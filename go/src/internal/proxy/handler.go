@@ -193,12 +193,43 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		// will gunzip when it needs to inspect the body.
 		req.Header.Set("Accept-Encoding", "gzip")
 
+		// Translate proxy Referer → original page URL so CDN hotlink
+		// protection sees the correct origin domain instead of localhost.
+		// The browser sends "Referer: http://proxy/?goto=<b64(page)>"; we
+		// decode that back to the original page URL before forwarding.
+		if ref := req.Header.Get("Referer"); ref != "" {
+			if translated := h.translateReferer(ref); translated != "" {
+				req.Header.Set("Referer", translated)
+			}
+		}
+
 		// User-Agent isn't auto-set if the request had none and the Director
 		// cleared it; keep whatever the client sent (or nothing).
 		if _, ok := req.Header["User-Agent"]; !ok {
 			req.Header.Set("User-Agent", "")
 		}
 	}
+}
+
+// translateReferer decodes a proxy Referer header back to the original URL.
+// Returns "" when the Referer isn't a proxy URL or can't be decoded.
+func (h *Handler) translateReferer(referer string) string {
+	if h.opts.ProxyCfg.PublicURL == nil {
+		return ""
+	}
+	u, err := url.Parse(referer)
+	if err != nil || !strings.EqualFold(u.Host, h.opts.ProxyCfg.PublicURL.Host) {
+		return ""
+	}
+	gotoParam := u.Query().Get("goto")
+	if gotoParam == "" {
+		return ""
+	}
+	decoded, err := b64u.Decode(gotoParam)
+	if err != nil {
+		return ""
+	}
+	return decoded
 }
 
 // modifyResponse runs after the upstream response headers arrive and before
@@ -267,6 +298,6 @@ func (h *Handler) errorHandler(target *url.URL) func(http.ResponseWriter, *http.
 // IsLoadRequest reports whether r is one we should route through the proxy
 // pipeline (as opposed to a static-asset hit on the same path).
 func IsLoadRequest(r *http.Request) bool {
-	return r.URL.Query().Has("load") &&
+	return r.URL.Query().Has("goto") &&
 		!strings.HasPrefix(r.URL.Path, "/rewriter-")
 }

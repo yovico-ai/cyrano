@@ -170,3 +170,65 @@ func TestAnchorLeftAlone(t *testing.T) {
 		t.Errorf("anchor url() rewritten unexpectedly: %s", got)
 	}
 }
+
+// TestCSSEscapedParensInURL verifies that CSS escape sequences (\( and \)) are
+// stripped before URL rewriting so the upstream request uses literal parens
+// instead of %5C%28, which Cloudflare WAF blocks with 403.
+func TestCSSEscapedParensInURL(t *testing.T) {
+	in := `.x { background: url("https://cdn.example.com/img/foo\(1\).png") }`
+	got := rewrite(t, in)
+	// The goto= value must encode the unescaped URL (parens, not backslashes).
+	want := b64("https://cdn.example.com/img/foo(1).png")
+	if !strings.Contains(got, want) {
+		t.Errorf("CSS-escaped parens not stripped before proxifying:\n got:  %s\n want base64 of url with literal parens: %s", got, want)
+	}
+	// Must not contain the backslash-escaped form.
+	bad := b64("https://cdn.example.com/img/foo\\(1\\).png")
+	if strings.Contains(got, bad) {
+		t.Errorf("backslash-escaped URL leaked into goto= param: %s", got)
+	}
+}
+
+// TestCSSEscapedParensUnquoted is the real-world dymium.io case: an UNQUOTED
+// url() with CSS-escaped parens like url(https://cdn.../foo%20\(1\).png).
+func TestCSSEscapedParensUnquoted(t *testing.T) {
+	// Use a base URL matching the actual CSS file origin.
+	base := mustURL(t, "https://cdn.prod.website-files.com/6808eb05eb223623c931cda0/css/dymium.shared.ee831ac2a.min.css")
+	src := `.slides{background-image:url(https://cdn.prod.website-files.com/6808eb05eb223623c931cda0/682c82cf99243844a7f0b5ba_Hero%20\(1\).png),radial-gradient(circle at 100%,#272033,#1a1a1a 25%)}`
+	got := string(Rewrite([]byte(src), Options{BaseURL: base, Proxy: devProxy}))
+	t.Logf("output: %s", got)
+	// The goto= value must NOT contain %5C (backslash). The CDN serves
+	// the file as foo(1).png; backslash is a Cloudflare WAF 403 trigger.
+	if strings.Contains(got, "%5C") || strings.Contains(got, "%5c") {
+		t.Errorf("backslash %%5C still present in proxified URL: %s", got)
+	}
+	// Must still contain a goto= URL pointing at the CDN.
+	if !strings.Contains(got, "localhost:9081/?goto=") {
+		t.Errorf("URL not proxified: %s", got)
+	}
+}
+
+func TestUnescapeCSS(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"no escapes here", "no escapes here"},
+		{`\(`, "("},
+		{`\)`, ")"},
+		{`foo\(1\).png`, "foo(1).png"},
+		{`\41`, "A"},           // hex escape: U+0041
+		{`\41 x`, "Ax"},        // hex escape + space terminator
+		{`\000041 x`, "Ax"},    // 6-digit hex + space
+		{`\0000410`, "A0"},     // 5-digit hex (stops at 5), literal 0 follows
+		{`\\`, "\\"},           // double backslash: first \ escapes second \
+		{`\`, ""},              // trailing backslash — dropped
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			if got := unescapeCSS(tc.in); got != tc.want {
+				t.Errorf("unescapeCSS(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

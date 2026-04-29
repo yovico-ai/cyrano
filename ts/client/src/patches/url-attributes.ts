@@ -20,21 +20,31 @@ type ProtoLike = { prototype: object };
 export function patchUrlAttributes(
     _targetWindow: Window,
     rewriteOne: (url: string) => string,
+    unwrapOne: (url: string) => string = (u) => u,
 ): void {
     const globals = globalThis as unknown as Record<string, ProtoLike | undefined>;
     for (const { ctorName, attrs } of URL_BEARING_ELEMENTS) {
         const Constructor = globals[ctorName];
         if (!Constructor?.prototype) continue;
         for (const attribute of attrs) {
-            patchAttributeSetter(Constructor.prototype, attribute, rewriteOne);
+            // srcset is a multi-URL value; unwrapping each entry is complex
+            // and not needed for the publicPath-detection fix, so we only
+            // unwrap single-URL attributes.
+            patchAttribute(
+                Constructor.prototype,
+                attribute,
+                rewriteOne,
+                attribute === "srcset" ? undefined : unwrapOne,
+            );
         }
     }
 }
 
-function patchAttributeSetter(
+function patchAttribute(
     prototype: object,
     attribute: string,
     rewriteOne: (url: string) => string,
+    unwrapOne: ((url: string) => string) | undefined,
 ): void {
     const descriptor = Object.getOwnPropertyDescriptor(prototype, attribute);
     if (!descriptor?.set || !descriptor?.get) return;
@@ -45,7 +55,11 @@ function patchAttributeSetter(
         configurable: true,
         enumerable: descriptor.enumerable ?? false,
         get(): unknown {
-            return originalGet.call(this);
+            const raw = originalGet.call(this) as unknown;
+            // Unwrap so page code (e.g. webpack reading document.currentScript.src
+            // to auto-detect publicPath) sees the original URL, not the proxy URL.
+            if (unwrapOne && typeof raw === "string") return unwrapOne(raw);
+            return raw;
         },
         set(value: unknown): void {
             // Only rewrite when the assigned value is a string. Some sites

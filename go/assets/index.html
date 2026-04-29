@@ -120,7 +120,7 @@
             if (!/^[a-z][a-z0-9+\-.]*:\/\//i.test(url)) {
                 url = 'https://' + url;
             }
-            location.href = '/?goto=' + b64uEncode(url) + '&doc=1';
+            location.href = '/?goto=' + b64uEncode(url);
         }
 
         document.getElementById('go').addEventListener('submit', function (e) {

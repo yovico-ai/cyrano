@@ -333,3 +333,66 @@ func TestServeHTTPWithTarget_StripsSecurityHeaders(t *testing.T) {
 		t.Errorf("CSP should be stripped, got %q", v)
 	}
 }
+
+func TestDirector_TranslatesReferer(t *testing.T) {
+	// CDN hotlink protection rejects requests whose Referer is the proxy
+	// origin. The Director must translate proxy Referer → original page URL.
+	upstream, cap := startUpstream(t)
+
+	publicURL, _ := url.Parse("http://localhost:9081")
+	proxyOrigin := publicURL.String() + "/?goto=" + b64u.Encode("https://example.com/page")
+
+	h := New(Options{
+		ProxyCfg: urlrewrite.ProxyConfig{PublicURL: publicURL},
+	})
+	target, _ := url.Parse(upstream.URL + "/image.png")
+	req := httptest.NewRequest("GET", "/image.png", nil)
+	req.Header.Set("Referer", proxyOrigin)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTPWithTarget(rec, req, target)
+
+	got := cap.headers.Get("Referer")
+	if got != "https://example.com/page" {
+		t.Errorf("upstream Referer = %q; want %q", got, "https://example.com/page")
+	}
+}
+
+func TestDirector_LeavesNonProxyRefererUntouched(t *testing.T) {
+	upstream, cap := startUpstream(t)
+
+	publicURL, _ := url.Parse("http://localhost:9081")
+	h := New(Options{
+		ProxyCfg: urlrewrite.ProxyConfig{PublicURL: publicURL},
+	})
+	target, _ := url.Parse(upstream.URL + "/image.png")
+	req := httptest.NewRequest("GET", "/image.png", nil)
+	req.Header.Set("Referer", "https://example.com/somepage")
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTPWithTarget(rec, req, target)
+
+	got := cap.headers.Get("Referer")
+	if got != "https://example.com/somepage" {
+		t.Errorf("upstream Referer = %q; want unchanged %q", got, "https://example.com/somepage")
+	}
+}
+
+func TestIsLoadRequest(t *testing.T) {
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"/?goto=" + b64u.Encode("https://example.com/"), true},
+		{"/", false},                                    // no goto=
+		{"/?other=1", false},                            // wrong param
+		{"/rewriter-status.json?goto=x", false},         // rewriter- prefix excluded
+		{"/rewriter-extended-status.json?goto=x", false},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest("GET", c.path, nil)
+		if got := IsLoadRequest(req); got != c.want {
+			t.Errorf("IsLoadRequest(%q) = %v; want %v", c.path, got, c.want)
+		}
+	}
+}

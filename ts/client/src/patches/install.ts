@@ -11,7 +11,7 @@
 // (e.g. after a same-document navigation) don't double-wrap natives.
 
 import type { ClientConfig } from "../config";
-import { rewriteUrl } from "../url/containment";
+import { rewriteUrl, unwrapProxiedUrl } from "../url/containment";
 import { patchFetch } from "./fetch";
 import { patchXmlHttpRequest } from "./xhr";
 import { patchWebSocket } from "./websocket";
@@ -40,6 +40,8 @@ export function installPatches(
 
     const rewriteOne = (rawUrl: string): string =>
         rewriteUrl(rawUrl, getCurrentBaseUrl(), config);
+    const unwrapOne = (proxiedUrl: string): string =>
+        unwrapProxiedUrl(proxiedUrl, config);
 
     patchFetch(targetWindow, rewriteOne);
     patchXmlHttpRequest(targetWindow, rewriteOne);
@@ -51,7 +53,7 @@ export function installPatches(
     // "original", and the property-setter patch later in this list works on
     // descendant constructors' descriptors which don't include setAttribute.
     patchDynamicHtml(targetWindow, rewriteOne);
-    patchUrlAttributes(targetWindow, rewriteOne);
+    patchUrlAttributes(targetWindow, rewriteOne, unwrapOne);
     patchCssRules(targetWindow, rewriteOne);
     patchCssStyleDeclaration(targetWindow, rewriteOne);
     patchFunctionConstructor(targetWindow);

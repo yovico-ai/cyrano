@@ -139,7 +139,7 @@ async function runOne(
     // Direct + proxied in parallel — they're independent contexts.
     const [direct, proxied] = await Promise.allSettled([
         captureSnapshot(browser, { target, proxyOrigin: null, userAgent, runDir, label: "direct" }),
-        captureSnapshot(browser, { target, proxyOrigin, userAgent, extraQuery: "doc=1", runDir, label: "proxied" }),
+        captureSnapshot(browser, { target, proxyOrigin, userAgent, runDir, label: "proxied" }),
     ]);
 
     run.direct  = direct.status  === "fulfilled" ? direct.value  : { error: String(direct.reason) };

@@ -236,8 +236,7 @@ func applyAttrRules(tag string, attrs []html.Attribute, cfg *Config) []html.Attr
 	return attrs
 }
 
-// urlOpts is reserved for future per-tag query-suffix handling (REST format
-// for forms, ct=js for scripts, doc=1 for iframes). Phase 3 rewrites flat.
+// urlOpts carries per-tag context for future handling (e.g. REST-form targets).
 type urlOpts struct {
 	tag  string
 	attr string

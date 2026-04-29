@@ -98,7 +98,7 @@ func IsAlreadyProxified(u *url.URL, cfg ProxyConfig) bool {
 	if !IsProxyHost(u, cfg) {
 		return false
 	}
-	return u.Query().Has("load")
+	return u.Query().Has("goto")
 }
 
 // Rewrite returns the proxified form of rawURL.

@@ -138,6 +138,14 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 
+		// Browsers auto-fetch /favicon.ico on every navigation. We silence it
+		// here before Referer routing can forward it upstream (which would
+		// surface as a 404 in the browser console for every proxied page).
+		if r.URL.Path == "/favicon.ico" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
 		// Proxified URL? Decode and forward to upstream.
 		if proxy.IsLoadRequest(r) {
 			// One handler per vhost so the body-rewriter sees the right config.
@@ -176,15 +184,6 @@ func (s *Server) Handler() http.Handler {
 				ProxyCfg:      proxyCfgForReferer,
 			})
 			proxyHandler.ServeHTTPWithTarget(w, r, target)
-			return
-		}
-
-		// Browsers auto-fetch /favicon.ico on every navigation. With no
-		// proxied-page Referer (e.g. landing-page loads) we silence the
-		// request with 204 to avoid log spam. With a Referer it would have
-		// been caught by Referer routing above and forwarded to the origin.
-		if r.URL.Path == "/favicon.ico" {
-			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 

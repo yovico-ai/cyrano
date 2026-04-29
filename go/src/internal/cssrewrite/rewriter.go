@@ -15,6 +15,7 @@ import (
 	"io"
 	"log/slog"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/tdewolff/parse/v2"
@@ -116,7 +117,11 @@ func rewriteURLToken(w *bytes.Buffer, raw []byte, opts Options) {
 		}
 	}
 
-	rewritten := urlrewrite.Rewrite(string(inner), opts.BaseURL, opts.Proxy)
+	// Unescape CSS escape sequences before handing to the URL rewriter.
+	// CSS allows \X to escape any character (e.g. \( \) to avoid mis-parsing
+	// url(...) content). The HTTP request must use the unescaped form — a
+	// literal backslash in a URL path becomes %5C which CDN WAFs block.
+	rewritten := urlrewrite.Rewrite(unescapeCSS(string(inner)), opts.BaseURL, opts.Proxy)
 
 	w.WriteString("url(")
 	w.WriteString(leading)
@@ -167,3 +172,53 @@ func splitWS(s []byte) (leading, trailing string) {
 }
 
 func isWS(b byte) bool { return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\f' }
+
+// unescapeCSS decodes CSS escape sequences from a URL string. CSS allows
+// \<char> to escape any character (browsers strip the backslash before making
+// the HTTP request). Without this, backslashes in URLs become %5C upstream,
+// which CDN WAFs commonly block.
+//
+// Two forms:
+//   - \HHHHHH[ ] — up to 6 hex digits + optional whitespace → Unicode codepoint
+//   - \X         — any other char → literal X (backslash removed)
+func unescapeCSS(s string) string {
+	if !strings.ContainsRune(s, '\\') {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	i := 0
+	for i < len(s) {
+		if s[i] != '\\' {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		i++ // skip backslash
+		if i >= len(s) {
+			break
+		}
+		// Hex escape: \HHHHHH (1-6 hex digits) + optional single whitespace.
+		j := i
+		for j < len(s) && j-i < 6 && isHexDigit(s[j]) {
+			j++
+		}
+		if j > i {
+			cp, _ := strconv.ParseInt(s[i:j], 16, 32)
+			b.WriteRune(rune(cp))
+			i = j
+			if i < len(s) && isWS(s[i]) {
+				i++
+			}
+		} else {
+			// Simple escape: \X → X.
+			b.WriteByte(s[i])
+			i++
+		}
+	}
+	return b.String()
+}
+
+func isHexDigit(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}

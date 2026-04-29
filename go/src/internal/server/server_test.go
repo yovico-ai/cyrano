@@ -26,7 +26,7 @@ func b64uEncode(s string) string {
 func TestInferOriginFromReferer_ValidReferer(t *testing.T) {
 	req := httptest.NewRequest("GET", "/chunk-abc.js", nil)
 	req.Header.Set("Referer",
-		"http://localhost:9081/?goto="+b64uEncode("https://github.com/")+"&doc=1")
+		"http://localhost:9081/?goto="+b64uEncode("https://github.com/")+"")
 
 	got := inferOriginFromReferer(req, testPublicURL)
 	if got == nil {
@@ -132,7 +132,7 @@ func TestServer_RewriterJSNotProxiedViaReferer(t *testing.T) {
 	handler := srv.Handler()
 
 	// Request /rewriter.js with a Referer pointing at a proxied upstream page.
-	referer := "http://localhost:9081/?goto=" + b64uEncode(upstream.URL+"/") + "&doc=1"
+	referer := "http://localhost:9081/?goto=" + b64uEncode(upstream.URL+"/") + ""
 	req := httptest.NewRequest("GET", "/rewriter.js", nil)
 	req.Host = "localhost:9081"
 	req.Header.Set("Referer", referer)
@@ -175,7 +175,7 @@ func TestServer_RefererRouting(t *testing.T) {
 	handler := srv.Handler()
 
 	// Build the Referer: a proxied page whose origin is our upstream.
-	referer := "http://localhost:9081/?goto=" + b64uEncode(upstream.URL+"/") + "&doc=1"
+	referer := "http://localhost:9081/?goto=" + b64uEncode(upstream.URL+"/") + ""
 
 	req := httptest.NewRequest("GET", "/chunk-abc.js", nil)
 	req.Host = "localhost:9081"
@@ -193,17 +193,12 @@ func TestServer_RefererRouting(t *testing.T) {
 	}
 }
 
-func TestServer_FaviconProxiedViaReferer(t *testing.T) {
-	// /favicon.ico from a proxied page should be forwarded to the origin,
-	// not swallowed by the landing-page 204 shortcut.
-	var gotPath string
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		w.Header().Set("Content-Type", "image/x-icon")
-		_, _ = w.Write([]byte("ICO"))
-	}))
-	t.Cleanup(upstream.Close)
-
+func TestServer_FaviconSilencedEvenWithReferer(t *testing.T) {
+	// /favicon.ico is always answered with 204 — even when the request
+	// carries a valid proxied-page Referer. Modern sites declare their icon
+	// via <link rel="icon"> (which the HTML rewriter handles correctly); the
+	// /favicon.ico fallback path frequently 404s on the upstream and produces
+	// noise in the browser console, so we suppress it here.
 	cfg := &config.File{
 		Servers: []config.Server{{Port: 9081}},
 		VHosts: []config.VHost{{
@@ -218,19 +213,15 @@ func TestServer_FaviconProxiedViaReferer(t *testing.T) {
 	srv := New(cfg, t.TempDir(), nil)
 	handler := srv.Handler()
 
-	referer := "http://localhost:9081/?goto=" + b64uEncode(upstream.URL+"/") + "&doc=1"
 	req := httptest.NewRequest("GET", "/favicon.ico", nil)
 	req.Host = "localhost:9081"
-	req.Header.Set("Referer", referer)
+	req.Header.Set("Referer", "http://localhost:9081/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS8")
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != 200 {
-		t.Fatalf("status %d; want 200 (proxied to origin)", rec.Code)
-	}
-	if gotPath != "/favicon.ico" {
-		t.Errorf("upstream path %q; want /favicon.ico", gotPath)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status %d; want 204 (silenced)", rec.Code)
 	}
 }
 
@@ -259,5 +250,49 @@ func TestServer_FaviconSilencedWithoutReferer(t *testing.T) {
 
 	if rec.Code != http.StatusNoContent {
 		t.Errorf("status %d; want 204 (silenced)", rec.Code)
+	}
+}
+
+func TestServer_RoutesGotoRequest(t *testing.T) {
+	// ?goto= requests must be proxied to the upstream, not served as static
+	// files. This directly exercises the IsLoadRequest dispatch in Handler().
+	var gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte("<html><head></head><body>hello</body></html>"))
+	}))
+	t.Cleanup(upstream.Close)
+
+	cfg := &config.File{
+		Servers: []config.Server{{Port: 9081}},
+		VHosts: []config.VHost{{
+			Hostnames:         []string{"localhost"},
+			HTTPPort:          9081,
+			Mode:              "webproxy",
+			RewriterJSPath:    "/rewriter.js",
+			HeadInjectionPath: "/head-injection",
+			CookiesJSONPath:   "/cookies.json",
+		}},
+	}
+	srv := New(cfg, t.TempDir(), nil)
+	handler := srv.Handler()
+
+	target := upstream.URL + "/some/page"
+	req := httptest.NewRequest("GET", "/?goto="+b64uEncode(target), nil)
+	req.Host = "localhost:9081"
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("status %d; body=%q", rec.Code, rec.Body.String())
+	}
+	if gotPath != "/some/page" {
+		t.Errorf("upstream received path %q; want /some/page", gotPath)
+	}
+	// Response must contain the injected rewriter script, not the landing page.
+	if !strings.Contains(rec.Body.String(), "rewriter.js") {
+		t.Error("response missing rewriter.js injection; likely served landing page instead of proxying")
 	}
 }

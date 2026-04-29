@@ -25,10 +25,6 @@ export CYRANO_REWRITER_JS_PATH=/rewriter.js
 export CYRANO_HEAD_INJECTION_PATH=/head-injection
 export CYRANO_COOKIES_JSON_PATH=/cookies.json
 
-# ── Redis (optional; proxy falls back to in-memory if unreachable) ────────────
-export REDIS_HOST=127.0.0.1
-export REDIS_PORT=6379
-
 # ── Locate binary and assets relative to this script ─────────────────────────
 repo_root=$(cd "$(dirname "$0")/../.." && pwd)
 binary="$repo_root/go/assets/cyrano"

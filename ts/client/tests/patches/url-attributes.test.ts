@@ -1,5 +1,5 @@
-// Runs under happy-dom. Patches the URL-bearing attribute setters on the
-// HTMLImageElement / HTMLAnchorElement prototypes, then restores them after
+// Runs under happy-dom. Patches the URL-bearing attribute setters/getters on
+// the HTMLImageElement / HTMLAnchorElement prototypes, then restores them after
 // each test to keep cross-test isolation.
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,6 +10,10 @@ import { patchUrlAttributes } from "../../src/patches/url-attributes";
 // path and query verbatim).
 const tag = (url: string): string =>
     url + (url.includes("?") ? "&" : "?") + "proxified=1";
+
+// Inverse of tag — strips the proxified marker.
+const untag = (url: string): string =>
+    url.replace(/[?&]proxified=1/, "");
 
 interface SavedDescriptor {
     proto: object;
@@ -97,5 +101,70 @@ describe("patchUrlAttributes", () => {
         // rewriter (which only takes strings).
         (img as unknown as { src: unknown }).src = null;
         expect(calls).toEqual([]);
+    });
+});
+
+describe("patchUrlAttributes getter unwrapping", () => {
+    // The getter fix is critical for webpack publicPath auto-detection.
+    // Webpack reads document.currentScript.src to determine where to load
+    // dynamic chunks from. Without the getter fix, it sees the proxy URL
+    // (/?goto=<b64>) and computes the wrong publicPath (the proxy root),
+    // causing all chunk requests to 404.
+
+    it("script.src getter returns original URL when attribute holds a proxified URL", () => {
+        snapshotAll();
+        patchUrlAttributes(window, tag, untag);
+
+        const script = document.createElement("script");
+        // Simulate what the server-side HTML rewriter stored in the src attr.
+        script.setAttribute("src", "http://example.com/bundle.js?proxified=1");
+        expect(script.src).toBe("http://example.com/bundle.js");
+    });
+
+    it("script.src round-trip: property set then get returns original URL", () => {
+        snapshotAll();
+        patchUrlAttributes(window, tag, untag);
+
+        const script = document.createElement("script");
+        script.src = "http://example.com/bundle.js";
+        // setter stores "…bundle.js?proxified=1", getter unwraps back to original
+        expect(script.src).toBe("http://example.com/bundle.js");
+    });
+
+    it("img.src getter returns original URL", () => {
+        snapshotAll();
+        patchUrlAttributes(window, tag, untag);
+
+        const img = document.createElement("img");
+        img.setAttribute("src", "http://example.com/photo.jpg?proxified=1");
+        expect(img.src).toBe("http://example.com/photo.jpg");
+    });
+
+    it("a.href getter returns original URL", () => {
+        snapshotAll();
+        patchUrlAttributes(window, tag, untag);
+
+        const a = document.createElement("a");
+        a.setAttribute("href", "http://example.com/page?proxified=1");
+        expect(a.href).toBe("http://example.com/page");
+    });
+
+    it("non-proxified URLs pass through getter unchanged", () => {
+        snapshotAll();
+        patchUrlAttributes(window, tag, untag);
+
+        const img = document.createElement("img");
+        img.setAttribute("src", "http://example.com/photo.jpg");
+        expect(img.src).toBe("http://example.com/photo.jpg");
+    });
+
+    it("srcset getter is NOT unwrapped (only single-URL attrs are unwrapped)", () => {
+        snapshotAll();
+        patchUrlAttributes(window, tag, untag);
+
+        const img = document.createElement("img");
+        img.setAttribute("srcset", "http://example.com/a.jpg?proxified=1 1x");
+        // srcset getter returns the stored value without unwrapping
+        expect(img.srcset).toContain("proxified=1");
     });
 });
