@@ -12,13 +12,19 @@
 // to investigate a failure: the URL it tried, what the browser rendered on
 // each side, and the JS errors it hit.
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { MiningRun } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPORTS_DIR = resolve(__dirname, "../reports");
+
+/** Deletes all session directories under reports/. */
+export function cleanReports(): void {
+    rmSync(REPORTS_DIR, { recursive: true, force: true });
+    mkdirSync(REPORTS_DIR, { recursive: true });
+}
 
 export function ensureSessionDir(sessionTag: string): string {
     const dir = resolve(REPORTS_DIR, sessionTag);

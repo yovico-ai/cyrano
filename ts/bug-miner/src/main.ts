@@ -9,6 +9,8 @@
 //   tsx src/main.ts --slow-mo 250                        # 250ms between actions, for visual debug
 //   tsx src/main.ts --query "specific words to search"
 //   tsx src/main.ts --proxy http://localhost:9080
+//   tsx src/main.ts --clean                              # delete all previous reports, then run
+//   tsx src/main.ts --clean --runs 0                     # delete reports only, no new run
 
 import { parseArgs } from "node:util";
 import { chromium, type Browser, type LaunchOptions } from "playwright";
@@ -16,7 +18,7 @@ import { firstHit } from "./search.js";
 import { captureSnapshot } from "./browser.js";
 import { diff } from "./compare.js";
 import { pickQuery } from "./words.js";
-import { ensureRunDir, writeRunJSON, writeSessionSummary } from "./report.js";
+import { cleanReports, ensureRunDir, writeRunJSON, writeSessionSummary } from "./report.js";
 import type { MiningRun, PageSnapshot } from "./types.js";
 
 /**
@@ -73,6 +75,7 @@ interface CLIOpts {
     browser: BrowserChannel;
     userAgent: string;
     slowMo: number;
+    clean: boolean;
 }
 
 function parseCLI(): CLIOpts {
@@ -85,6 +88,7 @@ function parseCLI(): CLIOpts {
             browser:    { type: "string",  default: "chrome" },        // real Chrome by default
             "user-agent": { type: "string", default: DEFAULT_UA },
             "slow-mo":  { type: "string",  default: "0" },
+            clean:      { type: "boolean", default: false },
         },
         allowPositionals: true,
     });
@@ -94,13 +98,14 @@ function parseCLI(): CLIOpts {
         : null;
     const browser = values.browser === "chromium" ? "chromium" : "chrome";
     return {
-        runs:    Math.max(1, parseInt(positionalRuns ?? values.runs ?? "1", 10)),
+        runs:    Math.max(0, parseInt(positionalRuns ?? values.runs ?? "1", 10)),
         proxy:   values.proxy ?? "http://localhost:9081",
         query:   values.query ?? null,
         headless: values.headless ?? false,
         browser,
         userAgent: values["user-agent"] ?? DEFAULT_UA,
         slowMo:  Math.max(0, parseInt(values["slow-mo"] ?? "0", 10)),
+        clean:   values.clean ?? false,
     };
 }
 
@@ -153,10 +158,19 @@ async function runOne(
 
 async function main() {
     const opts = parseCLI();
+
+    if (opts.clean) {
+        cleanReports();
+        console.log("reports/ cleaned");
+        if (opts.runs === 0) return;
+    }
+
     const sessionTag = new Date().toISOString().replace(/[:.]/g, "-");
     console.log(`bug-miner session ${sessionTag}`);
     console.log(`  runs=${opts.runs}, proxy=${opts.proxy}, browser=${opts.browser}, headless=${opts.headless}`);
     if (opts.slowMo > 0) console.log(`  slow-mo=${opts.slowMo}ms`);
+
+    if (opts.runs === 0) return;
 
     await preflightCheck(opts.proxy);
 
