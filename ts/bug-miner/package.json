@@ -1,0 +1,18 @@
+{
+  "name": "cyrano-bug-miner",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Playwright-based DOM-diff harness — picks 3 random words, queries DuckDuckGo, opens the first result both directly and via the proxy, compares DOMs (excluding ad slots) to surface rewriter bugs.",
+  "scripts": {
+    "mine": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "install-browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "playwright": "^1.49.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.4.0"
+  }
+}

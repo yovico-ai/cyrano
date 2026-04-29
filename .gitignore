@@ -1,0 +1,25 @@
+# Build artifacts
+go/assets/client/rewriter.js
+go/assets/client/rewriter.js.map
+go/assets/cyrano
+
+# Go toolchain
+go/src/vendor/
+
+# Node / TypeScript
+node_modules/
+ts/client/node_modules/
+ts/client/dist/
+ts/bug-miner/node_modules/
+
+# Logs & temp
+*.log
+/tmp/
+
+# Editor / OS
+.DS_Store
+*.swp
+*~
+
+# Claude Code project-local config
+.claude/

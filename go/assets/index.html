@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SSL VPN Rewriter</title>
+    <style>
+        :root {
+            color-scheme: light dark;
+            --fg: #1a1a1a;
+            --bg: #fafafa;
+            --muted: #666;
+            --accent: #0066cc;
+            --border: #ddd;
+            --code-bg: #f0f0f0;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --fg: #e8e8e8;
+                --bg: #1a1a1a;
+                --muted: #999;
+                --accent: #6db1ff;
+                --border: #333;
+                --code-bg: #2a2a2a;
+            }
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0; padding: 4rem 1.5rem;
+            font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+            color: var(--fg); background: var(--bg);
+        }
+        main {
+            max-width: 38rem; margin: 0 auto;
+        }
+        h1 {
+            font-size: 1.6rem; margin: 0 0 .25rem;
+            font-weight: 600;
+        }
+        .subtitle { color: var(--muted); margin: 0 0 2.5rem; }
+        form {
+            display: flex; gap: .5rem; margin-bottom: 1.5rem;
+        }
+        input[type=url], input[type=text] {
+            flex: 1; padding: .75rem .9rem;
+            font: inherit; color: inherit;
+            background: var(--bg);
+            border: 1px solid var(--border); border-radius: 6px;
+            outline: none;
+            transition: border-color .15s;
+        }
+        input:focus { border-color: var(--accent); }
+        button {
+            padding: .75rem 1.25rem;
+            font: inherit; font-weight: 500;
+            color: white; background: var(--accent);
+            border: none; border-radius: 6px;
+            cursor: pointer;
+            transition: opacity .15s;
+        }
+        button:hover { opacity: .9; }
+        h2 {
+            font-size: .9rem; text-transform: uppercase;
+            letter-spacing: .05em; color: var(--muted);
+            margin: 2rem 0 .5rem; font-weight: 500;
+        }
+        ul { list-style: none; padding: 0; margin: 0; }
+        li { margin: .25rem 0; }
+        a {
+            color: var(--accent); text-decoration: none;
+            border-bottom: 1px solid transparent;
+        }
+        a:hover { border-bottom-color: var(--accent); }
+        code {
+            background: var(--code-bg); padding: .1rem .4rem;
+            border-radius: 3px; font-size: .9em;
+        }
+        .note {
+            color: var(--muted); font-size: .9rem;
+            margin-top: 2.5rem; padding-top: 1.5rem;
+            border-top: 1px solid var(--border);
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <h1>SSL VPN Rewriter</h1>
+        <p class="subtitle">Browse any site through the rewriting proxy.</p>
+
+        <form id="go">
+            <input type="text" id="url" placeholder="https://example.com/" autofocus required>
+            <button type="submit">Open</button>
+        </form>
+
+        <h2>Examples</h2>
+        <ul id="examples">
+            <li><a href="#" data-url="https://example.com/">example.com</a> — minimal page, good first test</li>
+            <li><a href="#" data-url="https://news.ycombinator.com/">news.ycombinator.com</a> — server-rendered, mostly static</li>
+            <li><a href="#" data-url="https://en.wikipedia.org/wiki/HTTP">Wikipedia article</a> — large HTML, lots of links</li>
+            <li><a href="#" data-url="https://httpbin.org/">httpbin.org</a> — useful for verifying request rewrites</li>
+        </ul>
+
+        <p class="note">
+            Target URLs are base64url-encoded into the <code>?goto=</code> query
+            param. The server fetches and rewrites the response; the bundled
+            <code>/rewriter.js</code> intercepts dynamic URL APIs in the page.
+        </p>
+    </main>
+
+    <script>
+        // URL-safe base64 (matches client/src/core/base64.ts and server's utils/base64.js)
+        function b64uEncode(s) {
+            return btoa(unescape(encodeURIComponent(s)))
+                .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        }
+
+        function loadProxied(url) {
+            if (!url) return;
+            // Prepend scheme if the user typed a bare hostname
+            if (!/^[a-z][a-z0-9+\-.]*:\/\//i.test(url)) {
+                url = 'https://' + url;
+            }
+            location.href = '/?goto=' + b64uEncode(url) + '&doc=1';
+        }
+
+        document.getElementById('go').addEventListener('submit', function (e) {
+            e.preventDefault();
+            loadProxied(document.getElementById('url').value.trim());
+        });
+
+        document.querySelectorAll('#examples a').forEach(function (a) {
+            a.addEventListener('click', function (e) {
+                e.preventDefault();
+                loadProxied(a.dataset.url);
+            });
+        });
+    </script>
+</body>
+</html>
