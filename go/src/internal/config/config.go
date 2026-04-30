@@ -45,6 +45,10 @@ type VHost struct {
 	RewriterJSPath      string         `json:"rewriterJsPath"`
 	HeadInjectionPath   string         `json:"headInjectionPath"`
 	CookiesJSONPath     string         `json:"cookiesJsonPath"`
+	// PublicURL is the scheme+host[:port] the browser uses to reach this proxy
+	// (e.g. "https://vpn.example.com" or "http://localhost:9081"). When set it
+	// takes precedence over the HTTPS-flag-based derivation in proxyEndpoints.
+	PublicURL           string         `json:"publicUrl"`
 	Raw                 map[string]any `json:"-"`
 }
 
@@ -72,6 +76,9 @@ func Load(path string) (*File, error) {
 //
 // Supported variables:
 //
+//	CYRANO_PUBLIC_URL        Full public origin the browser uses to reach the proxy,
+//	                         e.g. "https://vpn.example.com" or "http://localhost:9081".
+//	                         Takes precedence over the HTTPS-flag derivation below.
 //	CYRANO_PORT              HTTP listen port (default 9081)
 //	CYRANO_HOSTNAME          VHost hostname matched against Host header (default "localhost")
 //	CYRANO_HTTPS_ENABLED     Enable TLS listener (default false)
@@ -115,6 +122,7 @@ func FromEnv() (*File, error) {
 			RewriterJSPath:    envStr("CYRANO_REWRITER_JS_PATH", "/rewriter.js"),
 			HeadInjectionPath: envStr("CYRANO_HEAD_INJECTION_PATH", "/head-injection"),
 			CookiesJSONPath:   envStr("CYRANO_COOKIES_JSON_PATH", "/cookies.json"),
+			PublicURL:         envStr("CYRANO_PUBLIC_URL", ""),
 		}},
 	}
 	return f, nil

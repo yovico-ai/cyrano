@@ -69,10 +69,9 @@ func TestProxy_ForwardsRequest(t *testing.T) {
 	if captured.host != expectedHost {
 		t.Errorf("upstream host: got %q want %q", captured.host, expectedHost)
 	}
-	// Cookie should be stripped entirely (managed by proxy session, not forwarded).
-	if v := captured.headers.Get("Cookie"); v != "" {
-		t.Errorf("Cookie should be dropped, got %q", v)
-	}
+	// Cookies are forwarded upstream so challenge-clearance cookies
+	// (cf_clearance, aws-waf-token) reach the upstream server.
+	// (No assertion here — the key behaviour is that they are NOT stripped.)
 	// X-Forwarded-For: httputil.ReverseProxy auto-appends the request's
 	// RemoteAddr after our Director runs, so the header isn't empty upstream.
 	// What we DO want to assert is that the client's spoofed "1.2.3.4" was

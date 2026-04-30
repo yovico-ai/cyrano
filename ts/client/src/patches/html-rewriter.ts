@@ -121,7 +121,15 @@ export function rewriteHtmlString(
             }
         }
 
-        // 2. Global `style="..."` attribute — applies to every element.
+        // 2. HTML_INTEGRITY — SRI hashes won't match rewritten content; drop.
+        element.removeAttribute("integrity");
+
+        // 3. HTML_CROSSORIGIN — normalize to use-credentials.
+        if (element.hasAttribute("crossorigin")) {
+            natives.setAttribute.call(element, "crossorigin", "use-credentials");
+        }
+
+        // 4. Global `style="..."` attribute — applies to every element.
         const styleAttr = element.getAttribute("style");
         if (styleAttr !== null && styleAttr.length > 0) {
             natives.setAttribute.call(
@@ -131,7 +139,7 @@ export function rewriteHtmlString(
             );
         }
 
-        // 3. Type-specific URL-bearing attributes (img.src, a.href, ...).
+        // 5. Type-specific URL-bearing attributes (img.src, a.href, ...).
         const attrs = urlAttrsForTagName(element.tagName);
         if (!attrs) continue;
         for (const attrName of attrs) {

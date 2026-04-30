@@ -205,7 +205,7 @@ func TestRewrite_ScriptOnloadInjected(t *testing.T) {
 
 func TestRewrite_IframeOnloadInjected(t *testing.T) {
 	got := rewrite(t, `<iframe src="/x"></iframe>`)
-	if !strings.Contains(got, `onload="$rewriter.process_server_cookies();"`) {
+	if !strings.Contains(got, `$rewriter.process_server_cookies();`) {
 		t.Errorf("iframe onload hook missing: %s", got)
 	}
 }
@@ -375,6 +375,72 @@ func TestRewriteSrcset_Trailing(t *testing.T) {
 	}
 }
 
+func TestRewriteSrcset_CloudflareCommasInURL(t *testing.T) {
+	// Cloudflare Image Resizing embeds transform params with commas in the URL
+	// path: /cdn-cgi/image/width=640,quality=75,format=auto/https://origin/img
+	// Those commas must NOT be treated as srcset candidate separators.
+	cfURL1 := "https://cdn.example.com/cdn-cgi/image/width=640,quality=75,format=auto/https://origin.com/img.jpg"
+	cfURL2 := "https://cdn.example.com/cdn-cgi/image/width=1280,quality=75,format=auto/https://origin.com/img.jpg"
+	srcset := cfURL1 + " 640w, " + cfURL2 + " 1280w"
+	out := rewriteSrcset(srcset, func(s string) string { return "R(" + s + ")" })
+	if !strings.Contains(out, "R("+cfURL1+") 640w") {
+		t.Errorf("first candidate not intact: %s", out)
+	}
+	if !strings.Contains(out, "R("+cfURL2+") 1280w") {
+		t.Errorf("second candidate not intact: %s", out)
+	}
+}
+
+// ── HTML_IFRAME_INJECTION ────────────────────────────────────────────────────
+
+func TestRewrite_IframeInjectionOnloadAppended(t *testing.T) {
+	got := rewrite(t, `<iframe src="/embed"></iframe>`)
+	if !strings.Contains(got, `$rewriter.append_rewrite_script_into_iframe(this)`) {
+		t.Errorf("iframe injection hook missing: %s", got)
+	}
+}
+
+func TestRewrite_IframeInjectionComposesWithCookieHook(t *testing.T) {
+	got := rewrite(t, `<iframe src="/embed"></iframe>`)
+	if !strings.Contains(got, `$rewriter.process_server_cookies()`) {
+		t.Errorf("cookie hook missing from iframe onload: %s", got)
+	}
+	if !strings.Contains(got, `$rewriter.append_rewrite_script_into_iframe(this)`) {
+		t.Errorf("injection hook missing from iframe onload: %s", got)
+	}
+	// cookie hook runs first so $rewriter state is ready before injection
+	cookieIdx := strings.Index(got, "process_server_cookies")
+	injectionIdx := strings.Index(got, "append_rewrite_script_into_iframe")
+	if cookieIdx > injectionIdx {
+		t.Errorf("cookie hook must appear before injection hook: %s", got)
+	}
+}
+
+func TestRewrite_IframeInjectionPreservesUserOnload(t *testing.T) {
+	got := rewrite(t, `<iframe src="/embed" onload="userHandler()"></iframe>`)
+	if !strings.Contains(got, "userHandler()") {
+		t.Errorf("user onload handler lost: %s", got)
+	}
+	if !strings.Contains(got, `$rewriter.append_rewrite_script_into_iframe(this)`) {
+		t.Errorf("injection hook missing when user onload present: %s", got)
+	}
+}
+
+func TestRewrite_IframeInjectionNoDoubleInject(t *testing.T) {
+	got := rewrite(t, `<iframe src="/embed" onload="$rewriter.append_rewrite_script_into_iframe(this);"></iframe>`)
+	if strings.Count(got, "append_rewrite_script_into_iframe") != 1 {
+		t.Errorf("injection hook double-injected: %s", got)
+	}
+}
+
+func TestRewrite_IframeInjectionNotAddedWithoutSrc(t *testing.T) {
+	// iframes without src= (e.g. srcdoc or JS-populated) — no onload injection
+	got := rewrite(t, `<iframe srcdoc="<p>hello</p>"></iframe>`)
+	if strings.Contains(got, "append_rewrite_script_into_iframe") {
+		t.Errorf("injection hook should not be added to iframe without src: %s", got)
+	}
+}
+
 // ── inline-script handoff to RewriteInlineJS ─────────────────────────────
 //
 // Regression: RewriteInlineJS receives a slice into the html tokenizer's
@@ -444,5 +510,37 @@ func TestRewrite_InlineStyle_NoNULStompFromRewriter(t *testing.T) {
 	}
 	if !strings.Contains(got, `<meta charset="utf-8">`) {
 		t.Errorf("missing intact <meta> after style: %q", got)
+	}
+}
+
+// ── <noscript> content rewriting ─────────────────────────────────────────
+
+func TestRewrite_Noscript_URLsRewritten(t *testing.T) {
+	in := `<html><head><noscript><link rel="stylesheet" href="//example.com/noscript.css"></noscript></head></html>`
+	got := rewrite(t, in)
+	if strings.Contains(got, "//example.com/") {
+		t.Errorf("noscript link href was not rewritten:\n%s", got)
+	}
+	if !strings.Contains(got, "localhost:9081") {
+		t.Errorf("noscript link href not proxified:\n%s", got)
+	}
+}
+
+func TestRewrite_Noscript_AbsoluteURLRewritten(t *testing.T) {
+	in := `<html><head><noscript><link rel="stylesheet" href="https://example.com/a.css"></noscript></head></html>`
+	got := rewrite(t, in)
+	if strings.Contains(got, "https://example.com/") {
+		t.Errorf("absolute URL inside noscript was not rewritten:\n%s", got)
+	}
+}
+
+func TestRewrite_Noscript_StructurePreserved(t *testing.T) {
+	in := `<html><head><noscript><link rel="stylesheet" href="//example.com/a.css"></noscript><title>T</title></head></html>`
+	got := rewrite(t, in)
+	if !strings.Contains(got, "<noscript>") || !strings.Contains(got, "</noscript>") {
+		t.Errorf("<noscript> tags not preserved:\n%s", got)
+	}
+	if !strings.Contains(got, "<title>T</title>") {
+		t.Errorf("content after </noscript> missing:\n%s", got)
 	}
 }

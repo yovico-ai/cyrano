@@ -80,6 +80,7 @@ export function patchDynamicHtml(
     patchOuterHTML(rewriteOne, outerHTMLDesc);
     patchInsertAdjacentHTML(rewriteOne, savedOriginals.insertAdjacentHTML);
     patchSetAttribute(rewriteOne, savedOriginals.setAttribute);
+    patchIntegrityProperty();
 }
 
 /** Test-only: undo the patches and reset the saved-originals flag. */
@@ -162,6 +163,17 @@ function patchSetAttribute(
         }
         const lowerName = name.toLowerCase();
 
+        // HTML_INTEGRITY — SRI hashes will never match rewritten content; drop
+        // silently. Mirrors the server HTML rewriter's HTML_INTEGRITY rule.
+        if (lowerName === "integrity") {
+            return;
+        }
+
+        // HTML_CROSSORIGIN — force use-credentials so cookies follow through.
+        if (lowerName === "crossorigin") {
+            return originalSetAttribute.call(this, name, "use-credentials");
+        }
+
         // The `style` attribute applies to every element and contains CSS
         // declarations. Rewrite the CSS rather than the URL — matches the
         // server's HTML rewriter, which dispatches inline styles to the CSS
@@ -184,4 +196,27 @@ function patchSetAttribute(
             : rewriteOne(value);
         return originalSetAttribute.call(this, name, rewritten);
     };
+}
+
+// Patch the .integrity property setter on <script> and <link> elements.
+// When JS assigns `el.integrity = '...'` directly (not via setAttribute),
+// we noop the setter and return "" from the getter — same effect as the
+// server-side HTML_INTEGRITY rule stripping the attribute.
+function patchIntegrityProperty(): void {
+    for (const ctorKey of ["HTMLScriptElement", "HTMLLinkElement"] as const) {
+        const ctor = (globalThis as Record<string, unknown>)[ctorKey] as
+            | { prototype: Record<string, unknown> }
+            | undefined;
+        if (!ctor?.prototype) continue;
+        try {
+            Object.defineProperty(ctor.prototype, "integrity", {
+                configurable: true,
+                enumerable: false,
+                get() { return ""; },
+                set(_v: string) { /* drop — SRI hash won't match rewritten content */ },
+            });
+        } catch {
+            // Non-configurable in this environment — skip gracefully.
+        }
+    }
 }

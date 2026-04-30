@@ -16,6 +16,11 @@ export function diff(direct: PageSnapshot, proxied: PageSnapshot): DiffSummary {
     const linkCountRatio = ratio(direct.linkCount, proxied.linkCount);
     const imageCountRatio = ratio(direct.imageCount, proxied.imageCount);
 
+    const directErrorKeys = new Set(direct.consoleErrors.map((e) => normalizeError(e.message)));
+    const newProxiedErrors = proxied.consoleErrors.filter(
+        (e) => !directErrorKeys.has(normalizeError(e.message)),
+    );
+
     const summary: DiffSummary = {
         titleEqual: direct.title === proxied.title,
         headingsEqual,
@@ -24,7 +29,8 @@ export function diff(direct: PageSnapshot, proxied: PageSnapshot): DiffSummary {
         imageCountRatio,
         headingsOnlyInDirect: [...directHeadings].filter((h) => !proxiedHeadings.has(h)),
         headingsOnlyInProxied: [...proxiedHeadings].filter((h) => !directHeadings.has(h)),
-        proxiedConsoleErrorCount: proxied.consoleErrors.length,
+        directConsoleErrorCount: direct.consoleErrors.length,
+        proxiedConsoleErrorCount: newProxiedErrors.length,
         proxyLeakCount: proxied.proxyLeakHosts.length,
         verdict: "ok",
     };
@@ -38,6 +44,24 @@ function ratio(direct: number, proxied: number): number {
     if (direct === 0 && proxied === 0) return 1;
     if (direct === 0) return 0;
     return Math.min(proxied / direct, 1.0);
+}
+
+/**
+ * Normalises a console-error message so that the same underlying error looks
+ * identical whether it came from the direct or the proxied session.
+ *
+ * - "Failed to load resource: … status of 403 (Forbidden)" → "http-error-403"
+ *   (strips URL and reason phrase so direct/proxied match despite different
+ *   URL hosts and missing/present reason text)
+ * - Everything else: strip the proxy origin so localhost URLs don't prevent
+ *   matching against the same error on the direct side.
+ */
+function normalizeError(msg: string): string {
+    const statusMatch = msg.match(
+        /Failed to load resource: the server responded with a status of (\d+)/,
+    );
+    if (statusMatch) return `http-error-${statusMatch[1]}`;
+    return msg.replace(/https?:\/\/localhost:\d+\/?/g, "");
 }
 
 function arraysEqual<T>(a: T[], b: T[]): boolean {

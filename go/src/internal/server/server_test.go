@@ -296,3 +296,50 @@ func TestServer_RoutesGotoRequest(t *testing.T) {
 		t.Error("response missing rewriter.js injection; likely served landing page instead of proxying")
 	}
 }
+
+// ── fixContentType ──────────────────────────────────────────────────────────
+
+func TestFixContentType_CSS_FixesTextPlain(t *testing.T) {
+	resp := &http.Response{Header: http.Header{"Content-Type": []string{"text/plain"}}}
+	u, _ := url.Parse("https://cdn.example.com/styles/all.css")
+	fixContentType(resp, u)
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/css") {
+		t.Errorf("expected text/css, got %q", ct)
+	}
+}
+
+func TestFixContentType_JS_FixesOctetStream(t *testing.T) {
+	resp := &http.Response{Header: http.Header{"Content-Type": []string{"application/octet-stream"}}}
+	u, _ := url.Parse("https://cdn.example.com/bundle.js")
+	fixContentType(resp, u)
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "javascript") {
+		t.Errorf("expected javascript MIME, got %q", ct)
+	}
+}
+
+func TestFixContentType_MJS_FixesTextPlain(t *testing.T) {
+	resp := &http.Response{Header: http.Header{"Content-Type": []string{"text/plain; charset=utf-8"}}}
+	u, _ := url.Parse("https://cdn.example.com/module.mjs")
+	fixContentType(resp, u)
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "javascript") {
+		t.Errorf("expected javascript MIME for .mjs, got %q", ct)
+	}
+}
+
+func TestFixContentType_LeavesSpecificTypeAlone(t *testing.T) {
+	resp := &http.Response{Header: http.Header{"Content-Type": []string{"text/css; charset=utf-8"}}}
+	u, _ := url.Parse("https://cdn.example.com/styles.css")
+	fixContentType(resp, u)
+	if ct := resp.Header.Get("Content-Type"); ct != "text/css; charset=utf-8" {
+		t.Errorf("should not modify specific type, got %q", ct)
+	}
+}
+
+func TestFixContentType_UnknownExtension_Unchanged(t *testing.T) {
+	resp := &http.Response{Header: http.Header{"Content-Type": []string{"text/plain"}}}
+	u, _ := url.Parse("https://cdn.example.com/data.bin")
+	fixContentType(resp, u)
+	if ct := resp.Header.Get("Content-Type"); ct != "text/plain" {
+		t.Errorf("unknown extension should be unchanged, got %q", ct)
+	}
+}

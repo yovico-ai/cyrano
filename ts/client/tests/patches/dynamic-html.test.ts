@@ -181,3 +181,61 @@ describe("patchDynamicHtml — idempotence", () => {
         expect(img.getAttribute("src")).not.toMatch(/proxified=1.*proxified=1/);
     });
 });
+
+// ── HTML_INTEGRITY — strip integrity attrs from dynamic content ──────────────
+
+describe("patchDynamicHtml — integrity stripping", () => {
+    it("setAttribute('integrity', ...) is silently dropped", () => {
+        patchDynamicHtml(window, tag);
+        const script = document.createElement("script");
+        script.setAttribute("integrity", "sha384-abc");
+        expect(script.getAttribute("integrity")).toBeNull();
+    });
+
+    it("integrity in innerHTML is stripped before insertion", () => {
+        patchDynamicHtml(window, tag);
+        const div = document.createElement("div");
+        div.innerHTML = '<script src="/x.js" integrity="sha384-abc"></script>';
+        const s = div.querySelector("script")!;
+        expect(s.getAttribute("integrity")).toBeNull();
+        // src should still be rewritten
+        expect(s.getAttribute("src")).toBe("/x.js?proxified=1");
+    });
+
+    it("integrity in insertAdjacentHTML is stripped", () => {
+        patchDynamicHtml(window, tag);
+        const div = document.createElement("div");
+        document.body.appendChild(div);
+        div.insertAdjacentHTML("beforeend", '<link rel="stylesheet" href="/s.css" integrity="sha384-xyz">');
+        const link = div.querySelector("link")!;
+        expect(link.getAttribute("integrity")).toBeNull();
+        expect(link.getAttribute("href")).toBe("/s.css?proxified=1");
+        div.remove();
+    });
+
+    it(".integrity property setter is nooped (returns empty string from getter)", () => {
+        patchDynamicHtml(window, tag);
+        const script = document.createElement("script") as HTMLScriptElement;
+        script.integrity = "sha384-shouldbedropped";
+        expect(script.integrity).toBe("");
+    });
+});
+
+// ── HTML_CROSSORIGIN — normalize crossorigin to use-credentials ───────────────
+
+describe("patchDynamicHtml — crossorigin normalization", () => {
+    it("setAttribute('crossorigin', 'anonymous') becomes use-credentials", () => {
+        patchDynamicHtml(window, tag);
+        const script = document.createElement("script");
+        script.setAttribute("crossorigin", "anonymous");
+        expect(script.getAttribute("crossorigin")).toBe("use-credentials");
+    });
+
+    it("crossorigin in innerHTML is normalized", () => {
+        patchDynamicHtml(window, tag);
+        const div = document.createElement("div");
+        div.innerHTML = '<script src="/x.js" crossorigin="anonymous"></script>';
+        const s = div.querySelector("script")!;
+        expect(s.getAttribute("crossorigin")).toBe("use-credentials");
+    });
+});

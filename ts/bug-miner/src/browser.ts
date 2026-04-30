@@ -68,14 +68,20 @@ export async function captureSnapshot(
         });
         page.on("requestfinished", (req: Request) => {
             const reqUrl = req.url();
-            const status = req.response().then((r: Response | null) => r?.status() ?? 0);
             requests.push({ url: reqUrl, method: req.method(), status: 0, resourceType: req.resourceType() });
-            // Best-effort fill of status — fire-and-forget; if the run ends
-            // before this resolves the entry just keeps status: 0.
-            void status.then((s) => {
-                const entry = requests[requests.length - 1];
-                if (entry && entry.url === reqUrl) entry.status = s;
-            });
+            // Best-effort fill of status — fire-and-forget; if the context closes
+            // before req.response() resolves Playwright throws "Target page …
+            // has been closed". The .catch() prevents that from becoming an
+            // unhandled rejection that crashes Node.
+            void req.response()
+                .then((r: Response | null) => {
+                    const s = r?.status() ?? 0;
+                    const entry = requests[requests.length - 1];
+                    if (entry && entry.url === reqUrl) entry.status = s;
+                })
+                .catch(() => {
+                    // ignore: context closed before response was accessible
+                });
             // Proxy-leak detection: every request from a proxified page
             // should be on the proxy origin (we may relax this for
             // data:/blob: schemes which are inherently local).

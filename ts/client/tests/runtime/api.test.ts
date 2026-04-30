@@ -99,3 +99,34 @@ describe("createRewriterApi — config exposure", () => {
         expect(api.config).toBe(config);
     });
 });
+
+describe("createRewriterApi — wrap_import_arg", () => {
+    it("proxifies an absolute string specifier through URL containment", () => {
+        const api = createRewriterApi(window, config);
+        api.set_base_url("https://example.com/page");
+        const result = api.wrap_import_arg("https://cdn.example.com/mod.js");
+        expect(typeof result).toBe("string");
+        // Proxified: must contain goto= and the encoded target host
+        expect(result as string).toContain("goto=");
+    });
+
+    it("proxifies a relative string specifier against the current base URL", () => {
+        const api = createRewriterApi(window, config);
+        api.set_base_url("https://example.com/app/");
+        const result = api.wrap_import_arg("./chunk.js");
+        // Resolved: https://example.com/app/chunk.js → proxified
+        expect(result as string).toContain("goto=");
+    });
+
+    it("passes non-string specifiers through unchanged (dynamic import with expression)", () => {
+        const api = createRewriterApi(window, config);
+        const expr = { notAString: true };
+        expect(api.wrap_import_arg(expr)).toBe(expr);
+    });
+
+    it("passes null/undefined through unchanged", () => {
+        const api = createRewriterApi(window, config);
+        expect(api.wrap_import_arg(null)).toBeNull();
+        expect(api.wrap_import_arg(undefined)).toBeUndefined();
+    });
+});

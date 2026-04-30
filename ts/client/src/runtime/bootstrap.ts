@@ -9,6 +9,7 @@ import type { ClientConfig } from "../config";
 import type { RewriterApi } from "./api-types";
 import { createRewriterApi } from "./api";
 import { installPatches } from "../patches/install";
+import { patchWindowLocation } from "../patches/location";
 
 export interface RewriterBootstrap {
     inject(): RewriterApi;
@@ -22,6 +23,13 @@ export function init(
     return {
         inject(): RewriterApi {
             installPatches(targetWindow, () => api.get_base_url(), config);
+            // Globally override window.location so unmodified scripts (e.g.
+            // Cloudflare challenge.js) see the upstream URL, not the proxy URL.
+            patchWindowLocation(
+                targetWindow,
+                api.wrap_get_location(targetWindow.location),
+                () => api.get_base_url().href,
+            );
             return api;
         },
     };

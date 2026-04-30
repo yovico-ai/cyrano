@@ -120,6 +120,16 @@ func Rewrite(rawURL string, baseURL *url.URL, cfg ProxyConfig) string {
 	if rawURL == "" || strings.HasPrefix(rawURL, "#") {
 		return rawURL
 	}
+	// Strip ASCII whitespace that browsers silently remove from attribute
+	// values (tab, LF, CR). Go's url.Parse rejects these as invalid; leaving
+	// them in would cause every URL with a stray newline to pass through
+	// unproxified.
+	rawURL = strings.Map(func(r rune) rune {
+		if r == '\t' || r == '\n' || r == '\r' {
+			return -1
+		}
+		return r
+	}, rawURL)
 	lower := strings.ToLower(rawURL)
 	for _, p := range passthroughPrefixes {
 		if strings.HasPrefix(lower, p) {

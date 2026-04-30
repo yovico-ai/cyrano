@@ -67,13 +67,14 @@ function renderMarkdown(runs: MiningRun[], sessionTag: string): string {
     lines.push(`**Runs**: ${runs.length}  `);
     lines.push(`**Verdicts**: ok=${counts.ok}, suspicious=${counts.suspicious}, broken=${counts.broken}, error=${counts.error}`);
     lines.push("");
-    lines.push("| # | query | target | verdict | text-ratio | leaks | console-errs | notes |");
-    lines.push("|---|---|---|---|---|---|---|---|");
+    lines.push("| # | query | target | verdict | text-ratio | leaks | direct-errs | new-errs | notes |");
+    lines.push("|---|---|---|---|---|---|---|---|---|");
     runs.forEach((r, i) => {
         const target = r.target ? truncate(r.target, 60) : "(no hit)";
         const verdict = r.diff?.verdict ?? "error";
         const textRatio = r.diff ? r.diff.visibleTextLengthRatio.toFixed(2) : "—";
         const leaks = r.diff?.proxyLeakCount ?? "—";
+        const directErrs = r.diff?.directConsoleErrorCount ?? "—";
         const errs = r.diff?.proxiedConsoleErrorCount ?? "—";
         const notes: string[] = [];
         if ("error" in r.direct) notes.push(`direct: ${r.direct.error}`);
@@ -82,7 +83,7 @@ function renderMarkdown(runs: MiningRun[], sessionTag: string): string {
             notes.push(`missing ${r.diff.headingsOnlyInDirect.length} heading(s)`);
         }
         lines.push(
-            `| ${i + 1} | \`${r.query}\` | ${target} | **${verdict}** | ${textRatio} | ${leaks} | ${errs} | ${notes.join("; ")} |`,
+            `| ${i + 1} | \`${r.query}\` | ${target} | **${verdict}** | ${textRatio} | ${leaks} | ${directErrs} | ${errs} | ${notes.join("; ")} |`,
         );
     });
     lines.push("");

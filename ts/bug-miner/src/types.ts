@@ -52,7 +52,8 @@ export interface DiffSummary {
     imageCountRatio: number;
     headingsOnlyInDirect: string[];
     headingsOnlyInProxied: string[];
-    proxiedConsoleErrorCount: number;
+    directConsoleErrorCount: number;  // errors already present in the direct run
+    proxiedConsoleErrorCount: number; // errors new in proxied (not present in direct)
     proxyLeakCount: number; // > 0 → containment bug
     verdict: "ok" | "suspicious" | "broken";
 }

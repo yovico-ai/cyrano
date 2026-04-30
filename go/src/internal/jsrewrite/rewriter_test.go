@@ -1,6 +1,7 @@
 package jsrewrite
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -278,32 +279,32 @@ func TestIdempotent(t *testing.T) {
 // assignment to an undeclared name throws ReferenceError. Slashdot's
 // cmp-slashdot.js (and any other "use strict" script using computed
 // property access) hit this in production. We fix by prepending
-// `var $apMe;` to the output whenever wrap_member_expression fired.
+// `var $__crn_tmp__;` to the output whenever wrap_member_expression fired.
 
-func TestRewrite_PrependsAPMEDeclaration_WhenMemberExpressionUsed(t *testing.T) {
+func TestRewrite_PrependsCrnTmpDeclaration_WhenMemberExpressionUsed(t *testing.T) {
 	in := `var x = obj["dynamic" + key];`
 	got := rewrite(t, in)
-	if !strings.HasPrefix(got, "var $apMe;\n") {
-		t.Errorf("expected `var $apMe;` declaration prepended, got: %s", got)
+	if !strings.HasPrefix(got, "var $__crn_tmp__;\n") {
+		t.Errorf("expected `var $__crn_tmp__;` declaration prepended, got: %s", got)
 	}
 	if !strings.Contains(got, "$rewriter.wrap_member_expression") {
 		t.Errorf("wrap_member_expression should fire on bracket access: %s", got)
 	}
 }
 
-func TestRewrite_DoesNotPrependAPME_WhenNoMemberExpression(t *testing.T) {
+func TestRewrite_DoesNotPrependCrnTmp_WhenNoMemberExpression(t *testing.T) {
 	in := `var x = location;`
 	got := rewrite(t, in)
-	if strings.Contains(got, "$apMe") {
-		t.Errorf("$apMe declaration should NOT appear when wrap_member_expression didn't fire: %s", got)
+	if strings.Contains(got, "$__crn_tmp__") {
+		t.Errorf("$__crn_tmp__ declaration should NOT appear when wrap_member_expression didn't fire: %s", got)
 	}
 }
 
-// $apMe survives strict-mode source: feeding the rewritten output back as
-// JS, with "use strict" at the top, the resulting program parses cleanly
+// $__crn_tmp__ survives strict-mode source: feeding the rewritten output back
+// as JS, with "use strict" at the top, the resulting program parses cleanly
 // (we can't EXECUTE it from a Go test, but parse success means the
 // declaration is in scope of every assignment).
-func TestRewrite_APMEDeclaration_ParsesWithStrictMode(t *testing.T) {
+func TestRewrite_CrnTmpDeclaration_ParsesWithStrictMode(t *testing.T) {
 	in := `"use strict"; var v = obj[key];`
 	got := rewrite(t, in)
 	// A second pass on the already-rewritten output is a no-op (idempotence
@@ -311,6 +312,134 @@ func TestRewrite_APMEDeclaration_ParsesWithStrictMode(t *testing.T) {
 	// doesn't break the parser the second time around.
 	twice := rewrite(t, got)
 	if got != twice {
-		t.Errorf("re-rewriting var $apMe; output drifted:\nonce: %s\ntwice: %s", got, twice)
+		t.Errorf("re-rewriting var $__crn_tmp__; output drifted:\nonce: %s\ntwice: %s", got, twice)
+	}
+}
+
+// ── WRAP_IMPORT_ARG ─────────────────────────────────────────────────────────
+
+func TestWrapImportArg_AbsoluteURL(t *testing.T) {
+	got := rewrite(t, `import("https://cdn.example.com/module.js");`)
+	if !strings.Contains(got, `$rewriter.wrap_import_arg("https://cdn.example.com/module.js")`) {
+		t.Errorf("import specifier not wrapped: %s", got)
+	}
+}
+
+func TestWrapImportArg_RelativePath(t *testing.T) {
+	got := rewrite(t, `import("/static/chunk-abc.js");`)
+	if !strings.Contains(got, `$rewriter.wrap_import_arg("/static/chunk-abc.js")`) {
+		t.Errorf("relative import not wrapped: %s", got)
+	}
+}
+
+func TestWrapImportArg_DynamicSpecifier(t *testing.T) {
+	// import(someVariable) — wrap the expression, not just string literals.
+	got := rewrite(t, `import(getModulePath());`)
+	if !strings.Contains(got, `$rewriter.wrap_import_arg(`) {
+		t.Errorf("dynamic-expression import not wrapped: %s", got)
+	}
+}
+
+func TestWrapImportArg_PreservesChain(t *testing.T) {
+	// import(...).then(...) — the promise chain must survive.
+	got := rewrite(t, `import("mod.js").then(m => m.init());`)
+	if !strings.Contains(got, `$rewriter.wrap_import_arg("mod.js")`) {
+		t.Errorf("import chain lost wrapper: %s", got)
+	}
+	if !strings.Contains(got, `.then(`) {
+		t.Errorf("promise chain dropped: %s", got)
+	}
+}
+
+func TestWrapImportArg_NotFiredWhenDisabled(t *testing.T) {
+	got := rewriteWith(t, `import("mod.js");`, Options{WrapImportArg: false})
+	if strings.Contains(got, "wrap_import_arg") {
+		t.Errorf("wrap_import_arg fired when disabled: %s", got)
+	}
+}
+
+func TestWrapImportArg_DoesNotWrapStaticImport(t *testing.T) {
+	// Static `import x from "mod"` is an ImportStmt, not a CallExpr.
+	// The rule must not fire on it.
+	got := rewrite(t, `import x from "mod.js";`)
+	if strings.Contains(got, "wrap_import_arg") {
+		t.Errorf("wrap_import_arg incorrectly fired on static import: %s", got)
+	}
+}
+
+// ── Static import() proxification (BaseURL + ProxifyURL) ────────────────────
+// When the rewriter has a BaseURL and ProxifyURL callback, string-literal
+// import() specifiers are resolved and proxified at rewrite time.
+
+func mustParseURL(s string) *url.URL {
+	u, err := url.Parse(s)
+	if err != nil {
+		panic(err)
+	}
+	return u
+}
+
+func staticProxify(rawURL string, base *url.URL) string {
+	resolved, err := base.Parse(rawURL)
+	if err != nil || resolved == nil {
+		return rawURL
+	}
+	return "https://proxy.example.com/?goto=" + resolved.String()
+}
+
+func TestWrapImportArg_StaticStringLiteral_AbsoluteURL(t *testing.T) {
+	base := mustParseURL("https://cdn.example.com/assets/main.js")
+	opts := DefaultOptions()
+	opts.BaseURL = base
+	opts.ProxifyURL = staticProxify
+
+	got := rewriteWith(t, `import("https://other.example.com/mod.js");`, opts)
+	want := `"https://proxy.example.com/?goto=https://other.example.com/mod.js"`
+	if !strings.Contains(got, want) {
+		t.Errorf("expected %s in: %s", want, got)
+	}
+	if strings.Contains(got, "wrap_import_arg") {
+		t.Errorf("wrap_import_arg should not fire for static specifier: %s", got)
+	}
+}
+
+func TestWrapImportArg_StaticStringLiteral_RelativePath(t *testing.T) {
+	base := mustParseURL("https://cdn.example.com/assets/main.js")
+	opts := DefaultOptions()
+	opts.BaseURL = base
+	opts.ProxifyURL = staticProxify
+
+	// ./chunk.js should resolve against the module URL, not the page URL.
+	got := rewriteWith(t, `import("./chunk-abc.js");`, opts)
+	want := `"https://proxy.example.com/?goto=https://cdn.example.com/assets/chunk-abc.js"`
+	if !strings.Contains(got, want) {
+		t.Errorf("expected %s in: %s", want, got)
+	}
+	if strings.Contains(got, "wrap_import_arg") {
+		t.Errorf("wrap_import_arg should not fire for static specifier: %s", got)
+	}
+}
+
+func TestWrapImportArg_StaticStringLiteral_DynamicFallsBack(t *testing.T) {
+	base := mustParseURL("https://cdn.example.com/assets/main.js")
+	opts := DefaultOptions()
+	opts.BaseURL = base
+	opts.ProxifyURL = staticProxify
+
+	// Non-literal specifiers must still use wrap_import_arg.
+	got := rewriteWith(t, `import(getPath());`, opts)
+	if !strings.Contains(got, "wrap_import_arg") {
+		t.Errorf("wrap_import_arg should fire for dynamic specifier: %s", got)
+	}
+}
+
+func TestWrapImportArg_NoBaseURL_FallsBackToWrap(t *testing.T) {
+	// No BaseURL set — must still wrap the specifier at runtime.
+	opts := DefaultOptions()
+	// BaseURL and ProxifyURL intentionally omitted.
+
+	got := rewriteWith(t, `import("./mod.js");`, opts)
+	if !strings.Contains(got, "wrap_import_arg") {
+		t.Errorf("wrap_import_arg should fire when BaseURL is absent: %s", got)
 	}
 }

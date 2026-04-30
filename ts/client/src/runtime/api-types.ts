@@ -45,6 +45,7 @@ export interface RewriterApi {
     wrap_eval(evalFn: typeof eval): typeof eval;
     wrap_eval_arg(evalFn: typeof eval, source: unknown): unknown;
     wrap_eval_memexp(obj: unknown): unknown;
+    wrap_import_arg(specifier: unknown): unknown;
 
     // ── HTML attribute hooks (injected by the server-side HTML rewriter) ───
     process_server_cookies(): void;

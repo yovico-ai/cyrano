@@ -15,6 +15,13 @@ The Go server (`go/`) and TS client (`ts/client/`) are a clean-room
 implementation. The TS client is written from the server-side rewriting
 contract (how rewritten HTML/JS calls into `$rewriter.*`).
 
+**Every rewriting fix must be applied to BOTH runtimes.** When you fix a URL
+rewriting bug in Go (e.g. `htmlrewrite/srcset.go`), the equivalent logic in
+TypeScript (`ts/client/src/patches/srcset.ts` and friends) must receive the
+same fix and vice versa. The two runtimes must stay byte-compatible: server
+rewrites static HTML; the client rewrites dynamically-set attributes. A bug
+fixed in only one runtime will still show up for the other's code paths.
+
 ## Directory layout
 
 - `go/` — Go server. Module is `github.com/yovico/cyrano`.

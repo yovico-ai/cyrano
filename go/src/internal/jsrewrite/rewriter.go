@@ -33,6 +33,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"net/url"
 	"strings"
 
 	"github.com/tdewolff/parse/v2"
@@ -55,6 +56,15 @@ type Options struct {
 	WrapEvalArg          bool
 	WrapEvalMemexp       bool
 	WrapMemberExpression bool
+	WrapImportArg        bool
+
+	// BaseURL is the URL of the script being rewritten. When set together
+	// with ProxifyURL, string-literal import() specifiers are resolved
+	// against this URL and proxified statically at rewrite time, bypassing
+	// the client-side wrap_import_arg. Dynamic specifiers (non-literals)
+	// still fall back to wrap_import_arg.
+	BaseURL    *url.URL
+	ProxifyURL func(rawURL string, base *url.URL) string
 
 	// Logger receives parse-failure and template-graft diagnostic events
 	// at debug level. nil disables logging — keeps the rewriter usable
@@ -78,6 +88,7 @@ func DefaultOptions() Options {
 		WrapEvalArg:          true,
 		WrapEvalMemexp:       true,
 		WrapMemberExpression: true,
+		WrapImportArg:        true,
 	}
 }
 
@@ -107,15 +118,15 @@ func Rewrite(src []byte, opts Options) []byte {
 	r.walkBlockStmt(&ast.BlockStmt)
 
 	var buf bytes.Buffer
-	if r.usedAPME {
+	if r.usedCrnTmp {
 		// Declare the bracket-key intermediate identifier the rewritten
 		// output references. Without this declaration, strict-mode scripts
-		// throw ReferenceError on `$apMe = expr` (assignment to undeclared
-		// name). `var` at script top-level scope-leaks to the global
-		// regardless of strict mode, which is what the wrap_member_expression
-		// template needs anyway (the same identifier is read on the bracket-
-		// access side of the same expression).
-		buf.WriteString("var $apMe;\n")
+		// throw ReferenceError on `$__crn_tmp__ = expr` (assignment to
+		// undeclared name). `var` at script top-level scope-leaks to the
+		// global regardless of strict mode, which is what the
+		// wrap_member_expression template needs (same identifier read on
+		// the bracket-access side of the same expression).
+		buf.WriteString("var $__crn_tmp__;\n")
 	}
 	ast.JS(&buf)
 	return buf.Bytes()
@@ -145,12 +156,11 @@ func alreadyRewritten(src []byte) bool {
 // rewriter holds per-pass state.
 type rewriter struct {
 	opts Options
-	// usedAPME tracks whether wrapMemberExpression fired during this pass.
-	// When it has, the output uses an intermediate identifier `$apMe` for
-	// the bracket-key expression — Rewrite() prepends a `var $apMe;`
-	// declaration to the output so strict-mode scripts don't ReferenceError
-	// on the implicit assignment.
-	usedAPME bool
+	// usedCrnTmp tracks whether wrapMemberExpression fired during this pass.
+	// When it has, the output uses an intermediate identifier `$__crn_tmp__`
+	// for the bracket-key expression — Rewrite() prepends a declaration so
+	// strict-mode scripts don't ReferenceError on the implicit assignment.
+	usedCrnTmp bool
 }
 
 // ── tree walk ────────────────────────────────────────────────────────────────
@@ -300,15 +310,39 @@ func (r *rewriter) rvalue(e js.IExpr) js.IExpr {
 		// Also wrap the arg first, then skip it in the args loop below
 		// to avoid wrapping the new wrapper itself.
 		evalCall := r.opts.WrapEvalArg && isVar(n.X, "eval") && len(n.Args.List) > 0
+		// import("url") — JS_WRAP_IMPORT_ARG. Dynamic import() is a keyword
+		// expression whose callee parses as a LiteralExpr with data "import",
+		// not as a regular identifier. Wrap the first arg (the specifier) so
+		// the proxy can rewrite it to a ?goto= URL before the browser fetches
+		// the module. Without this, import() calls bypass URL containment.
+		importCall := r.opts.WrapImportArg && isImportExpr(n.X) && len(n.Args.List) > 0
 		if evalCall {
 			// Recurse into arg-0 before wrapping so any inner identifiers
 			// (e.g. `eval(eval())`) get processed too.
 			n.Args.List[0].Value = r.wrapEvalArg(r.rvalue(n.Args.List[0].Value))
+		} else if importCall {
+			arg := n.Args.List[0].Value
+			if r.opts.BaseURL != nil && r.opts.ProxifyURL != nil {
+				if lit, ok := arg.(*js.LiteralExpr); ok &&
+					lit.TokenType == js.StringToken && len(lit.Data) >= 2 {
+					// Static specifier: resolve + proxify now so the browser
+					// fetches the right ?goto= URL regardless of the page's
+					// base URL at call time.
+					specifier := string(lit.Data[1 : len(lit.Data)-1])
+					proxified := r.opts.ProxifyURL(specifier, r.opts.BaseURL)
+					lit.Data = append(append([]byte{'"'}, []byte(proxified)...), '"')
+					// lit is updated in place; no need to reassign the arg.
+				} else {
+					n.Args.List[0].Value = r.wrapImportArg(r.rvalue(arg))
+				}
+			} else {
+				n.Args.List[0].Value = r.wrapImportArg(r.rvalue(arg))
+			}
 		} else {
 			n.X = r.rvalue(n.X)
 		}
 		for i := range n.Args.List {
-			if evalCall && i == 0 {
+			if (evalCall || importCall) && i == 0 {
 				continue
 			}
 			n.Args.List[i].Value = r.rvalue(n.Args.List[i].Value)
@@ -352,7 +386,9 @@ func (r *rewriter) rvalue(e js.IExpr) js.IExpr {
 		// `obj[expr]` — JS_WRAP_MEMBER_EXPRESSION. Wraps both sides.
 		n.X = r.rvalue(n.X)
 		n.Y = r.rvalue(n.Y)
-		if r.opts.WrapMemberExpression {
+		// Skip optional-chain accesses (obj?.[key]): wrapping would lose the
+		// ?. and turn safe null-guards into TypeError crashes.
+		if r.opts.WrapMemberExpression && !n.Optional {
 			return r.wrapMemberExpression(n)
 		}
 		return n
@@ -457,6 +493,14 @@ func isVar(e js.IExpr, name string) bool {
 	return ok && string(v.Data) == name
 }
 
+// isImportExpr reports whether e is the `import` keyword-callee of a dynamic
+// import() call. tdewolff represents it as *js.LiteralExpr with data "import"
+// (distinct from a Var identifier, since `import` is a reserved word).
+func isImportExpr(e js.IExpr) bool {
+	lit, ok := e.(*js.LiteralExpr)
+	return ok && string(lit.Data) == "import"
+}
+
 // dotPropName returns the property name on a DotExpr's right-hand side.
 // Empty if the property is something exotic (template, computed, etc).
 //
@@ -526,6 +570,21 @@ func (r *rewriter) wrapDotObj(n *js.DotExpr, helper string) js.IExpr {
 	return n
 }
 
+// wrapImportArg rewrites the specifier of `import(spec)` →
+// `$rewriter.wrap_import_arg(spec)` so the proxy can route the module load.
+func (r *rewriter) wrapImportArg(arg js.IExpr) js.IExpr {
+	tpl := parseExpr("$rewriter.wrap_import_arg(__REWRITER_PLACEHOLDER__)")
+	if tpl == nil {
+		return arg
+	}
+	call, ok := tpl.(*js.CallExpr)
+	if !ok || len(call.Args.List) == 0 {
+		return arg
+	}
+	call.Args.List[0].Value = arg
+	return call
+}
+
 // wrapEvalArg rewrites `eval(src, ...)` first arg → `$rewriter.wrap_eval_arg(eval, src)`.
 func (r *rewriter) wrapEvalArg(arg js.IExpr) js.IExpr {
 	tpl := parseExpr("$rewriter.wrap_eval_arg(eval,__REWRITER_PLACEHOLDER__)")
@@ -556,15 +615,15 @@ func (r *rewriter) wrapEvalMemexp(n *js.DotExpr) js.IExpr {
 }
 
 // wrapMemberExpression rewrites `obj[expr]` →
-// `$rewriter.wrap_member_expression(obj, ($apMe = expr))[$apMe]`. The
-// sequence-expression on the index keeps `expr` evaluating exactly once
+// `$rewriter.wrap_member_expression(obj, ($__crn_tmp__ = expr))[$__crn_tmp__]`.
+// The sequence-expression on the index keeps `expr` evaluating exactly once
 // while the call accesses obj's resolved property name.
 func (r *rewriter) wrapMemberExpression(n *js.IndexExpr) js.IExpr {
-	tpl := parseExpr("$rewriter.wrap_member_expression(__REWRITER_PLACEHOLDER_OBJ__, $apMe = __REWRITER_PLACEHOLDER_E__)[$apMe]")
+	tpl := parseExpr("$rewriter.wrap_member_expression(__REWRITER_PLACEHOLDER_OBJ__, $__crn_tmp__ = __REWRITER_PLACEHOLDER_E__)[$__crn_tmp__]")
 	if tpl == nil {
 		return n
 	}
-	r.usedAPME = true
+	r.usedCrnTmp = true
 	idx, ok := tpl.(*js.IndexExpr)
 	if !ok {
 		return n
@@ -574,7 +633,7 @@ func (r *rewriter) wrapMemberExpression(n *js.IndexExpr) js.IExpr {
 		return n
 	}
 	call.Args.List[0].Value = n.X
-	// Args[1] is `$apMe = E` — replace E.
+	// Args[1] is `$__crn_tmp__ = E` — replace E.
 	if assign, ok := call.Args.List[1].Value.(*js.BinaryExpr); ok {
 		assign.Y = n.Y
 	}

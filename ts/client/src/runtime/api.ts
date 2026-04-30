@@ -126,6 +126,10 @@ export function createRewriterApi(
         wrap_eval: wrapEval,
         wrap_eval_arg: wrapEvalArg,
         wrap_eval_memexp: wrapEvalMemexp,
+        // JS_WRAP_IMPORT_ARG — proxify dynamic import() specifiers so module
+        // loads go through URL containment like all other resource fetches.
+        wrap_import_arg: (specifier) =>
+            typeof specifier === "string" ? rewriteOne(specifier) : specifier,
 
         // ── Cookie hooks ───────────────────────────────────────────────────
         // Both fire from server-injected onload= handlers on script/iframe/img

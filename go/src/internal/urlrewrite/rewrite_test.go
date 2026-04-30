@@ -2,6 +2,7 @@ package urlrewrite
 
 import (
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -212,5 +213,28 @@ func TestIsProxyHost_DefaultPortNormalized(t *testing.T) {
 		if got != c.want {
 			t.Errorf("IsProxyHost(%q) = %v, want %v", c.in, got, c.want)
 		}
+	}
+}
+
+// ── whitespace stripping ──────────────────────────────────────────────────
+
+func TestRewrite_StripsNewlineFromURL(t *testing.T) {
+	base := mustURL(t, "https://example.com/")
+	raw := "http://www.google.com/maps/place/34.20275,-83.45582\n"
+	got := Rewrite(raw, base, devCfg)
+	if got == raw {
+		t.Errorf("URL with newline was not rewritten: %q", got)
+	}
+	if strings.Contains(got, "\n") {
+		t.Errorf("rewritten URL still contains newline: %q", got)
+	}
+}
+
+func TestRewrite_StripsTabAndCRFromURL(t *testing.T) {
+	base := mustURL(t, "https://example.com/")
+	raw := "https://cdn.example.com/path\t/file\r.js"
+	got := Rewrite(raw, base, devCfg)
+	if got == raw {
+		t.Errorf("URL with tab/CR was not rewritten: %q", got)
 	}
 }

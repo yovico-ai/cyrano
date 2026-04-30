@@ -33,7 +33,16 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 	clientPassthrough := buildClientPassthrough(vhost, proxyCfg)
 	jsOpts := jsrewrite.DefaultOptions()
 	jsOpts.Logger = logger.With("component", "jsrewrite")
-	rewriteJS := func(src []byte) []byte { return jsrewrite.Rewrite(src, jsOpts) }
+	jsOpts.ProxifyURL = func(rawURL string, base *url.URL) string {
+		return urlrewrite.Rewrite(rawURL, base, proxyCfg)
+	}
+	// rewriteJSFor returns a rewriter closure bound to scriptURL so that
+	// relative import() specifiers are resolved against the right base.
+	rewriteJSFor := func(scriptURL *url.URL) func([]byte) []byte {
+		opts := jsOpts
+		opts.BaseURL = scriptURL
+		return func(src []byte) []byte { return jsrewrite.Rewrite(src, opts) }
+	}
 
 	cssLogger := logger.With("component", "cssrewrite")
 	rewriteCSS := func(target *url.URL) func([]byte) []byte {
@@ -45,6 +54,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 	}
 
 	return func(resp *http.Response, target *url.URL) error {
+		fixContentType(resp, target)
 		ct := resp.Header.Get("Content-Type")
 
 		switch {
@@ -72,15 +82,24 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				return fmt.Errorf("read upstream body: %w", err)
 			}
 			var out bytes.Buffer
+			isChallenge := isChallengeHTML(body)
 			cfg := htmlrewrite.Config{
 				BaseURL:           target,
 				Proxy:             proxyCfg,
-				RewriterJSPath:      vhost.RewriterJSPath,
+				RewriterJSPath:    vhost.RewriterJSPath,
 				HeadInjectionPath: vhost.HeadInjectionPath,
-				InjectBootstrap:   true,
+				// Don't inject our bootstrap into challenge pages — challenge.js
+				// does PoW/fingerprinting and must run in an unmodified environment.
+				// Our fetch/XHR patches interfere with its API calls and cause the
+				// PoW solution to compute as all-zeros, failing the challenge.
+				InjectBootstrap:   !isChallenge,
 				ClientPassthrough: clientPassthrough,
-				RewriteInlineJS:   rewriteJS,
-				RewriteInlineCSS:  rewriteCSS(target),
+			}
+			if !isChallenge {
+				cfg.RewriteInlineJS = rewriteJSFor(target)
+				cfg.RewriteInlineCSS = rewriteCSS(target)
+			} else {
+				logger.Debug("rewriter: html passthrough (challenge page, no injection)", "target", target.String())
 			}
 			if err := htmlrewrite.Rewrite(&out, bytes.NewReader(body), cfg); err != nil {
 				logger.Warn("rewriter: html rewrite failed",
@@ -92,13 +111,20 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			replaceBody(resp, out.Bytes())
 
 		case isJS(resp):
+			// Skip rewriting Cloudflare bot-challenge scripts. Their fingerprint
+			// collection code is sensitive to any AST transformation; let it run
+			// unmodified so the challenge can pass in a real browser.
+			if isChallengeScript(target) {
+				logger.Debug("rewriter: js passthrough (challenge script)", "target", target.String())
+				break
+			}
 			body, err := readDecompressedBody(resp)
 			if err != nil {
 				logger.Warn("rewriter: read upstream JS body failed",
 					"target", target.String(), "ct", ct, "err", err)
 				return fmt.Errorf("read upstream body: %w", err)
 			}
-			rewritten := rewriteJS(body)
+			rewritten := rewriteJSFor(target)(body)
 			logger.Debug("rewriter: js rewritten",
 				"target", target.String(), "in", len(body), "out", len(rewritten),
 				"identical", len(body) == len(rewritten))
@@ -132,10 +158,50 @@ func isJS(resp *http.Response) bool {
 		strings.Contains(ct, "ecmascript")
 }
 
+// isChallengeScript reports whether the URL is a Cloudflare (or similar) bot
+// challenge script. These scripts do browser fingerprinting; rewriting them
+// breaks the challenge. URL patterns seen in the wild:
+//
+//	/__challenge_*/challenge.js
+//	/__cf_chl_*/challenge.js
+func isChallengeScript(u *url.URL) bool {
+	p := u.Path
+	return (strings.Contains(p, "/__challenge_") || strings.Contains(p, "/__cf_chl")) &&
+		strings.HasSuffix(p, "/challenge.js")
+}
+
+// isChallengeHTML reports whether the HTML body is a bot-challenge interstitial.
+// Cloudflare challenge pages reference their challenge script via a distinctive
+// path prefix; that reference appears in the raw HTML before any rewriting.
+func isChallengeHTML(body []byte) bool {
+	return bytes.Contains(body, []byte("/__challenge_")) ||
+		bytes.Contains(body, []byte("/__cf_chl"))
+}
+
 // isCSS reports whether the response Content-Type is rewritable CSS.
 func isCSS(resp *http.Response) bool {
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
 	return strings.Contains(ct, "text/css")
+}
+
+// fixContentType corrects a generic Content-Type (text/plain,
+// application/octet-stream) when the URL path has an unambiguous extension.
+// Some CDNs misconfigure MIME types, and browsers enforce strict MIME checking
+// for stylesheets — a text/plain .css file is silently rejected.
+func fixContentType(resp *http.Response, target *url.URL) {
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	if ct != "" &&
+		!strings.HasPrefix(ct, "text/plain") &&
+		!strings.HasPrefix(ct, "application/octet-stream") {
+		return // already a specific type — leave it alone
+	}
+	path := strings.ToLower(target.Path)
+	switch {
+	case strings.HasSuffix(path, ".css"):
+		resp.Header.Set("Content-Type", "text/css; charset=utf-8")
+	case strings.HasSuffix(path, ".js") || strings.HasSuffix(path, ".mjs"):
+		resp.Header.Set("Content-Type", "application/javascript; charset=utf-8")
+	}
 }
 
 // readDecompressedBody reads resp.Body, transparently un-gzipping if the

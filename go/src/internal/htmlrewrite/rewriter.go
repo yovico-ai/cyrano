@@ -22,9 +22,10 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 		return errors.New("htmlrewrite: Config.BaseURL required")
 	}
 	z := html.NewTokenizer(r)
-	bootstrapDone := false // guard against multiple <head> (e.g. nested srcdoc)
-	inScript := false      // currently inside <script>...</script> with rewritable content
-	inStyle := false       // currently inside <style>...</style>
+	bootstrapDone := false  // guard against multiple <head> (e.g. nested srcdoc)
+	inScript := false       // currently inside <script>...</script> with rewritable content
+	inStyle := false        // currently inside <style>...</style>
+	inNoscript := false     // currently inside <noscript>...</noscript>
 	emitted := bytes.Buffer{}
 
 	flush := func() error {
@@ -69,6 +70,12 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 			if tt == html.StartTagToken && tag == "style" && cfg.RewriteInlineCSS != nil {
 				inStyle = true
 			}
+			// <noscript> content is emitted by the tokenizer as a single raw
+			// text token (the tokenizer assumes scripting is enabled). We need
+			// to re-parse and rewrite it ourselves.
+			if tt == html.StartTagToken && tag == "noscript" {
+				inNoscript = true
+			}
 
 			// Inject the bootstrap chain immediately after <head> opens,
 			// so it runs before any other inline script in the document.
@@ -91,6 +98,8 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 				inScript = false
 			case "style":
 				inStyle = false
+			case "noscript":
+				inNoscript = false
 			}
 
 		case html.TextToken:
@@ -108,6 +117,18 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 				// Same NUL-sentinel concern for the CSS rewriter (also uses
 				// tdewolff/parse) — copy defensively.
 				emitRaw(cfg.RewriteInlineCSS(append([]byte(nil), z.Text()...)))
+			case inNoscript:
+				// The tokenizer emits the entire content of <noscript> as one
+				// raw text token (it assumes scripting is enabled). Re-parse it
+				// as an HTML fragment so its URL-bearing attributes get rewritten.
+				fragCfg := cfg
+				fragCfg.InjectBootstrap = false
+				var fragBuf bytes.Buffer
+				if err := Rewrite(&fragBuf, bytes.NewReader(z.Raw()), fragCfg); err == nil {
+					emitRaw(fragBuf.Bytes())
+				} else {
+					emitRaw(z.Raw())
+				}
 			default:
 				emitRaw(z.Raw())
 			}
@@ -216,6 +237,18 @@ func applyAttrRules(tag string, attrs []html.Attribute, cfg *Config) []html.Attr
 			cur, _ := getAttr(attrs, "onload")
 			if !strings.Contains(cur, "$rewriter.process_server_cookies()") {
 				attrs = setAttr(attrs, "onload", "$rewriter.process_server_cookies();"+cur)
+			}
+		}
+	}
+	// HTML_IFRAME_INJECTION — inject the rewriter runtime into child iframes.
+	// Called on load so that both proxy-served iframes (which already have
+	// bootstrap injected by the HTML rewriter) and about:blank / document.write
+	// iframes (which don't) get $rewriter in their window.
+	if tag == "iframe" {
+		if _, ok := getAttr(attrs, "src"); ok {
+			cur, _ := getAttr(attrs, "onload")
+			if !strings.Contains(cur, "$rewriter.append_rewrite_script_into_iframe") {
+				attrs = setAttr(attrs, "onload", cur+"$rewriter.append_rewrite_script_into_iframe(this);")
 			}
 		}
 	}

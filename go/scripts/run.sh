@@ -4,18 +4,18 @@
 # these via their own secrets/env mechanism rather than sourcing this file.
 set -euo pipefail
 
+# ── Public URL (scheme+host the browser uses to reach this proxy) ─────────────
+export CYRANO_PUBLIC_URL=http://localhost:9081
+
 # ── Listen ────────────────────────────────────────────────────────────────────
 export CYRANO_PORT=9081
 export CYRANO_HOSTNAME=localhost
 
-# ── TLS (leave HTTPS_ENABLED=false for plain HTTP in local dev) ───────────────
+# ── TLS (set CYRANO_PUBLIC_URL to https://... when enabling) ──────────────────
 export CYRANO_HTTPS_ENABLED=false
 export CYRANO_HTTPS_PORT=9444
 export CYRANO_SSL_CERT=
 export CYRANO_SSL_KEY=
-
-# ── Proxy mode ────────────────────────────────────────────────────────────────
-export CYRANO_MODE=webproxy
 
 # ── Cookie name ───────────────────────────────────────────────────────────────
 export CYRANO_SECRET_COOKIE=crnsct

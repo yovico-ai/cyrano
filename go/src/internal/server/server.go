@@ -40,11 +40,21 @@ func New(cfg *config.File, assetsRoot string, logger *slog.Logger) *Server {
 }
 
 // proxyEndpoints derives the URL-rewriter ProxyConfig from a vhost — i.e.
-// the single user-facing public URL the browser sees. Picks the scheme by
-// looking at whether any server in the global config has TLS enabled, and
-// the port from the matching vhost field. Pre-env-var implementation:
-// we'll replace this with a single CYRANO_PUBLIC_URL env read.
+// proxyEndpoints returns the ProxyConfig for the given vhost. The public URL
+// is taken directly from vhost.PublicURL (CYRANO_PUBLIC_URL) when set;
+// otherwise it is derived from the listen ports and TLS flags for backwards
+// compatibility with deployments that don't set CYRANO_PUBLIC_URL.
 func (s *Server) proxyEndpoints(vhost *config.VHost) urlrewrite.ProxyConfig {
+	if vhost.PublicURL != "" {
+		u, err := url.Parse(vhost.PublicURL)
+		if err == nil && u.Scheme != "" && u.Host != "" {
+			return urlrewrite.ProxyConfig{PublicURL: u}
+		}
+		s.Logger.Warn("CYRANO_PUBLIC_URL is invalid, falling back to derived URL",
+			"value", vhost.PublicURL, "err", err)
+	}
+
+	// Fallback: derive from TLS flags and port numbers.
 	domain := "localhost"
 	if len(vhost.Hostnames) > 0 {
 		domain = vhost.Hostnames[0]
@@ -71,11 +81,10 @@ func (s *Server) proxyEndpoints(vhost *config.VHost) urlrewrite.ProxyConfig {
 		}
 	}
 
-	publicURL := &url.URL{
+	return urlrewrite.ProxyConfig{PublicURL: &url.URL{
 		Scheme: scheme,
 		Host:   domain + ":" + port,
-	}
-	return urlrewrite.ProxyConfig{PublicURL: publicURL}
+	}}
 }
 
 // Handler returns the http.Handler for one listening port. The same handler
