@@ -32,8 +32,8 @@ By Content-Type:
 
 | Content-Type | Rewriter | What it does |
 |---|---|---|
-| `text/html`, `application/xhtml+xml` | HTML | URL containment in tag attrs (src/href/srcset/action/etc.), bootstrap script injection at `<head>`, drop CSP meta, strip integrity, force `crossorigin=use-credentials`, ensure iframe `allow-same-origin`, inject cookie-sync onload hooks |
-| `application/javascript` | JS | AST-level wrapping of `location`/`top`/`parent` (get + set + member-access), `eval` (and direct calls), `document.write`/`postMessage`, `obj[expr]` computed access |
+| `text/html`, `application/xhtml+xml` | HTML | URL containment in tag attrs (src/href/srcset/action/etc.), bootstrap script injection at `<head>`, drop CSP meta, strip integrity, force `crossorigin=use-credentials`, ensure iframe `allow-same-origin`, inject cookie-sync onload hooks, rewrite `<noscript>` content as HTML fragment, strip whitespace from URLs (tab/LF/CR) |
+| `application/javascript` | JS | AST-level wrapping of `location`/`top`/`parent` (get + set + member-access), `eval` (and direct calls), `document.write`/`postMessage`, `obj[expr]` computed access, `import(specifier)` dynamic imports (static specifiers resolved at rewrite time; dynamic expressions wrapped with `$rewriter.wrap_import_arg`) |
 | `text/css` | CSS | Rewrite every `url()` and `@import` URL |
 | inline `<script>` text | JS | Same as JS files |
 | inline `<style>` text + `style="..."` attr | CSS | Same as CSS files |
@@ -64,9 +64,25 @@ the server-side AST rewriter can't catch statically:
 
 - `fetch`, `XMLHttpRequest.prototype.open`
 - `WebSocket`, `EventSource`, `Worker`, `SharedWorker` constructors
+- `navigator.sendBeacon` — rewrites analytics/telemetry beacon URLs
+- `History.prototype.pushState` / `replaceState` — rewrites the URL argument
+- `Node.prototype.appendChild` / `insertBefore` — injects rewriter runtime
+  into dynamically-created `about:blank` iframes synchronously
 - `src` / `href` / `srcset` / `action` / `data` / `poster` setters on Image,
   Script, IFrame, Source, Embed, Audio, Video, Track, Link, Anchor, Area,
   Form, Object element prototypes
+- `Element.prototype.setAttribute` — all URL-bearing attributes
+- `Element.prototype.innerHTML` / `outerHTML` / `insertAdjacentHTML` — HTML
+  string rewrites via the client-side HTML rewriter
+- `Function` constructor — `new Function(src)` / `Function(src)` patterns
+  pass the body through the JS rewriter
+- CSS: `CSSStyleSheet.prototype.insertRule`, `CSSStyleDeclaration` style
+  property setters — rewrite `url()` values in dynamically-set CSS
+- `window.location` property — overridden with `WrappedLocation` so all reads
+  return the original URL; writes rewrite and navigate through the proxy
+- `document.URL` / `document.baseURI` — patched to return the original URL
+  so that `new URL(path, document.baseURI)` resolves against the original
+  origin (critical for chunk loaders and dynamic `import()` on Astro/webpack sites)
 
 ### 4. Session + cookies
 
@@ -112,24 +128,29 @@ the server-side AST rewriter can't catch statically:
 
 ## Test surface
 
-- **Go**: 95 tests across `b64u`, `urlrewrite`, `proxy`, `htmlrewrite`,
+- **Go**: 125 tests across `b64u`, `urlrewrite`, `proxy`, `htmlrewrite`,
   `jsrewrite`, `cssrewrite`, `wsproxy`. Run with `cd go/src && go test ./...`.
-- **Node.js (legacy)**: 417 jest tests covering the v1 server. Run with
-  `npx jest` from repo root.
-- **TS**: typecheck via `cd ts/client && npm run typecheck`. Behavioral
-  testing TBD via the planned `ts/bug-miner/` Playwright harness.
+- **TS**: 285 vitest tests under `ts/client/tests/`. Run with
+  `cd ts/client && npx vitest run`. Typecheck: `npm run typecheck`.
+- **bug-miner**: Playwright harness under `ts/bug-miner/`. Fetches sites via
+  direct and proxied paths, diffs DOM/text/console-errors. Run:
+  `cd ts/bug-miner && npm run mine`.
 
 ## Known gaps (tracked, not blocking demo)
 
 1. Cookie storage is in-process. Multi-instance deployments need sticky
    routing (e.g. Istio consistent-hash on `crnsid`) rather than an external
    store — an external store adds latency on every proxied request.
-2. Client `wrap_eval` / `wrap_document_write` / `wrap_postMessage` are
-   passthroughs — full semantics need an in-browser JS / HTML parser.
+2. Client `wrap_eval` / `wrap_postMessage` are passthroughs — full semantics
+   need an in-browser JS parser.
 3. AES-CTR payload encryption is wired but not implemented (Web Crypto in
    the TS client; matching helper in Go).
-4. URL-fragment rewriting (`#foo`) for class/id-mangling — was ad-evasion;
-   not reimplemented.
-5. The browser-side runtime is a clean-room implementation inferred from
-   the server-side rewriting contract (how rewritten HTML/JS calls into
-   `$rewriter.*`).
+4. `document.currentScript.src` returns the proxy URL rather than the original
+   URL — webpack `publicPath` auto-detection reads this and may compute the
+   wrong chunk base. Partially mitigated by `document.baseURI` being patched.
+5. Dynamic ES modules: `import.meta.url` in external module files returns the
+   proxy URL — Astro/Vite chunk loaders that use `import.meta.url` as a base
+   rather than `document.baseURI` may still mis-resolve chunk paths.
+6. Blob URL contexts (workers / script blobs) execute with rewriter-injected
+   code but no `$rewriter` in scope — calls to `$rewriter.*` from blob-URL
+   workers throw `ReferenceError`.
