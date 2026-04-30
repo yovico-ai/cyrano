@@ -24,6 +24,7 @@ import { patchCssStyleDeclaration } from "./css-style-declaration";
 import { patchFunctionConstructor } from "./function-ctor";
 import { patchDynamicIframeAppend } from "./dynamic-iframe";
 import { patchHistory } from "./history";
+import { patchSendBeacon } from "./beacon";
 
 const PATCHED_FLAG = Symbol.for("rewriter.patched");
 
@@ -61,4 +62,5 @@ export function installPatches(
     patchFunctionConstructor(targetWindow);
     patchDynamicIframeAppend(targetWindow, config, () => getCurrentBaseUrl().href);
     patchHistory(targetWindow, rewriteOne);
+    patchSendBeacon(targetWindow, rewriteOne);
 }
