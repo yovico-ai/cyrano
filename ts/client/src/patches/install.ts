@@ -23,6 +23,7 @@ import { patchCssRules } from "./css-rules";
 import { patchCssStyleDeclaration } from "./css-style-declaration";
 import { patchFunctionConstructor } from "./function-ctor";
 import { patchDynamicIframeAppend } from "./dynamic-iframe";
+import { patchHistory } from "./history";
 
 const PATCHED_FLAG = Symbol.for("rewriter.patched");
 
@@ -59,4 +60,5 @@ export function installPatches(
     patchCssStyleDeclaration(targetWindow, rewriteOne);
     patchFunctionConstructor(targetWindow);
     patchDynamicIframeAppend(targetWindow, config, () => getCurrentBaseUrl().href);
+    patchHistory(targetWindow, rewriteOne);
 }

@@ -34,11 +34,18 @@ export function patchWindowLocation(
     }
 
     // document.URL mirrors window.location.href in browsers.
+    // document.baseURI is the same when there is no <base> element — it drives
+    // how relative URLs are resolved (e.g. new URL('/_astro/foo.js', document.baseURI)).
+    // Without this patch, chunk-loaders resolve relative module paths against the
+    // proxy origin, producing bare http://localhost:9081/... URLs that bypass the
+    // proxy containment.
     try {
-        Object.defineProperty(targetWindow.document, "URL", {
+        const urlDescriptor = {
             get(): string { return wrappedLocation.href; },
             configurable: true,
-        });
+        };
+        Object.defineProperty(targetWindow.document, "URL", urlDescriptor);
+        Object.defineProperty(targetWindow.document, "baseURI", urlDescriptor);
     } catch { /* non-fatal */ }
 
     // document.referrer is checked by some anti-bot systems to verify the
