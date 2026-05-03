@@ -4,7 +4,7 @@
 
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { ConsoleMessage, Page, Request, Response } from "playwright";
+import { errors as pwErrors, type ConsoleMessage, type Page, type Request, type Response } from "playwright";
 import type { ConsoleError, NetworkRequestSummary, PageSnapshot } from "./types.js";
 
 const NAV_TIMEOUT_MS = 35_000;
@@ -75,7 +75,15 @@ export async function captureSnapshot(
             ? buildProxiedURL(opts.proxyOrigin, opts.target, opts.extraQuery)
             : opts.target;
 
-        const resp = await page.goto(visitURL, { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
+        let resp: Response | null = null;
+        try {
+            resp = await page.goto(visitURL, { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
+        } catch (e) {
+            // Ad-heavy pages frequently stall on third-party resources and
+            // never fire the "load" event. Capture whatever landed rather
+            // than discarding the run entirely.
+            if (!(e instanceof pwErrors.TimeoutError)) throw e;
+        }
         const statusCode = resp?.status() ?? 0;
         const finalUrl = page.url();
         const title = await page.title();
