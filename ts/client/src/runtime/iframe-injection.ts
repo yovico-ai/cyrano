@@ -33,6 +33,12 @@ export function injectIntoIframe(
     if (!childWindow || childWindow === parentWindow) return;
 
     try {
+        // If the child already has $rewriter (the proxy injected bootstrap into
+        // the iframe's HTML and it already ran), there's nothing to do. The
+        // child's bootstrap set the correct base URL for the iframe's own URL;
+        // overwriting it here with the parent's base URL would be wrong.
+        if (childWindow.$rewriter) return;
+
         // Prefer the child's own $rewriter_init if it has one (it might be a
         // same-origin iframe whose document already loaded the bundle).
         // Otherwise borrow the parent's. Either way, the function is the same

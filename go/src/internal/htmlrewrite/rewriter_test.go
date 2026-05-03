@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yovico/cyrano/internal/b64u"
 	"github.com/yovico/cyrano/internal/urlrewrite"
 )
 
@@ -53,14 +52,11 @@ func withBaseURL(u string) func(*Config) {
 	}
 }
 
-// b64 is shorthand for the URL containment encoding.
-func b64(u string) string { return b64u.Encode(u) }
-
 // ── HTML_EXTERNAL_RESOURCE_ATTRS ────────────────────────────────────────────
 
 func TestRewrite_AnchorHrefAbsolute(t *testing.T) {
 	got := rewrite(t, `<a href="https://other.com/about">x</a>`)
-	want := `<a href="http://localhost:9081/?goto=` + b64("https://other.com/about") + `">x</a>`
+	want := `<a href="http://localhost:9081/cyrano/https/other.com/about">x</a>`
 	if got != want {
 		t.Errorf("got  %s\nwant %s", got, want)
 	}
@@ -68,7 +64,7 @@ func TestRewrite_AnchorHrefAbsolute(t *testing.T) {
 
 func TestRewrite_AnchorHrefRelative(t *testing.T) {
 	got := rewrite(t, `<a href="/about">x</a>`)
-	want := `<a href="http://localhost:9081/?goto=` + b64("https://example.com/about") + `">x</a>`
+	want := `<a href="http://localhost:9081/cyrano/https/example.com/about">x</a>`
 	if got != want {
 		t.Errorf("got  %s\nwant %s", got, want)
 	}
@@ -76,28 +72,28 @@ func TestRewrite_AnchorHrefRelative(t *testing.T) {
 
 func TestRewrite_ImgSrc(t *testing.T) {
 	got := rewrite(t, `<img src="https://cdn.example.com/img.png" />`)
-	if !strings.Contains(got, `src="http://localhost:9081/?goto=`+b64("https://cdn.example.com/img.png")) {
+	if !strings.Contains(got, `src="http://localhost:9081/cyrano/https/cdn.example.com/img.png"`) {
 		t.Errorf("img src not rewritten: %s", got)
 	}
 }
 
 func TestRewrite_ScriptSrc(t *testing.T) {
 	got := rewrite(t, `<script src="https://cdn.example.com/x.js"></script>`)
-	if !strings.Contains(got, `src="http://localhost:9081/?goto=`+b64("https://cdn.example.com/x.js")) {
+	if !strings.Contains(got, `src="http://localhost:9081/cyrano/https/cdn.example.com/x.js"`) {
 		t.Errorf("script src not rewritten: %s", got)
 	}
 }
 
 func TestRewrite_LinkHref(t *testing.T) {
 	got := rewrite(t, `<link rel="stylesheet" href="/styles.css">`)
-	if !strings.Contains(got, `href="http://localhost:9081/?goto=`+b64("https://example.com/styles.css")) {
+	if !strings.Contains(got, `href="http://localhost:9081/cyrano/https/example.com/styles.css"`) {
 		t.Errorf("link href not rewritten: %s", got)
 	}
 }
 
 func TestRewrite_FormAction(t *testing.T) {
 	got := rewrite(t, `<form action="/submit" method="POST"></form>`)
-	if !strings.Contains(got, `action="http://localhost:9081/?goto=`+b64("https://example.com/submit")) {
+	if !strings.Contains(got, `action="http://localhost:9081/cyrano/https/example.com/submit"`) {
 		t.Errorf("form action not rewritten: %s", got)
 	}
 }
@@ -105,10 +101,10 @@ func TestRewrite_FormAction(t *testing.T) {
 func TestRewrite_VideoPosterAndSrc(t *testing.T) {
 	got := rewrite(t,
 		`<video poster="https://cdn.example.com/poster.jpg" src="https://cdn.example.com/v.mp4"></video>`)
-	if !strings.Contains(got, b64("https://cdn.example.com/poster.jpg")) {
+	if !strings.Contains(got, "localhost:9081/cyrano/https/cdn.example.com/poster.jpg") {
 		t.Errorf("poster not rewritten: %s", got)
 	}
-	if !strings.Contains(got, b64("https://cdn.example.com/v.mp4")) {
+	if !strings.Contains(got, "localhost:9081/cyrano/https/cdn.example.com/v.mp4") {
 		t.Errorf("video src not rewritten: %s", got)
 	}
 }
@@ -125,17 +121,17 @@ func TestRewrite_PreservesAnchorOnly(t *testing.T) {
 func TestRewrite_Srcset_TwoCandidates(t *testing.T) {
 	got := rewrite(t,
 		`<img srcset="https://cdn.example.com/a.png 1x, https://cdn.example.com/b.png 2x" />`)
-	if !strings.Contains(got, b64("https://cdn.example.com/a.png")+` 1x`) {
+	if !strings.Contains(got, "localhost:9081/cyrano/https/cdn.example.com/a.png 1x") {
 		t.Errorf("srcset 1x candidate missing: %s", got)
 	}
-	if !strings.Contains(got, b64("https://cdn.example.com/b.png")+` 2x`) {
+	if !strings.Contains(got, "localhost:9081/cyrano/https/cdn.example.com/b.png 2x") {
 		t.Errorf("srcset 2x candidate missing: %s", got)
 	}
 }
 
 func TestRewrite_Srcset_NoDescriptor(t *testing.T) {
 	got := rewrite(t, `<img srcset="https://cdn.example.com/a.png" />`)
-	if !strings.Contains(got, `srcset="http://localhost:9081/?goto=`+b64("https://cdn.example.com/a.png")) {
+	if !strings.Contains(got, `srcset="http://localhost:9081/cyrano/https/cdn.example.com/a.png"`) {
 		t.Errorf("srcset single-URL not rewritten: %s", got)
 	}
 }
@@ -237,7 +233,7 @@ func TestRewrite_BaseTagShiftsResolution(t *testing.T) {
 	in := `<head><base href="https://other.com/sub/"><a href="page.html">x</a></head>`
 	got := rewrite(t, in)
 	// After <base>, "page.html" should resolve against https://other.com/sub/
-	if !strings.Contains(got, b64("https://other.com/sub/page.html")) {
+	if !strings.Contains(got, "localhost:9081/cyrano/https/other.com/sub/page.html") {
 		t.Errorf("base href not honored: %s", got)
 	}
 }
@@ -269,7 +265,7 @@ func TestRewrite_BootstrapInjected(t *testing.T) {
 func TestRewrite_BootstrapInjectedBeforeOtherScripts(t *testing.T) {
 	got := rewrite(t, `<html><head><script src="/page.js"></script></head></html>`, withInject)
 	idxBootstrap := strings.Index(got, `<script src="/rewriter.js"`)
-	idxPageScript := strings.Index(got, `<script src="http://localhost:9081/?goto=`+b64("https://example.com/page.js"))
+	idxPageScript := strings.Index(got, `<script src="http://localhost:9081/cyrano/https/example.com/page.js"`)
 	if idxBootstrap < 0 || idxPageScript < 0 {
 		t.Fatalf("missing scripts: bootstrap=%d page=%d in:\n%s", idxBootstrap, idxPageScript, got)
 	}
@@ -294,7 +290,7 @@ func TestRewrite_BootstrapFallbackOnBody_WhenNoHead(t *testing.T) {
 		t.Errorf("bootstrap not injected via <body> fallback: %s", got)
 	}
 	idxBootstrap := strings.Index(got, `<script src="/rewriter.js"`)
-	idxPageScript := strings.Index(got, `<script src="http://localhost:9081/?goto=`)
+	idxPageScript := strings.Index(got, `<script src="http://localhost:9081/cyrano/`)
 	if idxBootstrap < 0 || idxPageScript < 0 {
 		t.Fatalf("missing scripts: bootstrap=%d page=%d in:\n%s", idxBootstrap, idxPageScript, got)
 	}
@@ -335,11 +331,11 @@ func TestRewrite_FullPage(t *testing.T) {
 	}
 	// All three external URLs proxified
 	for _, u := range []string{
-		"https://example.com/style.css",
-		"https://example.com/about",
-		"https://example.com/p.png",
+		"localhost:9081/cyrano/https/example.com/style.css",
+		"localhost:9081/cyrano/https/example.com/about",
+		"localhost:9081/cyrano/https/example.com/p.png",
 	} {
-		if !strings.Contains(got, b64(u)) {
+		if !strings.Contains(got, u) {
 			t.Errorf("URL not rewritten in output: %q\nout: %s", u, got)
 		}
 	}

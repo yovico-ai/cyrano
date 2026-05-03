@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,19 +13,17 @@ import (
 
 var testPublicURL = &url.URL{Scheme: "http", Host: "localhost:9081"}
 
-// b64uEncode is a test-local copy of the proxy URL encoding so the test
-// doesn't import the proxy package and create a circular dependency.
-func b64uEncode(s string) string {
-	return strings.NewReplacer("+", "-", "/", "_").Replace(
-		strings.TrimRight(base64.StdEncoding.EncodeToString([]byte(s)), "="))
+// cyranoURL returns the proxy URL for a target, using http://localhost:9081 as the proxy origin.
+func cyranoURL(target string) string {
+	u, _ := url.Parse(target)
+	return "http://localhost:9081/cyrano/" + u.Scheme + "/" + u.Host + u.EscapedPath()
 }
 
 // ── inferOriginFromReferer ──────────────────────────────────────────────────
 
 func TestInferOriginFromReferer_ValidReferer(t *testing.T) {
 	req := httptest.NewRequest("GET", "/chunk-abc.js", nil)
-	req.Header.Set("Referer",
-		"http://localhost:9081/?goto="+b64uEncode("https://github.com/")+"")
+	req.Header.Set("Referer", "http://localhost:9081/cyrano/https/github.com/")
 
 	got := inferOriginFromReferer(req, testPublicURL)
 	if got == nil {
@@ -53,8 +50,7 @@ func TestInferOriginFromReferer_NoReferer(t *testing.T) {
 func TestInferOriginFromReferer_DifferentHost(t *testing.T) {
 	// Referer is from an external origin — must not trust it.
 	req := httptest.NewRequest("GET", "/chunk.js", nil)
-	req.Header.Set("Referer",
-		"http://evil.com/?goto="+b64uEncode("https://github.com/"))
+	req.Header.Set("Referer", "http://evil.com/cyrano/https/github.com/")
 	if got := inferOriginFromReferer(req, testPublicURL); got != nil {
 		t.Errorf("expected nil for foreign Referer host, got %v", got)
 	}
@@ -68,19 +64,18 @@ func TestInferOriginFromReferer_NoLoadParam(t *testing.T) {
 	}
 }
 
-func TestInferOriginFromReferer_BadBase64(t *testing.T) {
+func TestInferOriginFromReferer_MalformedCyranoPath(t *testing.T) {
 	req := httptest.NewRequest("GET", "/chunk.js", nil)
-	req.Header.Set("Referer", "http://localhost:9081/?goto=NOT!!VALID!!BASE64")
+	req.Header.Set("Referer", "http://localhost:9081/cyrano/")
 	if got := inferOriginFromReferer(req, testPublicURL); got != nil {
-		t.Errorf("expected nil for bad base64, got %v", got)
+		t.Errorf("expected nil for malformed cyrano path, got %v", got)
 	}
 }
 
 func TestInferOriginFromReferer_NonHTTPScheme(t *testing.T) {
-	// Decoded target has a non-http/https scheme — must reject.
+	// Target has a non-http/https scheme — must reject.
 	req := httptest.NewRequest("GET", "/chunk.js", nil)
-	req.Header.Set("Referer",
-		"http://localhost:9081/?goto="+b64uEncode("file:///etc/passwd"))
+	req.Header.Set("Referer", "http://localhost:9081/cyrano/file/etc/passwd")
 	if got := inferOriginFromReferer(req, testPublicURL); got != nil {
 		t.Errorf("expected nil for file:// scheme, got %v", got)
 	}
@@ -89,8 +84,7 @@ func TestInferOriginFromReferer_NonHTTPScheme(t *testing.T) {
 func TestInferOriginFromReferer_CaseInsensitiveHost(t *testing.T) {
 	pubURL := &url.URL{Scheme: "http", Host: "Proxy.Example.COM:9081"}
 	req := httptest.NewRequest("GET", "/chunk.js", nil)
-	req.Header.Set("Referer",
-		"http://proxy.example.com:9081/?goto="+b64uEncode("https://target.com/"))
+	req.Header.Set("Referer", "http://proxy.example.com:9081/cyrano/https/target.com/")
 	got := inferOriginFromReferer(req, pubURL)
 	if got == nil {
 		t.Error("expected match for same host with different case")
@@ -132,7 +126,7 @@ func TestServer_RewriterJSNotProxiedViaReferer(t *testing.T) {
 	handler := srv.Handler()
 
 	// Request /rewriter.js with a Referer pointing at a proxied upstream page.
-	referer := "http://localhost:9081/?goto=" + b64uEncode(upstream.URL+"/") + ""
+	referer := cyranoURL(upstream.URL + "/")
 	req := httptest.NewRequest("GET", "/rewriter.js", nil)
 	req.Host = "localhost:9081"
 	req.Header.Set("Referer", referer)
@@ -149,16 +143,13 @@ func TestServer_RewriterJSNotProxiedViaReferer(t *testing.T) {
 }
 
 func TestServer_RefererRouting(t *testing.T) {
-	// Upstream records the path it received.
-	var gotPath string
+	// Bare-path request from a rewritten page must redirect to the canonical
+	// /cyrano/<scheme>/<host><path> URL — not inline-proxy it — so the
+	// browser address bar stays correct and client-side routing works.
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		w.Header().Set("Content-Type", "application/javascript")
-		_, _ = w.Write([]byte("/* chunk */"))
+		w.Write([]byte("/* chunk */"))
 	}))
 	t.Cleanup(upstream.Close)
-
-	upURL, _ := url.Parse(upstream.URL)
 
 	cfg := &config.File{
 		Servers: []config.Server{{Port: 9081}},
@@ -174,22 +165,22 @@ func TestServer_RefererRouting(t *testing.T) {
 	srv := New(cfg, t.TempDir(), nil)
 	handler := srv.Handler()
 
-	// Build the Referer: a proxied page whose origin is our upstream.
-	referer := "http://localhost:9081/?goto=" + b64uEncode(upstream.URL+"/") + ""
+	upURL, _ := url.Parse(upstream.URL)
+	referer := cyranoURL(upstream.URL + "/")
 
 	req := httptest.NewRequest("GET", "/chunk-abc.js", nil)
 	req.Host = "localhost:9081"
 	req.Header.Set("Referer", referer)
 
-	_ = upURL // referenced to keep import happy
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != 200 {
-		t.Fatalf("status %d; body=%q", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status %d; want 302, body=%q", rec.Code, rec.Body.String())
 	}
-	if gotPath != "/chunk-abc.js" {
-		t.Errorf("upstream received path %q, want /chunk-abc.js", gotPath)
+	want := "http://localhost:9081/cyrano/http/" + upURL.Host + "/chunk-abc.js"
+	if got := rec.Header().Get("Location"); got != want {
+		t.Errorf("Location %q; want %q", got, want)
 	}
 }
 
@@ -215,7 +206,7 @@ func TestServer_FaviconSilencedEvenWithReferer(t *testing.T) {
 
 	req := httptest.NewRequest("GET", "/favicon.ico", nil)
 	req.Host = "localhost:9081"
-	req.Header.Set("Referer", "http://localhost:9081/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS8")
+	req.Header.Set("Referer", "http://localhost:9081/cyrano/https/example.com/")
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -254,7 +245,7 @@ func TestServer_FaviconSilencedWithoutReferer(t *testing.T) {
 }
 
 func TestServer_RoutesGotoRequest(t *testing.T) {
-	// ?goto= requests must be proxied to the upstream, not served as static
+	// /cyrano/ requests must be proxied to the upstream, not served as static
 	// files. This directly exercises the IsLoadRequest dispatch in Handler().
 	var gotPath string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -279,7 +270,9 @@ func TestServer_RoutesGotoRequest(t *testing.T) {
 	handler := srv.Handler()
 
 	target := upstream.URL + "/some/page"
-	req := httptest.NewRequest("GET", "/?goto="+b64uEncode(target), nil)
+	u, _ := url.Parse(target)
+	cyranoReqPath := "/cyrano/" + u.Scheme + "/" + u.Host + u.EscapedPath()
+	req := httptest.NewRequest("GET", cyranoReqPath, nil)
 	req.Host = "localhost:9081"
 
 	rec := httptest.NewRecorder()
@@ -341,5 +334,130 @@ func TestFixContentType_UnknownExtension_Unchanged(t *testing.T) {
 	fixContentType(resp, u)
 	if ct := resp.Header.Get("Content-Type"); ct != "text/plain" {
 		t.Errorf("unknown extension should be unchanged, got %q", ct)
+	}
+}
+
+// ── isChallengeHTML ──────────────────────────────────────────────────────────
+
+func TestIsChallengeHTML_OldCfChlPath(t *testing.T) {
+	if !isChallengeHTML([]byte(`<script src="/__cf_chl_abc/challenge.js"></script>`)) {
+		t.Error("__cf_chl path should be detected as challenge HTML")
+	}
+}
+
+func TestIsChallengeHTML_OldChallengePath(t *testing.T) {
+	if !isChallengeHTML([]byte(`<script src="/__challenge_abc/challenge.js"></script>`)) {
+		t.Error("__challenge_ path should be detected as challenge HTML")
+	}
+}
+
+
+func TestIsChallengeHTML_NormalPage(t *testing.T) {
+	if isChallengeHTML([]byte(`<html><body><p>Hello world</p></body></html>`)) {
+		t.Error("normal HTML page should not be detected as challenge HTML")
+	}
+}
+
+// ── isChallengeScript ────────────────────────────────────────────────────────
+
+func TestIsChallengeScript_CdnCgiChallengePlatform(t *testing.T) {
+	u, _ := url.Parse("https://www.wordreference.com/cdn-cgi/challenge-platform/scripts/jsd/main.js")
+	if !isChallengeScript(u) {
+		t.Error("cdn-cgi/challenge-platform path should be detected as challenge script")
+	}
+}
+
+func TestIsChallengeScript_OldCfChlPattern(t *testing.T) {
+	u, _ := url.Parse("https://example.com/__cf_chl_opt/challenge.js")
+	if !isChallengeScript(u) {
+		t.Error("__cf_chl pattern should be detected as challenge script")
+	}
+}
+
+func TestIsChallengeScript_OldChallengePattern(t *testing.T) {
+	u, _ := url.Parse("https://example.com/__challenge_abc123/challenge.js")
+	if !isChallengeScript(u) {
+		t.Error("__challenge_ pattern should be detected as challenge script")
+	}
+}
+
+func TestIsChallengeScript_NormalJS(t *testing.T) {
+	u, _ := url.Parse("https://example.com/static/app.js")
+	if isChallengeScript(u) {
+		t.Error("normal JS should not be detected as challenge script")
+	}
+}
+
+func TestIsChallengeScript_AkamaiScript(t *testing.T) {
+	u, _ := url.Parse("https://www.casio.com/nFP9UMOZ6T/Wwr_/M1hZSI?v=12345678-1234-1234-1234-123456789abc&t=1234567")
+	if !isChallengeScript(u) {
+		t.Error("Akamai Bot Manager script should be detected as challenge script")
+	}
+}
+
+func TestIsChallengeScript_AkamaiScript_NoV(t *testing.T) {
+	u, _ := url.Parse("https://www.casio.com/nFP9UMOZ6T/Wwr_/M1hZSI?t=1234567")
+	if isChallengeScript(u) {
+		t.Error("random-path script without UUID v= should not match Akamai pattern")
+	}
+}
+
+func TestIsChallengeScript_AkamaiScript_HasExtension(t *testing.T) {
+	u, _ := url.Parse("https://www.casio.com/nFP9UMOZ6T/Wwr_.js?v=12345678-1234-1234-1234-123456789abc")
+	if isChallengeScript(u) {
+		t.Error("path with file extension should not match Akamai pattern")
+	}
+}
+
+// ── isChallengeJSPath / empty-JS fallback ────────────────────────────────────
+
+func TestIsChallengeJSPath_Match(t *testing.T) {
+	if !isChallengeJSPath("/cdn-cgi/challenge-platform/scripts/jsd/main.js") {
+		t.Error("cdn-cgi/challenge-platform/*.js should match")
+	}
+}
+
+func TestIsChallengeJSPath_NoMatch_NormalJS(t *testing.T) {
+	if isChallengeJSPath("/static/app.js") {
+		t.Error("normal JS should not match")
+	}
+}
+
+func TestIsChallengeJSPath_NoMatch_NonJS(t *testing.T) {
+	if isChallengeJSPath("/cdn-cgi/challenge-platform/scripts/jsd/data.json") {
+		t.Error("non-JS cdn-cgi path should not match")
+	}
+}
+
+func TestServer_CdnCgiChallengeFallback_EmptyJS(t *testing.T) {
+	cfg := &config.File{
+		Servers: []config.Server{{Port: 9081}},
+		VHosts: []config.VHost{{
+			Hostnames:         []string{"localhost"},
+			HTTPPort:          9081,
+			Mode:              "sslvpn",
+			RewriterJSPath:    "/rewriter.js",
+			HeadInjectionPath: "/head-injection",
+			CookiesJSONPath:   "/cookies.json",
+		}},
+	}
+	srv := New(cfg, t.TempDir(), nil)
+	handler := srv.Handler()
+
+	req := httptest.NewRequest("GET", "/cdn-cgi/challenge-platform/scripts/jsd/main.js", nil)
+	req.Host = "localhost:9081"
+	// No Referer — simulates request from about:blank sandbox.
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	ct := w.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, "application/javascript") {
+		t.Errorf("expected application/javascript Content-Type, got %q", ct)
+	}
+	if body := w.Body.String(); body != "" {
+		t.Errorf("expected empty body, got %q", body)
 	}
 }

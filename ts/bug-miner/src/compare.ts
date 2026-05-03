@@ -53,15 +53,35 @@ function ratio(direct: number, proxied: number): number {
  * - "Failed to load resource: … status of 403 (Forbidden)" → "http-error-403"
  *   (strips URL and reason phrase so direct/proxied match despite different
  *   URL hosts and missing/present reason text)
- * - Everything else: strip the proxy origin so localhost URLs don't prevent
- *   matching against the same error on the direct side.
+ * - Proxy goto-URLs are decoded back to the original URL so that
+ *   "Refused to execute script from 'http://localhost:9081/?goto=aHR0c...' because its MIME type"
+ *   matches the direct equivalent with the real origin URL.
+ * - Any remaining localhost references are stripped.
  */
 function normalizeError(msg: string): string {
     const statusMatch = msg.match(
         /Failed to load resource: the server responded with a status of (\d+)/,
     );
     if (statusMatch) return `http-error-${statusMatch[1]}`;
-    return msg.replace(/https?:\/\/localhost:\d+\/?/g, "");
+
+    // Decode proxy goto-URLs back to the original URL so errors that differ
+    // only in proxy-vs-direct URL representation compare equal.
+    let normalized = msg.replace(
+        /https?:\/\/localhost:\d+\/\?goto=([A-Za-z0-9_-]+=*)/g,
+        (_match, b64u: string) => {
+            try {
+                const b64 = b64u.replace(/-/g, "+").replace(/_/g, "/");
+                return Buffer.from(b64, "base64").toString("utf8");
+            } catch {
+                return "";
+            }
+        },
+    );
+
+    // Strip any bare proxy-origin prefix not covered by the goto decode above.
+    normalized = normalized.replace(/https?:\/\/localhost:\d+\/?/g, "");
+
+    return normalized;
 }
 
 function arraysEqual<T>(a: T[], b: T[]): boolean {

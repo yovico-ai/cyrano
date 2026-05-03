@@ -16,11 +16,9 @@
 //     (token-level attribute rewriting). The browser's parser is closer to
 //     spec-compliant than anything we could ship in the bundle.
 //   - Zero parser dependency.
-//   - Inline `<script>` and `<style>` content is NOT yet rewritten — that
-//     requires the JS / CSS source rewriters on the client and is tracked
-//     separately. Their rewriting is no-op here, so a `document.write` that
-//     embeds inline scripts with URL string literals is still a leak surface
-//     until the JS rewriter lands.
+//   - Inline `<script>` bodies are passed through the JS source rewriter;
+//     inline `<style>` / `style=""` is passed through the CSS rewriter —
+//     same as the server-side rewriter does for static HTML.
 //
 // Recursion safety: this module is the implementation behind the patched
 // `innerHTML` / `setAttribute` overloads, so it MUST avoid going through

@@ -86,21 +86,21 @@ describe("WrappedLocation writes route through the proxy", () => {
     it("href = '...' assigns the proxified URL on the real Location", () => {
         wrapped.href = "https://example.com/foo";
         expect(realLoc.assign).toHaveBeenCalledWith(
-            "http://localhost:9081/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS9mb28",
+            "http://localhost:9081/cyrano/https/example.com/foo",
         );
     });
 
     it("assign(url) proxifies and forwards", () => {
         wrapped.assign("/about");
         expect(realLoc.assign).toHaveBeenCalledWith(
-            "http://localhost:9081/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS9hYm91dA",
+            "http://localhost:9081/cyrano/https/example.com/about",
         );
     });
 
     it("replace(url) proxifies and forwards", () => {
         wrapped.replace("https://example.com/foo");
         expect(realLoc.replace).toHaveBeenCalledWith(
-            "http://localhost:9081/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS9mb28",
+            "http://localhost:9081/cyrano/https/example.com/foo",
         );
     });
 
@@ -123,7 +123,7 @@ describe("WrappedLocation writes route through the proxy", () => {
     it("setting protocol/host/hostname/port/pathname/search rewrites and assigns", () => {
         wrapped.pathname = "/api/v1";
         expect(realLoc.assign).toHaveBeenCalledWith(
-            "http://localhost:9081/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS9hcGkvdjE",
+            "http://localhost:9081/cyrano/https/example.com/api/v1",
         );
     });
 });

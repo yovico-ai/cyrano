@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yovico/cyrano/internal/b64u"
 	"github.com/yovico/cyrano/internal/urlrewrite"
 )
 
@@ -30,29 +29,23 @@ func rewrite(t *testing.T, src string) string {
 	}))
 }
 
-func b64(s string) string { return b64u.Encode(s) }
-
 func TestUrlAbsoluteDoubleQuoted(t *testing.T) {
 	got := rewrite(t, `body { background: url("https://cdn.example.com/img.png"); }`)
-	want := b64("https://cdn.example.com/img.png")
-	if !strings.Contains(got, want) {
-		t.Errorf("got %s\nwant containing %s", got, want)
-	}
-	if !strings.Contains(got, `url("http://localhost:9081/?goto=`) {
-		t.Errorf("quoting not preserved: %s", got)
+	if !strings.Contains(got, `url("http://localhost:9081/cyrano/https/cdn.example.com/img.png")`) {
+		t.Errorf("url not rewritten: %s", got)
 	}
 }
 
 func TestUrlAbsoluteSingleQuoted(t *testing.T) {
 	got := rewrite(t, `.x { background: url('https://cdn.example.com/a.png'); }`)
-	if !strings.Contains(got, `url('http://localhost:9081/?goto=`) {
+	if !strings.Contains(got, `url('http://localhost:9081/cyrano/https/cdn.example.com/a.png')`) {
 		t.Errorf("single-quote rewrite missing: %s", got)
 	}
 }
 
 func TestUrlAbsoluteUnquoted(t *testing.T) {
 	got := rewrite(t, `.x { background: url(https://cdn.example.com/a.png); }`)
-	if !strings.Contains(got, b64("https://cdn.example.com/a.png")) {
+	if !strings.Contains(got, "localhost:9081/cyrano/https/cdn.example.com/a.png") {
 		t.Errorf("unquoted url not rewritten: %s", got)
 	}
 	// Must not gain spurious quoting
@@ -63,28 +56,28 @@ func TestUrlAbsoluteUnquoted(t *testing.T) {
 
 func TestUrlRelative(t *testing.T) {
 	got := rewrite(t, `.x { background: url("/local.png"); }`)
-	if !strings.Contains(got, b64("https://example.com/local.png")) {
+	if !strings.Contains(got, "localhost:9081/cyrano/https/example.com/local.png") {
 		t.Errorf("relative url not resolved+rewritten: %s", got)
 	}
 }
 
 func TestImportString(t *testing.T) {
 	got := rewrite(t, `@import "https://fonts.example.com/font.css";`)
-	if !strings.Contains(got, b64("https://fonts.example.com/font.css")) {
+	if !strings.Contains(got, "localhost:9081/cyrano/https/fonts.example.com/font.css") {
 		t.Errorf("@import string url not rewritten: %s", got)
 	}
 }
 
 func TestImportUrlForm(t *testing.T) {
 	got := rewrite(t, `@import url(https://fonts.example.com/font2.css);`)
-	if !strings.Contains(got, b64("https://fonts.example.com/font2.css")) {
+	if !strings.Contains(got, "localhost:9081/cyrano/https/fonts.example.com/font2.css") {
 		t.Errorf("@import url() not rewritten: %s", got)
 	}
 }
 
 func TestImportSingleQuote(t *testing.T) {
 	got := rewrite(t, `@import 'https://x.example.com/y.css';`)
-	if !strings.Contains(got, `'http://localhost:9081/?goto=`) {
+	if !strings.Contains(got, `'http://localhost:9081/cyrano/https/x.example.com/y.css'`) {
 		t.Errorf("@import single-quote rewrite missing: %s", got)
 	}
 }
@@ -93,7 +86,7 @@ func TestNonImportStringLeftAlone(t *testing.T) {
 	// String tokens not following @import (e.g. inside content:) shouldn't
 	// be rewritten — they're not URLs.
 	got := rewrite(t, `.x::before { content: "https://example.com/x"; }`)
-	if strings.Contains(got, `localhost:9081/?goto=`) {
+	if strings.Contains(got, "localhost:9081/cyrano/") {
 		t.Errorf("string content shouldn't be rewritten: %s", got)
 	}
 	if !strings.Contains(got, `"https://example.com/x"`) {
@@ -120,8 +113,8 @@ func TestMultipleUrls(t *testing.T) {
 	in := `.a { background: url("https://x.example.com/1.png"); }
 .b { background: url("https://x.example.com/2.png"); }`
 	got := rewrite(t, in)
-	if !strings.Contains(got, b64("https://x.example.com/1.png")) ||
-		!strings.Contains(got, b64("https://x.example.com/2.png")) {
+	if !strings.Contains(got, "localhost:9081/cyrano/https/x.example.com/1.png") ||
+		!strings.Contains(got, "localhost:9081/cyrano/https/x.example.com/2.png") {
 		t.Errorf("not all urls rewritten: %s", got)
 	}
 }
@@ -145,7 +138,7 @@ func TestPlainCssNoUrls(t *testing.T) {
 func TestUrlWithSpaces(t *testing.T) {
 	in := `.x { background: url(  "/a.png"  ); }`
 	got := rewrite(t, in)
-	if !strings.Contains(got, b64("https://example.com/a.png")) {
+	if !strings.Contains(got, "localhost:9081/cyrano/https/example.com/a.png") {
 		t.Errorf("spaced url() not rewritten: %s", got)
 	}
 }
@@ -157,7 +150,7 @@ func TestDataUrlLeftAlone(t *testing.T) {
 	if !strings.Contains(got, "data:image/png") {
 		t.Errorf("data URL stripped: %s", got)
 	}
-	if strings.Contains(got, `localhost:9081/?goto=`) {
+	if strings.Contains(got, "localhost:9081/cyrano/") {
 		t.Errorf("data URL should not be proxified: %s", got)
 	}
 }
@@ -177,15 +170,14 @@ func TestAnchorLeftAlone(t *testing.T) {
 func TestCSSEscapedParensInURL(t *testing.T) {
 	in := `.x { background: url("https://cdn.example.com/img/foo\(1\).png") }`
 	got := rewrite(t, in)
-	// The goto= value must encode the unescaped URL (parens, not backslashes).
-	want := b64("https://cdn.example.com/img/foo(1).png")
+	// Parens are allowed in URL paths per RFC 3986 (sub-delimiters)
+	want := "localhost:9081/cyrano/https/cdn.example.com/img/foo(1).png"
 	if !strings.Contains(got, want) {
-		t.Errorf("CSS-escaped parens not stripped before proxifying:\n got:  %s\n want base64 of url with literal parens: %s", got, want)
+		t.Errorf("CSS-escaped parens not stripped before proxifying:\n got:  %s\n want cyrano url with literal parens: %s", got, want)
 	}
-	// Must not contain the backslash-escaped form.
-	bad := b64("https://cdn.example.com/img/foo\\(1\\).png")
+	bad := "localhost:9081/cyrano/https/cdn.example.com/img/foo%5C"
 	if strings.Contains(got, bad) {
-		t.Errorf("backslash-escaped URL leaked into goto= param: %s", got)
+		t.Errorf("backslash-escaped URL leaked: %s", got)
 	}
 }
 
@@ -202,8 +194,8 @@ func TestCSSEscapedParensUnquoted(t *testing.T) {
 	if strings.Contains(got, "%5C") || strings.Contains(got, "%5c") {
 		t.Errorf("backslash %%5C still present in proxified URL: %s", got)
 	}
-	// Must still contain a goto= URL pointing at the CDN.
-	if !strings.Contains(got, "localhost:9081/?goto=") {
+	// Must still contain a cyrano URL pointing at the CDN.
+	if !strings.Contains(got, "localhost:9081/cyrano/") {
 		t.Errorf("URL not proxified: %s", got)
 	}
 }

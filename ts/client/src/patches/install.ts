@@ -25,6 +25,9 @@ import { patchFunctionConstructor } from "./function-ctor";
 import { patchDynamicIframeAppend } from "./dynamic-iframe";
 import { patchHistory } from "./history";
 import { patchSendBeacon } from "./beacon";
+import { patchServiceWorker } from "./service-worker";
+import { patchDocumentCookie } from "./document-cookie";
+import { installMutationObserver } from "./mutation-observer";
 
 const PATCHED_FLAG = Symbol.for("rewriter.patched");
 
@@ -35,11 +38,18 @@ interface PatchableWindow extends Window {
 export function installPatches(
     targetWindow: Window,
     getCurrentBaseUrl: () => URL,
+    setBaseUrl: (href: string) => void,
     config: ClientConfig,
 ): void {
     const flagged = targetWindow as PatchableWindow;
     if (flagged[PATCHED_FLAG]) return;
     flagged[PATCHED_FLAG] = true;
+
+    // Capture native setAttribute/getAttribute before patchDynamicHtml replaces
+    // them. The MutationObserver uses the native versions to read/write raw DOM
+    // values (proxy URLs) without going through our unwrap/rewrite patches.
+    const nativeSetAttribute = Element.prototype.setAttribute;
+    const nativeGetAttribute = Element.prototype.getAttribute;
 
     const rewriteOne = (rawUrl: string): string =>
         rewriteUrl(rawUrl, getCurrentBaseUrl(), config);
@@ -51,16 +61,26 @@ export function installPatches(
     patchWebSocket(targetWindow, rewriteOne);
     patchEventSource(targetWindow, rewriteOne);
     patchWorker(targetWindow, rewriteOne);
+    patchServiceWorker(targetWindow);
     // Dynamic-HTML patches must come BEFORE the per-class property-setter
     // patches: dynamic-html captures Element.prototype.setAttribute as the
     // "original", and the property-setter patch later in this list works on
     // descendant constructors' descriptors which don't include setAttribute.
-    patchDynamicHtml(targetWindow, rewriteOne);
+    patchDynamicHtml(targetWindow, rewriteOne, unwrapOne);
     patchUrlAttributes(targetWindow, rewriteOne, unwrapOne);
     patchCssRules(targetWindow, rewriteOne);
     patchCssStyleDeclaration(targetWindow, rewriteOne);
     patchFunctionConstructor(targetWindow);
     patchDynamicIframeAppend(targetWindow, config, () => getCurrentBaseUrl().href);
-    patchHistory(targetWindow, rewriteOne);
+    patchHistory(targetWindow, rewriteOne, setBaseUrl, unwrapOne);
     patchSendBeacon(targetWindow, rewriteOne);
+    patchDocumentCookie(targetWindow, () => getCurrentBaseUrl().hostname);
+    installMutationObserver(
+        targetWindow,
+        rewriteOne,
+        config,
+        () => getCurrentBaseUrl().href,
+        nativeSetAttribute,
+        nativeGetAttribute,
+    );
 }

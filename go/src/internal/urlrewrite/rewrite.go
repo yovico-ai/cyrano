@@ -1,8 +1,8 @@
 // Package urlrewrite implements URL containment — the function that turns
 // any external URL into a URL pointing at this proxy with the original
-// URL encoded in the `?goto=` query parameter. This is the foundation of
-// the clientless VPN: every external link in rewritten HTML/CSS/JS gets
-// run through Rewrite() before being emitted.
+// URL encoded in the path as /cyrano/<scheme>/<host><path>[?query].
+// This is the foundation of the clientless VPN: every external link in
+// rewritten HTML/CSS/JS gets run through Rewrite() before being emitted.
 //
 // Wire-compatible with the TS client's url/containment.ts:rewriteUrl.
 // Producing byte-identical proxified URLs across runtimes is a hard
@@ -13,8 +13,6 @@ package urlrewrite
 import (
 	"net/url"
 	"strings"
-
-	"github.com/yovico/cyrano/internal/b64u"
 )
 
 // ProxyConfig is the subset of vhost config Rewrite cares about.
@@ -91,14 +89,53 @@ func effectiveHost(u *url.URL) string {
 	return host + ":" + port
 }
 
-// IsAlreadyProxified is true when u is on the proxy host AND already carries
-// a goto= query param — i.e. some upstream step already rewrote it. Avoids
-// the catastrophic "double-rewrite" case (?goto=<b64-of-?goto=<b64-of-...>>).
+// IsAlreadyProxified is true when u is on the proxy host AND the path starts
+// with /cyrano/ — i.e. some upstream step already rewrote it. Avoids the
+// catastrophic "double-rewrite" case.
 func IsAlreadyProxified(u *url.URL, cfg ProxyConfig) bool {
 	if !IsProxyHost(u, cfg) {
 		return false
 	}
-	return u.Query().Has("goto")
+	return strings.HasPrefix(u.Path, "/cyrano/")
+}
+
+// ParseCyranoPath parses a /cyrano/<scheme>/<host><path> URL path and raw
+// query string back into the original target URL. Returns (target, true) on
+// success, (nil, false) when the path is not a valid cyrano path.
+func ParseCyranoPath(urlPath, rawQuery string) (*url.URL, bool) {
+	const prefix = "/cyrano/"
+	if !strings.HasPrefix(urlPath, prefix) {
+		return nil, false
+	}
+	rest := urlPath[len(prefix):]
+
+	// First segment: scheme (everything before first '/').
+	idx := strings.Index(rest, "/")
+	if idx < 0 {
+		return nil, false
+	}
+	scheme := rest[:idx]
+	rest = rest[idx+1:]
+
+	// Second segment: host (everything before next '/').
+	idx = strings.Index(rest, "/")
+	var host, path string
+	if idx < 0 {
+		host = rest
+		path = "/"
+	} else {
+		host = rest[:idx]
+		path = rest[idx:]
+	}
+	if host == "" || scheme == "" {
+		return nil, false
+	}
+	return &url.URL{
+		Scheme:   scheme,
+		Host:     host,
+		Path:     path,
+		RawQuery: rawQuery,
+	}, true
 }
 
 // Rewrite returns the proxified form of rawURL.
@@ -111,10 +148,10 @@ func IsAlreadyProxified(u *url.URL, cfg ProxyConfig) bool {
 //   - rawURL starts with '#' (in-page anchor)
 //   - rawURL has a non-resolvable scheme (mailto:, data:, ...)
 //   - rawURL fails to parse against baseURL
-//   - the resolved URL is already on the proxy with a goto= param
+//   - the resolved URL is already on the proxy with a /cyrano/ path
 //
 // Returns the resolved absolute URL unchanged when it points directly at the
-// proxy host without a goto= param (already a same-origin request — leave
+// proxy host without a /cyrano/ path (already a same-origin request — leave
 // it alone).
 func Rewrite(rawURL string, baseURL *url.URL, cfg ProxyConfig) string {
 	if rawURL == "" || strings.HasPrefix(rawURL, "#") {
@@ -157,12 +194,18 @@ func Rewrite(rawURL string, baseURL *url.URL, cfg ProxyConfig) string {
 		return abs.String()
 	}
 
-	// Strip fragment from the encoded "load" payload (matches the JS rewriter).
+	// Strip fragment from the "load" payload (matches the JS rewriter).
 	target := *abs
 	target.Fragment = ""
-	encoded := b64u.Encode(target.String())
 
-	out := APIBase(cfg) + "/?goto=" + encoded
+	escapedPath := target.EscapedPath()
+	if escapedPath == "" {
+		escapedPath = "/"
+	}
+	out := APIBase(cfg) + "/cyrano/" + target.Scheme + "/" + target.Host + escapedPath
+	if target.RawQuery != "" {
+		out += "?" + target.RawQuery
+	}
 	if abs.Fragment != "" {
 		out += "#" + abs.Fragment
 	}
@@ -176,16 +219,13 @@ func Unwrap(proxiedHref string, cfg ProxyConfig) string {
 	if err != nil || !IsProxyHost(u, cfg) {
 		return proxiedHref
 	}
-	load := u.Query().Get("goto")
-	if load == "" {
+	target, ok := ParseCyranoPath(u.Path, u.RawQuery)
+	if !ok {
 		return proxiedHref
 	}
-	original, err := b64u.Decode(load)
-	if err != nil {
-		return proxiedHref
-	}
+	result := target.String()
 	if u.Fragment != "" {
-		return original + "#" + u.Fragment
+		result += "#" + u.Fragment
 	}
-	return original
+	return result
 }

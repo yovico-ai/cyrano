@@ -57,12 +57,21 @@ type Options struct {
 	WrapEvalMemexp       bool
 	WrapMemberExpression bool
 	WrapImportArg        bool
+	WrapImportMetaUrl    bool
+	WrapStaticImport     bool
 
 	// BaseURL is the URL of the script being rewritten. When set together
-	// with ProxifyURL, string-literal import() specifiers are resolved
-	// against this URL and proxified statically at rewrite time, bypassing
-	// the client-side wrap_import_arg. Dynamic specifiers (non-literals)
-	// still fall back to wrap_import_arg.
+	// with ProxifyURL:
+	//   - WrapImportArg: string-literal import() specifiers are resolved
+	//     against this URL and proxified statically at rewrite time, bypassing
+	//     the client-side wrap_import_arg.
+	//   - WrapStaticImport: static `import … from "…"` and `export … from "…"`
+	//     specifiers are resolved and proxified inline. This fixes ES-module
+	//     chunk loading where relative specifiers would otherwise resolve to
+	//     the proxy origin instead of the original module base URL.
+	//   - WrapImportMetaUrl: import.meta.url is replaced with a string literal
+	//     containing this URL, so ES-module entry points that compute chunk
+	//     paths relative to import.meta.url see the original URL.
 	BaseURL    *url.URL
 	ProxifyURL func(rawURL string, base *url.URL) string
 
@@ -89,6 +98,8 @@ func DefaultOptions() Options {
 		WrapEvalMemexp:       true,
 		WrapMemberExpression: true,
 		WrapImportArg:        true,
+		WrapImportMetaUrl:    true,
+		WrapStaticImport:     true,
 	}
 }
 
@@ -111,6 +122,16 @@ func Rewrite(src []byte, opts Options) []byte {
 				slog.Int("size", len(src)),
 				slog.String("snippet", snippet(src, 120)),
 			)
+		}
+		// Full AST parse failed. When WrapStaticImport is enabled and we have
+		// a BaseURL + ProxifyURL, apply a simple byte-scan fallback that rewrites
+		// ES module `import … from "url"` and `export … from "url"` specifiers.
+		// This handles parse-incompatible minified bundles that still need their
+		// static import specifiers proxified so the browser doesn't resolve them
+		// relative to the proxy root (e.g. yielding /chunk-X.js instead of
+		// /?goto=…/runtime/chunks/chunk-X.js).
+		if opts.WrapStaticImport && opts.BaseURL != nil && opts.ProxifyURL != nil {
+			return rewriteImportSpecifiersFallback(src, opts)
 		}
 		return src
 	}
@@ -252,6 +273,19 @@ func (r *rewriter) walkStmt(s js.IStmt) js.IStmt {
 		// Class bodies are handled inside their methods; tdewolff models
 		// each as a FuncDecl-like node within the class. Skip for now —
 		// nothing in the rule set needs to peek into class members.
+	case *js.ImportStmt:
+		// static `import … from "specifier"` — rewrite the specifier when
+		// BaseURL+ProxifyURL are set so chunks are fetched via the proxy.
+		// Without this, relative specifiers in ES-module entry points (Gatsby,
+		// Vite) resolve against the proxy goto= URL and 404.
+		if r.opts.WrapStaticImport && r.opts.BaseURL != nil && r.opts.ProxifyURL != nil && len(n.Module) >= 2 {
+			n.Module = r.proxifyModuleSpecifier(n.Module)
+		}
+	case *js.ExportStmt:
+		// `export … from "specifier"` — same rewrite policy as ImportStmt.
+		if r.opts.WrapStaticImport && r.opts.BaseURL != nil && r.opts.ProxifyURL != nil && len(n.Module) >= 2 {
+			n.Module = r.proxifyModuleSpecifier(n.Module)
+		}
 	}
 	return s
 }
@@ -316,6 +350,21 @@ func (r *rewriter) rvalue(e js.IExpr) js.IExpr {
 		// the proxy can rewrite it to a ?goto= URL before the browser fetches
 		// the module. Without this, import() calls bypass URL containment.
 		importCall := r.opts.WrapImportArg && isImportExpr(n.X) && len(n.Args.List) > 0
+		// obj.write()/obj.writeln() — JS_WRAP_DOCUMENT_WRITE. Intercept at
+		// the call site (not the DotExpr level) so that non-called reads of
+		// `.write` as a data property (e.g. Prototype.js attribute translation
+		// tables) are not replaced by the DocumentWriteWrapper function object.
+		docWriteCall := false
+		var docWriteDot *js.DotExpr
+		if !evalCall && !importCall && r.opts.WrapDocumentWrite {
+			if dot, ok := n.X.(*js.DotExpr); ok {
+				prop := dotPropName(dot)
+				if prop == "write" || prop == "writeln" {
+					docWriteCall = true
+					docWriteDot = dot
+				}
+			}
+		}
 		if evalCall {
 			// Recurse into arg-0 before wrapping so any inner identifiers
 			// (e.g. `eval(eval())`) get processed too.
@@ -338,6 +387,12 @@ func (r *rewriter) rvalue(e js.IExpr) js.IExpr {
 			} else {
 				n.Args.List[0].Value = r.wrapImportArg(r.rvalue(arg))
 			}
+		} else if docWriteCall {
+			// Recurse into the object part (dot.X) only; skip wrapDotObj at
+			// the DotExpr level so that bare `.write` property reads don't get
+			// replaced by the wrapper.
+			docWriteDot.X = r.rvalue(docWriteDot.X)
+			n.X = r.wrapDotObj(docWriteDot, "wrap_document_write")
 		} else {
 			n.X = r.rvalue(n.X)
 		}
@@ -354,6 +409,23 @@ func (r *rewriter) rvalue(e js.IExpr) js.IExpr {
 		// DotExpr.Y is IExpr (LiteralExpr or Var); pull out the property name
 		// via type switch.
 		n.X = r.rvalue(n.X)
+
+		// import.meta.url — replace with a string literal of the original
+		// module URL. In an ES module served through the proxy, import.meta.url
+		// is the proxy goto= URL (e.g. "http://proxy/?goto=b64(https://cdn/app.js)").
+		// Frameworks like Gatsby compute chunk URLs as
+		//   new URL('./chunk-X.js', import.meta.url)
+		// which resolves against the proxy origin and 404s. By substituting the
+		// known original URL we restore the correct base for those calculations.
+		if r.opts.WrapImportMetaUrl && r.opts.BaseURL != nil && dotPropName(n) == "url" {
+			if _, ok := n.X.(*js.ImportMetaExpr); ok {
+				return &js.LiteralExpr{
+					TokenType: js.StringToken,
+					Data:      []byte(`"` + r.opts.BaseURL.String() + `"`),
+				}
+			}
+		}
+
 		switch dotPropName(n) {
 		case "location":
 			if r.opts.WrapLocation {
@@ -367,10 +439,10 @@ func (r *rewriter) rvalue(e js.IExpr) js.IExpr {
 			if r.opts.WrapParentWindow {
 				return r.wrapDotObj(n, "wrap_parent_window")
 			}
-		case "write", "writeln":
-			if r.opts.WrapDocumentWrite {
-				return r.wrapDotObj(n, "wrap_document_write")
-			}
+		// NOTE: write/writeln are NOT wrapped here — only at the CallExpr
+		// level (see above) so that non-called property reads like
+		// `obj.write.names` (Prototype.js attribute translation table) are
+		// not replaced by the DocumentWriteWrapper function object.
 		case "postMessage":
 			if r.opts.WrapPostMessage {
 				return r.wrapDotObj(n, "wrap_postMessage")
@@ -437,6 +509,17 @@ func (r *rewriter) rvalue(e js.IExpr) js.IExpr {
 
 	case *js.NewExpr:
 		n.X = r.rvalue(n.X)
+		// If the constructor expression was rewritten to a call-rooted chain
+		// (e.g. IndexExpr whose left side is now a CallExpr after
+		// wrapMemberExpression), JavaScript would parse
+		//   new f(a)[k](args)
+		// as (new f(a))[k](args) — invoking the property as a plain function
+		// rather than as a constructor.  Wrap in GroupExpr (parens) so `new`
+		// binds to the whole expression:
+		//   new (f(a)[k])(args)
+		if isCallRooted(n.X) {
+			n.X = &js.GroupExpr{X: n.X}
+		}
 		if n.Args != nil {
 			for i := range n.Args.List {
 				n.Args.List[i].Value = r.rvalue(n.Args.List[i].Value)
@@ -486,6 +569,50 @@ func (r *rewriter) lvalue(e js.IExpr) js.IExpr {
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+// isCallRooted reports whether the left-most expression in a member chain is a
+// CallExpr.  When this is true, the expression cannot be used directly as the
+// callee of a `new` statement: `new f(a)[k](x)` parses as `(new f(a))[k](x)`,
+// calling `[k]` as a plain function rather than a constructor.  The caller must
+// wrap the expression in a GroupExpr (parentheses) to force correct binding.
+func isCallRooted(e js.IExpr) bool {
+	switch x := e.(type) {
+	case *js.CallExpr:
+		return true
+	case *js.IndexExpr:
+		return isCallRooted(x.X)
+	case *js.DotExpr:
+		return isCallRooted(x.X)
+	}
+	return false
+}
+
+// proxifyModuleSpecifier rewrites a static import/export module specifier
+// (the raw quoted bytes from *js.ImportStmt.Module or *js.ExportStmt.Module,
+// e.g. `"./chunks/chunk-X.js"`) by stripping the surrounding quotes, resolving
+// the specifier against BaseURL, passing it through ProxifyURL, and
+// re-quoting the result. Returns the input unchanged when the specifier is
+// not a string literal, is empty after stripping, or ProxifyURL returns it
+// unchanged (bare specifiers like "react" pass through).
+func (r *rewriter) proxifyModuleSpecifier(raw []byte) []byte {
+	if len(raw) < 2 {
+		return raw
+	}
+	q := raw[0]
+	if q != '"' && q != '\'' && q != '`' {
+		return raw
+	}
+	inner := string(raw[1 : len(raw)-1])
+	proxified := r.opts.ProxifyURL(inner, r.opts.BaseURL)
+	if proxified == inner {
+		return raw
+	}
+	out := make([]byte, 0, 2+len(proxified))
+	out = append(out, '"')
+	out = append(out, []byte(proxified)...)
+	out = append(out, '"')
+	return out
+}
 
 // isVar reports whether e is a bare identifier with the given name.
 func isVar(e js.IExpr, name string) bool {
@@ -646,6 +773,137 @@ func (r *rewriter) wrapMemberExpression(n *js.IndexExpr) js.IExpr {
 // on, so writes flow through the wrapper.
 func (r *rewriter) wrapSetLocation() js.IExpr {
 	return parseExpr("$rewriter.wrap_set_location(location, function(v){location=v;}).value")
+}
+
+// rewriteImportSpecifiersFallback is a best-effort byte-scan fallback for
+// modules that fail AST parsing. It finds `from "url"` / `from 'url'` patterns
+// (including bare `import "url"` side-effect imports and export-from) and
+// rewrites the specifier through ProxifyURL, leaving everything else unchanged.
+//
+// The scan is conservative: it only rewrites inside the first contiguous block
+// of import/export statements at the top of the file (stopping at the first
+// non-whitespace byte that isn't one of those keywords). This prevents false
+// rewrites inside string literals or comments elsewhere in the file.
+func rewriteImportSpecifiersFallback(src []byte, opts Options) []byte {
+	var out []byte
+	n := len(src)
+	flushed := 0 // how much of src has been copied to out
+	i := 0
+
+	// flush copies src[flushed:end] to out, ensuring out is initialised.
+	flush := func(end int) {
+		if out == nil {
+			out = make([]byte, 0, len(src)+256)
+		}
+		out = append(out, src[flushed:end]...)
+		flushed = end
+	}
+
+	// readQuoted reads one quoted string starting at pos, returning the quote
+	// char, the inner bytes, and the position after the closing quote.
+	// Returns 0, nil, pos on failure.
+	readQuoted := func(pos int) (byte, []byte, int) {
+		if pos >= n {
+			return 0, nil, pos
+		}
+		q := src[pos]
+		if q != '"' && q != '\'' {
+			return 0, nil, pos
+		}
+		start := pos + 1
+		for p := start; p < n; p++ {
+			c := src[p]
+			if c == '\\' {
+				p++
+				continue
+			}
+			if c == q {
+				return q, src[start:p], p + 1
+			}
+		}
+		return 0, nil, pos // unterminated — give up
+	}
+
+	// rewriteSpecifier rewrites the quoted specifier at quotePos using
+	// ProxifyURL. If the URL is unchanged, leaves src untouched.
+	rewriteSpecifier := func(quotePos int) (newI int, ok bool) {
+		q, inner, after := readQuoted(quotePos)
+		if q == 0 {
+			return quotePos, false
+		}
+		specifier := string(inner)
+		proxified := opts.ProxifyURL(specifier, opts.BaseURL)
+		if proxified == specifier {
+			// URL unchanged — skip, but advance past the quoted string.
+			return after, false
+		}
+		flush(quotePos) // copy everything up to the opening quote
+		if out == nil {
+			out = make([]byte, 0, len(src)+256)
+		}
+		out = append(out, q)
+		out = append(out, proxified...)
+		out = append(out, q)
+		flushed = after
+		return after, true
+	}
+
+	for i < n {
+		// Skip whitespace and semicolons between statements.
+		for i < n && (src[i] == ' ' || src[i] == '\t' || src[i] == '\r' || src[i] == '\n' || src[i] == ';') {
+			i++
+		}
+		if i >= n {
+			break
+		}
+
+		// We only touch `import` and `export` keywords.
+		keyword := ""
+		if i+6 <= n && string(src[i:i+6]) == "import" && (i+6 >= n || !isIdentChar(src[i+6])) {
+			keyword = "import"
+		} else if i+6 <= n && string(src[i:i+6]) == "export" && (i+6 >= n || !isIdentChar(src[i+6])) {
+			keyword = "export"
+		} else {
+			// Non-import/export statement — stop scanning.
+			break
+		}
+
+		i += len(keyword)
+
+		// Scan to end of statement: find `from "url"` or a side-effect
+		// `import "url"`, stopping at `;` or newline as a bail-out.
+		for i < n && src[i] != ';' && src[i] != '\n' {
+			// Side-effect `import "url"` — quote immediately follows import keyword+space.
+			if (src[i] == '"' || src[i] == '\'') && keyword == "import" {
+				i, _ = rewriteSpecifier(i)
+				break
+			}
+			// `from "url"` or `from 'url'`
+			if i+4 <= n && string(src[i:i+4]) == "from" && (i+4 >= n || !isIdentChar(src[i+4])) {
+				j := i + 4
+				for j < n && (src[j] == ' ' || src[j] == '\t') {
+					j++
+				}
+				if j < n && (src[j] == '"' || src[j] == '\'') {
+					i, _ = rewriteSpecifier(j)
+					break
+				}
+			}
+			i++
+		}
+	}
+
+	if out == nil {
+		return src
+	}
+	// Flush remaining src (from last rewritten specifier to end).
+	out = append(out, src[flushed:]...)
+	return out
+}
+
+// isIdentChar reports whether c can appear inside a JS identifier.
+func isIdentChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '$'
 }
 
 // dropPlaceholders removes any leftover __REWRITER_PLACEHOLDER_* identifiers

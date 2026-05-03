@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<!--
+  Fixture: brotli-decode
+  Tests: proxy correctly decompresses Content-Encoding: br responses
+
+  The fixture server's /brotli-page endpoint serves this exact page brotli-
+  encoded. The proxy must decompress it; if the proxy passes brotli through
+  unmodified the browser would show garbled content or a blank page.
+
+  PASS criteria: this page loaded and rendered (the <div id="result"> is
+  present and visible with data-pass="true").
+-->
+<html>
+<head><meta charset="utf-8"><title>brotli-decode fixture</title></head>
+<body>
+<p>If you can read this, brotli decompression worked.</p>
+<div id="result" data-pass="true">PASS — brotli body decompressed correctly</div>
+</body>
+</html>

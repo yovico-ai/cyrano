@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<!--
+  Fixture: cookie-document-cookie
+  Tests: document.cookie getter strips prefix; setter writes a readable cookie.
+
+  Served through the proxy, which injects rewriter.js and patches document.cookie.
+  The Playwright test pre-seeds the cookie store with:
+    __crn__fixture-a_test__mine=goldmine   (this site)
+    __crn__fixture-b_test__theirs=secret   (another site)
+
+  Page JS checks:
+    1. Getter returns only "mine=goldmine" (b-site cookie invisible, prefix stripped).
+    2. Setter: writing "wrote=value" makes it readable back via the getter.
+
+  data-pass="true" when both assertions hold.
+-->
+<html>
+<head><meta charset="utf-8"><title>cookie-document-cookie fixture</title></head>
+<body>
+<pre id="log"></pre>
+<div id="result" data-pass="false">pending</div>
+<script>
+(function() {
+  const log = [];
+  function check(label, ok, detail) {
+    log.push((ok ? "PASS" : "FAIL") + " " + label + (detail ? ": " + detail : ""));
+    return ok;
+  }
+
+  // 1. Getter: only this site's cookie should be visible, prefix stripped.
+  const before = document.cookie;
+  const cookies1 = before.split(";").map(s => s.trim()).filter(Boolean);
+  const hasOwn    = cookies1.some(kv => kv === "mine=goldmine");
+  const hasOther  = cookies1.some(kv => kv.startsWith("theirs=") || kv.includes("fixture-b_test"));
+  const hasPfx    = cookies1.some(kv => kv.startsWith("__crn__"));
+  check("getter sees own cookie",  hasOwn,  JSON.stringify(before));
+  check("getter hides other site", !hasOther, JSON.stringify(before));
+  check("getter strips prefix",    !hasPfx,  JSON.stringify(before));
+
+  // 2. Setter: write a new cookie and verify it is immediately readable back.
+  document.cookie = "wrote=value; Path=/";
+  const after = document.cookie;
+  const cookies2 = after.split(";").map(s => s.trim()).filter(Boolean);
+  const wroteVisible = cookies2.some(kv => kv === "wrote=value");
+  check("setter: wrote=value readable back", wroteVisible, JSON.stringify(after));
+
+  const pass = hasOwn && !hasOther && !hasPfx && wroteVisible;
+  document.getElementById("log").textContent = log.join("\n");
+  const el = document.getElementById("result");
+  el.dataset.pass = String(pass);
+  el.textContent = pass ? "PASS" : log.filter(l => l.startsWith("FAIL")).join("; ");
+})();
+</script>
+</body>
+</html>

@@ -4,6 +4,8 @@
 # these via their own secrets/env mechanism rather than sourcing this file.
 set -euo pipefail
 
+killall -9 cyrano 2>/dev/null || true
+
 # ── Public URL (scheme+host the browser uses to reach this proxy) ─────────────
 export CYRANO_PUBLIC_URL=http://localhost:9081
 

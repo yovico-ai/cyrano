@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<!--
+  Fixture: akamai-passthrough
+  Tests: Akamai Bot Manager-shaped scripts are passed through unmodified
+
+  The fixture server exposes a script at a random-path URL with ?v=<UUID>
+  that would be detected as an Akamai script and skipped by the JS rewriter.
+  The script contains a computed-property call pattern that would produce a
+  TypeError if wrap_member_expression were applied.
+
+  PASS: the script executes and sets window.__akamaiFixtureRan = true
+  FAIL: a TypeError is thrown (caught by window.onerror) or the flag is unset
+-->
+<html>
+<head><meta charset="utf-8"><title>akamai-passthrough fixture</title></head>
+<body>
+<div id="result" data-pass="false">pending</div>
+<script>
+  window.__akamaiFixtureRan = false;
+  window.__akamaiFixtureError = null;
+  window.onerror = function(msg) {
+    window.__akamaiFixtureError = msg;
+  };
+</script>
+<!--
+  The src is a relative URL that the fixture server routes to a handler
+  that returns the akamai-payload.js content with the right headers.
+  Path shape: /rAnD0m/sEgMnt?v=12345678-1234-1234-1234-123456789abc
+  This triggers isChallengeScript → passthrough (no wrap_member_expression).
+-->
+<script src="/rAnD0m/sEgMnt?v=12345678-1234-1234-1234-123456789abc"></script>
+<script>
+  // Give the async script load time to run, then check.
+  window.addEventListener("load", function() {
+    var pass = window.__akamaiFixtureRan === true && window.__akamaiFixtureError === null;
+    var el = document.getElementById("result");
+    el.dataset.pass = String(pass);
+    el.textContent = pass
+      ? "PASS — akamai script ran without TypeError"
+      : "FAIL — ran=" + window.__akamaiFixtureRan + " err=" + window.__akamaiFixtureError;
+  });
+</script>
+</body>
+</html>

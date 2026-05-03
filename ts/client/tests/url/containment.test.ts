@@ -73,24 +73,24 @@ describe("rewriteUrl — dev (http://localhost:9081)", () => {
     // HTTPS upstream. All proxified URLs land on the HTTP origin.
     const httpsBase = new URL("https://example.com/");
 
-    it("absolute https URL lands on http://localhost:9081/?goto=...", () => {
+    it("absolute https URL lands on http://localhost:9081/cyrano/https/...", () => {
         const got = rewriteUrl("https://example.com/foo", httpsBase, devCfg);
-        expect(got).toBe("http://localhost:9081/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS9mb28");
+        expect(got).toBe("http://localhost:9081/cyrano/https/example.com/foo");
     });
 
     it("relative path resolves against base, lands on dev origin", () => {
         const got = rewriteUrl("/about", httpsBase, devCfg);
-        expect(got).toBe("http://localhost:9081/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS9hYm91dA");
+        expect(got).toBe("http://localhost:9081/cyrano/https/example.com/about");
     });
 
     it("protocol-relative URL inherits base protocol, lands on dev origin", () => {
         const got = rewriteUrl("//cdn.example.com/script.js", httpsBase, devCfg);
-        expect(got).toBe("http://localhost:9081/?goto=aHR0cHM6Ly9jZG4uZXhhbXBsZS5jb20vc2NyaXB0Lmpz");
+        expect(got).toBe("http://localhost:9081/cyrano/https/cdn.example.com/script.js");
     });
 
-    it("fragment is preserved on the proxified URL, not encoded inside goto=", () => {
+    it("fragment is preserved on the proxified URL, not encoded inside cyrano path", () => {
         const got = rewriteUrl("https://example.com/page#section", httpsBase, devCfg);
-        expect(got).toBe("http://localhost:9081/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS9wYWdl#section");
+        expect(got).toBe("http://localhost:9081/cyrano/https/example.com/page#section");
     });
 
     it("Wikipedia thumbnail URL — regression for cookies.json :9444 bug", () => {
@@ -102,7 +102,7 @@ describe("rewriteUrl — dev (http://localhost:9081)", () => {
             new URL("https://wikipedia.org/"),
             devCfg,
         );
-        expect(got).toBe("http://localhost:9081/?goto=aHR0cHM6Ly91cGxvYWQud2lraW1lZGlhLm9yZy93aWtpcGVkaWEvZW4vZm9vLnBuZw");
+        expect(got).toBe("http://localhost:9081/cyrano/https/upload.wikimedia.org/wikipedia/en/foo.png");
     });
 });
 
@@ -111,26 +111,26 @@ describe("rewriteUrl — prod (https://proxy.example.com)", () => {
 
     it("HTTPS upstream lands on the prod public URL", () => {
         const got = rewriteUrl("https://cdn.target.com/a.js", httpsBase, prodCfg);
-        expect(got).toBe("https://proxy.example.com/?goto=aHR0cHM6Ly9jZG4udGFyZ2V0LmNvbS9hLmpz");
+        expect(got).toBe("https://proxy.example.com/cyrano/https/cdn.target.com/a.js");
     });
 
     it("HTTP upstream still lands on the prod public URL", () => {
         // Single-public-URL invariant: the target's scheme is preserved
-        // inside the b64'd goto= payload, not at the proxy origin.
+        // in the /cyrano/ path, not at the proxy origin.
         const httpBase = new URL("http://target.com/");
         const got = rewriteUrl("http://target.com/foo", httpBase, prodCfg);
-        expect(got).toBe("https://proxy.example.com/?goto=aHR0cDovL3RhcmdldC5jb20vZm9v");
+        expect(got).toBe("https://proxy.example.com/cyrano/http/target.com/foo");
     });
 });
 
 describe("rewriteUrl — already-proxified detection", () => {
-    it("a URL already on the proxy origin with ?goto= is left alone (dev)", () => {
-        const proxified = "http://localhost:9081/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS8";
+    it("a URL already on the proxy origin with /cyrano/ path is left alone (dev)", () => {
+        const proxified = "http://localhost:9081/cyrano/https/example.com/";
         const onProxyBase = new URL("http://localhost:9081/");
         expect(rewriteUrl(proxified, onProxyBase, devCfg)).toBe(proxified);
     });
 
-    it("a bare URL on the proxy origin without ?goto= is also left alone (static asset)", () => {
+    it("a bare URL on the proxy origin without /cyrano/ is also left alone (static asset)", () => {
         const onProxy = "http://localhost:9081/rewriter.js";
         const onProxyBase = new URL("http://localhost:9081/");
         expect(rewriteUrl(onProxy, onProxyBase, devCfg)).toBe(onProxy);
@@ -139,7 +139,7 @@ describe("rewriteUrl — already-proxified detection", () => {
     it("default-port equivalence: explicit and implicit ports compare equal", () => {
         // Prod public URL has no explicit port; an explicit :443 form
         // pointing at the same origin is the same place.
-        const explicit = "https://proxy.example.com:443/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS8";
+        const explicit = "https://proxy.example.com:443/cyrano/https/example.com/";
         const got = rewriteUrl(explicit, new URL("https://example.com/"), prodCfg);
         expect(got).toBe(explicit);
     });
@@ -148,11 +148,11 @@ describe("rewriteUrl — already-proxified detection", () => {
 describe("unwrapProxiedUrl — inverse of rewriteUrl", () => {
     const cases: Array<[string, string]> = [
         // proxified → original
-        ["http://localhost:9081/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS9mb28", "https://example.com/foo"],
-        ["http://localhost:9081/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS9wYWdl#section", "https://example.com/page#section"],
+        ["http://localhost:9081/cyrano/https/example.com/foo", "https://example.com/foo"],
+        ["http://localhost:9081/cyrano/https/example.com/page#section", "https://example.com/page#section"],
         // not on proxy → unchanged
         ["https://example.com/", "https://example.com/"],
-        // on proxy without load → unchanged
+        // on proxy without /cyrano/ path → unchanged
         ["http://localhost:9081/rewriter.js", "http://localhost:9081/rewriter.js"],
     ];
     for (const [proxified, expected] of cases) {

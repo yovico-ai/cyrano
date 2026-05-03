@@ -13,6 +13,9 @@ import { patchHistory } from "../../src/patches/history";
 const proxify = (url: string): string =>
     url.startsWith("http://localhost:3000") ? url : `http://localhost:3000/?goto=${btoa(url)}`;
 
+const noop = (): void => {};
+const identity = (u: string): string => u;
+
 afterEach(() => {
     vi.restoreAllMocks();
 });
@@ -23,7 +26,7 @@ describe("patchHistory — pushState", () => {
         // mockImplementation(() => {}) prevents it from calling the real API (which
         // would throw a cross-origin SecurityError in happy-dom).
         const spy = vi.spyOn(History.prototype, "pushState").mockImplementation(() => {});
-        patchHistory(window, proxify);
+        patchHistory(window, proxify, noop, identity);
 
         history.pushState(null, "", "https://example.com/page");
         expect(spy).toHaveBeenCalledOnce();
@@ -32,7 +35,7 @@ describe("patchHistory — pushState", () => {
 
     it("passes null URL through unchanged", () => {
         const spy = vi.spyOn(History.prototype, "pushState").mockImplementation(() => {});
-        patchHistory(window, proxify);
+        patchHistory(window, proxify, noop, identity);
 
         history.pushState({ x: 1 }, "", null);
         expect(spy).toHaveBeenCalledOnce();
@@ -41,7 +44,7 @@ describe("patchHistory — pushState", () => {
 
     it("passes undefined URL through unchanged", () => {
         const spy = vi.spyOn(History.prototype, "pushState").mockImplementation(() => {});
-        patchHistory(window, proxify);
+        patchHistory(window, proxify, noop, identity);
 
         history.pushState(null, "");
         expect(spy).toHaveBeenCalledOnce();
@@ -50,7 +53,7 @@ describe("patchHistory — pushState", () => {
 
     it("rewrites a URL object argument by its href", () => {
         const spy = vi.spyOn(History.prototype, "pushState").mockImplementation(() => {});
-        patchHistory(window, proxify);
+        patchHistory(window, proxify, noop, identity);
 
         history.pushState(null, "", new URL("https://example.com/obj"));
         expect(spy).toHaveBeenCalledOnce();
@@ -59,7 +62,7 @@ describe("patchHistory — pushState", () => {
 
     it("preserves already-proxied URLs untouched (no double-encode)", () => {
         const spy = vi.spyOn(History.prototype, "pushState").mockImplementation(() => {});
-        patchHistory(window, proxify);
+        patchHistory(window, proxify, noop, identity);
 
         const alreadyProxied = "http://localhost:3000/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS8";
         history.pushState(null, "", alreadyProxied);
@@ -71,7 +74,7 @@ describe("patchHistory — pushState", () => {
 describe("patchHistory — replaceState", () => {
     it("rewrites an absolute URL argument", () => {
         const spy = vi.spyOn(History.prototype, "replaceState").mockImplementation(() => {});
-        patchHistory(window, proxify);
+        patchHistory(window, proxify, noop, identity);
 
         history.replaceState(null, "", "https://example.com/replaced");
         expect(spy).toHaveBeenCalledOnce();
@@ -80,7 +83,7 @@ describe("patchHistory — replaceState", () => {
 
     it("passes null URL through unchanged", () => {
         const spy = vi.spyOn(History.prototype, "replaceState").mockImplementation(() => {});
-        patchHistory(window, proxify);
+        patchHistory(window, proxify, noop, identity);
 
         history.replaceState(null, "", null);
         expect(spy).toHaveBeenCalledOnce();

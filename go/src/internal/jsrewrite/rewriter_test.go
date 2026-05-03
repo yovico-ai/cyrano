@@ -120,6 +120,34 @@ func TestWrapDocumentWriteln(t *testing.T) {
 	}
 }
 
+func TestWrapDocumentWrite_PropertyRead_NotWrapped(t *testing.T) {
+	// Prototype.js accesses `Element._attributeTranslations.write.names` —
+	// `.write` as a data property, not a call.  It must NOT be replaced by
+	// the DocumentWriteWrapper function object or `.names` will be undefined.
+	got := rewrite(t, `var w = t.write;`)
+	if strings.Contains(got, "wrap_document_write") {
+		t.Errorf("bare property read of .write must not be wrapped: %s", got)
+	}
+}
+
+func TestWrapDocumentWrite_CallIsWrapped(t *testing.T) {
+	// Calling .write() must still be intercepted even after moving the rule
+	// from DotExpr level to CallExpr level.
+	got := rewrite(t, `someObj.write("html");`)
+	if !strings.Contains(got, "wrap_document_write") {
+		t.Errorf("call to .write() must be wrapped: %s", got)
+	}
+}
+
+func TestWrapDocumentWrite_NestedObjectWrite_NotWrapped(t *testing.T) {
+	// `t.write.names` — chained reads; neither `.write` nor `.names` should
+	// be wrapped because there is no call in this expression.
+	got := rewrite(t, `var n = t.write.names;`)
+	if strings.Contains(got, "wrap_document_write") {
+		t.Errorf("chained read of .write.names must not wrap .write: %s", got)
+	}
+}
+
 // ── WRAP_POST_MESSAGE ───────────────────────────────────────────────────────
 
 func TestWrapPostMessage(t *testing.T) {
@@ -384,7 +412,11 @@ func staticProxify(rawURL string, base *url.URL) string {
 	if err != nil || resolved == nil {
 		return rawURL
 	}
-	return "https://proxy.example.com/?goto=" + resolved.String()
+	escapedPath := resolved.EscapedPath()
+	if escapedPath == "" {
+		escapedPath = "/"
+	}
+	return "https://proxy.example.com/cyrano/" + resolved.Scheme + "/" + resolved.Host + escapedPath
 }
 
 func TestWrapImportArg_StaticStringLiteral_AbsoluteURL(t *testing.T) {
@@ -394,7 +426,7 @@ func TestWrapImportArg_StaticStringLiteral_AbsoluteURL(t *testing.T) {
 	opts.ProxifyURL = staticProxify
 
 	got := rewriteWith(t, `import("https://other.example.com/mod.js");`, opts)
-	want := `"https://proxy.example.com/?goto=https://other.example.com/mod.js"`
+	want := `"https://proxy.example.com/cyrano/https/other.example.com/mod.js"`
 	if !strings.Contains(got, want) {
 		t.Errorf("expected %s in: %s", want, got)
 	}
@@ -411,7 +443,7 @@ func TestWrapImportArg_StaticStringLiteral_RelativePath(t *testing.T) {
 
 	// ./chunk.js should resolve against the module URL, not the page URL.
 	got := rewriteWith(t, `import("./chunk-abc.js");`, opts)
-	want := `"https://proxy.example.com/?goto=https://cdn.example.com/assets/chunk-abc.js"`
+	want := `"https://proxy.example.com/cyrano/https/cdn.example.com/assets/chunk-abc.js"`
 	if !strings.Contains(got, want) {
 		t.Errorf("expected %s in: %s", want, got)
 	}
@@ -441,5 +473,273 @@ func TestWrapImportArg_NoBaseURL_FallsBackToWrap(t *testing.T) {
 	got := rewriteWith(t, `import("./mod.js");`, opts)
 	if !strings.Contains(got, "wrap_import_arg") {
 		t.Errorf("wrap_import_arg should fire when BaseURL is absent: %s", got)
+	}
+}
+
+// ── NewExpr + wrap_member_expression precedence ─────────────────────────────
+//
+// `new obj[key](args)` must NOT become `new wrap(obj,...)[key](args)` verbatim,
+// because JavaScript would parse that as `(new wrap(...))[key](args)` — calling
+// the property as a plain function.  The rewriter must parenthesise the callee
+// so `new` binds to the full bracketed expression.
+
+func TestNewExpr_ComputedConstructor_GetsParens(t *testing.T) {
+	// Simulates: new globalThis[TypedArrayName](n)
+	// The bracketed callee is wrapped by wrap_member_expression; without parens
+	// `new wrap_member_expression(...)[k](n)` would invoke k as a plain
+	// function → "Constructor BigInt64Array requires 'new'".
+	got := rewrite(t, `new obj[key](n);`)
+	// After fix: new ($rewriter.wrap_member_expression(obj,...)[...])(n)
+	if !strings.Contains(got, "new (") {
+		t.Errorf("callee not parenthesised — new will bind to CallExpr not IndexExpr: %s", got)
+	}
+	// Must not have the bare un-parenthesised form.
+	if strings.Contains(got, "new $rewriter.wrap_member_expression") &&
+		!strings.Contains(got, "new ($rewriter.wrap_member_expression") {
+		t.Errorf("wrap_member_expression callee must be in parens: %s", got)
+	}
+}
+
+func TestNewExpr_PlainConstructor_NoParens(t *testing.T) {
+	// Plain `new Foo(x)` — no rewriting, no unnecessary parens.
+	got := rewrite(t, `new Foo(x);`)
+	if strings.Contains(got, "new (") {
+		t.Errorf("plain new Foo should not get extra parens: %s", got)
+	}
+	if !strings.Contains(got, "new Foo(") {
+		t.Errorf("plain new Foo should be unchanged: %s", got)
+	}
+}
+
+func TestNewExpr_StaticMemberConstructor_NoParens(t *testing.T) {
+	// `new a.b()` — static member, no wrap, no extra parens.
+	got := rewrite(t, `new a.b();`)
+	if strings.Contains(got, "new (") {
+		t.Errorf("new a.b() should not get extra parens: %s", got)
+	}
+}
+
+// ── WrapImportMetaUrl ────────────────────────────────────────────────────────
+//
+// ES-module entry points (Gatsby, Vite, webpack 5) use `import.meta.url` to
+// compute the base URL for dynamic chunk loads. When the module is served
+// through the proxy, import.meta.url returns the proxy goto= URL rather than
+// the original module URL, so relative chunk paths resolve to the proxy origin
+// and 404. The rewriter replaces import.meta.url with the known original URL.
+
+func TestWrapImportMetaUrl_ReplacedWithBaseURL(t *testing.T) {
+	base := mustParseURL("https://cdn.example.com/assets/browser-entry.js")
+	opts := DefaultOptions()
+	opts.BaseURL = base
+
+	got := rewriteWith(t, `var u = import.meta.url;`, opts)
+	want := `"https://cdn.example.com/assets/browser-entry.js"`
+	if !strings.Contains(got, want) {
+		t.Errorf("import.meta.url not replaced with BaseURL: %s", got)
+	}
+	if strings.Contains(got, "import.meta.url") {
+		t.Errorf("import.meta.url must not appear in output: %s", got)
+	}
+}
+
+func TestWrapImportMetaUrl_NoBaseURL_PassesThrough(t *testing.T) {
+	// When BaseURL is not set, import.meta.url can't be substituted — leave it.
+	opts := DefaultOptions()
+	// BaseURL intentionally omitted.
+
+	got := rewriteWith(t, `var u = import.meta.url;`, opts)
+	if !strings.Contains(got, "import.meta.url") {
+		t.Errorf("import.meta.url should pass through when BaseURL is absent: %s", got)
+	}
+}
+
+func TestWrapImportMetaUrl_FlagOff_PassesThrough(t *testing.T) {
+	base := mustParseURL("https://cdn.example.com/app.js")
+	opts := DefaultOptions()
+	opts.BaseURL = base
+	opts.WrapImportMetaUrl = false
+
+	got := rewriteWith(t, `var u = import.meta.url;`, opts)
+	if !strings.Contains(got, "import.meta.url") {
+		t.Errorf("import.meta.url should pass through when WrapImportMetaUrl is false: %s", got)
+	}
+}
+
+func TestWrapImportMetaUrl_UsedInNewURL(t *testing.T) {
+	// Simulates: new URL('./chunk-X.js', import.meta.url)
+	base := mustParseURL("https://cdn.example.com/assets/entry.js")
+	opts := DefaultOptions()
+	opts.BaseURL = base
+
+	got := rewriteWith(t, `new URL('./chunk.js', import.meta.url);`, opts)
+	want := `"https://cdn.example.com/assets/entry.js"`
+	if !strings.Contains(got, want) {
+		t.Errorf("import.meta.url not replaced in new URL() call: %s", got)
+	}
+}
+
+func TestWrapImportMetaUrl_ImportMetaOtherProp_NotReplaced(t *testing.T) {
+	// import.meta.hot (Vite HMR) and other import.meta properties must not
+	// be replaced — only import.meta.url.
+	base := mustParseURL("https://cdn.example.com/app.js")
+	opts := DefaultOptions()
+	opts.BaseURL = base
+
+	got := rewriteWith(t, `var h = import.meta.hot;`, opts)
+	if strings.Contains(got, `"https://cdn.example.com/app.js"`) {
+		t.Errorf("import.meta.hot should not be replaced: %s", got)
+	}
+	if !strings.Contains(got, "import.meta") {
+		t.Errorf("import.meta.hot should pass through unchanged: %s", got)
+	}
+}
+
+// ── WrapStaticImport ─────────────────────────────────────────────────────────
+//
+// ES-module entry points use static `import … from "…"` to load chunks.
+// When served through the proxy the relative specifiers resolve against the
+// proxy goto= URL, landing on the proxy origin without the correct path.
+// Rewriting them to proxified absolute URLs at rewrite time fixes chunk loading
+// for Gatsby, Vite, and webpack 5 module bundles.
+
+func TestWrapStaticImport_RelativeSpecifier_Proxified(t *testing.T) {
+	base := mustParseURL("https://cdn.example.com/runtime/browser-entry.js")
+	opts := DefaultOptions()
+	opts.BaseURL = base
+	opts.ProxifyURL = staticProxify
+
+	got := rewriteWith(t, `import { a } from "./chunks/chunk-X.js";`, opts)
+	want := `"https://proxy.example.com/cyrano/https/cdn.example.com/runtime/chunks/chunk-X.js"`
+	if !strings.Contains(got, want) {
+		t.Errorf("static import specifier not proxified: %s", got)
+	}
+}
+
+func TestWrapStaticImport_ExportFrom_Proxified(t *testing.T) {
+	base := mustParseURL("https://cdn.example.com/runtime/entry.js")
+	opts := DefaultOptions()
+	opts.BaseURL = base
+	opts.ProxifyURL = staticProxify
+
+	got := rewriteWith(t, `export { a } from "./utils.js";`, opts)
+	want := `"https://proxy.example.com/cyrano/https/cdn.example.com/runtime/utils.js"`
+	if !strings.Contains(got, want) {
+		t.Errorf("static re-export specifier not proxified: %s", got)
+	}
+}
+
+func TestWrapStaticImport_AbsoluteURL_Proxified(t *testing.T) {
+	// Absolute URLs (e.g. CDN imports) are proxified the same way as relative ones.
+	base := mustParseURL("https://cdn.example.com/app.js")
+	opts := DefaultOptions()
+	opts.BaseURL = base
+	opts.ProxifyURL = staticProxify
+
+	got := rewriteWith(t, `import lib from "https://other.example.com/lib.js";`, opts)
+	want := `"https://proxy.example.com/cyrano/https/other.example.com/lib.js"`
+	if !strings.Contains(got, want) {
+		t.Errorf("absolute URL specifier not proxified: %s", got)
+	}
+}
+
+func TestWrapStaticImport_FlagOff_PassesThrough(t *testing.T) {
+	base := mustParseURL("https://cdn.example.com/entry.js")
+	opts := DefaultOptions()
+	opts.BaseURL = base
+	opts.ProxifyURL = staticProxify
+	opts.WrapStaticImport = false
+
+	got := rewriteWith(t, `import { a } from "./chunk.js";`, opts)
+	if strings.Contains(got, "proxy.example.com/cyrano/") {
+		t.Errorf("WrapStaticImport=false: specifier should not be proxified: %s", got)
+	}
+}
+
+func TestWrapStaticImport_NoBaseURL_PassesThrough(t *testing.T) {
+	opts := DefaultOptions()
+	// BaseURL intentionally omitted.
+
+	got := rewriteWith(t, `import { a } from "./chunk.js";`, opts)
+	if strings.Contains(got, "proxy.example.com/cyrano/") {
+		t.Errorf("no BaseURL: specifier should not be proxified: %s", got)
+	}
+}
+
+// ── Static-import fallback (parse-failure path) ─────────────────────────────
+//
+// When tdewolff fails to parse a module (e.g. due to a syntax it doesn't
+// recognise), Rewrite falls back to a simple byte-scan that still rewrites
+// the `from "…"` specifiers in the leading import block.
+
+func staticProxifyFallback(raw string, base *url.URL) string {
+	abs, err := base.Parse(raw)
+	if err != nil || (abs.Scheme != "http" && abs.Scheme != "https") {
+		return raw
+	}
+	escapedPath := abs.EscapedPath()
+	if escapedPath == "" {
+		escapedPath = "/"
+	}
+	return "http://proxy.example.com/cyrano/" + abs.Scheme + "/" + abs.Host + escapedPath
+}
+
+func TestRewriteImportSpecifiersFallback_RelativeSpecifier(t *testing.T) {
+	base, _ := url.Parse("https://cdn.example.com/runtime/chunks/chunk-A.js")
+	opts := Options{
+		WrapStaticImport: true,
+		BaseURL:          base,
+		ProxifyURL:       staticProxifyFallback,
+	}
+	// Simulate a module that fails AST parse: pass raw bytes with
+	// unparseable syntax that still has a leading import.
+	src := `import { a } from "./chunk-B.js";` + "\n" + `var f=([x]=[0])=>{return x;};`
+	got := rewriteImportSpecifiersFallback([]byte(src), opts)
+	result := string(got)
+	if !strings.Contains(result, "proxy.example.com") {
+		t.Errorf("specifier not proxified in fallback: %s", result)
+	}
+	if strings.Contains(result, `"./chunk-B.js"`) {
+		t.Errorf("original specifier still present: %s", result)
+	}
+}
+
+func TestRewriteImportSpecifiersFallback_SideEffectImport(t *testing.T) {
+	base, _ := url.Parse("https://cdn.example.com/runtime/chunks/chunk-A.js")
+	opts := Options{
+		WrapStaticImport: true,
+		BaseURL:          base,
+		ProxifyURL:       staticProxifyFallback,
+	}
+	src := `import "./chunk-B.js";` + "\n" + `var f=([x]=[0])=>{};`
+	got := rewriteImportSpecifiersFallback([]byte(src), opts)
+	result := string(got)
+	if !strings.Contains(result, "proxy.example.com") {
+		t.Errorf("side-effect import not proxified in fallback: %s", result)
+	}
+}
+
+func TestRewriteImportSpecifiersFallback_StopsAtNonImport(t *testing.T) {
+	base, _ := url.Parse("https://cdn.example.com/runtime/chunks/chunk-A.js")
+	opts := Options{
+		WrapStaticImport: true,
+		BaseURL:          base,
+		ProxifyURL:       staticProxifyFallback,
+	}
+	// The `from "./chunk-B.js"` inside a string literal after real code must
+	// NOT be proxified — the scanner stops at the first non-import statement.
+	src := `import { a } from "./chunk-A.js";` + "\n" +
+		`var x = 1; // from "./chunk-B.js" inside non-import`
+	got := rewriteImportSpecifiersFallback([]byte(src), opts)
+	result := string(got)
+	// chunk-B is in a comment after real code — must NOT be proxified.
+	if strings.Contains(result, "proxy.example.com/cyrano/") && strings.Contains(result, "chunk-B") {
+		// If both appear, make sure they're not on the same token.
+		if strings.Contains(result, "proxy.example.com/cyrano/https/cdn.example.com/runtime/chunks/chunk-B") {
+			t.Errorf("scanner rewrote chunk-B beyond import block: %s", result)
+		}
+	}
+	// The real import of chunk-A should be rewritten.
+	if !strings.Contains(result, "proxy.example.com/cyrano/https/cdn.example.com/runtime/chunks/chunk-A") {
+		t.Errorf("real import not rewritten: %s", result)
 	}
 }

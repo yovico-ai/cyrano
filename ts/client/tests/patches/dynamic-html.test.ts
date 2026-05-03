@@ -13,7 +13,7 @@ afterEach(() => {
 
 describe("patchDynamicHtml — innerHTML setter", () => {
     it("rewrites URL attrs in the assigned HTML before the parser sees it", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const div = document.createElement("div");
         div.innerHTML = '<img src="/a.png"><a href="/x">link</a>';
 
@@ -24,14 +24,14 @@ describe("patchDynamicHtml — innerHTML setter", () => {
     });
 
     it("preserves non-URL content untouched", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const div = document.createElement("div");
         div.innerHTML = "<p>plain text</p>";
         expect(div.textContent).toBe("plain text");
     });
 
     it("ignores non-string assignments", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const div = document.createElement("div");
         // Implementations differ on whether non-string innerHTML coerces to
         // string; we only assert it doesn't throw and our rewriter doesn't
@@ -42,7 +42,7 @@ describe("patchDynamicHtml — innerHTML setter", () => {
     });
 
     it("getter still returns the (rewritten) live HTML — not the input string", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const div = document.createElement("div");
         div.innerHTML = '<img src="/x.png">';
         // Reading innerHTML reflects what's actually in the DOM, which is the
@@ -53,7 +53,7 @@ describe("patchDynamicHtml — innerHTML setter", () => {
 
 describe("patchDynamicHtml — outerHTML setter", () => {
     it("rewrites URL attrs in replacement HTML", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const parent = document.createElement("div");
         const child = document.createElement("span");
         parent.appendChild(child);
@@ -66,7 +66,7 @@ describe("patchDynamicHtml — outerHTML setter", () => {
 
 describe("patchDynamicHtml — insertAdjacentHTML", () => {
     it("rewrites URL attrs in inserted HTML", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const div = document.createElement("div");
         document.body.appendChild(div);
         div.insertAdjacentHTML("beforeend", '<img src="/y.png">');
@@ -77,7 +77,7 @@ describe("patchDynamicHtml — insertAdjacentHTML", () => {
     });
 
     it("rewrites at all four insertion positions", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const wrapper = document.createElement("section");
         wrapper.innerHTML = "<p id=anchor>x</p>";
         document.body.appendChild(wrapper);
@@ -98,21 +98,21 @@ describe("patchDynamicHtml — insertAdjacentHTML", () => {
 
 describe("patchDynamicHtml — setAttribute", () => {
     it("rewrites img.setAttribute('src', …)", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const img = document.createElement("img");
         img.setAttribute("src", "/a.png");
         expect(img.getAttribute("src")).toBe("/a.png?proxified=1");
     });
 
     it("rewrites a.setAttribute('href', …)", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const a = document.createElement("a");
         a.setAttribute("href", "/x");
         expect(a.getAttribute("href")).toBe("/x?proxified=1");
     });
 
     it("rewrites srcset with descriptor preservation", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const img = document.createElement("img");
         img.setAttribute("srcset", "a.jpg 1x, b.jpg 2x");
         expect(img.getAttribute("srcset")).toBe(
@@ -121,21 +121,21 @@ describe("patchDynamicHtml — setAttribute", () => {
     });
 
     it("matches attribute names case-insensitively", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const img = document.createElement("img");
         img.setAttribute("SRC", "/upper.png");
         expect(img.getAttribute("src")).toBe("/upper.png?proxified=1");
     });
 
     it("does not rewrite non-URL attributes", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const a = document.createElement("a");
         a.setAttribute("class", "btn /not-a-url");
         expect(a.getAttribute("class")).toBe("btn /not-a-url");
     });
 
     it("rewrites the style=\"...\" attribute value through the CSS rewriter on every element", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         // The style attribute applies to every element, not just URL-bearing ones.
         const div = document.createElement("div");
         div.setAttribute("style", "background: url('bg.png')");
@@ -143,7 +143,7 @@ describe("patchDynamicHtml — setAttribute", () => {
     });
 
     it("rewrites @import inside a style attribute (rare but valid)", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const div = document.createElement("div");
         // @import is technically allowed only at the start of a stylesheet, but
         // our rewriter is content-driven — anything matching the regex gets
@@ -153,7 +153,7 @@ describe("patchDynamicHtml — setAttribute", () => {
     });
 
     it("does not rewrite URL attribute names on non-URL-bearing elements", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const div = document.createElement("div");
         // <div href="..."> is not standard; we should not rewrite.
         div.setAttribute("href", "/should-not-rewrite");
@@ -161,7 +161,7 @@ describe("patchDynamicHtml — setAttribute", () => {
     });
 
     it("passes non-string values through unchanged", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const img = document.createElement("img");
         // happy-dom coerces non-strings, but our rewriter must not run on them.
         img.setAttribute("src", null as unknown as string);
@@ -171,8 +171,8 @@ describe("patchDynamicHtml — setAttribute", () => {
 
 describe("patchDynamicHtml — idempotence", () => {
     it("re-installing on the same prototype is a no-op (no double-wrap)", () => {
-        patchDynamicHtml(window, tag);
-        patchDynamicHtml(window, tag); // second call must not double-rewrite
+        patchDynamicHtml(window, tag, (u) => u);
+        patchDynamicHtml(window, tag, (u) => u); // second call must not double-rewrite
 
         const img = document.createElement("img");
         img.setAttribute("src", "/x.png");
@@ -186,14 +186,14 @@ describe("patchDynamicHtml — idempotence", () => {
 
 describe("patchDynamicHtml — integrity stripping", () => {
     it("setAttribute('integrity', ...) is silently dropped", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const script = document.createElement("script");
         script.setAttribute("integrity", "sha384-abc");
         expect(script.getAttribute("integrity")).toBeNull();
     });
 
     it("integrity in innerHTML is stripped before insertion", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const div = document.createElement("div");
         div.innerHTML = '<script src="/x.js" integrity="sha384-abc"></script>';
         const s = div.querySelector("script")!;
@@ -203,7 +203,7 @@ describe("patchDynamicHtml — integrity stripping", () => {
     });
 
     it("integrity in insertAdjacentHTML is stripped", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const div = document.createElement("div");
         document.body.appendChild(div);
         div.insertAdjacentHTML("beforeend", '<link rel="stylesheet" href="/s.css" integrity="sha384-xyz">');
@@ -214,7 +214,7 @@ describe("patchDynamicHtml — integrity stripping", () => {
     });
 
     it(".integrity property setter is nooped (returns empty string from getter)", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const script = document.createElement("script") as HTMLScriptElement;
         script.integrity = "sha384-shouldbedropped";
         expect(script.integrity).toBe("");
@@ -225,14 +225,14 @@ describe("patchDynamicHtml — integrity stripping", () => {
 
 describe("patchDynamicHtml — crossorigin normalization", () => {
     it("setAttribute('crossorigin', 'anonymous') becomes use-credentials", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const script = document.createElement("script");
         script.setAttribute("crossorigin", "anonymous");
         expect(script.getAttribute("crossorigin")).toBe("use-credentials");
     });
 
     it("crossorigin in innerHTML is normalized", () => {
-        patchDynamicHtml(window, tag);
+        patchDynamicHtml(window, tag, (u) => u);
         const div = document.createElement("div");
         div.innerHTML = '<script src="/x.js" crossorigin="anonymous"></script>';
         const s = div.querySelector("script")!;

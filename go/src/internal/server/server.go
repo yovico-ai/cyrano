@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/yovico/cyrano/internal/b64u"
 	"github.com/yovico/cyrano/internal/config"
 	"github.com/yovico/cyrano/internal/proxy"
 	"github.com/yovico/cyrano/internal/static"
@@ -173,26 +172,32 @@ func (s *Server) Handler() http.Handler {
 		}
 
 		// Referer-based routing: bare-path requests from rewritten pages.
-		// Handles webpack chunks, Cloudflare challenge scripts, and any other
-		// path-absolute resources loaded by JavaScript on a proxied page.
+		// Redirect to the canonical /cyrano/<scheme>/<host><path> URL so the
+		// browser's address bar stays correct and client-side routing works.
 		proxyCfgForReferer := s.proxyEndpoints(vhost)
 		if origin := inferOriginFromReferer(r, proxyCfgForReferer.PublicURL); origin != nil {
-			target := &url.URL{
-				Scheme:   origin.Scheme,
-				Host:     origin.Host,
-				Path:     r.URL.Path,
-				RawPath:  r.URL.RawPath,
-				RawQuery: r.URL.RawQuery,
+			escapedPath := r.URL.EscapedPath()
+			if escapedPath == "" {
+				escapedPath = "/"
 			}
-			proxyLogger := s.Logger.With("component", "proxy")
-			rewriterLogger := s.Logger.With("component", "rewriter")
-			proxyHandler := proxy.New(proxy.Options{
-				SkipTLSVerify: false,
-				Logger:        proxyLogger,
-				BodyRewriter:  makeBodyRewriter(vhost, proxyCfgForReferer, rewriterLogger),
-				ProxyCfg:      proxyCfgForReferer,
-			})
-			proxyHandler.ServeHTTPWithTarget(w, r, target)
+			dest := proxyCfgForReferer.PublicURL.String() +
+				"/cyrano/" + origin.Scheme + "/" + origin.Host + escapedPath
+			if r.URL.RawQuery != "" {
+				dest += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, dest, http.StatusFound)
+			return
+		}
+
+		// Cloudflare Bot Management scripts (/cdn-cgi/challenge-platform/...)
+		// that arrive without a usable Referer (e.g. from an about:blank
+		// sandbox created by jsd/main.js) cannot be routed to an upstream
+		// because we have no origin to forward them to. Return an empty 200
+		// so the challenge fails silently instead of with a noisy 404 and a
+		// MIME-type error that breaks the page console.
+		if isChallengeJSPath(r.URL.Path) {
+			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
 			return
 		}
 
@@ -230,7 +235,7 @@ func (s *Server) ListenAndServe() error {
 // sent this request, as inferred from the Referer header. Returns nil when:
 //   - Referer is absent or unparseable
 //   - Referer host doesn't match publicURL (not from this proxy)
-//   - Referer has no ?goto= parameter, or the parameter can't be decoded
+//   - Referer has no /cyrano/ path, or it can't be parsed
 //   - The decoded target scheme is not http or https
 //
 // Only called for requests that didn't match any known proxy route, so it
@@ -248,16 +253,8 @@ func inferOriginFromReferer(r *http.Request, publicURL *url.URL) *url.URL {
 	if !strings.EqualFold(ref.Host, publicURL.Host) {
 		return nil
 	}
-	loadParam := ref.Query().Get("goto")
-	if loadParam == "" {
-		return nil
-	}
-	targetStr, err := b64u.Decode(loadParam)
-	if err != nil {
-		return nil
-	}
-	target, err := url.Parse(targetStr)
-	if err != nil || target == nil {
+	target, ok := urlrewrite.ParseCyranoPath(ref.Path, ref.RawQuery)
+	if !ok {
 		return nil
 	}
 	if target.Scheme != "http" && target.Scheme != "https" {

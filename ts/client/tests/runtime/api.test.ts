@@ -106,8 +106,8 @@ describe("createRewriterApi — wrap_import_arg", () => {
         api.set_base_url("https://example.com/page");
         const result = api.wrap_import_arg("https://cdn.example.com/mod.js");
         expect(typeof result).toBe("string");
-        // Proxified: must contain goto= and the encoded target host
-        expect(result as string).toContain("goto=");
+        // Proxified: must contain /cyrano/ and the target host
+        expect(result as string).toContain("/cyrano/");
     });
 
     it("proxifies a relative string specifier against the current base URL", () => {
@@ -115,7 +115,7 @@ describe("createRewriterApi — wrap_import_arg", () => {
         api.set_base_url("https://example.com/app/");
         const result = api.wrap_import_arg("./chunk.js");
         // Resolved: https://example.com/app/chunk.js → proxified
-        expect(result as string).toContain("goto=");
+        expect(result as string).toContain("/cyrano/");
     });
 
     it("passes non-string specifiers through unchanged (dynamic import with expression)", () => {

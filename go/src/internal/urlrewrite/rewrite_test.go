@@ -55,10 +55,10 @@ func TestRewrite_PassthroughSchemes(t *testing.T) {
 
 func TestRewrite_Dev_AbsoluteHTTPSTarget(t *testing.T) {
 	// HTTPS upstream lands on the HTTP dev origin — single-public-URL
-	// invariant; the target's scheme is preserved inside the b64 payload.
+	// invariant; the target's scheme is preserved in the /cyrano/ path.
 	got := Rewrite("https://example.com/foo",
 		mustURL(t, "https://example.com/"), devCfg)
-	want := "http://localhost:9081/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS9mb28"
+	want := "http://localhost:9081/cyrano/https/example.com/foo"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
@@ -67,7 +67,7 @@ func TestRewrite_Dev_AbsoluteHTTPSTarget(t *testing.T) {
 func TestRewrite_Dev_AbsoluteHTTPTarget(t *testing.T) {
 	got := Rewrite("http://example.com/foo",
 		mustURL(t, "http://example.com/"), devCfg)
-	want := "http://localhost:9081/?goto=aHR0cDovL2V4YW1wbGUuY29tL2Zvbw"
+	want := "http://localhost:9081/cyrano/http/example.com/foo"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
@@ -76,7 +76,7 @@ func TestRewrite_Dev_AbsoluteHTTPTarget(t *testing.T) {
 func TestRewrite_Dev_RelativePath(t *testing.T) {
 	got := Rewrite("/about",
 		mustURL(t, "https://example.com/"), devCfg)
-	want := "http://localhost:9081/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS9hYm91dA"
+	want := "http://localhost:9081/cyrano/https/example.com/about"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
@@ -85,7 +85,7 @@ func TestRewrite_Dev_RelativePath(t *testing.T) {
 func TestRewrite_Dev_ProtocolRelative(t *testing.T) {
 	got := Rewrite("//cdn.example.com/script.js",
 		mustURL(t, "https://example.com/"), devCfg)
-	want := "http://localhost:9081/?goto=aHR0cHM6Ly9jZG4uZXhhbXBsZS5jb20vc2NyaXB0Lmpz"
+	want := "http://localhost:9081/cyrano/https/cdn.example.com/script.js"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
@@ -94,7 +94,7 @@ func TestRewrite_Dev_ProtocolRelative(t *testing.T) {
 func TestRewrite_Dev_FragmentPreserved(t *testing.T) {
 	got := Rewrite("https://example.com/page#section",
 		mustURL(t, "https://example.com/"), devCfg)
-	want := "http://localhost:9081/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS9wYWdl#section"
+	want := "http://localhost:9081/cyrano/https/example.com/page#section"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
@@ -109,7 +109,7 @@ func TestRewrite_Dev_HTTPSSubresourceOnHTTPSPage(t *testing.T) {
 		mustURL(t, "https://wikipedia.org/"),
 		devCfg,
 	)
-	want := "http://localhost:9081/?goto=aHR0cHM6Ly91cGxvYWQud2lraW1lZGlhLm9yZy93aWtpcGVkaWEvZW4vZm9vLnBuZw"
+	want := "http://localhost:9081/cyrano/https/upload.wikimedia.org/wikipedia/en/foo.png"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
@@ -120,7 +120,7 @@ func TestRewrite_Dev_HTTPSSubresourceOnHTTPSPage(t *testing.T) {
 func TestRewrite_Prod_HTTPSTarget(t *testing.T) {
 	got := Rewrite("https://cdn.target.com/a.js",
 		mustURL(t, "https://target.com/"), prodCfg)
-	want := "https://proxy.example.com/?goto=aHR0cHM6Ly9jZG4udGFyZ2V0LmNvbS9hLmpz"
+	want := "https://proxy.example.com/cyrano/https/cdn.target.com/a.js"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
@@ -129,7 +129,7 @@ func TestRewrite_Prod_HTTPSTarget(t *testing.T) {
 func TestRewrite_Prod_HTTPTarget(t *testing.T) {
 	got := Rewrite("http://target.com/foo",
 		mustURL(t, "http://target.com/"), prodCfg)
-	want := "https://proxy.example.com/?goto=aHR0cDovL3RhcmdldC5jb20vZm9v"
+	want := "https://proxy.example.com/cyrano/http/target.com/foo"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
@@ -138,7 +138,7 @@ func TestRewrite_Prod_HTTPTarget(t *testing.T) {
 // ── already-proxified detection + on-proxy bare URLs ────────────────────
 
 func TestRewrite_AlreadyProxified(t *testing.T) {
-	in := "http://localhost:9081/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS8"
+	in := "http://localhost:9081/cyrano/https/example.com/"
 	got := Rewrite(in, mustURL(t, "http://localhost:9081/"), devCfg)
 	if got != in {
 		t.Errorf("already-proxified mutated: got %q", got)
@@ -158,7 +158,7 @@ func TestRewrite_OnProxyHostNoLoad(t *testing.T) {
 // Default-port equivalence: prod public URL has no explicit port; an
 // explicit :443 form pointing at the same origin is the same place.
 func TestRewrite_Prod_DefaultPortMatchesExplicit(t *testing.T) {
-	in := "https://proxy.example.com:443/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS8"
+	in := "https://proxy.example.com:443/cyrano/https/example.com/"
 	got := Rewrite(in, mustURL(t, "https://target.com/"), prodCfg)
 	if got != in {
 		t.Errorf("explicit :443 against implicit-port public URL should be unchanged: got %q", got)
@@ -169,8 +169,8 @@ func TestRewrite_Prod_DefaultPortMatchesExplicit(t *testing.T) {
 
 func TestUnwrap(t *testing.T) {
 	cases := []struct{ proxied, want string }{
-		{"http://localhost:9081/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS9mb28", "https://example.com/foo"},
-		{"http://localhost:9081/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS9wYWdl#section", "https://example.com/page#section"},
+		{"http://localhost:9081/cyrano/https/example.com/foo", "https://example.com/foo"},
+		{"http://localhost:9081/cyrano/https/example.com/page#section", "https://example.com/page#section"},
 		{"https://example.com/", "https://example.com/"},                                // not on proxy → unchanged
 		{"http://localhost:9081/rewriter.js", "http://localhost:9081/rewriter.js"},         // on proxy without load → unchanged
 	}

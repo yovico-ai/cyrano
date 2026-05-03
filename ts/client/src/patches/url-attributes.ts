@@ -62,16 +62,20 @@ function patchAttribute(
             return raw;
         },
         set(value: unknown): void {
-            // Only rewrite when the assigned value is a string. Some sites
-            // null out attributes; pass non-strings through verbatim.
-            if (typeof value !== "string") {
+            // null/undefined clear the attribute — pass through verbatim.
+            // TrustedTypes objects (TrustedScriptURL, TrustedHTML, etc.) coerce
+            // to their wrapped URL string via String(); pass them through the
+            // rewrite path so GTM/GTags can't escape URL containment by handing
+            // the setter a TrustedScriptURL instead of a plain string.
+            if (value == null) {
                 originalSet.call(this, value);
                 return;
             }
+            const strValue = typeof value === "string" ? value : String(value);
             if (attribute === "srcset") {
-                originalSet.call(this, rewriteSrcsetAttribute(value, rewriteOne));
+                originalSet.call(this, rewriteSrcsetAttribute(strValue, rewriteOne));
             } else {
-                originalSet.call(this, rewriteOne(value));
+                originalSet.call(this, rewriteOne(strValue));
             }
         },
     });

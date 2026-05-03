@@ -7,14 +7,13 @@
 // websocket library, since we don't decode frames; we just shovel bytes.
 //
 // The wire-level URL containment is the same as HTTP: clients send
-// `ws(s)://<proxy-host>/?goto=<b64(ws(s)://<origin>/...)>` and we
-// decode `load` on the upgrade request to find the upstream.
+// `/cyrano/<scheme>/<host><path>` and we parse that on the upgrade request to
+// find the upstream.
 package wsproxy
 
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yovico/cyrano/internal/b64u"
+	"github.com/yovico/cyrano/internal/urlrewrite"
 )
 
 // Options configures one wsproxy handler.
@@ -38,7 +37,7 @@ type Options struct {
 // Handler upgrades incoming WebSocket requests and proxies them.
 //
 // Flow:
-//  1. Decode `?goto=` to find the upstream wss://... URL
+//  1. Parse /cyrano/<scheme>/<host><path> to find the upstream wss://... URL
 //  2. http.Hijack the client connection
 //  3. Dial upstream (TLS for wss, plain for ws)
 //  4. Forward the client's Upgrade request, with Host/Origin rewritten
@@ -80,23 +79,13 @@ func IsWSUpgrade(r *http.Request) bool {
 
 // ServeHTTP handles one WebSocket upgrade.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	loadParam := r.URL.Query().Get("goto")
-	if loadParam == "" {
-		http.Error(w, "missing goto= for ws upgrade", http.StatusBadRequest)
-		return
-	}
-	targetStr, err := b64.Decode(loadParam)
-	if err != nil {
-		http.Error(w, "invalid goto= encoding", http.StatusBadRequest)
-		return
-	}
-	target, err := url.Parse(targetStr)
-	if err != nil || target == nil {
-		http.Error(w, "invalid goto= URL", http.StatusBadRequest)
+	target, ok := urlrewrite.ParseCyranoPath(r.URL.Path, r.URL.RawQuery)
+	if !ok {
+		http.Error(w, "missing or invalid /cyrano/ path for ws upgrade", http.StatusBadRequest)
 		return
 	}
 
-	// Coerce HTTP/HTTPS to ws/wss — clients sometimes send http(s) goto= values.
+	// Coerce HTTP/HTTPS to ws/wss — clients sometimes send http(s) cyrano values.
 	switch target.Scheme {
 	case "ws", "wss":
 		// ok
@@ -241,11 +230,3 @@ func writeErrorResponse(c net.Conn, status int, msg string) {
 		status, http.StatusText(status), len(body), body)
 }
 
-// b64 is a function-scoped alias so the standalone b64u import is
-// recognized as used; pulled into a stable name in case we ever swap out
-// the encoder (unlikely — base64url is RFC-spec'd).
-var b64 = struct {
-	Decode func(string) (string, error)
-}{Decode: b64u.Decode}
-
-var _ = errors.New // imported for future use; keeps `errors` in the toolchain

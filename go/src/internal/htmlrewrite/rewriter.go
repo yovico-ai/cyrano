@@ -188,9 +188,14 @@ func applyAttrRules(tag string, attrs []html.Attribute, cfg *Config) []html.Attr
 	attrs = removeAttr(attrs, "integrity")
 
 	// HTML_CROSSORIGIN — force `use-credentials` so cookies follow the
-	// rewritten request.
+	// rewritten request. Skip <link rel="preload"> — the preload's credentials
+	// mode must match whatever the actual JS fetch uses; we can't know that
+	// statically, and mismatching causes the preload to be silently discarded.
 	if _, ok := getAttr(attrs, "crossorigin"); ok {
-		attrs = setAttr(attrs, "crossorigin", "use-credentials")
+		rel, _ := getAttr(attrs, "rel")
+		if !(tag == "link" && strings.EqualFold(rel, "preload")) {
+			attrs = setAttr(attrs, "crossorigin", "use-credentials")
+		}
 	}
 
 	// HTML_SANDBOX on <iframe> — ensure allow-same-origin so the

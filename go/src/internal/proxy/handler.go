@@ -1,6 +1,7 @@
 // Package proxy is the upstream-fetch leg of the rewriter pipeline. It
-// decodes the URL-containment scheme (`?goto=<b64>`), opens a connection to
-// the original host, and streams the response back to the client.
+// decodes the URL-containment scheme (`/cyrano/<scheme>/<host><path>`), opens
+// a connection to the original host, and streams the response back to the
+// client.
 //
 // Phase 2 only: pass-through. No body rewriting happens here yet — that
 // belongs to a wrapper handler in phase 3 that pipes the response through
@@ -19,7 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yovico/cyrano/internal/b64u"
+	"golang.org/x/net/publicsuffix"
+
 	"github.com/yovico/cyrano/internal/urlrewrite"
 )
 
@@ -38,7 +40,7 @@ type Options struct {
 	// BodyRewriter, if non-nil, is invoked from ModifyResponse after the
 	// upstream response headers arrive. It may replace resp.Body with a
 	// wrapped reader (e.g. piping the body through the HTML/JS/CSS
-	// rewriters). The target URL — the decoded ?goto= value — is the
+	// rewriters). The target URL — the /cyrano/ decoded URL — is the
 	// page's *original* URL and should be the BaseURL for any rewriters.
 	//
 	// nil = pure pass-through (phase 2 behavior).
@@ -53,8 +55,8 @@ type Options struct {
 	ProxyCfg urlrewrite.ProxyConfig
 }
 
-// Handler decodes ?goto= and proxies. It implements http.Handler so it can
-// be mounted into an http.ServeMux directly.
+// Handler decodes /cyrano/ paths and proxies. It implements http.Handler so it
+// can be mounted into an http.ServeMux directly.
 type Handler struct {
 	opts      Options
 	transport *http.Transport
@@ -98,13 +100,16 @@ var hopByHopHeaders = []string{
 // dangerousResponseHeaders are headers we strip from the upstream response
 // because they'd lock the browser into the original origin's policies and
 // break the rewriting (HSTS would force https on our proxy host; CSP would
-// block our injected /rewriter.js; etc.).
+// block our injected /rewriter.js; X-Frame-Options would prevent third-party
+// iframes from embedding the proxied page, which breaks ad and widget frames
+// that the proxy intermediates; etc.).
 var dangerousResponseHeaders = []string{
 	"Strict-Transport-Security",
 	"Content-Security-Policy",
 	"Content-Security-Policy-Report-Only",
 	"Public-Key-Pins",
 	"Alt-Svc",
+	"X-Frame-Options",
 }
 
 // dropOnRequest are headers we never forward upstream — they leak the proxy
@@ -114,24 +119,14 @@ var dropOnRequest = []string{
 	"X-Forwarded-Proto",
 	"X-Forwarded-Port",
 	"X-Forwarded-Host",
+	"Forwarded",
 }
 
 // ServeHTTP routes one proxified request.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	loadParam := r.URL.Query().Get("goto")
-	if loadParam == "" {
-		http.Error(w, "missing goto= query param", http.StatusBadRequest)
-		return
-	}
-
-	targetStr, err := b64u.Decode(loadParam)
-	if err != nil {
-		http.Error(w, "invalid goto= encoding", http.StatusBadRequest)
-		return
-	}
-	target, err := url.Parse(targetStr)
-	if err != nil || target == nil {
-		http.Error(w, "invalid goto= URL", http.StatusBadRequest)
+	target, ok := urlrewrite.ParseCyranoPath(r.URL.Path, r.URL.RawQuery)
+	if !ok {
+		http.Error(w, "invalid /cyrano/ path", http.StatusBadRequest)
 		return
 	}
 	switch target.Scheme {
@@ -146,27 +141,32 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Merge any extra query params from the proxy URL (beyond "goto") into the
-	// upstream target URL. Challenge flows (AWS WAF, Cloudflare) append params
-	// like chal_t= and force_referer= to the proxy URL after the challenge
-	// interstitial runs; these must reach the upstream server or the flow breaks.
-	// We translate force_referer= from proxy URL back to the original page URL
-	// so the upstream sees the correct referrer domain.
-	if extraParams := extraQueryParams(r.URL.Query(), h.opts.ProxyCfg); len(extraParams) > 0 {
-		q := target.Query()
-		for k, vs := range extraParams {
-			for _, v := range vs {
-				q.Add(k, v)
+	// Translate any force_referer= proxy URL values back to original upstream URLs.
+	// Challenge flows (AWS WAF, Cloudflare) append force_referer= to the proxy URL;
+	// the upstream server expects the original page URL, not our proxy URL.
+	if h.opts.ProxyCfg.PublicURL != nil {
+		if q := target.Query(); q.Has("force_referer") {
+			changed := false
+			for i, v := range q["force_referer"] {
+				if u, err := url.Parse(v); err == nil &&
+					strings.EqualFold(u.Host, h.opts.ProxyCfg.PublicURL.Host) {
+					if orig, ok := urlrewrite.ParseCyranoPath(u.Path, u.RawQuery); ok {
+						q["force_referer"][i] = orig.String()
+						changed = true
+					}
+				}
+			}
+			if changed {
+				target.RawQuery = q.Encode()
 			}
 		}
-		target.RawQuery = q.Encode()
 	}
 
 	h.serveTarget(w, r, target)
 }
 
 // ServeHTTPWithTarget proxies r to an explicitly provided target URL without
-// requiring a ?goto= parameter. Used for Referer-based routing of bare-path
+// requiring a /cyrano/ path. Used for Referer-based routing of bare-path
 // requests (e.g. webpack chunks, Cloudflare challenge scripts) that are
 // relative to a proxied page's origin.
 func (h *Handler) ServeHTTPWithTarget(w http.ResponseWriter, r *http.Request, target *url.URL) {
@@ -201,17 +201,43 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		for _, h := range dropOnRequest {
 			req.Header.Del(h)
 		}
-		// Forward cookies: JS on the proxied page stores cookies under the
-		// proxy origin (e.g. aws-waf-token, cf_clearance after Set-Cookie
-		// domain rewriting below). Passing them through lets bot-challenge
-		// clearance cookies reach the upstream server.
-		// Force gzip — keeps payloads small over the wire and the rewriter
-		// will gunzip when it needs to inspect the body.
-		req.Header.Set("Accept-Encoding", "gzip")
+		// Forward only cookies that belong to this upstream. Cookies are stored
+		// under the proxy origin with a site-namespace prefix (see cookiePrefixFor
+		// and rewriteSetCookies). Filtering here prevents cross-site cookie
+		// contamination — e.g. cf_clearance from a Cloudflare-protected site
+		// leaking into a request to an Akamai-protected site where it looks
+		// suspicious. The prefix is stripped before forwarding so the upstream
+		// sees plain cookie names.
+		if cookieHeader := req.Header.Get("Cookie"); cookieHeader != "" {
+			prefix := cookiePrefixFor(target.Host)
+			var forwarded []string
+			for _, kv := range strings.Split(cookieHeader, ";") {
+				kv = strings.TrimSpace(kv)
+				if strings.HasPrefix(kv, prefix) {
+					forwarded = append(forwarded, kv[len(prefix):])
+				}
+			}
+			if len(forwarded) > 0 {
+				req.Header.Set("Cookie", strings.Join(forwarded, "; "))
+			} else {
+				req.Header.Del("Cookie")
+			}
+		}
+		//
+		// Advertise the same encodings a real browser sends. "gzip only" is a
+		// trivial bot fingerprint that WAFs (Akamai, Cloudflare, etc.) key on.
+		// readDecompressedBody handles gzip and br; zstd is stripped here so
+		// we don't receive an encoding we can't decompress yet.
+		ae := req.Header.Get("Accept-Encoding")
+		ae = removeEncoding(ae, "zstd")
+		if ae == "" {
+			ae = "gzip, deflate, br"
+		}
+		req.Header.Set("Accept-Encoding", ae)
 
 		// Translate proxy Referer → original page URL so CDN hotlink
 		// protection sees the correct origin domain instead of localhost.
-		// The browser sends "Referer: http://proxy/?goto=<b64(page)>"; we
+		// The browser sends "Referer: http://proxy/cyrano/<scheme>/<host><path>"; we
 		// decode that back to the original page URL before forwarding.
 		var translatedRefOrigin string
 		if ref := req.Header.Get("Referer"); ref != "" {
@@ -220,6 +246,12 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 				if u, err := url.Parse(translated); err == nil {
 					translatedRefOrigin = u.Scheme + "://" + u.Host
 				}
+			} else if h.isProxyReferer(ref) {
+				// Referer is our proxy origin but has no /cyrano/ path
+				// (e.g. the landing page on first navigation). Strip it so
+				// the upstream doesn't see "Referer: http://localhost:9081/"
+				// and block the request as a known proxy.
+				req.Header.Del("Referer")
 			}
 		}
 
@@ -241,7 +273,27 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		if _, ok := req.Header["User-Agent"]; !ok {
 			req.Header.Set("User-Agent", "")
 		}
+
+		// Suppress httputil.ReverseProxy's automatic X-Forwarded-For injection.
+		// ReverseProxy checks for a nil map value (Go issue #38079) and skips
+		// the header when it's nil — setting to nil here is the documented way
+		// to opt out.  A 127.0.0.1 XFF would expose the proxy to WAFs.
+		req.Header["X-Forwarded-For"] = nil
 	}
+}
+
+// isProxyReferer reports whether the Referer header value points at our own
+// proxy origin. Used to strip proxy-origin Referers that can't be translated
+// before they reach the upstream and expose the proxy.
+func (h *Handler) isProxyReferer(referer string) bool {
+	if h.opts.ProxyCfg.PublicURL == nil {
+		return false
+	}
+	u, err := url.Parse(referer)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Host, h.opts.ProxyCfg.PublicURL.Host)
 }
 
 // isProxyOrigin reports whether the given Origin header value is our own
@@ -267,15 +319,11 @@ func (h *Handler) translateReferer(referer string) string {
 	if err != nil || !strings.EqualFold(u.Host, h.opts.ProxyCfg.PublicURL.Host) {
 		return ""
 	}
-	gotoParam := u.Query().Get("goto")
-	if gotoParam == "" {
+	target, ok := urlrewrite.ParseCyranoPath(u.Path, u.RawQuery)
+	if !ok {
 		return ""
 	}
-	decoded, err := b64u.Decode(gotoParam)
-	if err != nil {
-		return ""
-	}
-	return decoded
+	return target.String()
 }
 
 // modifyResponse runs after the upstream response headers arrive and before
@@ -302,7 +350,7 @@ func (h *Handler) modifyResponse(resp *http.Response) error {
 		// proxy origin. Without this, cookies with Domain=.example.com are
 		// silently rejected when the page is served from localhost:9081, and
 		// clearance cookies (cf_clearance, aws-waf-token, etc.) are lost.
-		rewriteSetCookies(resp, h.opts.ProxyCfg.PublicURL)
+		rewriteSetCookies(resp, h.opts.ProxyCfg.PublicURL, resp.Request.URL.Host)
 	}
 	if h.opts.BodyRewriter != nil && resp.Request != nil && resp.Request.URL != nil {
 		// Director copied the upstream URL into resp.Request.URL — it's
@@ -328,6 +376,27 @@ func rewriteRedirectHeader(resp *http.Response, name string, cfg urlrewrite.Prox
 	}
 }
 
+// cookieSiteKey returns a short stable key for the eTLD+1 of host, used as
+// the cookie namespace prefix. e.g. "www.casio.com" → "casio_com".
+func cookieSiteKey(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if etld1, err := publicsuffix.EffectiveTLDPlusOne(host); err == nil {
+		return strings.ReplaceAll(etld1, ".", "_")
+	}
+	return strings.ReplaceAll(host, ".", "_")
+}
+
+// cookiePrefixFor returns the namespace prefix for cookies belonging to host.
+// Cookies are stored with this prefix in the browser so that the Director can
+// filter them back to only the originating site when forwarding requests,
+// preventing cross-site cookie contamination (e.g. cf_clearance from site A
+// being forwarded to site B's upstream).
+func cookiePrefixFor(host string) string {
+	return "__crn__" + cookieSiteKey(host) + "__"
+}
+
 // rewriteSetCookies rewrites all Set-Cookie response headers so the browser
 // accepts and stores them under the proxy origin instead of the upstream
 // domain. Specifically:
@@ -337,25 +406,29 @@ func rewriteRedirectHeader(resp *http.Response, name string, cfg urlrewrite.Prox
 //   - Secure is dropped when the proxy is serving plain HTTP.
 //   - SameSite=None is downgraded to SameSite=Lax when Secure is absent
 //     (browsers require Secure for SameSite=None).
-func rewriteSetCookies(resp *http.Response, publicURL *url.URL) {
+func rewriteSetCookies(resp *http.Response, publicURL *url.URL, upstreamHost string) {
 	cookies := resp.Header["Set-Cookie"]
 	if len(cookies) == 0 {
 		return
 	}
 	isHTTPS := strings.EqualFold(publicURL.Scheme, "https")
+	prefix := cookiePrefixFor(upstreamHost)
 	rewritten := make([]string, 0, len(cookies))
 	for _, raw := range cookies {
-		rewritten = append(rewritten, rewriteOneCookie(raw, isHTTPS))
+		rewritten = append(rewritten, rewriteOneCookie(raw, isHTTPS, prefix))
 	}
 	resp.Header["Set-Cookie"] = rewritten
 }
 
-// rewriteOneCookie rewrites a single Set-Cookie header value.
-func rewriteOneCookie(raw string, proxyIsHTTPS bool) string {
+// rewriteOneCookie rewrites a single Set-Cookie header value, prefixing the
+// cookie name with namePrefix so the browser stores it namespaced to the
+// upstream site (see cookiePrefixFor). The Director strips the prefix when
+// forwarding cookies back to the same upstream on subsequent requests.
+func rewriteOneCookie(raw string, proxyIsHTTPS bool, namePrefix string) string {
 	// Split into name=value ; attr ; attr ... parts.
 	parts := strings.Split(raw, ";")
 	out := make([]string, 0, len(parts))
-	out = append(out, strings.TrimSpace(parts[0])) // name=value always first
+	out = append(out, namePrefix+strings.TrimSpace(parts[0])) // prefix + name=value
 	hasSecure := false
 	for _, p := range parts[1:] {
 		attr := strings.TrimSpace(p)
@@ -402,38 +475,28 @@ func (h *Handler) errorHandler(target *url.URL) func(http.ResponseWriter, *http.
 	}
 }
 
-// extraQueryParams returns the query parameters from proxyQuery that are not
-// the "goto" key, translating any "force_referer" value from a proxy URL back
-// to the original upstream URL. Used to forward challenge-flow params (chal_t,
-// force_referer) appended by AWS WAF / Cloudflare to the proxy URL.
-func extraQueryParams(proxyQuery url.Values, cfg urlrewrite.ProxyConfig) url.Values {
-	out := url.Values{}
-	for k, vs := range proxyQuery {
-		if k == "goto" {
-			continue
-		}
-		for _, v := range vs {
-			if k == "force_referer" && cfg.PublicURL != nil {
-				// Translate proxy URL → upstream URL if it's our origin.
-				if u, err := url.Parse(v); err == nil &&
-					strings.EqualFold(u.Host, cfg.PublicURL.Host) {
-					if gotoParam := u.Query().Get("goto"); gotoParam != "" {
-						if decoded, err := b64u.Decode(gotoParam); err == nil {
-							out.Add(k, decoded)
-							continue
-						}
-					}
-				}
-			}
-			out.Add(k, v)
-		}
-	}
-	return out
-}
-
 // IsLoadRequest reports whether r is one we should route through the proxy
 // pipeline (as opposed to a static-asset hit on the same path).
 func IsLoadRequest(r *http.Request) bool {
-	return r.URL.Query().Has("goto") &&
-		!strings.HasPrefix(r.URL.Path, "/rewriter-")
+	return strings.HasPrefix(r.URL.Path, "/cyrano/")
+}
+
+// removeEncoding removes a named token from a comma-separated
+// Accept-Encoding value (e.g. removes "zstd" from "gzip, deflate, br, zstd").
+// Returns the original string if the token is not present.
+func removeEncoding(ae, token string) string {
+	parts := strings.Split(ae, ",")
+	out := parts[:0]
+	for _, p := range parts {
+		// Each part may be "token" or "token;q=0.x" — trim both.
+		name := strings.ToLower(strings.TrimSpace(strings.SplitN(p, ";", 2)[0]))
+		if name == strings.ToLower(token) {
+			continue
+		}
+		out = append(out, p)
+	}
+	if len(out) == len(parts) {
+		return ae
+	}
+	return strings.TrimLeft(strings.Join(out, ","), " ,")
 }

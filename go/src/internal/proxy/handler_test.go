@@ -8,9 +8,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yovico/cyrano/internal/b64u"
 	"github.com/yovico/cyrano/internal/urlrewrite"
 )
+
+func cyranoPath(target string) string {
+	u, _ := url.Parse(target)
+	return "/cyrano/" + u.Scheme + "/" + u.Host + u.EscapedPath()
+}
 
 // startUpstream returns a stub origin server that echoes details about the
 // request it received, so we can assert on what the proxy forwarded.
@@ -43,7 +47,7 @@ func TestProxy_ForwardsRequest(t *testing.T) {
 	h := New(Options{})
 
 	target := upstream.URL + "/foo/bar"
-	req := httptest.NewRequest("GET", "/?goto="+b64u.Encode(target), nil)
+	req := httptest.NewRequest("GET", cyranoPath(target), nil)
 	req.Host = "localhost:9081"
 	req.Header.Set("User-Agent", "go-test")
 	req.Header.Set("Cookie", "should=not-leak")
@@ -69,13 +73,12 @@ func TestProxy_ForwardsRequest(t *testing.T) {
 	if captured.host != expectedHost {
 		t.Errorf("upstream host: got %q want %q", captured.host, expectedHost)
 	}
-	// Cookies are forwarded upstream so challenge-clearance cookies
-	// (cf_clearance, aws-waf-token) reach the upstream server.
-	// (No assertion here — the key behaviour is that they are NOT stripped.)
-	// X-Forwarded-For: httputil.ReverseProxy auto-appends the request's
-	// RemoteAddr after our Director runs, so the header isn't empty upstream.
-	// What we DO want to assert is that the client's spoofed "1.2.3.4" was
-	// dropped before the auto-append.
+	// Cookies without a site-namespace prefix are filtered by the Director.
+	// "should=not-leak" has no prefix, so it must not reach the upstream.
+	if v := captured.headers.Get("Cookie"); strings.Contains(v, "should=not-leak") {
+		t.Errorf("unprefixed cookie leaked upstream: Cookie=%q", v)
+	}
+	// X-Forwarded-For: suppressed via nil-sentinel; client-spoofed value must not appear.
 	if v := captured.headers.Get("X-Forwarded-For"); strings.Contains(v, "1.2.3.4") {
 		t.Errorf("client-supplied X-Forwarded-For leaked upstream: %q", v)
 	}
@@ -86,7 +89,7 @@ func TestProxy_StripsDangerousResponseHeaders(t *testing.T) {
 	h := New(Options{})
 
 	target := upstream.URL + "/"
-	req := httptest.NewRequest("GET", "/?goto="+b64u.Encode(target), nil)
+	req := httptest.NewRequest("GET", cyranoPath(target), nil)
 	req.Host = "localhost:9081"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -105,26 +108,25 @@ func TestProxy_RejectsBadLoadParam(t *testing.T) {
 	h := New(Options{})
 
 	cases := []string{
-		"",                // missing
-		"!!not-base64!!",  // invalid b64
-		b64u.Encode("ftp://nope.test/"),  // unsupported scheme
-		b64u.Encode("not a url at all"),  // unparseable
+		"/cyrano/",              // no scheme segment
+		"/cyrano/http/",         // no host
+		"/cyrano/ftp/nope.test/", // unsupported scheme
 	}
 	for _, p := range cases {
-		req := httptest.NewRequest("GET", "/?goto="+p, nil)
+		req := httptest.NewRequest("GET", p, nil)
 		req.Host = "localhost:9081"
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		if rec.Code != http.StatusBadRequest {
 			body, _ := io.ReadAll(rec.Body)
-			t.Errorf("goto=%q: status %d, want 400; body=%q", p, rec.Code, string(body))
+			t.Errorf("path=%q: status %d, want 400; body=%q", p, rec.Code, string(body))
 		}
 	}
 }
 
 func TestProxy_WebSocketSchemeNotImplemented(t *testing.T) {
 	h := New(Options{})
-	req := httptest.NewRequest("GET", "/?goto="+b64u.Encode("wss://example.com/socket"), nil)
+	req := httptest.NewRequest("GET", "/cyrano/wss/example.com/socket", nil)
 	req.Host = "localhost:9081"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -136,7 +138,7 @@ func TestProxy_WebSocketSchemeNotImplemented(t *testing.T) {
 func TestProxy_BadGatewayOnUpstreamFailure(t *testing.T) {
 	// Point at a definitely-closed port to force a connection refused.
 	h := New(Options{})
-	req := httptest.NewRequest("GET", "/?goto="+b64u.Encode("http://127.0.0.1:1/"), nil)
+	req := httptest.NewRequest("GET", "/cyrano/http/127.0.0.1:1/", nil)
 	req.Host = "localhost:9081"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -179,7 +181,7 @@ func TestProxy_RewritesAbsoluteLocationRedirect(t *testing.T) {
 
 	h := New(Options{ProxyCfg: devProxyCfg()})
 	target := upstream.URL + "/"
-	req := httptest.NewRequest("GET", "/?goto="+b64u.Encode(target), nil)
+	req := httptest.NewRequest("GET", cyranoPath(target), nil)
 	req.Host = "localhost:9081"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -188,7 +190,7 @@ func TestProxy_RewritesAbsoluteLocationRedirect(t *testing.T) {
 		t.Fatalf("status: got %d want %d", rec.Code, http.StatusFound)
 	}
 	got := rec.Header().Get("Location")
-	want := "http://localhost:9081/?goto=" + b64u.Encode(otherOrigin)
+	want := "http://localhost:9081/cyrano/https/en.wiktionary.org/wiki/Wiktionary:Main_Page"
 	if got != want {
 		t.Errorf("Location:\n got  %q\n want %q", got, want)
 	}
@@ -204,7 +206,7 @@ func TestProxy_RewritesRelativeLocationRedirect(t *testing.T) {
 
 	h := New(Options{ProxyCfg: devProxyCfg()})
 	target := upstream.URL + "/"
-	req := httptest.NewRequest("GET", "/?goto="+b64u.Encode(target), nil)
+	req := httptest.NewRequest("GET", cyranoPath(target), nil)
 	req.Host = "localhost:9081"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -213,7 +215,7 @@ func TestProxy_RewritesRelativeLocationRedirect(t *testing.T) {
 		t.Fatalf("status: got %d want %d", rec.Code, http.StatusFound)
 	}
 	got := rec.Header().Get("Location")
-	want := "http://localhost:9081/?goto=" + b64u.Encode(upstream.URL+"/us")
+	want := "http://localhost:9081" + cyranoPath(upstream.URL+"/us")
 	if got != want {
 		t.Errorf("Location:\n got  %q\n want %q", got, want)
 	}
@@ -231,13 +233,13 @@ func TestProxy_RewritesContentLocationHeader(t *testing.T) {
 
 	h := New(Options{ProxyCfg: devProxyCfg()})
 	target := upstream.URL + "/"
-	req := httptest.NewRequest("GET", "/?goto="+b64u.Encode(target), nil)
+	req := httptest.NewRequest("GET", cyranoPath(target), nil)
 	req.Host = "localhost:9081"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
 	got := rec.Header().Get("Content-Location")
-	want := "http://localhost:9081/?goto=" + b64u.Encode(otherURL)
+	want := "http://localhost:9081/cyrano/https/example.com/canonical"
 	if got != want {
 		t.Errorf("Content-Location:\n got  %q\n want %q", got, want)
 	}
@@ -250,7 +252,7 @@ func TestProxy_LocationPassthroughWhenProxyCfgUnset(t *testing.T) {
 
 	h := New(Options{}) // no ProxyCfg
 	target := upstream.URL + "/"
-	req := httptest.NewRequest("GET", "/?goto="+b64u.Encode(target), nil)
+	req := httptest.NewRequest("GET", cyranoPath(target), nil)
 	req.Host = "localhost:9081"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -315,6 +317,7 @@ func TestServeHTTPWithTarget_StripsSecurityHeaders(t *testing.T) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.Header().Set("Strict-Transport-Security", "max-age=31536000")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'")
+		w.Header().Set("X-Frame-Options", "deny")
 		_, _ = w.Write([]byte("ok"))
 	}))
 	t.Cleanup(upstream.Close)
@@ -331,6 +334,9 @@ func TestServeHTTPWithTarget_StripsSecurityHeaders(t *testing.T) {
 	if v := rec.Header().Get("Content-Security-Policy"); v != "" {
 		t.Errorf("CSP should be stripped, got %q", v)
 	}
+	if v := rec.Header().Get("X-Frame-Options"); v != "" {
+		t.Errorf("X-Frame-Options should be stripped, got %q", v)
+	}
 }
 
 func TestDirector_TranslatesReferer(t *testing.T) {
@@ -339,7 +345,7 @@ func TestDirector_TranslatesReferer(t *testing.T) {
 	upstream, cap := startUpstream(t)
 
 	publicURL, _ := url.Parse("http://localhost:9081")
-	proxyOrigin := publicURL.String() + "/?goto=" + b64u.Encode("https://example.com/page")
+	proxyOrigin := publicURL.String() + "/cyrano/https/example.com/page"
 
 	h := New(Options{
 		ProxyCfg: urlrewrite.ProxyConfig{PublicURL: publicURL},
@@ -382,16 +388,133 @@ func TestIsLoadRequest(t *testing.T) {
 		path string
 		want bool
 	}{
-		{"/?goto=" + b64u.Encode("https://example.com/"), true},
-		{"/", false},                                    // no goto=
-		{"/?other=1", false},                            // wrong param
-		{"/rewriter-status.json?goto=x", false},         // rewriter- prefix excluded
-		{"/rewriter-extended-status.json?goto=x", false},
+		{"/cyrano/https/example.com/", true},
+		{"/", false},
+		{"/?other=1", false},
+		{"/rewriter-status.json", false},
+		{"/rewriter-extended-status.json", false},
 	}
 	for _, c := range cases {
 		req := httptest.NewRequest("GET", c.path, nil)
 		if got := IsLoadRequest(req); got != c.want {
 			t.Errorf("IsLoadRequest(%q) = %v; want %v", c.path, got, c.want)
 		}
+	}
+}
+
+// ── cookie isolation ─────────────────────────────────────────────────────────
+
+func TestCookieSiteKey(t *testing.T) {
+	cases := []struct{ host, want string }{
+		{"www.casio.com", "casio_com"},
+		{"casio.com", "casio_com"},
+		{"cdn.casio.com", "casio_com"},       // same eTLD+1
+		{"stackoverflow.com", "stackoverflow_com"},
+		{"www.bbc.co.uk", "bbc_co_uk"},       // two-part TLD
+		{"localhost:9081", "localhost"},       // dev proxy host
+		{"127.0.0.1", "127_0_0_1"},
+	}
+	for _, c := range cases {
+		if got := cookieSiteKey(c.host); got != c.want {
+			t.Errorf("cookieSiteKey(%q) = %q; want %q", c.host, got, c.want)
+		}
+	}
+}
+
+func TestRewriteOneCookie_PrefixesName(t *testing.T) {
+	raw := "ak_bmsc=abc123; Path=/; Domain=.casio.com; Secure; SameSite=None"
+	got := rewriteOneCookie(raw, true /*proxyHTTPS*/, "__crn__casio_com__")
+	if !strings.HasPrefix(got, "__crn__casio_com__ak_bmsc=abc123") {
+		t.Errorf("name not prefixed: %q", got)
+	}
+	if strings.Contains(got, "Domain=") {
+		t.Errorf("Domain= not stripped: %q", got)
+	}
+}
+
+func TestRewriteOneCookie_NoPrefixWhenEmpty(t *testing.T) {
+	raw := "session=xyz; Path=/"
+	got := rewriteOneCookie(raw, false, "")
+	if !strings.HasPrefix(got, "session=xyz") {
+		t.Errorf("unexpected change with empty prefix: %q", got)
+	}
+}
+
+// startUpstreamWithSetCookie is like startUpstream but also sets a cookie
+// in the response so we can verify it arrives at the browser prefixed.
+func startUpstreamWithSetCookie(t *testing.T, cookieVal string) (*httptest.Server, *capturedRequest) {
+	t.Helper()
+	captured := &capturedRequest{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured.headers = r.Header.Clone()
+		w.Header().Set("Set-Cookie", cookieVal)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, captured
+}
+
+func TestCookieIsolation_SetCookiePrefixedInResponse(t *testing.T) {
+	upstream, _ := startUpstreamWithSetCookie(t, "ak_bmsc=secretval; Path=/; Domain=.casio.com")
+	publicURL, _ := url.Parse("http://localhost:9081")
+	h := New(Options{ProxyCfg: urlrewrite.ProxyConfig{PublicURL: publicURL}})
+
+	target, _ := url.Parse(upstream.URL + "/")
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTPWithTarget(rec, req, target)
+
+	setCookies := rec.Result().Cookies()
+	if len(setCookies) == 0 {
+		t.Fatal("no Set-Cookie in response")
+	}
+	// The upstream host is the httptest server (127.0.0.1:port); its site key
+	// is based on that host. We verify the name starts with the prefix token.
+	if !strings.HasPrefix(setCookies[0].Name, "__crn__") {
+		t.Errorf("Set-Cookie name not prefixed: %q", setCookies[0].Name)
+	}
+	if strings.Contains(setCookies[0].Name, "ak_bmsc") == false {
+		t.Errorf("original cookie name missing: %q", setCookies[0].Name)
+	}
+}
+
+func TestCookieIsolation_ForwardsMatchingPrefix(t *testing.T) {
+	upstream, cap := startUpstream(t)
+	upstreamURL, _ := url.Parse(upstream.URL)
+	prefix := cookiePrefixFor(upstreamURL.Host)
+
+	publicURL, _ := url.Parse("http://localhost:9081")
+	h := New(Options{ProxyCfg: urlrewrite.ProxyConfig{PublicURL: publicURL}})
+
+	target, _ := url.Parse(upstream.URL + "/")
+	req := httptest.NewRequest("GET", "/", nil)
+	// Simulate browser sending one matching cookie and one from a different site.
+	req.Header.Set("Cookie", prefix+"session=abc; __crn__other_site__token=xyz")
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTPWithTarget(rec, req, target)
+
+	got := cap.headers.Get("Cookie")
+	if got != "session=abc" {
+		t.Errorf("upstream Cookie = %q; want %q", got, "session=abc")
+	}
+}
+
+func TestCookieIsolation_DropsOtherSiteCookies(t *testing.T) {
+	upstream, cap := startUpstream(t)
+
+	publicURL, _ := url.Parse("http://localhost:9081")
+	h := New(Options{ProxyCfg: urlrewrite.ProxyConfig{PublicURL: publicURL}})
+
+	target, _ := url.Parse(upstream.URL + "/")
+	req := httptest.NewRequest("GET", "/", nil)
+	// Only cookies from a different site — none should reach this upstream.
+	req.Header.Set("Cookie", "__crn__other_site__cf_clearance=abc; crnsct=proxy-internal")
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTPWithTarget(rec, req, target)
+
+	if got := cap.headers.Get("Cookie"); got != "" {
+		t.Errorf("upstream received cookies it shouldn't: Cookie=%q", got)
 	}
 }

@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<!--
+  Fixture: cookie-cross-site
+  Tests: cookies set by site A are invisible to site B's document.cookie
+
+  Load this page via fixture-a.test. The harness pre-seeds two cookies:
+    __crn__fixture-a_test__a_cookie=for_a   (site A)
+    __crn__fixture-b_test__b_cookie=for_b   (site B)
+
+  Site A's page should see only "a_cookie=for_a" in document.cookie.
+  Site B's cookie must not appear (cross-site isolation).
+-->
+<html>
+<head><meta charset="utf-8"><title>cookie-cross-site fixture</title></head>
+<body>
+<pre id="log"></pre>
+<div id="result" data-pass="false">pending</div>
+<script>
+(function() {
+  const visible = document.cookie;
+  const log = [];
+
+  const hasOwn  = visible.split(";").map(s => s.trim()).some(kv => kv.startsWith("a_cookie="));
+  const hasOther = visible.split(";").map(s => s.trim()).some(kv => kv.startsWith("b_cookie="));
+
+  log.push((hasOwn  ? "PASS" : "FAIL") + " own cookie visible: " + JSON.stringify(visible));
+  log.push((hasOther ? "FAIL" : "PASS") + " other site's cookie hidden");
+
+  const pass = hasOwn && !hasOther;
+  document.getElementById("log").textContent = log.join("\n");
+  const el = document.getElementById("result");
+  el.dataset.pass = String(pass);
+  el.textContent = pass ? "PASS" : log.filter(l => l.startsWith("FAIL")).join("; ");
+})();
+</script>
+</body>
+</html>

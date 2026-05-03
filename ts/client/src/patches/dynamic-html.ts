@@ -53,6 +53,7 @@ let savedOriginals: OriginalElementOps | null = null;
 export function patchDynamicHtml(
     _targetWindow: Window,
     rewriteOne: (url: string) => string,
+    _unwrapOne: (url: string) => string,
 ): void {
     if (savedOriginals) return;
 

@@ -83,6 +83,14 @@ the server-side AST rewriter can't catch statically:
 - `document.URL` / `document.baseURI` — patched to return the original URL
   so that `new URL(path, document.baseURI)` resolves against the original
   origin (critical for chunk loaders and dynamic `import()` on Astro/webpack sites)
+- **`MutationObserver` safety net** — installed on the document root; watches
+  all URL-bearing attributes (`src`, `href`, `srcset`, `action`, `data`,
+  `poster`) across the full DOM subtree. When a non-proxified URL lands on a
+  live element (i.e. a write path that bypassed every other patch), it is
+  rewritten in-place via the pre-patch native `setAttribute` and logged to an
+  in-memory miss log. On install, the observer also retroactively scans
+  existing `<iframe>` elements: injects the rewriter runtime into same-origin
+  frames and rewrites (reloads) any iframe whose `src` is an unproxified URL.
 
 ### 4. Session + cookies
 

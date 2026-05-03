@@ -3,18 +3,17 @@
 // Every URL the page would otherwise navigate to or fetch from has to be
 // transformed into a request that goes through the proxy origin so that the
 // proxy can intercept the response and rewrite it in turn. The transformation
-// is "proxify": wrap the original target in a base64url-encoded `?goto=...`
-// query parameter on the proxy origin.
+// is "proxify": wrap the original target in a /cyrano/<scheme>/<host><path>
+// path on the proxy origin.
 //
 // The inverse, "unproxify", is needed when page-side code reads URLs back
 // (e.g. `location.href`) and would be confused if it saw the proxy origin.
 //
-// Mirrors the server's utils/url.js:getRewrittenUrl. Some optimizations the
-// server applies are intentionally omitted from the client first cut — they
-// are listed inline below and will be revisited.
+// Mirrors the server's urlrewrite/rewrite.go:Rewrite. Producing byte-identical
+// proxified URLs across runtimes is a hard requirement so server-rewritten
+// HTML and client-side dynamic rewrites agree on the URL of every resource.
 
 import type { ClientConfig } from "../config";
-import { b64uDecode, b64uEncode } from "./base64url";
 
 // Schemes whose URLs we proxify. Anything else (data:, blob:, javascript:,
 // mailto:, tel:, about:, fragment-only, etc.) passes through unchanged.
@@ -60,16 +59,16 @@ function effectiveHost(u: URL): string {
 
 /**
  * True if this URL is already a proxified URL on our origin (i.e. has the
- * `?goto=...` parameter). Used to avoid double-wrapping.
+ * /cyrano/ path prefix). Used to avoid double-wrapping.
  */
 function isAlreadyProxified(url: URL, config: ClientConfig): boolean {
-    return isProxyOrigin(url, config) && url.searchParams.has("goto");
+    return isProxyOrigin(url, config) && url.pathname.startsWith("/cyrano/");
 }
 
 /**
  * Proxifies a URL: takes a raw URL (absolute or relative) and the page's
  * effective base URL, and returns the URL the browser should actually
- * request — i.e. a `?goto=<base64url(target)>` URL on the proxy origin.
+ * request — i.e. a /cyrano/<scheme>/<host><path> URL on the proxy origin.
  *
  * Returns the input unchanged when:
  *   - it's empty / not a string
@@ -77,11 +76,6 @@ function isAlreadyProxified(url: URL, config: ClientConfig): boolean {
  *   - it uses a non-proxifiable scheme (data:, javascript:, etc.)
  *   - parsing as a URL fails
  *   - the resolved URL is already proxified
- *
- * First-cut omissions vs the server (intentional, will revisit):
- *   - No URL-length compression (server uses pako above 5000 chars)
- *   - No cache-busting `v=cacheKey` query suffix
- *   - Always emits the `?goto=...` query form, never the `/load/<b64>/` REST form
  */
 export function rewriteUrl(
     rawUrl: string,
@@ -115,21 +109,18 @@ export function rewriteUrl(
     if (isProxyOrigin(absolute, config)) return absolute.href;
 
     const apiBase = proxyApiBase(config);
-    // The fragment never participates in HTTP requests, so we keep it on the
-    // proxified URL itself rather than encoding it inside `goto=`. This way
-    // browser-native fragment navigation behaves correctly.
-    const targetWithoutFragment =
-        `${absolute.protocol}//${absolute.host}${absolute.pathname}${absolute.search}`;
-    return `${apiBase}/?goto=${b64uEncode(targetWithoutFragment)}${absolute.hash}`;
+    const scheme = absolute.protocol.slice(0, -1); // strip trailing ':'
+    const cyranoPath = `/cyrano/${scheme}/${absolute.host}${absolute.pathname}`;
+    return `${apiBase}${cyranoPath}${absolute.search}${absolute.hash}`;
 }
 
 /**
- * Unproxifies a URL: given a `?goto=<b64>...` URL on our proxy origin, recover
- * the original target URL. Used when page-side code reads URLs back (e.g.
- * `location.href`) and we want to hand it the URL it expects.
+ * Unproxifies a URL: given a /cyrano/<scheme>/<host><path> URL on our proxy
+ * origin, recover the original target URL. Used when page-side code reads
+ * URLs back (e.g. `location.href`) and we want to hand it the URL it expects.
  *
  * Returns the input unchanged when the URL isn't on our proxy origin or
- * doesn't carry a `goto=` parameter.
+ * doesn't carry a /cyrano/ path.
  */
 export function unwrapProxiedUrl(
     proxiedHref: string,
@@ -143,12 +134,24 @@ export function unwrapProxiedUrl(
     }
     if (!isProxyOrigin(url, config)) return proxiedHref;
 
-    const gotoParam = url.searchParams.get("goto");
-    if (gotoParam) {
-        try {
-            return b64uDecode(gotoParam) + url.hash;
-        } catch {
-            return proxiedHref;
+    if (url.pathname.startsWith("/cyrano/")) {
+        const rest = url.pathname.slice("/cyrano/".length);
+        const schemeEnd = rest.indexOf("/");
+        if (schemeEnd >= 0) {
+            const scheme = rest.slice(0, schemeEnd);
+            const afterScheme = rest.slice(schemeEnd + 1);
+            const hostEnd = afterScheme.indexOf("/");
+            let host: string, path: string;
+            if (hostEnd < 0) {
+                host = afterScheme;
+                path = "/";
+            } else {
+                host = afterScheme.slice(0, hostEnd);
+                path = afterScheme.slice(hostEnd);
+            }
+            if (host && (scheme === "http" || scheme === "https" || scheme === "ws" || scheme === "wss")) {
+                return `${scheme}://${host}${path}${url.search}${url.hash}`;
+            }
         }
     }
     return proxiedHref;

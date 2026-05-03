@@ -75,8 +75,9 @@ run the build step before starting the server if it's missing.
 
 ## Known gaps
 
-- `wrap_eval` / `wrap_document_write` / `wrap_postMessage` in the TS client
-  are passthroughs — see `ts/client/src/runtime/api.ts`.
+- `wrap_postMessage` in the TS client is a passthrough — see
+  `ts/client/src/wrappers/post-message.ts` (TODO: rewrite proxy-origin URLs
+  in message payloads before they cross frame boundaries).
 - AES-CTR cookie decryption in the TS client is stubbed —
   see `ts/client/src/cookies/decrypt.ts` (TODO: Web Crypto).
 - Cookie sync endpoints return empty data (in-memory stub) —

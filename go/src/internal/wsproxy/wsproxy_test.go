@@ -6,11 +6,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/yovico/cyrano/internal/b64u"
 )
 
 func TestIsWSUpgrade(t *testing.T) {
@@ -47,18 +46,18 @@ func TestIsWSUpgrade(t *testing.T) {
 
 func TestServeHTTP_RejectsBadLoadParam(t *testing.T) {
 	h := New(Options{})
-	for _, p := range []string{
-		"",                   // missing
-		"!!!",                // invalid b64
-		b64u.Encode("ftp://x"), // unsupported scheme
+	for _, path := range []string{
+		"/cyrano/",              // no scheme
+		"/cyrano/ftp/x/",        // unsupported scheme
+		"/cyrano/http/",         // no host
 	} {
-		req := httptest.NewRequest("GET", "/?goto="+p, nil)
+		req := httptest.NewRequest("GET", path, nil)
 		req.Header.Set("Upgrade", "websocket")
 		req.Header.Set("Connection", "Upgrade")
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		if rec.Code < 400 || rec.Code >= 500 {
-			t.Errorf("goto=%q: status %d, want 4xx", p, rec.Code)
+			t.Errorf("path=%q: status %d, want 4xx", path, rec.Code)
 		}
 	}
 }
@@ -120,9 +119,10 @@ func TestUpgrade_FullCycle(t *testing.T) {
 	go srv.Serve(frontLn)
 	defer srv.Close()
 
-	// Encode the upstream as the load= target — note ws:// scheme.
+	// Build the cyrano path for the upstream ws:// target.
 	target := "ws://" + upstreamAddr + "/socket"
-	loadParam := b64u.Encode(target)
+	u, _ := url.Parse(target)
+	cyranoPath := "/cyrano/" + u.Scheme + "/" + u.Host + u.EscapedPath()
 
 	// Open a raw client conn and send the upgrade request.
 	c, err := net.Dial("tcp", frontLn.Addr().String())
@@ -132,7 +132,7 @@ func TestUpgrade_FullCycle(t *testing.T) {
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(5 * time.Second))
 
-	upgrade := "GET /?goto=" + loadParam + " HTTP/1.1\r\n" +
+	upgrade := "GET " + cyranoPath + " HTTP/1.1\r\n" +
 		"Host: localhost\r\n" +
 		"Upgrade: websocket\r\n" +
 		"Connection: Upgrade\r\n" +

@@ -22,7 +22,12 @@ export function init(
     const api = createRewriterApi(targetWindow, config);
     return {
         inject(): RewriterApi {
-            installPatches(targetWindow, () => api.get_base_url(), config);
+            installPatches(
+                targetWindow,
+                () => api.get_base_url(),
+                (href) => api.set_base_url(href),
+                config,
+            );
             // Globally override window.location so unmodified scripts (e.g.
             // Cloudflare challenge.js) see the upstream URL, not the proxy URL.
             patchWindowLocation(

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<!--
+  Fixture: echo-headers
+  Tests: X-Forwarded-For stripped, Accept-Encoding realistic
+
+  The fixture server exposes GET /echo-headers → JSON of request headers.
+  This page fetches that endpoint and renders the headers so Playwright
+  can inspect them, but the Go tier-1 tests hit /echo-headers directly.
+
+  PASS criteria (checked by Go test, not this page):
+    - "x-forwarded-for" key absent from the JSON
+    - "accept-encoding" value contains "gzip", "deflate", and "br"
+-->
+<html>
+<head><meta charset="utf-8"><title>echo-headers fixture</title></head>
+<body>
+<pre id="headers">loading…</pre>
+<div id="result" data-pass="false">pending</div>
+<script>
+fetch("/echo-headers").then(r => r.json()).then(h => {
+  document.getElementById("headers").textContent = JSON.stringify(h, null, 2);
+
+  const ae = (h["accept-encoding"] || []).join(",").toLowerCase();
+  const xfwd = "x-forwarded-for" in h;
+
+  const aeOk = ae.includes("gzip") && ae.includes("deflate") && ae.includes("br");
+  const xfwdOk = !xfwd;
+  const pass = aeOk && xfwdOk;
+
+  const el = document.getElementById("result");
+  el.dataset.pass = String(pass);
+  el.textContent = pass
+    ? "PASS"
+    : [
+        !aeOk  && ("FAIL: accept-encoding=" + ae),
+        !xfwdOk && "FAIL: x-forwarded-for present",
+      ].filter(Boolean).join("; ");
+}).catch(e => {
+  document.getElementById("result").textContent = "FAIL: fetch error: " + e;
+});
+</script>
+</body>
+</html>

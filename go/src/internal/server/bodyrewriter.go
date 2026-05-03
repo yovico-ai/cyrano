@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/andybalholm/brotli"
 	"github.com/yovico/cyrano/internal/config"
 	"github.com/yovico/cyrano/internal/cssrewrite"
 	"github.com/yovico/cyrano/internal/htmlrewrite"
@@ -158,16 +159,70 @@ func isJS(resp *http.Response) bool {
 		strings.Contains(ct, "ecmascript")
 }
 
-// isChallengeScript reports whether the URL is a Cloudflare (or similar) bot
-// challenge script. These scripts do browser fingerprinting; rewriting them
-// breaks the challenge. URL patterns seen in the wild:
+// isChallengeScript reports whether the URL is a bot-challenge script that
+// must not be rewritten. These scripts do browser fingerprinting; any AST
+// transformation breaks them. URL patterns seen in the wild:
 //
 //	/__challenge_*/challenge.js
 //	/__cf_chl_*/challenge.js
+//	/cdn-cgi/challenge-platform/*/   (Cloudflare Bot Management / jsd/main.js)
+//	/<b64seg>/<b64seg>/...?v=<uuid>  (Akamai Bot Manager — randomised paths)
 func isChallengeScript(u *url.URL) bool {
 	p := u.Path
-	return (strings.Contains(p, "/__challenge_") || strings.Contains(p, "/__cf_chl")) &&
-		strings.HasSuffix(p, "/challenge.js")
+	if strings.Contains(p, "/cdn-cgi/challenge-platform/") {
+		return true
+	}
+	if (strings.Contains(p, "/__challenge_") || strings.Contains(p, "/__cf_chl")) &&
+		strings.HasSuffix(p, "/challenge.js") {
+		return true
+	}
+	return isAkamaiScript(u)
+}
+
+// isAkamaiScript detects Akamai Bot Manager scripts by their distinctive URL
+// shape: all path segments are URL-safe base64 characters (no dots, no
+// extension) and the query string contains a v= parameter with a UUID value.
+//
+// Akamai serves these scripts from the origin domain itself at a randomised
+// path that rotates per-deployment, making content-based detection unreliable.
+func isAkamaiScript(u *url.URL) bool {
+	// Must have a v= query param that looks like a UUID.
+	if !looksLikeUUID(u.Query().Get("v")) {
+		return false
+	}
+	// Every path segment must be non-empty and purely [A-Za-z0-9_-] (no dots).
+	segs := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(segs) < 2 {
+		return false
+	}
+	for _, seg := range segs {
+		if seg == "" {
+			return false
+		}
+		for _, c := range seg {
+			if !('a' <= c && c <= 'z') && !('A' <= c && c <= 'Z') &&
+				!('0' <= c && c <= '9') && c != '_' && c != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// looksLikeUUID reports whether s is a UUID in the standard
+// xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx format.
+func looksLikeUUID(s string) bool {
+	return len(s) == 36 && s[8] == '-' && s[13] == '-' && s[18] == '-' && s[23] == '-'
+}
+
+// isChallengeJSPath reports whether the request path looks like a Cloudflare
+// Bot Management script that may arrive without a usable Referer (e.g. from an
+// about:blank sandbox). Used by the server to return an empty 200 JS response
+// instead of a 404 when Referer-based routing cannot resolve an upstream.
+func isChallengeJSPath(path string) bool {
+	lower := strings.ToLower(path)
+	return strings.Contains(lower, "/cdn-cgi/challenge-platform/") &&
+		strings.HasSuffix(lower, ".js")
 }
 
 // isChallengeHTML reports whether the HTML body is a bot-challenge interstitial.
@@ -204,12 +259,13 @@ func fixContentType(resp *http.Response, target *url.URL) {
 	}
 }
 
-// readDecompressedBody reads resp.Body, transparently un-gzipping if the
-// upstream marked it Content-Encoding: gzip. Removes that header so the
-// rewritten response we substitute back is plain text.
+// readDecompressedBody reads resp.Body, transparently decompressing gzip or
+// brotli content. Removes Content-Encoding so the rewritten response we
+// substitute back is treated as plain text by the browser.
 func readDecompressedBody(resp *http.Response) ([]byte, error) {
 	defer resp.Body.Close()
-	if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
+	switch strings.ToLower(resp.Header.Get("Content-Encoding")) {
+	case "gzip":
 		gz, err := gzip.NewReader(resp.Body)
 		if err != nil {
 			return nil, err
@@ -221,8 +277,16 @@ func readDecompressedBody(resp *http.Response) ([]byte, error) {
 		}
 		resp.Header.Del("Content-Encoding")
 		return body, nil
+	case "br":
+		body, err := io.ReadAll(brotli.NewReader(resp.Body))
+		if err != nil {
+			return nil, err
+		}
+		resp.Header.Del("Content-Encoding")
+		return body, nil
+	default:
+		return io.ReadAll(resp.Body)
 	}
-	return io.ReadAll(resp.Body)
 }
 
 // buildClientPassthrough returns the JSON-serializable subset of vhost
