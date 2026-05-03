@@ -1,6 +1,11 @@
 // CLI entry. One run = one query, two snapshots, one diff, one JSON report.
 // Loops until the requested run count is reached, writes a session summary.
 //
+// Three persistent tabs are opened at startup and reused across all runs:
+//   Tab 1 — search: navigates search engines to find the target URL
+//   Tab 2 — direct: loads the target URL as-is (no proxy)
+//   Tab 3 — via proxy: loads the target through the cyrano proxy
+//
 //   tsx src/main.ts                                      # default: chrome, headed
 //   tsx src/main.ts --runs 5
 //   tsx src/main.ts --headless                           # no UI (CI / batch)
@@ -13,7 +18,7 @@
 //   tsx src/main.ts --clean --runs 0                     # delete reports only, no new run
 
 import { parseArgs } from "node:util";
-import { chromium, type Browser, type LaunchOptions } from "playwright";
+import { chromium, type Browser, type BrowserContext, type LaunchOptions, type Page } from "playwright";
 import { firstHit } from "./search.js";
 import { captureSnapshot } from "./browser.js";
 import { diff } from "./compare.js";
@@ -27,7 +32,6 @@ import type { MiningRun, PageSnapshot } from "./types.js";
  * run produce a wall of "$rewriter is not defined" errors.
  */
 async function preflightCheck(proxyOrigin: string): Promise<void> {
-    // 1. Proxy root must respond.
     let rootOk = false;
     try {
         const r = await fetch(`${proxyOrigin}/`, { signal: AbortSignal.timeout(5000) });
@@ -39,7 +43,6 @@ async function preflightCheck(proxyOrigin: string): Promise<void> {
         throw new Error(`proxy at ${proxyOrigin}/ returned a 5xx — is it running?`);
     }
 
-    // 2. rewriter.js must be served as JavaScript, not text/plain or 404.
     let jsRes: Response;
     try {
         jsRes = await fetch(`${proxyOrigin}/rewriter.js`, { signal: AbortSignal.timeout(5000) });
@@ -84,15 +87,14 @@ function parseCLI(): CLIOpts {
             runs:       { type: "string", default: "1" },
             proxy:      { type: "string", default: "http://localhost:9081" },
             query:      { type: "string" },
-            headless:   { type: "boolean", default: false },           // visible by default
-            browser:    { type: "string",  default: "chrome" },        // real Chrome by default
+            headless:   { type: "boolean", default: false },
+            browser:    { type: "string",  default: "chrome" },
             "user-agent": { type: "string", default: DEFAULT_UA },
             "slow-mo":  { type: "string",  default: "0" },
             clean:      { type: "boolean", default: false },
         },
         allowPositionals: true,
     });
-    // Accept a bare number as a positional shorthand for --runs N.
     const positionalRuns = positionals[0] !== undefined && /^\d+$/.test(positionals[0])
         ? positionals[0]
         : null;
@@ -109,11 +111,35 @@ function parseCLI(): CLIOpts {
     };
 }
 
+// Three persistent tabs shared across all runs in a session.
+interface Session {
+    searchPage: Page;
+    directPage: Page;
+    proxyPage: Page;
+    ctx: BrowserContext;
+}
+
+async function createSession(browser: Browser, userAgent: string): Promise<Session> {
+    const ctx = await browser.newContext({
+        ignoreHTTPSErrors: true,
+        userAgent,
+    });
+    const [searchPage, directPage, proxyPage] = await Promise.all([
+        ctx.newPage(),
+        ctx.newPage(),
+        ctx.newPage(),
+    ]);
+    return { searchPage, directPage, proxyPage, ctx };
+}
+
+async function destroySession(session: Session): Promise<void> {
+    try { await session.ctx.close(); } catch { /* already gone */ }
+}
+
 async function runOne(
-    browser: Browser,
+    session: Session,
     query: string,
     proxyOrigin: string,
-    userAgent: string,
     runDir: string,
 ): Promise<MiningRun> {
     const timestamp = new Date().toISOString();
@@ -128,7 +154,7 @@ async function runOne(
 
     let target: string | null = null;
     try {
-        target = await firstHit(browser, query, userAgent);
+        target = await firstHit(session.searchPage, query);
     } catch (e) {
         run.direct = { error: `search failed: ${String(e)}` };
         run.proxied = { error: "search failed; no target" };
@@ -141,10 +167,10 @@ async function runOne(
         return run;
     }
 
-    // Direct + proxied in parallel — they're independent contexts.
+    // Direct and proxied load in parallel — they use separate tabs.
     const [direct, proxied] = await Promise.allSettled([
-        captureSnapshot(browser, { target, proxyOrigin: null, userAgent, runDir, label: "direct" }),
-        captureSnapshot(browser, { target, proxyOrigin, userAgent, runDir, label: "proxied" }),
+        captureSnapshot(session.directPage, { target, proxyOrigin: null, runDir, label: "direct" }),
+        captureSnapshot(session.proxyPage, { target, proxyOrigin, runDir, label: "proxied" }),
     ]);
 
     run.direct  = direct.status  === "fulfilled" ? direct.value  : { error: String(direct.reason) };
@@ -179,21 +205,20 @@ async function main() {
         slowMo: opts.slowMo,
     };
     if (opts.browser === "chrome") {
-        // System-installed Chrome (Playwright spawns it via the `chrome`
-        // channel — google-chrome on Linux, /Applications/Google Chrome on macOS).
-        // Falls back with a clear error if Chrome isn't installed.
         launch.channel = "chrome";
     }
 
     let browser = await chromium.launch(launch);
+    let session = await createSession(browser, opts.userAgent);
     const runs: MiningRun[] = [];
 
-    const ensureBrowser = async (): Promise<typeof browser> => {
-        if (browser.isConnected()) return browser;
+    const ensureSession = async (): Promise<Session> => {
+        if (browser.isConnected()) return session;
         console.log("  [browser crashed — relaunching]");
         try { await browser.close(); } catch { /* already gone */ }
         browser = await chromium.launch(launch);
-        return browser;
+        session = await createSession(browser, opts.userAgent);
+        return session;
     };
 
     try {
@@ -202,8 +227,8 @@ async function main() {
             console.log(`\n[${i + 1}/${opts.runs}] query: "${query}"`);
 
             const runDir = ensureRunDir(sessionTag, i, query);
-            const b = await ensureBrowser();
-            const run = await runOne(b, query, opts.proxy, opts.userAgent, runDir);
+            const s = await ensureSession();
+            const run = await runOne(s, query, opts.proxy, runDir);
             runs.push(run);
 
             const jsonPath = writeRunJSON(run, runDir);
@@ -219,6 +244,7 @@ async function main() {
             console.log(`  → ${jsonPath}`);
         }
     } finally {
+        await destroySession(session);
         try { await browser.close(); } catch { /* already gone */ }
     }
 

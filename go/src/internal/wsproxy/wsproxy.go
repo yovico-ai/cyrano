@@ -13,7 +13,7 @@ package wsproxy
 
 import (
 	"context"
-	"crypto/tls"
+	"github.com/yovico/cyrano/internal/tlsdial"
 	"fmt"
 	"io"
 	"log/slog"
@@ -164,14 +164,9 @@ func (h *Handler) dialUpstream(target *url.URL) (net.Conn, error) {
 	d := &net.Dialer{Timeout: h.opts.DialTimeout}
 
 	if target.Scheme == "wss" {
-		// nosemgrep: gosec.G402.tls-unsafe-config — flagged off by config, dev-only.
-		tlsCfg := &tls.Config{
-			ServerName:         target.Hostname(),
-			InsecureSkipVerify: h.opts.SkipTLSVerify,
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), h.opts.DialTimeout)
 		defer cancel()
-		return (&tls.Dialer{NetDialer: d, Config: tlsCfg}).DialContext(ctx, "tcp", host)
+		return tlsdial.DialTLS(ctx, "tcp", host, h.opts.SkipTLSVerify)
 	}
 	return d.Dial("tcp", host)
 }

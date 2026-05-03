@@ -10,7 +10,6 @@ package proxy
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"log/slog"
 	"net"
@@ -22,6 +21,7 @@ import (
 
 	"golang.org/x/net/publicsuffix"
 
+	"github.com/yovico/cyrano/internal/tlsdial"
 	"github.com/yovico/cyrano/internal/urlrewrite"
 )
 
@@ -70,20 +70,21 @@ func New(opts Options) *Handler {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
+	tcpDialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
 	t := &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout:   10 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		DialContext:    tcpDialer.DialContext,
+		DialTLSContext: tlsdial.NewDialTLSContext(tcpDialer, opts.SkipTLSVerify),
+		// TLSClientConfig and TLSHandshakeTimeout are intentionally absent:
+		// DialTLSContext owns TLS config and the handshake timeout.
 		MaxIdleConns:          100,
 		MaxIdleConnsPerHost:   8,
 		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		ResponseHeaderTimeout: opts.Timeout,
 		ForceAttemptHTTP2:     true,
-		// nosemgrep: gosec.G402.tls-unsafe-config — flagged off by config, dev-only.
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: opts.SkipTLSVerify},
 	}
 	return &Handler{opts: opts, transport: t}
 }

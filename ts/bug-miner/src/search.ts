@@ -12,7 +12,7 @@
 // We fall through engines on empty/error. Returns null only if every engine
 // produces nothing for the query.
 
-import type { Browser } from "playwright";
+import type { Page } from "playwright";
 
 interface Engine {
     name: string;
@@ -25,9 +25,6 @@ const ENGINES: Engine[] = [
     {
         name: "yandex",
         url: (q) => `https://ya.ru/?q=${encodeURIComponent(q)}`,
-        // Title links carry both `Link_theme_normal` (visual style) and
-        // `Organic` (semantic — organic result, not an ad). Match both
-        // substrings so cosmetic class renames don't break us.
         selector: `a[class*="Organic"][class*="Link_theme_normal"]`,
     },
     {
@@ -46,18 +43,16 @@ const ENGINES: Engine[] = [
 const NAV_TIMEOUT_MS = 15_000;
 
 /** First-result URL across the engine chain, or null if nothing usable. */
-export async function firstHit(browser: Browser, query: string, userAgent: string): Promise<string | null> {
+export async function firstHit(page: Page, query: string): Promise<string | null> {
     for (const engine of ENGINES) {
-        const hit = await tryEngine(browser, engine, query, userAgent);
+        const hit = await tryEngine(page, engine, query);
         if (hit) return hit;
     }
     return null;
 }
 
-async function tryEngine(browser: Browser, engine: Engine, query: string, userAgent: string): Promise<string | null> {
-    const ctx = await browser.newContext({ userAgent });
+async function tryEngine(page: Page, engine: Engine, query: string): Promise<string | null> {
     try {
-        const page = await ctx.newPage();
         await page.goto(engine.url(query), { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
 
         // Wikipedia's "redirect on exact title match" lands on the article
@@ -88,8 +83,6 @@ async function tryEngine(browser: Browser, engine: Engine, query: string, userAg
         return null;
     } catch {
         return null;
-    } finally {
-        await ctx.close();
     }
 }
 
@@ -120,11 +113,6 @@ function isOnSearchEngine(href: string): boolean {
     }
 }
 
-// High-frequency "magnet" domains that dominate search results for random
-// word queries but are poor proxying targets: they're either encyclopedic
-// (Wikipedia, Britannica), reference-only (Merriam-Webster, Dictionary.com),
-// social (Reddit, Quora, YouTube), or auth-gated (Amazon, Twitter/X).
-// Skipping them produces more diverse and interesting test targets.
 const BLOCKED_DOMAINS = [
     "wikipedia.org",
     "wiktionary.org",

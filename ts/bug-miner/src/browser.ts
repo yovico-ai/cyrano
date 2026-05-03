@@ -1,105 +1,76 @@
-// Playwright orchestration: open a target page either directly or via the
-// proxy, capture a PageSnapshot, and tear down. The two paths share the
-// same capture machinery so direct vs proxied snapshots are apples-to-apples.
+// Playwright orchestration: navigate a persistent page to a target (directly
+// or via the proxy), capture a PageSnapshot, and release listeners.
+// The caller owns the Page lifecycle; this module never creates or closes pages.
 
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { Browser, ConsoleMessage, Request, Response } from "playwright";
+import type { ConsoleMessage, Page, Request, Response } from "playwright";
 import type { ConsoleError, NetworkRequestSummary, PageSnapshot } from "./types.js";
 
 const NAV_TIMEOUT_MS = 35_000;
 
-/**
- * URL-safe base64 (no padding) — same alphabet as the Go b64u helper and
- * the TS client's b64uEncode. Inlined to avoid coupling bug-miner to the
- * client package import path.
- */
-function b64uEncode(input: string): string {
-    return Buffer.from(input, "utf8")
-        .toString("base64")
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/, "");
-}
-
 export interface SnapshotOptions {
     target: string;
     proxyOrigin: string | null; // e.g. "http://localhost:9081" — null for direct fetch
-    userAgent: string;          // overrides Playwright's default UA on both sides
     extraQuery?: string;        // tacked onto the proxified URL (e.g. "doc=1")
     runDir: string;             // absolute directory to write the captured HTML into
     label: string;              // file basename without extension — "direct" or "proxied"
 }
 
 /**
- * Renders `target` (directly or through the proxy) and returns a snapshot.
- * Wraps the page-side instrumentation: console errors, network requests,
- * and proxy-leak detection (any request whose URL host is not the proxy
- * origin when running in proxied mode).
+ * Navigates `page` to `target` (directly or through the proxy) and returns a
+ * snapshot. Attaches event listeners before navigation and removes them in the
+ * finally block so the page is clean for the next run.
  */
 export async function captureSnapshot(
-    browser: Browser,
+    page: Page,
     opts: SnapshotOptions,
 ): Promise<PageSnapshot> {
-    const ctx = await browser.newContext({
-        ignoreHTTPSErrors: true,
-        userAgent: opts.userAgent,
-    });
-
     const consoleErrors: ConsoleError[] = [];
     const requests: NetworkRequestSummary[] = [];
     const proxyHostname = opts.proxyOrigin ? new URL(opts.proxyOrigin).hostname : null;
     const leakHosts = new Set<string>();
 
-    try {
-        const page = await ctx.newPage();
-
-        page.on("console", (msg: ConsoleMessage) => {
-            if (msg.type() === "error") {
-                consoleErrors.push({ source: "console", message: msg.text() });
-            }
-        });
-        page.on("pageerror", (err) => {
-            // pageerror gives us a real Error with stack — way more useful for
-            // pinning down a JS-rewriter regression than the bare message.
-            const entry: ConsoleError = { source: "pageerror", message: err.message || String(err) };
-            if (err.stack) entry.stack = err.stack;
-            consoleErrors.push(entry);
-        });
-        page.on("requestfinished", (req: Request) => {
-            const reqUrl = req.url();
-            requests.push({ url: reqUrl, method: req.method(), status: 0, resourceType: req.resourceType() });
-            // Best-effort fill of status — fire-and-forget; if the context closes
-            // before req.response() resolves Playwright throws "Target page …
-            // has been closed". The .catch() prevents that from becoming an
-            // unhandled rejection that crashes Node.
-            void req.response()
-                .then((r: Response | null) => {
-                    const s = r?.status() ?? 0;
-                    const entry = requests[requests.length - 1];
-                    if (entry && entry.url === reqUrl) entry.status = s;
-                })
-                .catch(() => {
-                    // ignore: context closed before response was accessible
-                });
-            // Proxy-leak detection: every request from a proxified page
-            // should be on the proxy origin (we may relax this for
-            // data:/blob: schemes which are inherently local).
-            if (proxyHostname) {
-                try {
-                    const u = new URL(reqUrl);
-                    if (
-                        (u.protocol === "http:" || u.protocol === "https:") &&
-                        u.hostname !== proxyHostname
-                    ) {
-                        leakHosts.add(u.hostname);
-                    }
-                } catch {
-                    // ignore unparseable
+    const onConsole = (msg: ConsoleMessage) => {
+        if (msg.type() === "error") {
+            consoleErrors.push({ source: "console", message: msg.text() });
+        }
+    };
+    const onPageError = (err: Error) => {
+        const entry: ConsoleError = { source: "pageerror", message: err.message || String(err) };
+        if (err.stack) entry.stack = err.stack;
+        consoleErrors.push(entry);
+    };
+    const onRequestFinished = (req: Request) => {
+        const reqUrl = req.url();
+        requests.push({ url: reqUrl, method: req.method(), status: 0, resourceType: req.resourceType() });
+        void req.response()
+            .then((r: Response | null) => {
+                const s = r?.status() ?? 0;
+                const entry = requests[requests.length - 1];
+                if (entry && entry.url === reqUrl) entry.status = s;
+            })
+            .catch(() => {});
+        if (proxyHostname) {
+            try {
+                const u = new URL(reqUrl);
+                if (
+                    (u.protocol === "http:" || u.protocol === "https:") &&
+                    u.hostname !== proxyHostname
+                ) {
+                    leakHosts.add(u.hostname);
                 }
+            } catch {
+                // ignore unparseable
             }
-        });
+        }
+    };
 
+    page.on("console", onConsole);
+    page.on("pageerror", onPageError);
+    page.on("requestfinished", onRequestFinished);
+
+    try {
         const visitURL = opts.proxyOrigin
             ? buildProxiedURL(opts.proxyOrigin, opts.target, opts.extraQuery)
             : opts.target;
@@ -109,13 +80,8 @@ export async function captureSnapshot(
         const finalUrl = page.url();
         const title = await page.title();
 
-        // DOM extraction — runs in the page context, post ad-filter.
         const dom = await page.evaluate(domExtractor);
 
-        // Save the live, post-execution DOM as it stood when we measured it.
-        // This is the artifact a future Claude session will diff against to
-        // explain a "broken" verdict — not the rewriter's pre-execution
-        // output, but what the browser actually rendered.
         const htmlFile = `${opts.label}.html`;
         const html = await page.content();
         writeFileSync(resolve(opts.runDir, htmlFile), html, "utf8");
@@ -134,14 +100,21 @@ export async function captureSnapshot(
             htmlFile,
         };
     } finally {
-        await ctx.close();
+        page.off("console", onConsole);
+        page.off("pageerror", onPageError);
+        page.off("requestfinished", onRequestFinished);
     }
 }
 
 function buildProxiedURL(proxyOrigin: string, target: string, extraQuery?: string): string {
-    const enc = b64uEncode(target);
-    const q = extraQuery ? `&${extraQuery}` : "";
-    return `${proxyOrigin}/?goto=${enc}${q}`;
+    const u = new URL(target);
+    const scheme = u.protocol.slice(0, -1); // strip trailing ":"
+    let path = "/cyrano/" + scheme + "/" + u.host + (u.pathname || "/");
+    const qParts: string[] = [];
+    if (u.search) qParts.push(u.search.slice(1));
+    if (extraQuery) qParts.push(extraQuery);
+    if (qParts.length) path += "?" + qParts.join("&");
+    return proxyOrigin + path;
 }
 
 /**
@@ -190,10 +163,6 @@ function domExtractor(): {
         '.sponsored',
     ];
 
-    // IAB standard ad sizes [width, height] in CSS pixels, ±2px tolerance.
-    // Defined as a plain array literal — no named inner function — so that
-    // esbuild/tsx does not emit __name() helper calls inside the serialized
-    // function body (which would be undefined in the browser context).
     const IAB_AD_SIZES = [
         [728,  90], [970,  90], [970, 250],
         [300, 250], [336, 280], [250, 250], [200, 200],
@@ -201,7 +170,6 @@ function domExtractor(): {
         [320,  50], [320, 100], [468,  60], [234,  60], [120, 240],
     ];
 
-    // Mark ad-sized elements on the live DOM so the clone inherits the flag.
     const MARK = "data-bugminer-adsize";
     for (const el of Array.from(document.body.querySelectorAll("*"))) {
         const r = el.getBoundingClientRect();
@@ -210,17 +178,13 @@ function domExtractor(): {
         }
     }
 
-    // Clone-and-prune so we don't mutate the live page.
     const clone = document.body.cloneNode(true) as HTMLElement;
 
-    // Remove by selector.
     for (const sel of AD_SELECTORS) {
         clone.querySelectorAll(sel).forEach((el) => el.remove());
     }
-    // Remove by size mark.
     clone.querySelectorAll(`[${MARK}]`).forEach((el) => el.remove());
 
-    // Clean the mark off the live DOM.
     document.body.querySelectorAll(`[${MARK}]`).forEach((el) =>
         (el as HTMLElement).removeAttribute(MARK),
     );
