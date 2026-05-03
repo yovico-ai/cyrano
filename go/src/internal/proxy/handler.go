@@ -79,12 +79,13 @@ func New(opts Options) *Handler {
 		DialTLSContext: tlsdial.NewDialTLSContext(tcpDialer, opts.SkipTLSVerify),
 		// TLSClientConfig and TLSHandshakeTimeout are intentionally absent:
 		// DialTLSContext owns TLS config and the handshake timeout.
+		// ForceAttemptHTTP2 is omitted: tlsdial limits ALPN to http/1.1 so
+		// servers never select h2 (see tlsdial package comment).
 		MaxIdleConns:          100,
 		MaxIdleConnsPerHost:   8,
 		IdleConnTimeout:       90 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		ResponseHeaderTimeout: opts.Timeout,
-		ForceAttemptHTTP2:     true,
 	}
 	return &Handler{opts: opts, transport: t}
 }
