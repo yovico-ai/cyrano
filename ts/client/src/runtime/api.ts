@@ -135,7 +135,7 @@ export function createRewriterApi(
         get_top_level_window: getTopLevelWindow,
 
         // ── Document.write / postMessage / eval / member expression ────────
-        wrap_document_write: (arg) => wrapDocumentWrite(arg, rewriteOne, buildBootstrapHtml),
+        wrap_document_write: (arg) => wrapDocumentWrite(arg, rewriteOne, buildBootstrapHtml, initialBaseUrl.origin),
         wrap_postMessage: (arg) => wrapPostMessage(arg, initialBaseUrl.origin),
         wrap_member_expression: wrapMemberExpression,
         wrap_eval: wrapEval,

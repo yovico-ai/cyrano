@@ -65,6 +65,7 @@ export function wrapDocumentWrite(
     arg: { obj: unknown },
     rewriteOne: (url: string) => string,
     getBootstrapHtml: (() => string) | null = null,
+    proxyOrigin: string = "",
 ): DocumentWriteWrapper {
     const target = arg.obj as WriteCapable | null;
 
@@ -73,7 +74,7 @@ export function wrapDocumentWrite(
             if (!target || typeof target.write !== "function") return undefined;
             if (isDocumentLike(target) && allStrings(args)) {
                 const joined = (args as string[]).join("");
-                let rewritten = rewriteHtmlString(joined, rewriteOne);
+                let rewritten = rewriteHtmlString(joined, rewriteOne, proxyOrigin);
                 if (getBootstrapHtml) {
                     rewritten = maybeInjectBootstrap(target, joined, rewritten, getBootstrapHtml);
                 }
@@ -86,7 +87,7 @@ export function wrapDocumentWrite(
             if (!target || typeof target.writeln !== "function") return undefined;
             if (isDocumentLike(target) && allStrings(args)) {
                 const joined = (args as string[]).join("");
-                let rewritten = rewriteHtmlString(joined, rewriteOne);
+                let rewritten = rewriteHtmlString(joined, rewriteOne, proxyOrigin);
                 if (getBootstrapHtml) {
                     rewritten = maybeInjectBootstrap(target, joined, rewritten, getBootstrapHtml);
                 }

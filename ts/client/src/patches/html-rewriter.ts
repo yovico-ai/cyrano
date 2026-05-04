@@ -82,6 +82,7 @@ function ensureCaptured(): CapturedNatives {
 export function rewriteHtmlString(
     html: string,
     rewriteOne: (url: string) => string,
+    proxyOrigin: string = "",
 ): string {
     if (typeof html !== "string" || html.length === 0) return html;
 
@@ -119,6 +120,27 @@ export function rewriteHtmlString(
             }
         }
 
+        // 1c. <meta http-equiv="Content-Security-Policy"> — rewrite the CSP
+        // content attribute to add the proxy origin to all *-src directives,
+        // same as the server's rewriteCSP does for response headers. Without
+        // this, ad scripts that document.write full HTML with an inline CSP
+        // would block rewritten resource URLs (e.g. script-src only allowing
+        // https://cdn.ampproject.org/ would block our proxied copies).
+        if (
+            proxyOrigin.length > 0 &&
+            element.tagName === "META" &&
+            /^content-security-policy$/i.test(element.getAttribute("http-equiv") ?? "")
+        ) {
+            const content = element.getAttribute("content") ?? "";
+            if (content.length > 0) {
+                natives.setAttribute.call(
+                    element,
+                    "content",
+                    rewriteCspContent(content, proxyOrigin),
+                );
+            }
+        }
+
         // 2. HTML_INTEGRITY — SRI hashes won't match rewritten content; drop.
         element.removeAttribute("integrity");
 
@@ -153,4 +175,32 @@ export function rewriteHtmlString(
     }
 
     return natives.innerHTMLGet.call(template);
+}
+
+// Mirrors Go's rewriteCSP: adds proxyOrigin to every *-src directive so
+// proxy-rewritten resource URLs pass the browser's CSP check.
+function rewriteCspContent(csp: string, proxyOrigin: string): string {
+    const directives = csp.split(";");
+    for (let i = 0; i < directives.length; i++) {
+        const dir = directives[i]!;
+        const parts = dir.trim().split(/\s+/);
+        if (parts.length === 0 || !parts[0]) continue;
+        const name = parts[0].toLowerCase();
+        if (!name.includes("-src")) continue;
+
+        // Check if proxy origin is already present.
+        let hasProxy = false;
+        for (const tok of parts.slice(1)) {
+            if (tok.toLowerCase() === proxyOrigin.toLowerCase()) {
+                hasProxy = true;
+                break;
+            }
+        }
+        if (!hasProxy) {
+            // Preserve leading whitespace in the directive.
+            const lead = dir.length - dir.trimStart().length;
+            directives[i] = dir.slice(0, lead) + parts.join(" ") + " " + proxyOrigin;
+        }
+    }
+    return directives.join(";");
 }
