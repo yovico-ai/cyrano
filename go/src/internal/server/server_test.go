@@ -449,6 +449,48 @@ func TestIsChallengeJSPath_NoMatch_NonJS(t *testing.T) {
 	}
 }
 
+func makeTestServer(t *testing.T) http.Handler {
+	t.Helper()
+	cfg := &config.File{
+		Servers: []config.Server{{Port: 9081}},
+		VHosts: []config.VHost{{
+			Hostnames:         []string{"localhost"},
+			HTTPPort:          9081,
+			Mode:              "sslvpn",
+			RewriterJSPath:    "/rewriter.js",
+			HeadInjectionPath: "/head-injection",
+			CookiesJSONPath:   "/cookies.json",
+		}},
+	}
+	return New(cfg, t.TempDir(), nil).Handler()
+}
+
+// Regression for the ServeMux double-slash collapse bug:
+// Cloudflare Image Resizing URLs embed a full URL in the path, e.g.:
+//
+//	/cyrano/https/files.example.com/cdn-cgi/image/<opts>/https://origin.com/img.jpg
+//
+// net/http.ServeMux calls path.Clean which collapses `//` → `/`, issuing a
+// 301 to .../https:/origin.com/... — a broken URL. The handler must NOT use
+// ServeMux so these paths are dispatched as-is.
+func TestHandler_NoDoubleslashRedirect(t *testing.T) {
+	handler := makeTestServer(t)
+
+	// Path contains `//` from the embedded `https://` inside the proxy URL.
+	req := httptest.NewRequest("GET",
+		"/cyrano/https/files.example.com/cdn-cgi/image/width=800/https://origin.example.com/img.jpg",
+		nil)
+	req.Host = "localhost"
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	// Must NOT be a 301 redirect that collapses // → /
+	if w.Code == http.StatusMovedPermanently {
+		loc := w.Header().Get("Location")
+		t.Errorf("handler issued 301 redirect to %q (double-slash collapsed by ServeMux)", loc)
+	}
+}
+
 func TestServer_CdnCgiChallengeFallback_EmptyJS(t *testing.T) {
 	cfg := &config.File{
 		Servers: []config.Server{{Port: 9081}},

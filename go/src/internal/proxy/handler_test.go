@@ -593,7 +593,10 @@ func startUpstreamMultiCookie(t *testing.T, setCookies ...string) (*httptest.Ser
 	return srv, captured
 }
 
-func TestCookieJar_HttpOnlyCookieNotForwardedToBrowser(t *testing.T) {
+func TestCookieJar_AllCookiesStoredInJar(t *testing.T) {
+	// Both HttpOnly and non-HttpOnly upstream cookies must be absorbed into the
+	// server-side jar. Neither should appear in the browser response (the page
+	// bootstrap script delivers them instead).
 	upstream, _ := startUpstreamMultiCookie(t,
 		"session=secret; Path=/; HttpOnly",
 		"pref=dark; Path=/",
@@ -611,25 +614,31 @@ func TestCookieJar_HttpOnlyCookieNotForwardedToBrowser(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTPWithTarget(rec, req, target)
 
-	// The HttpOnly "session" cookie must NOT appear in the browser response.
+	// Only the proxy-issued crnsct cookie should reach the browser.
+	var sessionID string
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == "session" || strings.Contains(c.Name, "session") {
-			// Allow only if it's the prefixed non-HttpOnly version
-			if c.HttpOnly {
-				t.Errorf("HttpOnly cookie forwarded to browser: %q", c.Name)
-			}
+		if c.Name == "crnsct" {
+			sessionID = c.Value
+			continue
 		}
+		t.Errorf("unexpected upstream cookie forwarded to browser: %q=%q", c.Name, c.Value)
+	}
+	if sessionID == "" {
+		t.Fatal("crnsct session cookie not issued")
 	}
 
-	// The non-HttpOnly "pref" cookie MUST appear (prefixed).
-	var foundPref bool
-	for _, c := range rec.Result().Cookies() {
-		if strings.Contains(c.Name, "pref") {
-			foundPref = true
-		}
+	// Both upstream cookies must be stored in the jar.
+	upstreamHost := strings.TrimPrefix(upstream.URL, "http://")
+	cookies := jar.RetrieveForRequest(sessionID, upstreamHost, "/")
+	names := make(map[string]string)
+	for _, c := range cookies {
+		names[c.Name] = c.Value
 	}
-	if !foundPref {
-		t.Error("non-HttpOnly cookie not forwarded to browser")
+	if names["session"] != "secret" {
+		t.Errorf("HttpOnly 'session' cookie not in jar: %v", names)
+	}
+	if names["pref"] != "dark" {
+		t.Errorf("non-HttpOnly 'pref' cookie not in jar: %v", names)
 	}
 }
 

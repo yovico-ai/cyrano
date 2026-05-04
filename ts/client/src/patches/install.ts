@@ -78,7 +78,7 @@ export function installPatches(
     patchDynamicIframeAppend(targetWindow, config, () => getCurrentBaseUrl().href);
     patchHistory(targetWindow, rewriteOne, setBaseUrl, unwrapOne);
     patchSendBeacon(targetWindow, rewriteOne);
-    patchDocumentCookie(targetWindow, () => getCurrentBaseUrl().hostname);
+    patchDocumentCookie(targetWindow, () => getCurrentBaseUrl().pathname);
     installMutationObserver(
         targetWindow,
         rewriteOne,

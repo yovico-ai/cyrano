@@ -1,68 +1,31 @@
-// Patch document.cookie to enforce per-site cookie namespacing.
+// Patch document.cookie to use the proxy's in-memory cookie store.
 //
-// The proxy stores upstream cookies under the proxy origin (localhost) with a
-// site-namespace prefix: e.g. ak_bmsc=xxx from casio.com is stored as
-// __crn__casio_com__ak_bmsc=xxx.  Without this patch, page JavaScript that
-// reads or writes document.cookie would see the raw prefixed names — Akamai's
-// bot JS would fail to read its own bm_sv cookie, causing re-challenges.
+// All upstream cookies are absorbed server-side into the session jar and
+// delivered to the page via the bootstrap script's $rewriter.set_cookies()
+// call, which populates the in-memory store. No cookies flow through
+// document.cookie in the browser sense — this patch makes document.cookie
+// read and write the in-memory store instead.
 //
-// Getter: returns only cookies belonging to the current upstream site, with
-//         the prefix stripped, so page JS sees plain "ak_bmsc=xxx; bm_sv=yyy".
-//
-// Setter: prefixes the cookie name before writing to the real cookie store so
-//         the proxy's Director can later filter and forward it correctly.
+// Getter: returns all non-expired cookies applicable to the current upstream
+//         pathname (RFC 6265 §5.1.4 path matching).
+// Setter: writes the cookie into the in-memory store (parse + upsert).
 
-import { cookiePrefixFor } from "../cookies/site-key";
+import { getCookiesForPath, setCookie } from "../cookies/in-memory-store";
 
 export function patchDocumentCookie(
     targetWindow: Window,
-    getCurrentHost: () => string,
+    getCurrentPathname: () => string,
 ): void {
     const doc = targetWindow.document;
 
-    // Walk the full prototype chain to find where "cookie" is defined.
-    // In Chrome, document.cookie lives on Document.prototype, not on
-    // HTMLDocument.prototype (the immediate prototype of the document instance),
-    // so a single getOwnPropertyDescriptor(Object.getPrototypeOf(doc)) misses it.
-    let descriptor: PropertyDescriptor | undefined;
-    let proto: object | null = doc;
-    while (proto) {
-        const d = Object.getOwnPropertyDescriptor(proto, "cookie");
-        if (d?.get && d.set) { descriptor = d; break; }
-        proto = Object.getPrototypeOf(proto);
-    }
-
-    if (!descriptor?.get || !descriptor.set) return;
-
-    const nativeGet = descriptor.get;
-    const nativeSet = descriptor.set;
-
     Object.defineProperty(doc, "cookie", {
         get(): string {
-            const raw: string = nativeGet.call(this);
-            if (!raw) return "";
-            const prefix = cookiePrefixFor(getCurrentHost());
-            return raw
-                .split(";")
-                .map((c) => c.trim())
-                .filter((c) => c.startsWith(prefix))
-                .map((c) => c.slice(prefix.length))
-                .join("; ");
+            return getCookiesForPath(getCurrentPathname());
         },
         set(value: string): void {
-            const prefix = cookiePrefixFor(getCurrentHost());
-            nativeSet.call(this, prefixCookieName(value, prefix));
+            setCookie(value as string);
         },
         configurable: true,
         enumerable: true,
     });
-}
-
-// prefixCookieName inserts prefix before the cookie name in a Set-Cookie-style
-// assignment string ("name=value; Path=/; ...").
-export function prefixCookieName(cookieStr: string, prefix: string): string {
-    const semi = cookieStr.indexOf(";");
-    const nameValue = semi >= 0 ? cookieStr.slice(0, semi) : cookieStr;
-    const attrs = semi >= 0 ? cookieStr.slice(semi) : "";
-    return prefix + nameValue.trimStart() + attrs;
 }

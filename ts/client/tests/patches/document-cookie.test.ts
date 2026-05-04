@@ -1,182 +1,92 @@
 // @vitest-environment node
 //
-// document.cookie getter/setter patch.
+// document.cookie getter/setter patch — in-memory store wiring.
 //
-// Getter: page JS sees only cookies for the current site, prefix stripped.
-// Setter: page JS writes are namespaced with the site prefix before storage.
+// The new implementation replaces native document.cookie with direct reads
+// and writes to the module-level in-memory store. Path filtering is done by
+// the store; the patch just wires up the accessor.
 
-import { describe, expect, it } from "vitest";
-import { patchDocumentCookie, prefixCookieName } from "../../src/patches/document-cookie";
+import { describe, expect, it, beforeEach } from "vitest";
+import { patchDocumentCookie } from "../../src/patches/document-cookie";
+import { setCookie, getCookiesForPath, clearStore } from "../../src/cookies/in-memory-store";
 
-// ── prefixCookieName (pure) ───────────────────────────────────────────────────
-
-describe("prefixCookieName", () => {
-    it("prepends prefix to the cookie name", () => {
-        expect(prefixCookieName("ak_bmsc=abc123", "__crn__casio_com__"))
-            .toBe("__crn__casio_com__ak_bmsc=abc123");
-    });
-
-    it("preserves attributes after the semicolon", () => {
-        expect(prefixCookieName("bm_sv=xyz; Path=/; SameSite=None", "__crn__casio_com__"))
-            .toBe("__crn__casio_com__bm_sv=xyz; Path=/; SameSite=None");
-    });
-
-    it("handles deletion string (Max-Age=0)", () => {
-        expect(prefixCookieName("session=; Max-Age=0; Path=/", "__crn__so__"))
-            .toBe("__crn__so__session=; Max-Age=0; Path=/");
-    });
-
-    it("trims leading whitespace from name=value", () => {
-        expect(prefixCookieName("  name=val", "__p__"))
-            .toBe("__p__name=val");
-    });
-});
-
-// ── patchDocumentCookie (DOM) ─────────────────────────────────────────────────
-
-// Build a fake window whose document.cookie we can control and inspect.
-function makeFakeWindow(initial = ""): {
-    win: Window;
-    getWritten: () => string[];
-} {
-    let stored = initial;
-    const written: string[] = [];
-
+function makeFakeWindow(): Window {
     const doc = {} as Document;
     Object.defineProperty(doc, "cookie", {
-        get: () => stored,
-        set: (v: string) => {
-            written.push(v as string);
-            // Simulate simple store: keep first name=value token only.
-            const kv = (v as string).split(";")[0]!.trim();
-            stored = stored ? `${stored}; ${kv}` : kv;
-        },
+        get: () => "",
+        set: (_v: string) => { /* native — will be replaced by patch */ },
         configurable: true,
         enumerable: true,
     });
-
-    const win = { document: doc } as unknown as Window;
-    return { win, getWritten: () => written };
+    return { document: doc } as unknown as Window;
 }
 
+beforeEach(() => {
+    clearStore();
+});
+
 describe("patchDocumentCookie — getter", () => {
-    it("returns only cookies for the current site, prefix stripped", () => {
-        const { win } = makeFakeWindow(
-            "__crn__casio_com__ak_bmsc=abc; __crn__stackoverflow_com__prov=xyz; crnsct=proxy"
-        );
-        patchDocumentCookie(win, () => "www.casio.com");
-        expect(win.document.cookie).toBe("ak_bmsc=abc");
+    it("returns cookies matching the current pathname", () => {
+        setCookie("admin_tok=abc; Path=/admin");
+        setCookie("root_tok=xyz; Path=/");
+        const win = makeFakeWindow();
+        patchDocumentCookie(win, () => "/admin/page");
+        // Both root and /admin cookies should be visible
+        const result = win.document.cookie;
+        expect(result).toContain("admin_tok=abc");
+        expect(result).toContain("root_tok=xyz");
     });
 
-    it("returns empty string when no cookies match the current site", () => {
-        const { win } = makeFakeWindow("__crn__stackoverflow_com__prov=xyz; crnsct=proxy");
-        patchDocumentCookie(win, () => "www.casio.com");
+    it("hides cookies whose path does not match", () => {
+        setCookie("admin_tok=abc; Path=/admin");
+        const win = makeFakeWindow();
+        patchDocumentCookie(win, () => "/public");
         expect(win.document.cookie).toBe("");
     });
 
-    it("strips prefix from multiple matching cookies", () => {
-        const { win } = makeFakeWindow(
-            "__crn__casio_com__ak_bmsc=abc; __crn__casio_com__bm_sv=def"
-        );
-        patchDocumentCookie(win, () => "casio.com");
-        expect(win.document.cookie).toBe("ak_bmsc=abc; bm_sv=def");
+    it("resolves pathname at read time, not patch time", () => {
+        setCookie("a=1; Path=/first");
+        setCookie("b=2; Path=/second");
+        let pathname = "/first";
+        const win = makeFakeWindow();
+        patchDocumentCookie(win, () => pathname);
+
+        expect(win.document.cookie).toBe("a=1");
+
+        pathname = "/second";
+        expect(win.document.cookie).toBe("b=2");
     });
 
-    it("resolves current host at read time (not at patch time)", () => {
-        let currentHost = "casio.com";
-        const { win } = makeFakeWindow(
-            "__crn__casio_com__x=1; __crn__stackoverflow_com__y=2"
-        );
-        patchDocumentCookie(win, () => currentHost);
-
-        expect(win.document.cookie).toBe("x=1");
-
-        currentHost = "stackoverflow.com";
-        expect(win.document.cookie).toBe("y=2");
-    });
-});
-
-// Simulates Chrome's prototype chain: document instance → HTMLDocument.prototype
-// → Document.prototype (where "cookie" lives), matching the real browser layout
-// that caused the original "patch silently skipped" bug.
-function makeFakeWindowChrome(initial = ""): {
-    win: Window;
-    getWritten: () => string[];
-} {
-    let stored = initial;
-    const written: string[] = [];
-
-    // Level 2: Document.prototype — this is where "cookie" lives in Chrome.
-    const DocumentProto = Object.create(Object.prototype);
-    Object.defineProperty(DocumentProto, "cookie", {
-        get() { return stored; },
-        set(v: string) {
-            written.push(v as string);
-            const kv = (v as string).split(";")[0]!.trim();
-            stored = stored ? `${stored}; ${kv}` : kv;
-        },
-        configurable: true,
-        enumerable: true,
-    });
-
-    // Level 1: HTMLDocument.prototype — no "cookie" own property (like Chrome).
-    const HTMLDocumentProto = Object.create(DocumentProto);
-
-    // Level 0: document instance — no "cookie" own property (like Chrome).
-    const doc = Object.create(HTMLDocumentProto) as Document;
-
-    const win = { document: doc } as unknown as Window;
-    return { win, getWritten: () => written };
-}
-
-describe("patchDocumentCookie — Chrome prototype chain", () => {
-    it("finds cookie descriptor two levels up and patches the instance", () => {
-        const { win, getWritten } = makeFakeWindowChrome(
-            "__crn__casio_com__ak_bmsc=abc; __crn__stackoverflow_com__prov=xyz"
-        );
-        patchDocumentCookie(win, () => "www.casio.com");
-        // Getter must filter and strip prefix.
-        expect(win.document.cookie).toBe("ak_bmsc=abc");
-        // Setter must add prefix.
-        win.document.cookie = "bm_sv=newval; Path=/";
-        expect(getWritten()[0]).toBe("__crn__casio_com__bm_sv=newval; Path=/");
-    });
-
-    it("does not leave the patch unapplied when cookie is on a distant prototype", () => {
-        const { win } = makeFakeWindowChrome(
-            "__crn__iaac_space__preferred_language=en; other=x"
-        );
-        patchDocumentCookie(win, () => "iaac.space");
-        // If the patch were skipped (old bug), this would return the raw string.
-        expect(win.document.cookie).toBe("preferred_language=en");
+    it("returns empty string when store is empty", () => {
+        const win = makeFakeWindow();
+        patchDocumentCookie(win, () => "/");
+        expect(win.document.cookie).toBe("");
     });
 });
 
 describe("patchDocumentCookie — setter", () => {
-    it("prefixes the cookie name on write", () => {
-        const { win, getWritten } = makeFakeWindow();
-        patchDocumentCookie(win, () => "www.casio.com");
-        win.document.cookie = "bm_sv=newval; Path=/";
-        expect(getWritten()[0]).toBe("__crn__casio_com__bm_sv=newval; Path=/");
+    it("writes a cookie into the in-memory store", () => {
+        const win = makeFakeWindow();
+        patchDocumentCookie(win, () => "/");
+        win.document.cookie = "tok=secret; Path=/";
+        expect(getCookiesForPath("/")).toBe("tok=secret");
     });
 
-    it("prefixes a deletion write (Max-Age=0)", () => {
-        const { win, getWritten } = makeFakeWindow();
-        patchDocumentCookie(win, () => "casio.com");
-        win.document.cookie = "ak_bmsc=; Max-Age=0; Path=/";
-        expect(getWritten()[0]).toBe("__crn__casio_com__ak_bmsc=; Max-Age=0; Path=/");
+    it("setter deletion removes the cookie from the store", () => {
+        setCookie("tok=old; Path=/");
+        const win = makeFakeWindow();
+        patchDocumentCookie(win, () => "/");
+        win.document.cookie = "tok=; Max-Age=0; Path=/";
+        expect(getCookiesForPath("/")).toBe("");
     });
 
-    it("uses the current host at write time, not at patch time", () => {
-        let currentHost = "first.com";
-        const { win, getWritten } = makeFakeWindow();
-        patchDocumentCookie(win, () => currentHost);
-
-        win.document.cookie = "x=1";
-        currentHost = "second.com";
-        win.document.cookie = "y=2";
-
-        expect(getWritten()[0]).toBe("__crn__first_com__x=1");
-        expect(getWritten()[1]).toBe("__crn__second_com__y=2");
+    it("getter reflects setter writes immediately", () => {
+        const win = makeFakeWindow();
+        patchDocumentCookie(win, () => "/");
+        win.document.cookie = "x=1; Path=/";
+        win.document.cookie = "y=2; Path=/";
+        const result = win.document.cookie;
+        expect(result).toContain("x=1");
+        expect(result).toContain("y=2");
     });
 });

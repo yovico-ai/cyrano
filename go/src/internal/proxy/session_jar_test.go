@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -161,6 +162,129 @@ func TestSessionJar_Deletion(t *testing.T) {
 	got := jar.RetrieveForRequest("s", "example.com", "/")
 	if len(got) != 0 {
 		t.Errorf("deleted cookie should not be returned: %v", got)
+	}
+}
+
+func TestSessionJar_ForPageCookies_Basic(t *testing.T) {
+	jar := NewSessionJar()
+	jar.StoreServerCookies("s", "www.example.com", []*http.Cookie{
+		{Name: "session", Value: "tok123", Path: "/"},
+		{Name: "pref", Value: "dark", Path: "/settings"},
+	})
+
+	got := jar.ForPageCookies("s", "www.example.com")
+	if len(got) != 2 {
+		t.Fatalf("want 2 cookies, got %d: %v", len(got), got)
+	}
+	// Verify both cookies are present (order not guaranteed).
+	found := map[string]bool{}
+	for _, s := range got {
+		if strings.HasPrefix(s, "session=tok123") {
+			found["session"] = true
+		}
+		if strings.HasPrefix(s, "pref=dark") {
+			found["pref"] = true
+		}
+	}
+	if !found["session"] || !found["pref"] {
+		t.Errorf("cookies missing in ForPageCookies: %v", got)
+	}
+}
+
+func TestSessionJar_ForPageCookies_IncludesPath(t *testing.T) {
+	jar := NewSessionJar()
+	jar.StoreServerCookies("s", "example.com", []*http.Cookie{
+		{Name: "admin", Value: "x", Path: "/admin"},
+	})
+
+	got := jar.ForPageCookies("s", "example.com")
+	if len(got) != 1 || !strings.Contains(got[0], "Path=/admin") {
+		t.Errorf("want Path=/admin in string, got %v", got)
+	}
+}
+
+func TestSessionJar_ForPageCookies_IncludesMaxAge(t *testing.T) {
+	jar := NewSessionJar()
+	jar.StoreServerCookies("s", "example.com", []*http.Cookie{
+		{Name: "tok", Value: "v", Path: "/", MaxAge: 3600},
+	})
+
+	got := jar.ForPageCookies("s", "example.com")
+	if len(got) != 1 || !strings.Contains(got[0], "Max-Age=") {
+		t.Errorf("want Max-Age in string, got %v", got)
+	}
+}
+
+func TestSessionJar_ForPageCookies_SessionCookieHasNoMaxAge(t *testing.T) {
+	// Cookies with no Expires/MaxAge should be returned without Max-Age.
+	jar := NewSessionJar()
+	jar.StoreServerCookies("s", "example.com", []*http.Cookie{
+		{Name: "sess", Value: "v", Path: "/"},
+	})
+
+	got := jar.ForPageCookies("s", "example.com")
+	if len(got) != 1 || strings.Contains(got[0], "Max-Age=") {
+		t.Errorf("session cookie must not have Max-Age, got %v", got)
+	}
+}
+
+func TestSessionJar_ForPageCookies_DomainScoped(t *testing.T) {
+	// Cookie with Domain=.example.com must be visible to api.example.com.
+	jar := NewSessionJar()
+	jar.StoreServerCookies("s", "www.example.com", []*http.Cookie{
+		{Name: "shared", Value: "v", Domain: ".example.com", Path: "/"},
+	})
+
+	// Asking for api.example.com — same eTLD+1, domain-scoped cookie should appear.
+	got := jar.ForPageCookies("s", "api.example.com")
+	if len(got) != 1 {
+		t.Errorf("domain-scoped cookie should be visible to subdomain, got %v", got)
+	}
+}
+
+func TestSessionJar_ForPageCookies_ExactHostNotLeaked(t *testing.T) {
+	// Cookie set without Domain attr must only appear for the exact setting host.
+	jar := NewSessionJar()
+	jar.StoreServerCookies("s", "www.example.com", []*http.Cookie{
+		{Name: "exact", Value: "v", Path: "/"},
+	})
+
+	if got := jar.ForPageCookies("s", "api.example.com"); len(got) != 0 {
+		t.Errorf("exact-host cookie leaked to other subdomain: %v", got)
+	}
+	if got := jar.ForPageCookies("s", "www.example.com"); len(got) != 1 {
+		t.Errorf("exact-host cookie missing for setting host: %v", got)
+	}
+}
+
+func TestSessionJar_ForPageCookies_ExpiredEvicted(t *testing.T) {
+	jar := NewSessionJar()
+	jar.StoreServerCookies("s", "example.com", []*http.Cookie{
+		{Name: "live", Value: "yes", Path: "/"},
+		{Name: "dead", Value: "no", MaxAge: 1, Path: "/"},
+	})
+
+	// Backdate the "dead" entry.
+	jar.mu.Lock()
+	for _, entries := range jar.entries["s"] {
+		for _, e := range entries {
+			if e.name == "dead" {
+				e.expires = time.Now().Add(-time.Second)
+			}
+		}
+	}
+	jar.mu.Unlock()
+
+	got := jar.ForPageCookies("s", "example.com")
+	if len(got) != 1 || !strings.HasPrefix(got[0], "live=yes") {
+		t.Errorf("expired cookie not evicted: %v", got)
+	}
+}
+
+func TestSessionJar_ForPageCookies_EmptySessionID(t *testing.T) {
+	jar := NewSessionJar()
+	if got := jar.ForPageCookies("", "example.com"); got != nil {
+		t.Errorf("empty sessionID must return nil, got %v", got)
 	}
 }
 

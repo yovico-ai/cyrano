@@ -55,6 +55,12 @@ type Config struct {
 	//   - the value of every `style="..."` attribute
 	// Same decoupling pattern as RewriteInlineJS.
 	RewriteInlineCSS func([]byte) []byte
+
+	// PageCookies is the set of cookies to inject into the page via the
+	// bootstrap script's $rewriter.set_cookies() call. Each element is a
+	// Set-Cookie-style string (e.g. "name=value; Path=/; Max-Age=3600").
+	// Populated by the body rewriter from the server-side session jar.
+	PageCookies []string
 }
 
 // externalResourceAttrs is the (tagName → attribute names) map that drives

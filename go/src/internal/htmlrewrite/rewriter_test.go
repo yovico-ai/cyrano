@@ -308,6 +308,42 @@ func TestRewrite_BootstrapNotDoubleInjected_WithHeadAndBody(t *testing.T) {
 	}
 }
 
+func TestRewrite_BootstrapSetCookiesInjected(t *testing.T) {
+	// PageCookies must be emitted as $rewriter.set_cookies([...]) in the
+	// inline bootstrap script, after set_location.
+	withCookies := func(cfg *Config) {
+		cfg.InjectBootstrap = true
+		cfg.PageCookies = []string{"session=tok123; Path=/", "pref=dark; Path=/"}
+	}
+	got := rewrite(t, `<html><head></head><body></body></html>`, withCookies)
+	if !strings.Contains(got, `$rewriter.set_cookies(`) {
+		t.Errorf("set_cookies call missing: %s", got)
+	}
+	if !strings.Contains(got, `session=tok123`) {
+		t.Errorf("session cookie missing in set_cookies: %s", got)
+	}
+	if !strings.Contains(got, `pref=dark`) {
+		t.Errorf("pref cookie missing in set_cookies: %s", got)
+	}
+	// set_cookies must come AFTER set_location.
+	idxLoc := strings.Index(got, "set_location")
+	idxCookies := strings.Index(got, "set_cookies")
+	if idxLoc < 0 || idxCookies < 0 {
+		t.Fatalf("set_location=%d set_cookies=%d", idxLoc, idxCookies)
+	}
+	if idxCookies < idxLoc {
+		t.Errorf("set_cookies emitted before set_location")
+	}
+}
+
+func TestRewrite_BootstrapSetCookiesOmittedWhenEmpty(t *testing.T) {
+	// No PageCookies → no set_cookies call (keeps bootstrap compact).
+	got := rewrite(t, `<html><head></head><body></body></html>`, withInject)
+	if strings.Contains(got, "set_cookies") {
+		t.Errorf("set_cookies should not appear when PageCookies is empty: %s", got)
+	}
+}
+
 // ── End-to-end: full page round-trip ────────────────────────────────────────
 
 func TestRewrite_FullPage(t *testing.T) {

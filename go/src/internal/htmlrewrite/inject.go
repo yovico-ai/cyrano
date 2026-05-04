@@ -37,14 +37,25 @@ func bootstrapScript(cfg *Config) string {
 
 	originalURLLit := jsStringLiteral(cfg.BaseURL.String())
 
+	cookieCall := ""
+	if len(cfg.PageCookies) > 0 {
+		cookiesJSON, jerr := json.Marshal(cfg.PageCookies)
+		if jerr != nil {
+			cookiesJSON = []byte(`[]`)
+		}
+		cookieCall = `$rewriter.set_cookies(` + string(cookiesJSON) + `);`
+	}
+
 	return fmt.Sprintf(
 		`<script src="%s"></script>`+
 			`<script>window.$rewriter=window.$rewriter_init(window,%s).inject();`+
 			`$rewriter.set_location(%s);`+
+			`%s`+
 			`document.currentScript.remove();</script>`,
 		cfg.RewriterJSPath,
 		string(configJSON),
 		string(originalURLLit),
+		cookieCall,
 	)
 }
 

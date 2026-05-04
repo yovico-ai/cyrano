@@ -15,6 +15,7 @@ import (
 	"github.com/yovico/cyrano/internal/cssrewrite"
 	"github.com/yovico/cyrano/internal/htmlrewrite"
 	"github.com/yovico/cyrano/internal/jsrewrite"
+	"github.com/yovico/cyrano/internal/proxy"
 	"github.com/yovico/cyrano/internal/urlrewrite"
 )
 
@@ -30,7 +31,7 @@ import (
 // All errors are returned to the caller AND logged with target/content-type
 // context — ReverseProxy turns the error into a 502 but the log gives us
 // enough to diagnose without re-running.
-func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logger *slog.Logger) func(*http.Response, *url.URL) error {
+func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logger *slog.Logger, jar *proxy.SessionJar, sessName string) func(*http.Response, *url.URL) error {
 	clientPassthrough := buildClientPassthrough(vhost, proxyCfg)
 	jsOpts := jsrewrite.DefaultOptions()
 	jsOpts.Logger = logger.With("component", "jsrewrite")
@@ -84,6 +85,14 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			}
 			var out bytes.Buffer
 			isChallenge := isChallengeHTML(body) || isChallengeHost(target.Hostname())
+
+			var pageCookies []string
+			if jar != nil && sessName != "" && resp.Request != nil {
+				if sessID, _ := resp.Request.Context().Value(proxy.SessionContextKey{}).(string); sessID != "" {
+					pageCookies = jar.ForPageCookies(sessID, target.Host)
+				}
+			}
+
 			cfg := htmlrewrite.Config{
 				BaseURL:           target,
 				Proxy:             proxyCfg,
@@ -95,6 +104,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				// PoW solution to compute as all-zeros, failing the challenge.
 				InjectBootstrap:   !isChallenge,
 				ClientPassthrough: clientPassthrough,
+				PageCookies:       pageCookies,
 			}
 			if !isChallenge {
 				cfg.RewriteInlineJS = rewriteJSFor(target)

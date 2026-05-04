@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -126,6 +127,55 @@ func (j *SessionJar) RetrieveForRequest(sessionID, host, path string) []*http.Co
 		if jarMatchesDomain(bh, ent) && jarMatchesPath(path, ent.path) {
 			result = append(result, &http.Cookie{Name: ent.name, Value: ent.value})
 		}
+	}
+	j.entries[sessionID][siteKey] = live
+	return result
+}
+
+// ForPageCookies returns all non-expired cookies applicable to (sessionID,
+// host) as Set-Cookie-style strings — without the HttpOnly/Secure/Domain
+// attributes — for injection into the page bootstrap script. Path and
+// Max-Age are preserved so the client's in-memory store can apply them.
+// Path filtering is intentionally omitted here; the client filters at read
+// time based on the current upstream URL's pathname.
+func (j *SessionJar) ForPageCookies(sessionID, host string) []string {
+	if sessionID == "" {
+		return nil
+	}
+	siteKey := cookieSiteKey(host)
+	bh := jarBareHost(host)
+	now := time.Now()
+
+	j.mu.Lock()
+	defer j.mu.Unlock()
+
+	entries, ok := j.entries[sessionID][siteKey]
+	if !ok {
+		return nil
+	}
+
+	live := entries[:0]
+	var result []string
+	for _, ent := range entries {
+		if !ent.expires.IsZero() && ent.expires.Before(now) {
+			continue // expired — evict
+		}
+		live = append(live, ent)
+		if !jarMatchesDomain(bh, ent) {
+			continue
+		}
+		s := ent.name + "=" + ent.value
+		if ent.path != "" {
+			s += "; Path=" + ent.path
+		} else {
+			s += "; Path=/"
+		}
+		if !ent.expires.IsZero() {
+			if remaining := int(time.Until(ent.expires).Seconds()); remaining > 0 {
+				s += "; Max-Age=" + strconv.Itoa(remaining)
+			}
+		}
+		result = append(result, s)
 	}
 	j.entries[sessionID][siteKey] = live
 	return result

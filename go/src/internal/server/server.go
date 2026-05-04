@@ -89,25 +89,33 @@ func (s *Server) proxyEndpoints(vhost *config.VHost) urlrewrite.ProxyConfig {
 // Handler returns the http.Handler for one listening port. The same handler
 // is used for every server in cfg.Servers; vhost selection happens per-request
 // via the Host header.
+//
+// We intentionally do NOT use http.ServeMux here. ServeMux calls path.Clean on
+// every incoming path, which collapses `//` to `/`. Upstream URLs that contain
+// embedded URLs in their paths (e.g. Cloudflare Image Resizing:
+// /cdn-cgi/image/<opts>/https://origin.com/img.jpg) get routed through the
+// proxy as /cyrano/https/host/cdn-cgi/image/<opts>/https://origin.com/img.jpg.
+// The `://` within the path confuses path.Clean into stripping one slash,
+// producing https:/origin.com — breaking the embedded URL. Using a plain
+// HandlerFunc bypasses that redirect entirely.
 func (s *Server) Handler() http.Handler {
-	// One jar per server lifetime — shared across all requests so HttpOnly
-	// cookies set on response N are available to forward on request N+1.
+	// One jar per server lifetime — shared across all requests so cookies
+	// set on response N are available to forward on request N+1.
 	jar := proxy.NewSessionJar()
 
-	mux := http.NewServeMux()
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Internal status endpoints checked before vhost lookup.
+		switch r.URL.Path {
+		case "/rewriter-status.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			return
+		case "/rewriter-extended-status.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"application":"ok","storage":"unimplemented"}`))
+			return
+		}
 
-	mux.HandleFunc("/rewriter-status.json", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
-	mux.HandleFunc("/rewriter-extended-status.json", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"application":"ok","storage":"unimplemented"}`))
-	})
-
-	// Per-request dispatch: pick vhost, fall through to static handler when
-	// the request isn't a proxified URL.
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		vhost := s.Config.FindVHost(r.Host)
 		if vhost == nil {
 			s.Logger.Warn("no vhost for host", "host", r.Host)
@@ -168,7 +176,7 @@ func (s *Server) Handler() http.Handler {
 			proxyHandler := proxy.New(proxy.Options{
 				SkipTLSVerify:     false,
 				Logger:            proxyLogger,
-				BodyRewriter:      makeBodyRewriter(vhost, proxyCfg, rewriterLogger),
+				BodyRewriter:      makeBodyRewriter(vhost, proxyCfg, rewriterLogger, jar, vhost.SecretCookieName),
 				ProxyCfg:          proxyCfg,
 				CookieJar:         jar,
 				SessionCookieName: vhost.SecretCookieName,
@@ -211,7 +219,7 @@ func (s *Server) Handler() http.Handler {
 		sh.ServeHTTP(w, r)
 	})
 
-	return logRequests(s.Logger, mux)
+	return logRequests(s.Logger, inner)
 }
 
 // ListenAndServe starts every server in s.Config.Servers. Returns the first

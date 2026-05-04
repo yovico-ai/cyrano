@@ -12,6 +12,7 @@
 // Path, Max-Age, Secure, etc.
 
 import { maybeDecryptCookiePayload } from "./decrypt";
+import { setCookie } from "./in-memory-store";
 
 export function applyCookiePayload(
     payload: string,
@@ -21,8 +22,7 @@ export function applyCookiePayload(
     try {
         plaintext = maybeDecryptCookiePayload(payload, sessionSecret);
     } catch {
-        // Decryption failure — drop the payload. Logging here would be noisy
-        // in normal operation and we don't have a logger plumbed yet.
+        // Decryption failure — drop the payload.
         return;
     }
 
@@ -36,12 +36,6 @@ export function applyCookiePayload(
 
     for (const entry of parsed) {
         if (typeof entry !== "string" || entry.length === 0) continue;
-        try {
-            document.cookie = entry;
-        } catch {
-            // An entry might not be valid for the current origin (Domain
-            // mismatch, etc.). The browser silently ignores most such cases,
-            // but throws on a few — skip and keep going.
-        }
+        setCookie(entry);
     }
 }

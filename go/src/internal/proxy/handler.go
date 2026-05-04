@@ -67,9 +67,9 @@ type Options struct {
 	SessionCookieName string
 }
 
-// sessionKey is the context key used to pass the session ID from Director
-// to ModifyResponse within a single request.
-type sessionKey struct{}
+// SessionContextKey is the context key used to propagate the proxy session ID
+// from Director to ModifyResponse and the body rewriter.
+type SessionContextKey struct{}
 
 // Handler decodes /cyrano/ paths and proxies. It implements http.Handler so it
 // can be mounted into an http.ServeMux directly.
@@ -243,7 +243,7 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 			}
 			// Stash for ModifyResponse via context — Director can't return a value.
 			*req = *req.WithContext(
-				context.WithValue(req.Context(), sessionKey{}, sessionID),
+				context.WithValue(req.Context(), SessionContextKey{}, sessionID),
 			)
 		}
 
@@ -435,13 +435,15 @@ func (h *Handler) modifyResponse(resp *http.Response) error {
 	return nil
 }
 
-// routeSetCookies splits Set-Cookie headers from the upstream response:
-//   - HttpOnly cookies → stored in the session jar (never forwarded to browser)
-//   - non-HttpOnly cookies → rewritten for the proxy origin and forwarded as usual
+// routeSetCookies absorbs all upstream Set-Cookie headers into the server-side
+// session jar. No upstream cookies are forwarded to the browser — the body
+// rewriter injects them into the page bootstrap script instead, so page JS
+// reads them from the in-memory store rather than the browser cookie store.
 //
 // When CookieJar is nil, all cookies go through the existing rewrite path.
 // When a new session ID must be issued (first ever response for this client),
-// a crnsct session cookie is appended to the response.
+// a crnsct session cookie is appended to the response, and the new session ID
+// is stashed back into the request context so the body rewriter can use it.
 func (h *Handler) routeSetCookies(resp *http.Response) {
 	if h.opts.CookieJar == nil {
 		rewriteSetCookies(resp, h.opts.ProxyCfg.PublicURL, resp.Request.URL.Host)
@@ -449,39 +451,27 @@ func (h *Handler) routeSetCookies(resp *http.Response) {
 	}
 
 	// Read the session ID that makeDirector stored in the request context.
-	sessionID, _ := resp.Request.Context().Value(sessionKey{}).(string)
+	sessionID, _ := resp.Request.Context().Value(SessionContextKey{}).(string)
 	newSession := sessionID == ""
 	if newSession {
 		sessionID = GenerateSessionID()
+		// Propagate the new session ID to the body rewriter, which runs after us.
+		ctx := context.WithValue(resp.Request.Context(), SessionContextKey{}, sessionID)
+		resp.Request = resp.Request.WithContext(ctx)
 	}
 
-	// Partition Set-Cookie headers.
-	var forBrowser []string
+	// Store ALL upstream cookies server-side — none go to the browser.
 	var forJar []*http.Cookie
 	for _, raw := range resp.Header["Set-Cookie"] {
-		c := ParseSetCookieHeader(raw)
-		if c.HttpOnly {
-			forJar = append(forJar, c)
-		} else {
-			forBrowser = append(forBrowser, raw)
-		}
+		forJar = append(forJar, ParseSetCookieHeader(raw))
 	}
-
-	// Store HttpOnly cookies server-side.
 	if len(forJar) > 0 {
 		h.opts.CookieJar.StoreServerCookies(sessionID, resp.Request.URL.Host, forJar)
 	}
+	resp.Header.Del("Set-Cookie")
 
-	// Rewrite non-HttpOnly cookies for the proxy origin and forward to browser.
-	if len(forBrowser) > 0 {
-		resp.Header["Set-Cookie"] = forBrowser
-		rewriteSetCookies(resp, h.opts.ProxyCfg.PublicURL, resp.Request.URL.Host)
-	} else {
-		resp.Header.Del("Set-Cookie")
-	}
-
-	// Issue (or refresh) the proxy session cookie. Added AFTER rewriteSetCookies
-	// so it doesn't go through the upstream-cookie name-prefix rewrite.
+	// Issue the proxy session cookie on first contact. Added after Del so it
+	// doesn't get cleared along with the upstream cookies.
 	if newSession {
 		isHTTPS := strings.EqualFold(h.opts.ProxyCfg.PublicURL.Scheme, "https")
 		sc := &http.Cookie{
