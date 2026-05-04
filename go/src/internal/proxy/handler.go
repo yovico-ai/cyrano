@@ -106,6 +106,12 @@ var hopByHopHeaders = []string{
 //   - Public-Key-Pins: pinned cert is the origin's cert, not the proxy's.
 //   - Alt-Svc: would route future requests over QUIC/H3 directly to the
 //     origin, bypassing the proxy entirely.
+//   - Permissions-Policy / Feature-Policy: allowlists name upstream origins
+//     (e.g. "i.dell.com"), which the browser evaluates against the proxy
+//     origin — making them a no-op at best and console-error noise at worst.
+//     Many sites send pre-spec syntax with unquoted origins that browsers now
+//     reject with warnings. There is no safe way to rewrite these for the
+//     proxy context, so we drop them.
 //
 // Headers like CSP, X-Frame-Options, and Cross-Origin-* are NOT stripped.
 // They use the `'self'` keyword, which the browser evaluates relative to the
@@ -117,6 +123,8 @@ var stripResponseHeaders = []string{
 	"Strict-Transport-Security",
 	"Public-Key-Pins",
 	"Alt-Svc",
+	"Permissions-Policy",
+	"Feature-Policy",
 }
 
 // dropOnRequest are headers we never forward upstream — they leak the proxy

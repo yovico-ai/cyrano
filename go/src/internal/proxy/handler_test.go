@@ -318,6 +318,11 @@ func TestServeHTTPWithTarget_HeaderReconstitution(t *testing.T) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.Header().Set("Strict-Transport-Security", "max-age=31536000")
 		w.Header().Set("Alt-Svc", `h3=":443"; ma=86400`)
+		// Permissions-Policy with upstream-origin allowlist (dell.com pattern):
+		// unquoted origins are invalid per the current spec and cause browser
+		// console warnings; the allowlist is meaningless through the proxy anyway.
+		w.Header().Set("Permissions-Policy", "ch-dpr=(i.dell.com), ch-viewport-width=(i.dell.com)")
+		w.Header().Set("Feature-Policy", "dpr i.dell.com")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'")
 		w.Header().Set("X-Frame-Options", "deny")
 		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
@@ -338,6 +343,12 @@ func TestServeHTTPWithTarget_HeaderReconstitution(t *testing.T) {
 	}
 	if v := rec.Header().Get("Alt-Svc"); v != "" {
 		t.Errorf("Alt-Svc should be stripped, got %q", v)
+	}
+	if v := rec.Header().Get("Permissions-Policy"); v != "" {
+		t.Errorf("Permissions-Policy should be stripped, got %q", v)
+	}
+	if v := rec.Header().Get("Feature-Policy"); v != "" {
+		t.Errorf("Feature-Policy should be stripped, got %q", v)
 	}
 
 	// Must pass through — these use 'self' which the browser evaluates
