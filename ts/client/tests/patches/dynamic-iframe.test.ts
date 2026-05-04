@@ -154,7 +154,7 @@ describe("iframe bootstrap / PATCHED_FLAG (end-to-end)", () => {
         document.body.appendChild(iframe);
         const child = iframe.contentWindow!;
 
-        expect((child as Record<symbol, unknown>)[PATCHED_FLAG]).toBeUndefined();
+        expect((child as unknown as Record<symbol, unknown>)[PATCHED_FLAG]).toBeUndefined();
 
         // Bootstrap: install with the iframe's own URL.
         const api = init(child, config).inject();

@@ -49,6 +49,22 @@ describe("wrapPostMessage — targetOrigin translation", () => {
         expect(proxiedWin.postMessage).toHaveBeenCalledWith({ data: 1 }, PROXY_ORIGIN);
     });
 
+    it("translates even when location.origin returns the virtual upstream origin (WrappedLocation)", () => {
+        // This is the real-world bug: window.location is patched by WrappedLocation,
+        // whose .origin getter returns the virtual upstream origin
+        // (e.g. 'https://www.zerohedge.com') so third-party scripts see the URL
+        // they expect. The OLD check (win.location.origin === proxyOrigin) was
+        // always false in this scenario. The fix: check only that location is
+        // accessible (non-null), not that its .origin matches proxyOrigin.
+        const proxiedWinWithVirtualOrigin = {
+            postMessage: vi.fn(),
+            location: { origin: "https://www.zerohedge.com" }, // WrappedLocation scenario
+        };
+        const wrapper = wrapPostMessage({ obj: proxiedWinWithVirtualOrigin }, PROXY_ORIGIN);
+        wrapper.postMessage({ data: 1 }, "https://www.zerohedge.com");
+        expect(proxiedWinWithVirtualOrigin.postMessage).toHaveBeenCalledWith({ data: 1 }, PROXY_ORIGIN);
+    });
+
     it("leaves targetOrigin unchanged for a cross-origin window (not proxied)", () => {
         // Simulates: realExternalWindow.postMessage(data, 'https://example.com')
         // location is NOT accessible (cross-origin) — accessor throws.
