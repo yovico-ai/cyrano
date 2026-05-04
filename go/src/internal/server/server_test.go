@@ -409,6 +409,26 @@ func TestIsChallengeScript_AkamaiScript_HasExtension(t *testing.T) {
 	}
 }
 
+// ── isChallengeHost ──────────────────────────────────────────────────────────
+
+func TestIsChallengeHost_CloudflareTurnstile(t *testing.T) {
+	if !isChallengeHost("challenges.cloudflare.com") {
+		t.Error("challenges.cloudflare.com should be detected as a challenge host")
+	}
+}
+
+func TestIsChallengeHost_CaseInsensitive(t *testing.T) {
+	if !isChallengeHost("Challenges.Cloudflare.Com") {
+		t.Error("isChallengeHost should be case-insensitive")
+	}
+}
+
+func TestIsChallengeHost_RegularHost(t *testing.T) {
+	if isChallengeHost("www.example.com") {
+		t.Error("regular host should not be a challenge host")
+	}
+}
+
 // ── isChallengeJSPath / empty-JS fallback ────────────────────────────────────
 
 func TestIsChallengeJSPath_Match(t *testing.T) {

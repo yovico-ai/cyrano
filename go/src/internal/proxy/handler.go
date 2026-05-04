@@ -99,19 +99,24 @@ var hopByHopHeaders = []string{
 	"Te", "Trailer", "Transfer-Encoding", "Upgrade",
 }
 
-// dangerousResponseHeaders are headers we strip from the upstream response
-// because they'd lock the browser into the original origin's policies and
-// break the rewriting (HSTS would force https on our proxy host; CSP would
-// block our injected /rewriter.js; X-Frame-Options would prevent third-party
-// iframes from embedding the proxied page, which breaks ad and widget frames
-// that the proxy intermediates; etc.).
-var dangerousResponseHeaders = []string{
+// stripResponseHeaders are headers that cannot be reconstituted for the proxy
+// context and must be stripped entirely:
+//   - HSTS: proxy may serve HTTP; leaving this would force the browser to
+//     require HTTPS for future connections to the proxy host.
+//   - Public-Key-Pins: pinned cert is the origin's cert, not the proxy's.
+//   - Alt-Svc: would route future requests over QUIC/H3 directly to the
+//     origin, bypassing the proxy entirely.
+//
+// Headers like CSP, X-Frame-Options, and Cross-Origin-* are NOT stripped.
+// They use the `'self'` keyword, which the browser evaluates relative to the
+// current page origin (the proxy origin). Our rewriter.js is served at
+// /rewriter.js on the proxy origin, so it is covered by `'self'` in any
+// script-src directive. Cross-Origin-* policies also work correctly because
+// all proxied resources share the proxy origin.
+var stripResponseHeaders = []string{
 	"Strict-Transport-Security",
-	"Content-Security-Policy",
-	"Content-Security-Policy-Report-Only",
 	"Public-Key-Pins",
 	"Alt-Svc",
-	"X-Frame-Options",
 }
 
 // dropOnRequest are headers we never forward upstream — they leak the proxy
@@ -333,11 +338,24 @@ func (h *Handler) translateReferer(referer string) string {
 // the browser into the original origin's security policies, then hand off
 // to the BodyRewriter (if configured) for content transformation.
 func (h *Handler) modifyResponse(resp *http.Response) error {
-	for _, name := range dangerousResponseHeaders {
+	for _, name := range stripResponseHeaders {
 		resp.Header.Del(name)
 	}
 	for _, name := range hopByHopHeaders {
 		resp.Header.Del(name)
+	}
+	// Strip nonce tokens from CSP so our injected rewriter.js and bootstrap
+	// script can load. Nonces serve no security purpose in the proxy context
+	// (all frames are already same-origin); keeping them only blocks us.
+	for _, name := range []string{"Content-Security-Policy", "Content-Security-Policy-Report-Only"} {
+		vals := resp.Header.Values(name)
+		if len(vals) == 0 {
+			continue
+		}
+		resp.Header.Del(name)
+		for _, v := range vals {
+			resp.Header.Add(name, stripCSPNonces(v))
+		}
 	}
 	// Rewrite redirect targets so the browser follows them THROUGH the proxy.
 	// Without this, a `302 Location: https://example.com/foo` from upstream

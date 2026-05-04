@@ -84,7 +84,7 @@ func TestProxy_ForwardsRequest(t *testing.T) {
 	}
 }
 
-func TestProxy_StripsDangerousResponseHeaders(t *testing.T) {
+func TestProxy_StripsProxyIncompatibleHeaders(t *testing.T) {
 	upstream, _ := startUpstream(t)
 	h := New(Options{})
 
@@ -94,9 +94,10 @@ func TestProxy_StripsDangerousResponseHeaders(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
+	// These cannot be reconstituted for the proxy context and must be stripped.
 	for _, name := range []string{
 		"Strict-Transport-Security",
-		"Content-Security-Policy",
+		"Alt-Svc",
 	} {
 		if v := rec.Header().Get(name); v != "" {
 			t.Errorf("%s should be stripped from response, got %q", name, v)
@@ -312,12 +313,15 @@ func TestServeHTTPWithTarget_BodyRewriterInvoked(t *testing.T) {
 	}
 }
 
-func TestServeHTTPWithTarget_StripsSecurityHeaders(t *testing.T) {
+func TestServeHTTPWithTarget_HeaderReconstitution(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+		w.Header().Set("Alt-Svc", `h3=":443"; ma=86400`)
 		w.Header().Set("Content-Security-Policy", "default-src 'self'")
 		w.Header().Set("X-Frame-Options", "deny")
+		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		_, _ = w.Write([]byte("ok"))
 	}))
 	t.Cleanup(upstream.Close)
@@ -328,14 +332,55 @@ func TestServeHTTPWithTarget_StripsSecurityHeaders(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTPWithTarget(rec, req, target)
 
+	// Must be stripped — cannot be reconstituted for proxy context.
 	if v := rec.Header().Get("Strict-Transport-Security"); v != "" {
 		t.Errorf("HSTS should be stripped, got %q", v)
 	}
-	if v := rec.Header().Get("Content-Security-Policy"); v != "" {
-		t.Errorf("CSP should be stripped, got %q", v)
+	if v := rec.Header().Get("Alt-Svc"); v != "" {
+		t.Errorf("Alt-Svc should be stripped, got %q", v)
 	}
-	if v := rec.Header().Get("X-Frame-Options"); v != "" {
-		t.Errorf("X-Frame-Options should be stripped, got %q", v)
+
+	// Must pass through — these use 'self' which the browser evaluates
+	// relative to the proxy origin, so they work correctly as-is.
+	if v := rec.Header().Get("Content-Security-Policy"); v == "" {
+		t.Error("CSP should pass through, got empty")
+	}
+	if v := rec.Header().Get("X-Frame-Options"); v == "" {
+		t.Error("X-Frame-Options should pass through, got empty")
+	}
+	if v := rec.Header().Get("Cross-Origin-Opener-Policy"); v == "" {
+		t.Error("COOP should pass through, got empty")
+	}
+	if v := rec.Header().Get("Cross-Origin-Resource-Policy"); v == "" {
+		t.Error("CORP should pass through, got empty")
+	}
+}
+
+func TestServeHTTPWithTarget_CSPNoncesStripped(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		// Typical nonce-gated CSP (e.g. Cloudflare Turnstile widget pages).
+		w.Header().Set("Content-Security-Policy",
+			"script-src 'nonce-abc123' 'unsafe-eval'; style-src 'nonce-xyz'")
+		_, _ = w.Write([]byte("<html><body>ok</body></html>"))
+	}))
+	t.Cleanup(upstream.Close)
+
+	h := New(Options{})
+	target, _ := url.Parse(upstream.URL + "/page")
+	req := httptest.NewRequest("GET", "/page", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTPWithTarget(rec, req, target)
+
+	got := rec.Header().Get("Content-Security-Policy")
+	if strings.Contains(got, "nonce-") {
+		t.Errorf("CSP nonce should be stripped, got %q", got)
+	}
+	if !strings.Contains(got, "'unsafe-inline'") {
+		t.Errorf("CSP should contain 'unsafe-inline' after nonce strip, got %q", got)
+	}
+	if !strings.Contains(got, "'self'") {
+		t.Errorf("CSP should contain 'self' after nonce strip, got %q", got)
 	}
 }
 

@@ -83,7 +83,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				return fmt.Errorf("read upstream body: %w", err)
 			}
 			var out bytes.Buffer
-			isChallenge := isChallengeHTML(body)
+			isChallenge := isChallengeHTML(body) || isChallengeHost(target.Hostname())
 			cfg := htmlrewrite.Config{
 				BaseURL:           target,
 				Proxy:             proxyCfg,
@@ -112,10 +112,8 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			replaceBody(resp, out.Bytes())
 
 		case isJS(resp):
-			// Skip rewriting Cloudflare bot-challenge scripts. Their fingerprint
-			// collection code is sensitive to any AST transformation; let it run
-			// unmodified so the challenge can pass in a real browser.
-			if isChallengeScript(target) {
+			// Skip rewriting challenge scripts and any content from challenge hosts.
+			if isChallengeScript(target) || isChallengeHost(target.Hostname()) {
 				logger.Debug("rewriter: js passthrough (challenge script)", "target", target.String())
 				break
 			}
@@ -223,6 +221,15 @@ func isChallengeJSPath(path string) bool {
 	lower := strings.ToLower(path)
 	return strings.Contains(lower, "/cdn-cgi/challenge-platform/") &&
 		strings.HasSuffix(lower, ".js")
+}
+
+// isChallengeHost reports whether all content from this host must be passed
+// through without injection or JS rewriting. Cloudflare Turnstile widget pages
+// are served from challenges.cloudflare.com and do browser fingerprinting that
+// must run unmodified; injecting rewriter.js also fails because their CSP is
+// nonce-gated around a different nonce than the one on our injected script.
+func isChallengeHost(host string) bool {
+	return strings.EqualFold(host, "challenges.cloudflare.com")
 }
 
 // isChallengeHTML reports whether the HTML body is a bot-challenge interstitial.
