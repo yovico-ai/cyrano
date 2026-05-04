@@ -2,12 +2,14 @@ package proxy
 
 import "testing"
 
-func TestStripCSPNonces(t *testing.T) {
+func TestRewriteCSP(t *testing.T) {
 	cases := []struct {
-		name string
-		in   string
-		want string
+		name        string
+		in          string
+		proxyOrigin string
+		want        string
 	}{
+		// ── Nonce stripping (proxyOrigin = "") ─────────────────────────────
 		{
 			name: "no nonce — untouched",
 			in:   "default-src 'self'; script-src 'self' 'unsafe-eval'",
@@ -68,11 +70,43 @@ func TestStripCSPNonces(t *testing.T) {
 			in:   "",
 			want: "",
 		},
+
+		// ── Proxy origin injection ──────────────────────────────────────────
+		{
+			name:        "proxy origin added to script-src",
+			in:          "script-src https://cdn.ampproject.org/",
+			proxyOrigin: "https://proxy.example.com",
+			want:        "script-src https://cdn.ampproject.org/ https://proxy.example.com",
+		},
+		{
+			name:        "proxy origin added to every *-src directive",
+			in:          "default-src 'self'; script-src https://cdn.example.com; img-src *; connect-src 'self'",
+			proxyOrigin: "https://proxy.example.com",
+			want:        "default-src 'self' https://proxy.example.com; script-src https://cdn.example.com https://proxy.example.com; img-src * https://proxy.example.com; connect-src 'self' https://proxy.example.com",
+		},
+		{
+			name:        "proxy origin not duplicated when already present",
+			in:          "script-src https://cdn.example.com https://proxy.example.com",
+			proxyOrigin: "https://proxy.example.com",
+			want:        "script-src https://cdn.example.com https://proxy.example.com",
+		},
+		{
+			name:        "non-src directives left unchanged",
+			in:          "sandbox allow-scripts; report-uri /csp; script-src 'self'",
+			proxyOrigin: "https://proxy.example.com",
+			want:        "sandbox allow-scripts; report-uri /csp; script-src 'self' https://proxy.example.com",
+		},
+		{
+			name:        "nonce stripped and proxy origin added together",
+			in:          "script-src 'nonce-abc' https://cdn.ampproject.org/",
+			proxyOrigin: "https://proxy.example.com",
+			want:        "script-src https://cdn.ampproject.org/ 'unsafe-inline' 'self' https://proxy.example.com",
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := stripCSPNonces(tc.in)
+			got := rewriteCSP(tc.in, tc.proxyOrigin)
 			if got != tc.want {
 				t.Errorf("\n got:  %q\n want: %q", got, tc.want)
 			}

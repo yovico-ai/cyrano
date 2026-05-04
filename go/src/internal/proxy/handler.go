@@ -401,9 +401,13 @@ func (h *Handler) modifyResponse(resp *http.Response) error {
 	for _, name := range hopByHopHeaders {
 		resp.Header.Del(name)
 	}
-	// Strip nonce tokens from CSP so our injected rewriter.js and bootstrap
-	// script can load. Nonces serve no security purpose in the proxy context
-	// (all frames are already same-origin); keeping them only blocks us.
+	// Rewrite CSP headers: strip nonces (they have no isolation value in a
+	// proxy context) and inject our proxy origin into every *-src source list
+	// so rewritten resource URLs (which go through the proxy) can load.
+	var proxyOrigin string
+	if h.opts.ProxyCfg.PublicURL != nil {
+		proxyOrigin = h.opts.ProxyCfg.PublicURL.Scheme + "://" + h.opts.ProxyCfg.PublicURL.Host
+	}
 	for _, name := range []string{"Content-Security-Policy", "Content-Security-Policy-Report-Only"} {
 		vals := resp.Header.Values(name)
 		if len(vals) == 0 {
@@ -411,7 +415,7 @@ func (h *Handler) modifyResponse(resp *http.Response) error {
 		}
 		resp.Header.Del(name)
 		for _, v := range vals {
-			resp.Header.Add(name, stripCSPNonces(v))
+			resp.Header.Add(name, rewriteCSP(v, proxyOrigin))
 		}
 	}
 	// Rewrite redirect targets so the browser follows them THROUGH the proxy.

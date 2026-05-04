@@ -2,34 +2,39 @@ package proxy
 
 import "strings"
 
-// stripCSPNonces rewrites a Content-Security-Policy (or CSP-Report-Only) header
-// value so the proxy's injected scripts and styles can load and execute.
+// rewriteCSP rewrites a Content-Security-Policy (or CSP-Report-Only) header
+// value so the proxy can operate transparently. Two mutations are applied:
 //
-// In a proxy context every frame is already same-origin with the proxy, so the
-// security isolation that nonces are designed to provide has already collapsed.
-// Keeping nonce requirements only blocks our rewriter.js from loading.
+//  1. Nonce stripping (script/style/default-src directives only):
+//     'nonce-…' tokens are removed and 'strict-dynamic' is dropped alongside
+//     them. 'self' and 'unsafe-inline' are added so our injected rewriter.js
+//     and bootstrap <script> block can load and execute. Nonces serve no
+//     isolation purpose in a proxy context — all frames are already same-origin
+//     with the proxy, so nonces only block us.
 //
-// For each script-src / style-src / default-src directive that contains a
-// nonce token we:
+//  2. Proxy origin injection (all *-src source-list directives):
+//     When proxyOrigin is non-empty (e.g. "https://proxy.example.com"), it is
+//     appended to every directive whose name ends in "-src". This is necessary
+//     because our client-side rewriter rewrites resource URLs to go through
+//     the proxy: a page with "script-src https://cdn.ampproject.org/" would
+//     otherwise block scripts rewritten to
+//     "https://proxy.example.com/cyrano/https/cdn.ampproject.org/…".
 //
-//  1. Remove all 'nonce-...' tokens.
-//  2. Remove 'strict-dynamic' — it suppresses 'self' and 'unsafe-inline',
-//     making the additions below ineffective.
-//  3. Add 'self' — allows /rewriter.js (same-origin script) to load.
-//  4. Add 'unsafe-inline' — allows the bootstrap <script> block to execute.
-func stripCSPNonces(csp string) string {
-	if !strings.Contains(csp, "'nonce-") {
-		return csp
-	}
+// Directives whose names do NOT end in "-src" (sandbox, report-uri, report-to,
+// upgrade-insecure-requests, …) are passed through unchanged.
+func rewriteCSP(csp, proxyOrigin string) string {
 	directives := strings.Split(csp, ";")
 	for i, dir := range directives {
 		parts := strings.Fields(dir)
 		if len(parts) == 0 {
 			continue
 		}
-		if !isScriptOrStyleDirective(strings.ToLower(parts[0])) {
+		name := strings.ToLower(parts[0])
+		if !strings.Contains(name, "-src") {
 			continue
 		}
+
+		isNonceTarget := isScriptOrStyleDirective(name)
 
 		// Preserve any leading whitespace ("; directive" → " directive") so the
 		// rejoined header string stays close to the original format.
@@ -38,14 +43,15 @@ func stripCSPNonces(csp string) string {
 		hadNonce := false
 		hasUnsafeInline := false
 		hasSelf := false
+		hasProxy := proxyOrigin == "" // skip proxy-origin check when not configured
 
 		for _, tok := range parts[1:] {
 			lower := strings.ToLower(tok)
 			switch {
-			case strings.HasPrefix(lower, "'nonce-"):
+			case isNonceTarget && strings.HasPrefix(lower, "'nonce-"):
 				hadNonce = true
 				// stripped
-			case lower == "'strict-dynamic'":
+			case isNonceTarget && lower == "'strict-dynamic'":
 				hadNonce = true // mark changed; drop strict-dynamic alongside nonces
 				// stripped
 			case lower == "'unsafe-inline'":
@@ -55,17 +61,28 @@ func stripCSPNonces(csp string) string {
 				hasSelf = true
 				kept = append(kept, tok)
 			default:
+				if !hasProxy && strings.EqualFold(tok, proxyOrigin) {
+					hasProxy = true
+				}
 				kept = append(kept, tok)
 			}
 		}
 
-		if hadNonce {
+		changed := false
+		if isNonceTarget && hadNonce {
 			if !hasUnsafeInline {
 				kept = append(kept, "'unsafe-inline'")
 			}
 			if !hasSelf {
 				kept = append(kept, "'self'")
 			}
+			changed = true
+		}
+		if !hasProxy {
+			kept = append(kept, proxyOrigin)
+			changed = true
+		}
+		if changed {
 			directives[i] = lead + strings.Join(kept, " ")
 		}
 	}
