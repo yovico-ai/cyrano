@@ -53,7 +53,23 @@ type Options struct {
 	// passes Location headers through verbatim — fine only for tests that
 	// don't exercise redirects.
 	ProxyCfg urlrewrite.ProxyConfig
+
+	// CookieJar, when non-nil, enables server-side HttpOnly cookie storage.
+	// HttpOnly cookies from upstream responses are stored here instead of
+	// being forwarded to the browser; they are injected back into outgoing
+	// requests automatically. Non-HttpOnly cookies continue to be forwarded
+	// to the browser with the usual name-prefix rewrite.
+	CookieJar *SessionJar
+
+	// SessionCookieName is the name of the proxy-issued session-ID cookie
+	// (e.g. "crnsct"). Used as the key into CookieJar. Has no effect when
+	// CookieJar is nil.
+	SessionCookieName string
 }
+
+// sessionKey is the context key used to pass the session ID from Director
+// to ModifyResponse within a single request.
+type sessionKey struct{}
 
 // Handler decodes /cyrano/ paths and proxies. It implements http.Handler so it
 // can be mounted into an http.ServeMux directly.
@@ -216,6 +232,21 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		for _, h := range dropOnRequest {
 			req.Header.Del(h)
 		}
+
+		// Extract session ID BEFORE we modify the Cookie header. The session
+		// cookie (crnsct) is a proxy-internal cookie — it won't have the
+		// site-namespace prefix, so it's naturally excluded from forwarding.
+		var sessionID string
+		if h.opts.CookieJar != nil && h.opts.SessionCookieName != "" {
+			if c, err := req.Cookie(h.opts.SessionCookieName); err == nil {
+				sessionID = c.Value
+			}
+			// Stash for ModifyResponse via context — Director can't return a value.
+			*req = *req.WithContext(
+				context.WithValue(req.Context(), sessionKey{}, sessionID),
+			)
+		}
+
 		// Forward only cookies that belong to this upstream. Cookies are stored
 		// under the proxy origin with a site-namespace prefix (see cookiePrefixFor
 		// and rewriteSetCookies). Filtering here prevents cross-site cookie
@@ -238,7 +269,25 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 				req.Header.Del("Cookie")
 			}
 		}
-		//
+
+		// Inject server-side HttpOnly cookies from the jar. These were stored
+		// here on a previous response instead of being forwarded to the browser.
+		if h.opts.CookieJar != nil && sessionID != "" {
+			jarCookies := h.opts.CookieJar.RetrieveForRequest(sessionID, target.Host, target.Path)
+			if len(jarCookies) > 0 {
+				parts := make([]string, len(jarCookies))
+				for i, c := range jarCookies {
+					parts[i] = c.Name + "=" + c.Value
+				}
+				extra := strings.Join(parts, "; ")
+				if existing := req.Header.Get("Cookie"); existing != "" {
+					req.Header.Set("Cookie", existing+"; "+extra)
+				} else {
+					req.Header.Set("Cookie", extra)
+				}
+			}
+		}
+
 		// Advertise the same encodings a real browser sends. "gzip only" is a
 		// trivial bot fingerprint that WAFs (Akamai, Cloudflare, etc.) key on.
 		// readDecompressedBody handles gzip and br; zstd is stripped here so
@@ -374,11 +423,7 @@ func (h *Handler) modifyResponse(resp *http.Response) error {
 	if h.opts.ProxyCfg.PublicURL != nil && resp.Request != nil && resp.Request.URL != nil {
 		rewriteRedirectHeader(resp, "Location", h.opts.ProxyCfg)
 		rewriteRedirectHeader(resp, "Content-Location", h.opts.ProxyCfg)
-		// Rewrite Set-Cookie so the browser stores upstream cookies under the
-		// proxy origin. Without this, cookies with Domain=.example.com are
-		// silently rejected when the page is served from localhost:9081, and
-		// clearance cookies (cf_clearance, aws-waf-token, etc.) are lost.
-		rewriteSetCookies(resp, h.opts.ProxyCfg.PublicURL, resp.Request.URL.Host)
+		h.routeSetCookies(resp)
 	}
 	if h.opts.BodyRewriter != nil && resp.Request != nil && resp.Request.URL != nil {
 		// Director copied the upstream URL into resp.Request.URL — it's
@@ -388,6 +433,67 @@ func (h *Handler) modifyResponse(resp *http.Response) error {
 		}
 	}
 	return nil
+}
+
+// routeSetCookies splits Set-Cookie headers from the upstream response:
+//   - HttpOnly cookies → stored in the session jar (never forwarded to browser)
+//   - non-HttpOnly cookies → rewritten for the proxy origin and forwarded as usual
+//
+// When CookieJar is nil, all cookies go through the existing rewrite path.
+// When a new session ID must be issued (first ever response for this client),
+// a crnsct session cookie is appended to the response.
+func (h *Handler) routeSetCookies(resp *http.Response) {
+	if h.opts.CookieJar == nil {
+		rewriteSetCookies(resp, h.opts.ProxyCfg.PublicURL, resp.Request.URL.Host)
+		return
+	}
+
+	// Read the session ID that makeDirector stored in the request context.
+	sessionID, _ := resp.Request.Context().Value(sessionKey{}).(string)
+	newSession := sessionID == ""
+	if newSession {
+		sessionID = GenerateSessionID()
+	}
+
+	// Partition Set-Cookie headers.
+	var forBrowser []string
+	var forJar []*http.Cookie
+	for _, raw := range resp.Header["Set-Cookie"] {
+		c := ParseSetCookieHeader(raw)
+		if c.HttpOnly {
+			forJar = append(forJar, c)
+		} else {
+			forBrowser = append(forBrowser, raw)
+		}
+	}
+
+	// Store HttpOnly cookies server-side.
+	if len(forJar) > 0 {
+		h.opts.CookieJar.StoreServerCookies(sessionID, resp.Request.URL.Host, forJar)
+	}
+
+	// Rewrite non-HttpOnly cookies for the proxy origin and forward to browser.
+	if len(forBrowser) > 0 {
+		resp.Header["Set-Cookie"] = forBrowser
+		rewriteSetCookies(resp, h.opts.ProxyCfg.PublicURL, resp.Request.URL.Host)
+	} else {
+		resp.Header.Del("Set-Cookie")
+	}
+
+	// Issue (or refresh) the proxy session cookie. Added AFTER rewriteSetCookies
+	// so it doesn't go through the upstream-cookie name-prefix rewrite.
+	if newSession {
+		isHTTPS := strings.EqualFold(h.opts.ProxyCfg.PublicURL.Scheme, "https")
+		sc := &http.Cookie{
+			Name:     h.opts.SessionCookieName,
+			Value:    sessionID,
+			Path:     "/",
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Secure:   isHTTPS,
+		}
+		resp.Header.Add("Set-Cookie", sc.String())
+	}
 }
 
 // rewriteRedirectHeader runs urlrewrite.Rewrite over the named header value,

@@ -574,3 +574,159 @@ func TestCookieIsolation_DropsOtherSiteCookies(t *testing.T) {
 		t.Errorf("upstream received cookies it shouldn't: Cookie=%q", got)
 	}
 }
+
+// ── server-side HttpOnly cookie jar ──────────────────────────────────────────
+
+// startUpstreamMultiCookie returns a server that always emits the given
+// Set-Cookie headers, and captures the Cookie header on each request.
+func startUpstreamMultiCookie(t *testing.T, setCookies ...string) (*httptest.Server, *capturedRequest) {
+	t.Helper()
+	captured := &capturedRequest{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured.headers = r.Header.Clone()
+		for _, sc := range setCookies {
+			w.Header().Add("Set-Cookie", sc)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, captured
+}
+
+func TestCookieJar_HttpOnlyCookieNotForwardedToBrowser(t *testing.T) {
+	upstream, _ := startUpstreamMultiCookie(t,
+		"session=secret; Path=/; HttpOnly",
+		"pref=dark; Path=/",
+	)
+	publicURL, _ := url.Parse("http://localhost:9081")
+	jar := NewSessionJar()
+	h := New(Options{
+		ProxyCfg:          urlrewrite.ProxyConfig{PublicURL: publicURL},
+		CookieJar:         jar,
+		SessionCookieName: "crnsct",
+	})
+
+	target, _ := url.Parse(upstream.URL + "/")
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTPWithTarget(rec, req, target)
+
+	// The HttpOnly "session" cookie must NOT appear in the browser response.
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "session" || strings.Contains(c.Name, "session") {
+			// Allow only if it's the prefixed non-HttpOnly version
+			if c.HttpOnly {
+				t.Errorf("HttpOnly cookie forwarded to browser: %q", c.Name)
+			}
+		}
+	}
+
+	// The non-HttpOnly "pref" cookie MUST appear (prefixed).
+	var foundPref bool
+	for _, c := range rec.Result().Cookies() {
+		if strings.Contains(c.Name, "pref") {
+			foundPref = true
+		}
+	}
+	if !foundPref {
+		t.Error("non-HttpOnly cookie not forwarded to browser")
+	}
+}
+
+func TestCookieJar_SessionCookieIssuedOnFirstResponse(t *testing.T) {
+	upstream, _ := startUpstreamMultiCookie(t)
+	publicURL, _ := url.Parse("http://localhost:9081")
+	jar := NewSessionJar()
+	h := New(Options{
+		ProxyCfg:          urlrewrite.ProxyConfig{PublicURL: publicURL},
+		CookieJar:         jar,
+		SessionCookieName: "crnsct",
+	})
+
+	target, _ := url.Parse(upstream.URL + "/")
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTPWithTarget(rec, req, target)
+
+	var sessionCookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "crnsct" {
+			sessionCookie = c
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("session cookie crnsct not set on first response")
+	}
+	if !sessionCookie.HttpOnly {
+		t.Error("session cookie must be HttpOnly")
+	}
+	if sessionCookie.Value == "" {
+		t.Error("session cookie must have a non-empty value")
+	}
+}
+
+func TestCookieJar_JarCookiesForwardedToUpstream(t *testing.T) {
+	// First request: upstream sets an HttpOnly cookie.
+	// Second request: that cookie must be injected into the outgoing Cookie header.
+	upstream, captured := startUpstreamMultiCookie(t,
+		"session=tok123; Path=/; HttpOnly",
+	)
+	publicURL, _ := url.Parse("http://localhost:9081")
+	jar := NewSessionJar()
+	h := New(Options{
+		ProxyCfg:          urlrewrite.ProxyConfig{PublicURL: publicURL},
+		CookieJar:         jar,
+		SessionCookieName: "crnsct",
+	})
+	target, _ := url.Parse(upstream.URL + "/")
+
+	// First request — no session cookie yet; upstream sets HttpOnly session.
+	req1 := httptest.NewRequest("GET", "/", nil)
+	rec1 := httptest.NewRecorder()
+	h.ServeHTTPWithTarget(rec1, req1, target)
+
+	// Extract the crnsct session ID from the response.
+	var sessionID string
+	for _, c := range rec1.Result().Cookies() {
+		if c.Name == "crnsct" {
+			sessionID = c.Value
+		}
+	}
+	if sessionID == "" {
+		t.Fatal("no crnsct session cookie on first response")
+	}
+
+	// Second request — browser echoes crnsct; jar must inject session=tok123.
+	req2 := httptest.NewRequest("GET", "/", nil)
+	req2.Header.Set("Cookie", "crnsct="+sessionID)
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTPWithTarget(rec2, req2, target)
+
+	upstreamCookie := captured.headers.Get("Cookie")
+	if !strings.Contains(upstreamCookie, "session=tok123") {
+		t.Errorf("jar cookie not injected into upstream request; Cookie=%q", upstreamCookie)
+	}
+}
+
+func TestCookieJar_SessionCookieNotReissuedWhenPresent(t *testing.T) {
+	upstream, _ := startUpstreamMultiCookie(t)
+	publicURL, _ := url.Parse("http://localhost:9081")
+	jar := NewSessionJar()
+	h := New(Options{
+		ProxyCfg:          urlrewrite.ProxyConfig{PublicURL: publicURL},
+		CookieJar:         jar,
+		SessionCookieName: "crnsct",
+	})
+	target, _ := url.Parse(upstream.URL + "/")
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Cookie", "crnsct=existing-id-abc")
+	rec := httptest.NewRecorder()
+	h.ServeHTTPWithTarget(rec, req, target)
+
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "crnsct" {
+			t.Errorf("crnsct session cookie should not be re-issued when already present, got %q", c.Value)
+		}
+	}
+}

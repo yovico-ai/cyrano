@@ -90,6 +90,10 @@ func (s *Server) proxyEndpoints(vhost *config.VHost) urlrewrite.ProxyConfig {
 // is used for every server in cfg.Servers; vhost selection happens per-request
 // via the Host header.
 func (s *Server) Handler() http.Handler {
+	// One jar per server lifetime — shared across all requests so HttpOnly
+	// cookies set on response N are available to forward on request N+1.
+	jar := proxy.NewSessionJar()
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/rewriter-status.json", func(w http.ResponseWriter, _ *http.Request) {
@@ -162,10 +166,12 @@ func (s *Server) Handler() http.Handler {
 			rewriterLogger := s.Logger.With("component", "rewriter")
 			proxyCfg := s.proxyEndpoints(vhost)
 			proxyHandler := proxy.New(proxy.Options{
-				SkipTLSVerify: false,
-				Logger:        proxyLogger,
-				BodyRewriter:  makeBodyRewriter(vhost, proxyCfg, rewriterLogger),
-				ProxyCfg:      proxyCfg,
+				SkipTLSVerify:     false,
+				Logger:            proxyLogger,
+				BodyRewriter:      makeBodyRewriter(vhost, proxyCfg, rewriterLogger),
+				ProxyCfg:          proxyCfg,
+				CookieJar:         jar,
+				SessionCookieName: vhost.SecretCookieName,
 			})
 			proxyHandler.ServeHTTP(w, r)
 			return
