@@ -121,7 +121,7 @@ export function createRewriterApi(
 
         // ── Document.write / postMessage / eval / member expression ────────
         wrap_document_write: (arg) => wrapDocumentWrite(arg, rewriteOne),
-        wrap_postMessage: wrapPostMessage,
+        wrap_postMessage: (arg) => wrapPostMessage(arg, initialBaseUrl.origin),
         wrap_member_expression: wrapMemberExpression,
         wrap_eval: wrapEval,
         wrap_eval_arg: wrapEvalArg,

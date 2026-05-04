@@ -221,20 +221,41 @@ async function main() {
         return session;
     };
 
+    let consecutiveNoHits = 0;
+    const MAX_CONSECUTIVE_NO_HITS = 5;
+
     try {
-        for (let i = 0; i < opts.runs; i++) {
+        for (let i = 0; i < opts.runs; ) {
             const query = opts.query ?? pickQuery();
             console.log(`\n[${i + 1}/${opts.runs}] query: "${query}"`);
 
             const runDir = ensureRunDir(sessionTag, i, query);
             const s = await ensureSession();
             const run = await runOne(s, query, opts.proxy, runDir);
+
+            const target = run.target ?? "(no hit)";
+            console.log(`  target:  ${target}`);
+
+            if (!run.target) {
+                consecutiveNoHits++;
+                const giveUp = opts.query !== null || consecutiveNoHits >= MAX_CONSECUTIVE_NO_HITS;
+                if (giveUp) {
+                    // Fixed query or search engines persistently dry — count the slot.
+                    console.log(`  → no search hit`);
+                    consecutiveNoHits = 0;
+                    i++;
+                } else {
+                    console.log(`  → no search hit, trying another query`);
+                }
+                continue;
+            }
+
+            consecutiveNoHits = 0;
             runs.push(run);
+            i++;
 
             const jsonPath = writeRunJSON(run, runDir);
             const verdict = run.diff?.verdict ?? "error";
-            const target = run.target ?? "(no hit)";
-            console.log(`  target:  ${target}`);
             console.log(`  verdict: ${verdict}`);
             if (run.diff) {
                 console.log(`  text ratio:    ${run.diff.visibleTextLengthRatio.toFixed(2)}`);

@@ -96,6 +96,62 @@ describe("patchDocumentCookie — getter", () => {
     });
 });
 
+// Simulates Chrome's prototype chain: document instance → HTMLDocument.prototype
+// → Document.prototype (where "cookie" lives), matching the real browser layout
+// that caused the original "patch silently skipped" bug.
+function makeFakeWindowChrome(initial = ""): {
+    win: Window;
+    getWritten: () => string[];
+} {
+    let stored = initial;
+    const written: string[] = [];
+
+    // Level 2: Document.prototype — this is where "cookie" lives in Chrome.
+    const DocumentProto = Object.create(Object.prototype);
+    Object.defineProperty(DocumentProto, "cookie", {
+        get() { return stored; },
+        set(v: string) {
+            written.push(v as string);
+            const kv = (v as string).split(";")[0]!.trim();
+            stored = stored ? `${stored}; ${kv}` : kv;
+        },
+        configurable: true,
+        enumerable: true,
+    });
+
+    // Level 1: HTMLDocument.prototype — no "cookie" own property (like Chrome).
+    const HTMLDocumentProto = Object.create(DocumentProto);
+
+    // Level 0: document instance — no "cookie" own property (like Chrome).
+    const doc = Object.create(HTMLDocumentProto) as Document;
+
+    const win = { document: doc } as unknown as Window;
+    return { win, getWritten: () => written };
+}
+
+describe("patchDocumentCookie — Chrome prototype chain", () => {
+    it("finds cookie descriptor two levels up and patches the instance", () => {
+        const { win, getWritten } = makeFakeWindowChrome(
+            "__crn__casio_com__ak_bmsc=abc; __crn__stackoverflow_com__prov=xyz"
+        );
+        patchDocumentCookie(win, () => "www.casio.com");
+        // Getter must filter and strip prefix.
+        expect(win.document.cookie).toBe("ak_bmsc=abc");
+        // Setter must add prefix.
+        win.document.cookie = "bm_sv=newval; Path=/";
+        expect(getWritten()[0]).toBe("__crn__casio_com__bm_sv=newval; Path=/");
+    });
+
+    it("does not leave the patch unapplied when cookie is on a distant prototype", () => {
+        const { win } = makeFakeWindowChrome(
+            "__crn__iaac_space__preferred_language=en; other=x"
+        );
+        patchDocumentCookie(win, () => "iaac.space");
+        // If the patch were skipped (old bug), this would return the raw string.
+        expect(win.document.cookie).toBe("preferred_language=en");
+    });
+});
+
 describe("patchDocumentCookie — setter", () => {
     it("prefixes the cookie name on write", () => {
         const { win, getWritten } = makeFakeWindow();

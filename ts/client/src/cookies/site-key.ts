@@ -7,7 +7,7 @@
 import { getDomain } from "tldts";
 
 export function cookieSiteKey(host: string): string {
-    const bare = host.split(":")[0].toLowerCase();
+    const bare = (host.split(":")[0] ?? host).toLowerCase();
     const etld1 = getDomain(bare) ?? bare;
     return etld1.replace(/\./g, "_");
 }

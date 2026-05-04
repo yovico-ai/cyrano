@@ -20,10 +20,17 @@ export function patchDocumentCookie(
 ): void {
     const doc = targetWindow.document;
 
-    // Walk the prototype chain to find where "cookie" is actually defined.
-    const descriptor =
-        Object.getOwnPropertyDescriptor(Object.getPrototypeOf(doc), "cookie") ??
-        Object.getOwnPropertyDescriptor(doc, "cookie");
+    // Walk the full prototype chain to find where "cookie" is defined.
+    // In Chrome, document.cookie lives on Document.prototype, not on
+    // HTMLDocument.prototype (the immediate prototype of the document instance),
+    // so a single getOwnPropertyDescriptor(Object.getPrototypeOf(doc)) misses it.
+    let descriptor: PropertyDescriptor | undefined;
+    let proto: object | null = doc;
+    while (proto) {
+        const d = Object.getOwnPropertyDescriptor(proto, "cookie");
+        if (d?.get && d.set) { descriptor = d; break; }
+        proto = Object.getPrototypeOf(proto);
+    }
 
     if (!descriptor?.get || !descriptor.set) return;
 

@@ -44,6 +44,12 @@ const NAV_TIMEOUT_MS = 15_000;
 
 /** First-result URL across the engine chain, or null if nothing usable. */
 export async function firstHit(page: Page, query: string): Promise<string | null> {
+    // Clear accumulated session cookies so search engines don't rate-limit or
+    // captcha the persistent tab after many searches. Also resets direct/proxy
+    // tab state so each run starts fresh (desirable — prior-run cookies would
+    // skew the comparison if the same site happened to be visited twice).
+    await page.context().clearCookies();
+
     for (const engine of ENGINES) {
         const hit = await tryEngine(page, engine, query);
         if (hit) return hit;
