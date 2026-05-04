@@ -60,6 +60,18 @@ export function patchDynamicIframeAppend(
         const iframe = node as HTMLIFrameElement;
         if (injected.has(iframe)) return;
         injected.add(iframe);
+
+        // If the iframe already has a proxied src, the server will inject the
+        // bootstrap when that page loads. Injecting now would stamp PATCHED_FLAG
+        // onto the about:blank window; since same-origin navigations reuse the
+        // window object, the bootstrap's installPatches call would be a no-op,
+        // leaving DOM patches (fetch, XHR, URL attrs, document.cookie) wired to
+        // this window's parent-page closure instead of the iframe's own.
+        // Only inject immediately for about:blank / no-src frames (e.g. the
+        // Cloudflare beacon pattern that accesses contentDocument synchronously).
+        const src = iframe.src;
+        if (src && src.indexOf("/cyrano/") !== -1) return;
+
         injectIntoIframe(iframe, targetWindow, config, getBaseHref());
     }
 
