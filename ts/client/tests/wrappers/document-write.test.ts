@@ -9,11 +9,17 @@ const tag = (url: string): string =>
 
 const DOCUMENT_NODE = 9;
 
-function fakeDocument(): { write: ReturnType<typeof vi.fn>; writeln: ReturnType<typeof vi.fn>; nodeType: number } {
+function fakeDocument(opts: { hasRewriter?: boolean } = {}): {
+    write: ReturnType<typeof vi.fn>;
+    writeln: ReturnType<typeof vi.fn>;
+    nodeType: number;
+    defaultView: { $rewriter?: object } | null;
+} {
     return {
         write: vi.fn(),
         writeln: vi.fn(),
         nodeType: DOCUMENT_NODE,
+        defaultView: opts.hasRewriter ? { $rewriter: {} } : {},
     };
 }
 
@@ -94,5 +100,55 @@ describe("wrapDocumentWrite — non-Document target (must NOT rewrite as HTML)",
     it("does nothing when obj is null/undefined (won't crash)", () => {
         const wrapper = wrapDocumentWrite({ obj: null }, tag);
         expect(() => wrapper.write("anything")).not.toThrow();
+    });
+});
+
+describe("wrapDocumentWrite — head bootstrap injection", () => {
+    const BOOTSTRAP = "<!--BOOTSTRAP-->";
+    const getBootstrapHtml = () => BOOTSTRAP;
+
+    it("injects bootstrap after <head> when window has no $rewriter", () => {
+        const doc = fakeDocument();
+        const wrapper = wrapDocumentWrite({ obj: doc }, tag, getBootstrapHtml);
+        wrapper.write("<html><head><title>Ad</title></head><body></body></html>");
+
+        const written = doc.write.mock.calls[0]?.[0] as string;
+        expect(written).toContain(`<head>${BOOTSTRAP}`);
+    });
+
+    it("injects bootstrap after <head> written via writeln", () => {
+        const doc = fakeDocument();
+        const wrapper = wrapDocumentWrite({ obj: doc }, tag, getBootstrapHtml);
+        wrapper.writeln("<html><head></head><body>content</body></html>");
+
+        const written = doc.writeln.mock.calls[0]?.[0] as string;
+        expect(written).toContain(`<head>${BOOTSTRAP}`);
+    });
+
+    it("does not inject when window already has $rewriter", () => {
+        const doc = fakeDocument({ hasRewriter: true });
+        const wrapper = wrapDocumentWrite({ obj: doc }, tag, getBootstrapHtml);
+        wrapper.write("<html><head></head><body></body></html>");
+
+        const written = doc.write.mock.calls[0]?.[0] as string;
+        expect(written).not.toContain(BOOTSTRAP);
+    });
+
+    it("does not inject when HTML has no <head>", () => {
+        const doc = fakeDocument();
+        const wrapper = wrapDocumentWrite({ obj: doc }, tag, getBootstrapHtml);
+        wrapper.write("<div><p>fragment</p></div>");
+
+        const written = doc.write.mock.calls[0]?.[0] as string;
+        expect(written).not.toContain(BOOTSTRAP);
+    });
+
+    it("does not inject when getBootstrapHtml is null", () => {
+        const doc = fakeDocument();
+        const wrapper = wrapDocumentWrite({ obj: doc }, tag, null);
+        wrapper.write("<html><head></head><body></body></html>");
+
+        const written = doc.write.mock.calls[0]?.[0] as string;
+        expect(written).not.toContain(BOOTSTRAP);
     });
 });

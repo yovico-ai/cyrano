@@ -66,6 +66,21 @@ export function createRewriterApi(
     const rewriteOne = (rawUrl: string): string =>
         rewriteUrl(rawUrl, baseUrlState.get(), config);
 
+    // Mirrors the server's inject.go bootstrapScript() for HTML written via
+    // document.write at runtime — injects <script src=...> + init call into
+    // any <head> element so inline scripts that reference $rewriter can run.
+    const buildBootstrapHtml = (): string => {
+        const src = config.apiBaseURL + config.source;
+        const configJson = htmlSafeJson(config);
+        const locationLit = jsStringLiteral(baseUrlState.get().href);
+        return (
+            `<script src="${src}"></script>` +
+            `<script>window.$rewriter=window.$rewriter_init(window,${configJson}).inject();` +
+            `$rewriter.set_location(${locationLit});` +
+            `document.currentScript.remove();</script>`
+        );
+    };
+
     return {
         config,
 
@@ -120,7 +135,7 @@ export function createRewriterApi(
         get_top_level_window: getTopLevelWindow,
 
         // ── Document.write / postMessage / eval / member expression ────────
-        wrap_document_write: (arg) => wrapDocumentWrite(arg, rewriteOne),
+        wrap_document_write: (arg) => wrapDocumentWrite(arg, rewriteOne, buildBootstrapHtml),
         wrap_postMessage: (arg) => wrapPostMessage(arg, initialBaseUrl.origin),
         wrap_member_expression: wrapMemberExpression,
         wrap_eval: wrapEval,
@@ -159,4 +174,32 @@ export function createRewriterApi(
             injectIntoIframe(iframe, targetWindow, config, baseUrlState.get().href);
         },
     };
+}
+
+// Produce a double-quoted JS string literal safe to embed inside a <script>
+// block. Escapes \, ", control characters, and < (prevents </script> breakout).
+function jsStringLiteral(s: string): string {
+    let out = '"';
+    for (let i = 0; i < s.length; i++) {
+        const code = s.charCodeAt(i);
+        const c = s[i]!;
+        if (c === "\\") { out += "\\\\"; }
+        else if (c === '"') { out += '\\"'; }
+        else if (c === "\n") { out += "\\n"; }
+        else if (c === "\r") { out += "\\r"; }
+        else if (c === "\t") { out += "\\t"; }
+        else if (c === "<") { out += "\\x3c"; } // prevent </script> breakout
+        else if (code < 0x20) { out += "\\u00" + code.toString(16).padStart(2, "0"); }
+        else { out += c; }
+    }
+    return out + '"';
+}
+
+// JSON.stringify with HTML-safe escaping — mirrors Go's json.Marshal which
+// escapes <, >, & by default so the JSON is safe inside a <script> block.
+function htmlSafeJson(obj: unknown): string {
+    return JSON.stringify(obj)
+        .replace(/</g, "\\u003c")
+        .replace(/>/g, "\\u003e")
+        .replace(/&/g, "\\u0026");
 }

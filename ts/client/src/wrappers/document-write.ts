@@ -30,19 +30,41 @@ interface WriteCapable {
     write?: (...args: unknown[]) => unknown;
     writeln?: (...args: unknown[]) => unknown;
     nodeType?: number;
+    defaultView?: { $rewriter?: unknown } | null;
 }
 
 const DOCUMENT_NODE = 9;
 
-function isDocumentLike(obj: unknown): obj is Document {
+function isDocumentLike(obj: unknown): obj is WriteCapable {
     return obj !== null
         && typeof obj === "object"
         && (obj as { nodeType?: number }).nodeType === DOCUMENT_NODE;
 }
 
+// Injects the bootstrap after <head> when the content opens a new document
+// (i.e. contains a <head> element) and the target window doesn't already
+// have $rewriter installed. This mirrors what the server's inject.go does for
+// static HTML, applied here to HTML written via document.write at runtime.
+function maybeInjectBootstrap(
+    target: WriteCapable,
+    originalHtml: string,
+    rewrittenHtml: string,
+    getBootstrapHtml: () => string,
+): string {
+    if (!/<head[\s>]/i.test(originalHtml)) return rewrittenHtml;
+
+    // Skip if the target document's window already has $rewriter installed.
+    const win = target.defaultView;
+    if (!win || win.$rewriter) return rewrittenHtml;
+
+    // Inject right after the <head> opening tag (including any attributes).
+    return rewrittenHtml.replace(/(<head(?:\s[^>]*)?>)/i, (match) => match + getBootstrapHtml());
+}
+
 export function wrapDocumentWrite(
     arg: { obj: unknown },
     rewriteOne: (url: string) => string,
+    getBootstrapHtml: (() => string) | null = null,
 ): DocumentWriteWrapper {
     const target = arg.obj as WriteCapable | null;
 
@@ -51,7 +73,11 @@ export function wrapDocumentWrite(
             if (!target || typeof target.write !== "function") return undefined;
             if (isDocumentLike(target) && allStrings(args)) {
                 const joined = (args as string[]).join("");
-                return target.write(rewriteHtmlString(joined, rewriteOne));
+                let rewritten = rewriteHtmlString(joined, rewriteOne);
+                if (getBootstrapHtml) {
+                    rewritten = maybeInjectBootstrap(target, joined, rewritten, getBootstrapHtml);
+                }
+                return target.write(rewritten);
             }
             // Not a document, or not all-string args — forward verbatim.
             return target.write(...args);
@@ -60,7 +86,11 @@ export function wrapDocumentWrite(
             if (!target || typeof target.writeln !== "function") return undefined;
             if (isDocumentLike(target) && allStrings(args)) {
                 const joined = (args as string[]).join("");
-                return target.writeln(rewriteHtmlString(joined, rewriteOne));
+                let rewritten = rewriteHtmlString(joined, rewriteOne);
+                if (getBootstrapHtml) {
+                    rewritten = maybeInjectBootstrap(target, joined, rewritten, getBootstrapHtml);
+                }
+                return target.writeln(rewritten);
             }
             return target.writeln(...args);
         },
