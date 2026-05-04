@@ -17,7 +17,11 @@
 interface UrlBearingElement {
     tagName: string;       // matches `Element.tagName` (always uppercase)
     ctorName: string;      // matches the constructor's name on globalThis
-    attrs: readonly string[]; // attribute names (lowercase, matches getAttribute lookup)
+    attrs: readonly string[]; // content attribute names (lowercase, matches getAttribute)
+    // Maps content attribute name → IDL property name when they differ (e.g.
+    // "formaction" → "formAction"). Only needed for prototype-setter patching;
+    // absent entries default to the content attribute name verbatim.
+    idlNames?: Readonly<Record<string, string>>;
 }
 
 export const URL_BEARING_ELEMENTS: ReadonlyArray<UrlBearingElement> = [
@@ -29,10 +33,13 @@ export const URL_BEARING_ELEMENTS: ReadonlyArray<UrlBearingElement> = [
     { tagName: "AUDIO",  ctorName: "HTMLAudioElement",  attrs: ["src"] },
     { tagName: "VIDEO",  ctorName: "HTMLVideoElement",  attrs: ["src", "poster"] },
     { tagName: "TRACK",  ctorName: "HTMLTrackElement",  attrs: ["src"] },
+    { tagName: "BASE",   ctorName: "HTMLBaseElement",   attrs: ["href"] },
     { tagName: "LINK",   ctorName: "HTMLLinkElement",   attrs: ["href"] },
     { tagName: "A",      ctorName: "HTMLAnchorElement", attrs: ["href"] },
     { tagName: "AREA",   ctorName: "HTMLAreaElement",   attrs: ["href"] },
     { tagName: "FORM",   ctorName: "HTMLFormElement",   attrs: ["action"] },
+    { tagName: "INPUT",  ctorName: "HTMLInputElement",  attrs: ["src", "formaction"], idlNames: { formaction: "formAction" } },
+    { tagName: "BUTTON", ctorName: "HTMLButtonElement", attrs: ["formaction"],        idlNames: { formaction: "formAction" } },
     { tagName: "OBJECT", ctorName: "HTMLObjectElement", attrs: ["data"] },
 ];
 

@@ -3,7 +3,7 @@
 // each test to keep cross-test isolation.
 
 import { afterEach, describe, expect, it } from "vitest";
-import { patchUrlAttributes } from "../../src/patches/url-attributes";
+import { patchUrlAttributes, patchAnchorUrlReflection } from "../../src/patches/url-attributes";
 
 // Tag-suffix rewriter survives URL canonicalization (the DOM resolves attribute
 // values through its URL parser, which lowercases scheme+host but preserves
@@ -40,6 +40,16 @@ function snapshotAll(): void {
     snapshotProperty(HTMLImageElement.prototype, "src");
     snapshotProperty(HTMLImageElement.prototype, "srcset");
     snapshotProperty(HTMLAnchorElement.prototype, "href");
+    snapshotProperty(HTMLAnchorElement.prototype, "host");
+    snapshotProperty(HTMLAnchorElement.prototype, "hostname");
+    snapshotProperty(HTMLAnchorElement.prototype, "port");
+    snapshotProperty(HTMLAnchorElement.prototype, "protocol");
+    snapshotProperty(HTMLAnchorElement.prototype, "pathname");
+    snapshotProperty(HTMLAnchorElement.prototype, "search");
+    snapshotProperty(HTMLAnchorElement.prototype, "hash");
+    snapshotProperty(HTMLAnchorElement.prototype, "origin");
+    snapshotProperty(HTMLAnchorElement.prototype, "username");
+    snapshotProperty(HTMLAnchorElement.prototype, "password");
     snapshotProperty(HTMLLinkElement.prototype, "href");
     snapshotProperty(HTMLScriptElement.prototype, "src");
     snapshotProperty(HTMLIFrameElement.prototype, "src");
@@ -166,5 +176,153 @@ describe("patchUrlAttributes getter unwrapping", () => {
         img.setAttribute("srcset", "http://example.com/a.jpg?proxified=1 1x");
         // srcset getter returns the stored value without unwrapping
         expect(img.srcset).toContain("proxified=1");
+    });
+});
+
+describe("patchAnchorUrlReflection", () => {
+    // This fix addresses a class of third-party script breakage: scripts that
+    // use the "anchor element as URL parser" idiom:
+    //
+    //   var a = document.createElement("a");
+    //   a.href = upstreamUrl;   // our href setter proxifies this
+    //   var host = a.host;      // BUG: returns proxy host, not upstream host
+    //
+    // OptinMonster (api.min.js) uses this exact pattern to detect whether it's
+    // running on its primary CDN or a CNAME domain. Getting the proxy host
+    // instead of the upstream CDN host causes it to set wrong base URLs for
+    // CSS and API endpoints, resulting in 502s and broken styles.
+
+    it("a.host returns upstream host after setter proxifies the href", () => {
+        snapshotAll();
+        // patchAnchorUrlReflection MUST be called before patchUrlAttributes
+        // so it captures the native href getter.
+        patchAnchorUrlReflection(untag, tag);
+        patchUrlAttributes(window, tag, untag);
+
+        const a = document.createElement("a");
+        a.href = "http://example.com/path?q=1";
+        // setter stored the tagged (proxified) URL; host/protocol/etc. must
+        // reflect the original URL, not the stored one.
+        expect(a.host).toBe("example.com");
+    });
+
+    it("a.protocol reflects upstream protocol", () => {
+        snapshotAll();
+        patchAnchorUrlReflection(untag, tag);
+        patchUrlAttributes(window, tag, untag);
+
+        const a = document.createElement("a");
+        a.href = "https://secure.example.com/page";
+        expect(a.protocol).toBe("https:");
+    });
+
+    it("a.hostname reflects upstream hostname (no port)", () => {
+        snapshotAll();
+        patchAnchorUrlReflection(untag, tag);
+        patchUrlAttributes(window, tag, untag);
+
+        const a = document.createElement("a");
+        a.href = "https://cdn.example.com:8443/asset.js";
+        expect(a.hostname).toBe("cdn.example.com");
+    });
+
+    it("a.port reflects upstream port", () => {
+        snapshotAll();
+        patchAnchorUrlReflection(untag, tag);
+        patchUrlAttributes(window, tag, untag);
+
+        const a = document.createElement("a");
+        a.href = "https://cdn.example.com:8443/asset.js";
+        expect(a.port).toBe("8443");
+    });
+
+    it("a.pathname reflects upstream pathname", () => {
+        snapshotAll();
+        patchAnchorUrlReflection(untag, tag);
+        patchUrlAttributes(window, tag, untag);
+
+        const a = document.createElement("a");
+        a.href = "https://cdn.example.com/app/js/bundle.js";
+        expect(a.pathname).toBe("/app/js/bundle.js");
+    });
+
+    it("non-proxified href: URL parts pass through unchanged", () => {
+        snapshotAll();
+        patchAnchorUrlReflection(untag, tag);
+        patchUrlAttributes(window, tag, untag);
+
+        const a = document.createElement("a");
+        // Set a URL that the rewriter would NOT proxify (already tagged or
+        // some other passthrough). Use setAttribute to bypass the setter.
+        a.setAttribute("href", "http://example.com/page");
+        // unwrapOne("http://example.com/page") === rawHref → fall through to native
+        expect(a.host).toBe("example.com");
+    });
+
+    it("a.hostname setter updates the upstream URL and re-proxifies", () => {
+        snapshotAll();
+        patchAnchorUrlReflection(untag, tag);
+        patchUrlAttributes(window, tag, untag);
+
+        const a = document.createElement("a");
+        a.href = "http://example.com/path?q=1";
+        // href setter proxified: stored as "http://example.com/path?q=1&proxified=1"
+        // hostname setter must: unwrap → mutate upstream → re-proxify
+        a.hostname = "other.com";
+        expect(a.hostname).toBe("other.com");
+        expect(a.getAttribute("href")).toContain("proxified=1");
+        expect(a.getAttribute("href")).toContain("other.com");
+    });
+
+    it("a.pathname setter updates the upstream URL and re-proxifies", () => {
+        snapshotAll();
+        patchAnchorUrlReflection(untag, tag);
+        patchUrlAttributes(window, tag, untag);
+
+        const a = document.createElement("a");
+        a.href = "http://example.com/old-path";
+        a.pathname = "/new-path";
+        expect(a.pathname).toBe("/new-path");
+        expect(a.getAttribute("href")).toContain("proxified=1");
+        expect(a.getAttribute("href")).toContain("/new-path");
+    });
+
+    it("a.hostname setter on non-proxified href delegates to native", () => {
+        snapshotAll();
+        patchAnchorUrlReflection(untag, tag);
+        patchUrlAttributes(window, tag, untag);
+
+        const a = document.createElement("a");
+        // setAttribute bypasses our href setter — stores the raw URL directly.
+        a.setAttribute("href", "http://example.com/page");
+        // hostname getter falls through (unwrapped === rawHref), so setting
+        // hostname delegates to the native setter which modifies the raw href.
+        a.hostname = "other.com";
+        expect(a.hostname).toBe("other.com");
+    });
+
+    it("wrapping an already-proxified URL is idempotent (setter)", () => {
+        snapshotAll();
+        patchAnchorUrlReflection(untag, tag);
+        patchUrlAttributes(window, tag, untag);
+
+        const a = document.createElement("a");
+        a.href = "http://example.com/page";
+        const stored1 = a.getAttribute("href");
+        // Set again — rewriteOne must not double-proxify.
+        a.href = "http://example.com/page";
+        expect(a.getAttribute("href")).toBe(stored1);
+    });
+
+    it("unwrapping a real (non-proxified) URL is a no-op (getter)", () => {
+        snapshotAll();
+        patchAnchorUrlReflection(untag, tag);
+        patchUrlAttributes(window, tag, untag);
+
+        const a = document.createElement("a");
+        // Use setAttribute to store a plain URL — no proxification.
+        a.setAttribute("href", "http://example.com/page");
+        // getter: unwrapOne("http://example.com/page") === rawHref → native getter
+        expect(a.href).toBe("http://example.com/page");
     });
 });

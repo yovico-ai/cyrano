@@ -27,7 +27,7 @@ describe("patchXmlHttpRequest", () => {
         proto.open = spy as typeof proto.open;
         restoreOriginalOpen = (): void => { proto.open = realOriginal; };
 
-        patchXmlHttpRequest(window, upper);
+        patchXmlHttpRequest(window, upper, (u) => u);
 
         const xhr = new XMLHttpRequest();
         xhr.open("GET", "http://example.com/foo");
@@ -47,7 +47,7 @@ describe("patchXmlHttpRequest", () => {
         proto.open = spy as typeof proto.open;
         restoreOriginalOpen = (): void => { proto.open = realOriginal; };
 
-        patchXmlHttpRequest(window, upper);
+        patchXmlHttpRequest(window, upper, (u) => u);
 
         const xhr = new XMLHttpRequest();
         xhr.open("POST", new URL("http://example.com/bar"));
@@ -64,7 +64,7 @@ describe("patchXmlHttpRequest", () => {
         proto.open = spy as typeof proto.open;
         restoreOriginalOpen = (): void => { proto.open = realOriginal; };
 
-        patchXmlHttpRequest(window, upper);
+        patchXmlHttpRequest(window, upper, (u) => u);
 
         const xhr = new XMLHttpRequest();
         xhr.open("GET", "http://example.com/x", true, "user", "pass");

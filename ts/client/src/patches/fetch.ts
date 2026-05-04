@@ -6,11 +6,16 @@
 //   - URL     → rewrite the href
 //   - Request → clone with the rewritten URL, preserving init overrides
 //
+// We also patch `Request.prototype.url` and `Response.prototype.url` so page
+// code that reads the URL back from a Request or Response sees the upstream
+// URL rather than the proxified one.
+//
 // All other fetch options pass through unchanged.
 
 export function patchFetch(
     targetWindow: Window,
     rewriteOne: (url: string) => string,
+    unwrapOne: (url: string) => string,
 ): void {
     const nativeFetch = targetWindow.fetch;
     if (!nativeFetch) return;
@@ -29,4 +34,20 @@ export function patchFetch(
         const rewrittenRequest = new Request(rewriteOne(input.url), input);
         return boundNativeFetch(rewrittenRequest, init);
     }) as typeof fetch;
+
+    for (const Ctor of [
+        typeof Request !== "undefined" ? Request : undefined,
+        typeof Response !== "undefined" ? Response : undefined,
+    ]) {
+        if (!Ctor?.prototype) continue;
+        const urlDesc = Object.getOwnPropertyDescriptor(Ctor.prototype, "url");
+        if (!urlDesc?.get) continue;
+        const nativeGet = urlDesc.get;
+        Object.defineProperty(Ctor.prototype, "url", {
+            ...urlDesc,
+            get(): string {
+                return unwrapOne(nativeGet.call(this) as string);
+            },
+        });
+    }
 }

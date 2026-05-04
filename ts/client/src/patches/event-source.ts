@@ -20,6 +20,7 @@ type EventSourceCtor = new (
 export function patchEventSource(
     _targetWindow: Window,
     rewriteOne: (url: string) => string,
+    unwrapOne: (url: string) => string,
 ): void {
     const NativeEventSource = getGlobal<EventSourceCtor & EventSourceConstants>("EventSource");
     if (!NativeEventSource) return;
@@ -41,4 +42,15 @@ export function patchEventSource(
     });
 
     setGlobal("EventSource", PatchedEventSource);
+
+    const urlDesc = Object.getOwnPropertyDescriptor(Native.prototype, "url");
+    if (urlDesc?.get) {
+        const nativeGet = urlDesc.get;
+        Object.defineProperty(Native.prototype, "url", {
+            ...urlDesc,
+            get(): string {
+                return unwrapOne(nativeGet.call(this) as string);
+            },
+        });
+    }
 }

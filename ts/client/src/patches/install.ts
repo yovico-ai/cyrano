@@ -17,7 +17,7 @@ import { patchXmlHttpRequest } from "./xhr";
 import { patchWebSocket } from "./websocket";
 import { patchEventSource } from "./event-source";
 import { patchWorker } from "./worker";
-import { patchUrlAttributes } from "./url-attributes";
+import { patchUrlAttributes, patchAnchorUrlReflection } from "./url-attributes";
 import { patchDynamicHtml } from "./dynamic-html";
 import { patchCssRules } from "./css-rules";
 import { patchCssStyleDeclaration } from "./css-style-declaration";
@@ -56,10 +56,14 @@ export function installPatches(
     const unwrapOne = (proxiedUrl: string): string =>
         unwrapProxiedUrl(proxiedUrl, config);
 
-    patchFetch(targetWindow, rewriteOne);
-    patchXmlHttpRequest(targetWindow, rewriteOne);
-    patchWebSocket(targetWindow, rewriteOne);
-    patchEventSource(targetWindow, rewriteOne);
+    // Anchor/area URL-part reflection must be patched before patchUrlAttributes
+    // wraps the href getter/setter — we need the native getter/setter to read
+    // and write raw proxified values on the DOM node.
+    patchAnchorUrlReflection(unwrapOne, rewriteOne);
+    patchFetch(targetWindow, rewriteOne, unwrapOne);
+    patchXmlHttpRequest(targetWindow, rewriteOne, unwrapOne);
+    patchWebSocket(targetWindow, rewriteOne, unwrapOne);
+    patchEventSource(targetWindow, rewriteOne, unwrapOne);
     patchWorker(targetWindow, rewriteOne);
     patchServiceWorker(targetWindow);
     // Dynamic-HTML patches must come BEFORE the per-class property-setter

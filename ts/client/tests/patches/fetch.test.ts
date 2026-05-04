@@ -23,7 +23,7 @@ function makeFakeWindowWithFetch(): {
 describe("patchFetch", () => {
     it("rewrites a string URL argument", async () => {
         const { win, base } = makeFakeWindowWithFetch();
-        patchFetch(win, upper);
+        patchFetch(win, upper, (u) => u);
 
         await win.fetch("http://example.com/foo");
         expect(base).toHaveBeenCalledWith("HTTP://EXAMPLE.COM/FOO", undefined);
@@ -31,7 +31,7 @@ describe("patchFetch", () => {
 
     it("rewrites a URL object input by its href", async () => {
         const { win, base } = makeFakeWindowWithFetch();
-        patchFetch(win, upper);
+        patchFetch(win, upper, (u) => u);
 
         await win.fetch(new URL("http://example.com/bar"));
         expect(base.mock.calls[0]?.[0]).toBe("HTTP://EXAMPLE.COM/BAR");
@@ -39,7 +39,7 @@ describe("patchFetch", () => {
 
     it("rewrites a Request input's URL while preserving init", async () => {
         const { win, base } = makeFakeWindowWithFetch();
-        patchFetch(win, tag);
+        patchFetch(win, tag, (u) => u);
 
         const req = new Request("http://example.com/baz", { method: "POST" });
         await win.fetch(req);
@@ -53,13 +53,13 @@ describe("patchFetch", () => {
     it("does nothing when the window has no fetch", () => {
         const win = {} as Window;
         // No throw.
-        expect(() => patchFetch(win, upper)).not.toThrow();
+        expect(() => patchFetch(win, upper, (u) => u)).not.toThrow();
         expect(win.fetch).toBeUndefined();
     });
 
     it("preserves the init argument when passed", async () => {
         const { win, base } = makeFakeWindowWithFetch();
-        patchFetch(win, upper);
+        patchFetch(win, upper, (u) => u);
 
         const init: RequestInit = { method: "PUT", headers: { "x-test": "1" } };
         await win.fetch("http://example.com/x", init);

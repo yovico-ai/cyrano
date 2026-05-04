@@ -23,6 +23,7 @@ type WebSocketCtor = new (
 export function patchWebSocket(
     _targetWindow: Window,
     rewriteOne: (url: string) => string,
+    unwrapOne: (url: string) => string,
 ): void {
     const NativeWebSocket = getGlobal<WebSocketCtor & WebSocketConstants>("WebSocket");
     if (!NativeWebSocket) return;
@@ -45,4 +46,15 @@ export function patchWebSocket(
     });
 
     setGlobal("WebSocket", PatchedWebSocket);
+
+    const urlDesc = Object.getOwnPropertyDescriptor(Native.prototype, "url");
+    if (urlDesc?.get) {
+        const nativeGet = urlDesc.get;
+        Object.defineProperty(Native.prototype, "url", {
+            ...urlDesc,
+            get(): string {
+                return unwrapOne(nativeGet.call(this) as string);
+            },
+        });
+    }
 }
