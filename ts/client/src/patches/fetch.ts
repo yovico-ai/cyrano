@@ -28,11 +28,13 @@ export function patchFetch(
         if (input instanceof URL) {
             return boundNativeFetch(rewriteOne(input.href), init);
         }
-        // Request object: build a new Request with the rewritten URL,
-        // copying body/method/headers/etc. from the original. `init`, when
-        // provided, takes precedence over the cloned values.
-        const rewrittenRequest = new Request(rewriteOne(input.url), input);
-        return boundNativeFetch(rewrittenRequest, init);
+        if (input instanceof Request) {
+            // Request object: clone with the rewritten URL, preserving all options.
+            const rewrittenRequest = new Request(rewriteOne(input.url), input);
+            return boundNativeFetch(rewrittenRequest, init);
+        }
+        // Trusted Types URL-like (TrustedURL) or any other toString()-able object.
+        return boundNativeFetch(rewriteOne(String(input)), init);
     }) as typeof fetch;
 
     for (const Ctor of [

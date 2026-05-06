@@ -31,7 +31,7 @@ export function patchEventSource(
         url: string | URL,
         init?: EventSourceInit,
     ): EventSource {
-        const rawUrl = typeof url === "string" ? url : url.href;
+        const rawUrl = typeof url === "string" ? url : String(url);
         return new Native(rewriteOne(rawUrl), init);
     }
     PatchedEventSource.prototype = Native.prototype;

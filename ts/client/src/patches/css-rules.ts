@@ -13,12 +13,14 @@
 //     separate gap; not as common in real-world dynamic CSS as insertRule.
 //
 // Implementation note — finding the prototype that actually owns insertRule:
-//   In real browsers it's at globalThis.CSSStyleSheet.prototype as expected.
-//   In some test environments (happy-dom, jsdom variants) the global class
-//   is just a marker and the real insertRule lives on a private internal
-//   prototype that the instances delegate to. We walk the prototype chain
-//   of a freshly-created stylesheet to find whichever object actually owns
-//   the method, so the patch lands in both kinds of environment.
+//   We use `new CSSStyleSheet()` (constructable stylesheets, Chrome 73+) to
+//   get a real instance without DOM injection, then walk its prototype chain.
+//   This avoids both the CSP `style-src` violations from injecting a <style>
+//   element on strict pages, and the happy-dom/jsdom pitfall where
+//   CSSStyleSheet.prototype.insertRule exists as a class-level stub but the
+//   instances actually delegate to a private internal prototype.
+//   Falls back to <style> injection in environments that predate constructable
+//   stylesheets.
 //
 // Recursion safety: insertRule's argument is a CSS source string that we run
 // through rewriteCssText. The rewriter is pure (no DOM callbacks) so there
@@ -42,44 +44,90 @@ export function patchCssRules(
 
 /**
  * Finds the prototype object that owns `insertRule` for top-level stylesheets.
- * Returns null if a stylesheet can't be created (very headless environments).
+ *
+ * Uses a constructable stylesheet (new CSSStyleSheet()) to obtain a real
+ * instance without injecting a <style> element into the DOM — avoiding both
+ * the CSP `style-src` violations triggered by DOM injection on strict pages
+ * and the happy-dom/jsdom pitfall where CSSStyleSheet.prototype.insertRule
+ * exists at the class level but instances actually delegate to a private
+ * internal prototype. Walking the instance's own chain finds whichever
+ * prototype really owns the method.
+ *
+ * Falls back to <style> injection only in environments that predate
+ * constructable stylesheets (old browsers, minimal test stubs).
  */
 function findInsertRulePrototype(_kind: "style"): object | null {
-    let host: HTMLStyleElement | null = null;
+    // First choice: constructable stylesheet — no DOM mutation, correct chain.
     try {
-        host = document.createElement("style");
+        if (typeof CSSStyleSheet !== "undefined") {
+            const sheet = new CSSStyleSheet();
+            const proto = findPrototypeWith(sheet, "insertRule");
+            if (proto) return proto;
+        }
+    } catch {
+        // Constructable stylesheets not supported in this environment.
+    }
+    // Fallback: inject a temporary <style> element to get a real instance.
+    try {
+        const host = document.createElement("style");
         document.head.appendChild(host);
-        const sheet = host.sheet;
-        if (!sheet) return null;
-        return findPrototypeWith(sheet, "insertRule");
+        try {
+            const sheet = host.sheet;
+            if (!sheet) return null;
+            return findPrototypeWith(sheet, "insertRule");
+        } finally {
+            host.remove();
+        }
     } catch {
         return null;
-    } finally {
-        host?.remove();
     }
 }
 
 /**
  * Finds the prototype object that owns `insertRule` for grouping rules
- * (CSSGroupingRule — @media, @supports, etc.). We need a real grouping rule
- * to walk its proto chain, so we briefly insert one.
+ * (CSSGroupingRule — @media, @supports, etc.).
+ *
+ * Same constructable-first strategy: avoids DOM injection when possible.
+ * Grouping rules aren't constructable directly, so we obtain one by inserting
+ * an @media rule into a constructable stylesheet (or, if that's unavailable,
+ * into a temporarily injected <style> element).
  */
 function findGroupingRuleInsertRulePrototype(): object | null {
-    let host: HTMLStyleElement | null = null;
+    // Helper: given a CSSStyleSheet instance, extract an @media rule's proto.
+    function probeGroupingProto(sheet: CSSStyleSheet): object | null {
+        try {
+            const idx = sheet.insertRule("@media (min-width: 0px) {}", 0);
+            const rule = sheet.cssRules[idx];
+            if (!rule) return null;
+            return findPrototypeWith(rule, "insertRule");
+        } catch {
+            return null;
+        }
+    }
+
+    // First choice: constructable stylesheet.
     try {
-        host = document.createElement("style");
+        if (typeof CSSStyleSheet !== "undefined") {
+            const sheet = new CSSStyleSheet();
+            const proto = probeGroupingProto(sheet);
+            if (proto) return proto;
+        }
+    } catch {
+        // Constructable stylesheets not supported.
+    }
+    // Fallback: temporary <style> element.
+    try {
+        const host = document.createElement("style");
         document.head.appendChild(host);
-        const sheet = host.sheet;
-        if (!sheet) return null;
-        // Inserting an @media rule gives us a CSSMediaRule (a CSSGroupingRule).
-        const idx = sheet.insertRule("@media (min-width: 0px) {}", 0);
-        const rule = sheet.cssRules[idx];
-        if (!rule) return null;
-        return findPrototypeWith(rule, "insertRule");
+        try {
+            const sheet = host.sheet;
+            if (!sheet) return null;
+            return probeGroupingProto(sheet);
+        } finally {
+            host.remove();
+        }
     } catch {
         return null;
-    } finally {
-        host?.remove();
     }
 }
 

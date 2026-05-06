@@ -21,8 +21,19 @@ const config = {
     rewrite_css_selectors: false,
 };
 
+const UPSTREAM = "https://pagead2.googlesyndication.com/bg/script.js";
+const PROXIED  = `${PROXY_ORIGIN}/cyrano/https/pagead2.googlesyndication.com/bg/script.js`;
+
+function rewriteOne(url: string): string {
+    if (url.startsWith("https://") || url.startsWith("http://")) {
+        const u = new URL(url);
+        return `${PROXY_ORIGIN}/cyrano/${u.protocol.replace(":", "")}/${u.host}${u.pathname}`;
+    }
+    return url;
+}
+
 function install(): void {
-    patchDynamicIframeAppend(window, config, () => BASE_HREF);
+    patchDynamicIframeAppend(window, config, () => BASE_HREF, rewriteOne);
 }
 
 afterEach(() => {
@@ -123,6 +134,54 @@ describe("patchDynamicIframeAppend — insertBefore", () => {
         const iframe = document.createElement("iframe");
         const result = document.body.insertBefore(iframe, null);
         expect(result).toBe(iframe);
+    });
+});
+
+// ── URL rewriting before insert ─────────────────────────────────────────────
+//
+// Elements created in un-bootstrapped realms have upstream URLs in their src/
+// href. The patch must rewrite these BEFORE calling origAppendChild so the
+// browser fetches the proxied URL, not the upstream URL.
+
+describe("patchDynamicIframeAppend — URL rewriting before insert", () => {
+    it("rewrites upstream script.src before appendChild", () => {
+        install();
+        const script = document.createElement("script");
+        script.setAttribute("src", UPSTREAM);
+        document.head.appendChild(script);
+        expect(script.getAttribute("src")).toBe(PROXIED);
+    });
+
+    it("rewrites upstream script.src before insertBefore", () => {
+        install();
+        const script = document.createElement("script");
+        script.setAttribute("src", UPSTREAM);
+        document.head.insertBefore(script, null);
+        expect(script.getAttribute("src")).toBe(PROXIED);
+    });
+
+    it("leaves already-proxied script.src unchanged", () => {
+        install();
+        const script = document.createElement("script");
+        script.setAttribute("src", PROXIED);
+        document.head.appendChild(script);
+        expect(script.getAttribute("src")).toBe(PROXIED);
+    });
+
+    it("leaves relative script.src unchanged (not an absolute upstream URL)", () => {
+        install();
+        const script = document.createElement("script");
+        script.setAttribute("src", "/static/bundle.js");
+        document.head.appendChild(script);
+        expect(script.getAttribute("src")).toBe("/static/bundle.js");
+    });
+
+    it("rewrites upstream iframe.src before appendChild", () => {
+        install();
+        const iframe = document.createElement("iframe");
+        iframe.setAttribute("src", "https://embed.example.com/widget");
+        document.body.appendChild(iframe);
+        expect(iframe.getAttribute("src")).toMatch(/\/cyrano\//);
     });
 });
 

@@ -31,7 +31,7 @@ function patchPlainWorker(rewriteOne: (url: string) => string): void {
         url: string | URL,
         options?: WorkerOptions,
     ): Worker {
-        const rawUrl = typeof url === "string" ? url : url.href;
+        const rawUrl = typeof url === "string" ? url : String(url);
         return new Native(rewriteOne(rawUrl), options);
     }
     PatchedWorker.prototype = Native.prototype;
@@ -49,7 +49,7 @@ function patchSharedWorker(rewriteOne: (url: string) => string): void {
         url: string | URL,
         options?: string | WorkerOptions,
     ): SharedWorker {
-        const rawUrl = typeof url === "string" ? url : url.href;
+        const rawUrl = typeof url === "string" ? url : String(url);
         return new Native(rewriteOne(rawUrl), options);
     }
     PatchedSharedWorker.prototype = Native.prototype;

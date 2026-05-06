@@ -1,7 +1,14 @@
-// Patches Node.prototype.appendChild and Node.prototype.insertBefore to inject
-// the rewriter runtime into about:blank (and other same-origin) iframes the
-// moment they are connected to the DOM — synchronously, before the caller gets
-// control back.
+// Patches Node.prototype.appendChild and Node.prototype.insertBefore to:
+//
+//   1. Rewrite URL-bearing attributes on elements being inserted — script.src,
+//      link.href, iframe.src — BEFORE the append so the browser fetches the
+//      proxied URL, not the upstream URL.  This catches elements created in
+//      un-bootstrapped realms (cross-realm elements) whose src/href was set
+//      without going through our prototype patches.
+//
+//   2. Inject the rewriter runtime into about:blank (and other same-origin)
+//      iframes the moment they are connected to the DOM — synchronously, before
+//      the caller gets control back.
 //
 // The server-side HTML rewriter covers <iframe> elements in static HTML by
 // adding an onload="$rewriter.append_rewrite_script_into_iframe(this)" handler.
@@ -28,10 +35,20 @@ const savedByWindow = new WeakMap<Window, SavedOriginals>();
 // though browsers (and happy-dom) expose them there.
 type WindowGlobals = Record<string, { prototype: Record<string, unknown> } | undefined>;
 
+// URL-bearing attributes for each tag that we rewrite in appendChild/insertBefore.
+// Keyed by nodeName (upper-case).
+const URL_ATTRS_BY_TAG: Record<string, string> = {
+    SCRIPT: "src",
+    IFRAME: "src",
+    LINK:   "href",
+    IMG:    "src",
+};
+
 export function patchDynamicIframeAppend(
     targetWindow: Window,
     config: ClientConfig,
     getBaseHref: () => string,
+    rewriteOne: (url: string) => string,
 ): void {
     if (savedByWindow.has(targetWindow)) return;
 
@@ -44,6 +61,15 @@ export function patchDynamicIframeAppend(
 
     // Capture in a const so the closure below sees the narrowed (non-optional) type.
     const IFrameCtor: new () => HTMLIFrameElement = TargetHTMLIFrameElement;
+
+    // Capture native getAttribute/setAttribute from the target window so we
+    // can read/write element attributes without going through our own patches
+    // (which would double-rewrite).
+    const nativeGetAttr = (globals["Element"]?.prototype as { getAttribute?: (n: string) => string | null } | undefined)
+        ?.getAttribute ?? Element.prototype.getAttribute;
+    const nativeSetAttr = (globals["Element"]?.prototype as { setAttribute?: (n: string, v: string) => void } | undefined)
+        ?.setAttribute ?? Element.prototype.setAttribute;
+
     const proto = TargetNode.prototype;
     const origAppendChild = proto["appendChild"] as typeof Node.prototype.appendChild;
     const origInsertBefore = proto["insertBefore"] as typeof Node.prototype.insertBefore;
@@ -55,7 +81,30 @@ export function patchDynamicIframeAppend(
     // iframe instance without this.
     const injected = new WeakSet<HTMLIFrameElement>();
 
-    function maybeInject(node: Node): void {
+    // Rewrite URL-bearing attributes on node BEFORE it is inserted into the DOM,
+    // so the browser fetches the proxied URL immediately on append.
+    function rewriteUrlBeforeInsert(node: Node): void {
+        const tag = (node as Element).nodeName;
+        const attrName = URL_ATTRS_BY_TAG[tag];
+        if (!attrName) return;
+        try {
+            const raw = nativeGetAttr.call(node as Element, attrName);
+            if (!raw) return;
+            // Already proxied — nothing to do.
+            if (raw.indexOf("/cyrano/") !== -1) return;
+            // Only rewrite absolute URLs with a scheme we know the proxy handles.
+            if (!raw.startsWith("http://") && !raw.startsWith("https://")) return;
+            const rewritten = rewriteOne(raw);
+            if (rewritten !== raw) {
+                nativeSetAttr.call(node as Element, attrName, rewritten);
+            }
+        } catch {
+            // Cross-realm DOM exceptions — skip; the element will load from its
+            // original URL and be flagged by the MutationObserver as a miss.
+        }
+    }
+
+    function maybeInjectIframe(node: Node): void {
         if (!(node instanceof IFrameCtor)) return;
         const iframe = node as HTMLIFrameElement;
         if (injected.has(iframe)) return;
@@ -79,8 +128,9 @@ export function patchDynamicIframeAppend(
         this: Node,
         node: T,
     ): T {
+        rewriteUrlBeforeInsert(node);
         const result = origAppendChild.call(this, node) as T;
-        maybeInject(node);
+        maybeInjectIframe(node);
         return result;
     };
 
@@ -89,8 +139,9 @@ export function patchDynamicIframeAppend(
         node: T,
         refNode: Node | null,
     ): T {
+        rewriteUrlBeforeInsert(node);
         const result = origInsertBefore.call(this, node, refNode) as T;
-        maybeInject(node);
+        maybeInjectIframe(node);
         return result;
     };
 }

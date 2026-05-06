@@ -23,7 +23,7 @@ export function patchXmlHttpRequest(
         url: string | URL,
         ...rest: unknown[]
     ): void {
-        const rawUrl = typeof url === "string" ? url : url.href;
+        const rawUrl = typeof url === "string" ? url : String(url);
         const proxified = rewriteOne(rawUrl);
         return (originalOpen as (...args: unknown[]) => void).call(
             this,

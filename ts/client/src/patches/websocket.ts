@@ -34,7 +34,7 @@ export function patchWebSocket(
         url: string | URL,
         protocols?: string | string[],
     ): WebSocket {
-        const rawUrl = typeof url === "string" ? url : url.href;
+        const rawUrl = typeof url === "string" ? url : String(url);
         return new Native(rewriteOne(rawUrl), protocols);
     }
     PatchedWebSocket.prototype = Native.prototype;

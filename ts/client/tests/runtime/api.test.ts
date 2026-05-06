@@ -55,10 +55,16 @@ describe("createRewriterApi — wrap_* surface", () => {
         expect(wrapped.location).toBe(api.wrap_get_location(window.location));
     });
 
-    it("wrap_location({obj: other}) passes through the underlying property", () => {
+    it("wrap_location({obj: other}) wraps the location to proxify URL assignments", () => {
         const api = createRewriterApi(window, config);
-        const fakeOther = { location: { href: "x" } };
-        expect(api.wrap_location({ obj: fakeOther }).location).toBe(fakeOther.location);
+        api.set_base_url("https://example.com/page");
+        const realLoc = { href: "http://localhost:9081/cyrano/https/example.com/page", assign: (_u: string) => {}, replace: (_u: string) => {}, reload: () => {} } as unknown as Location;
+        const fakeOther = { location: realLoc };
+        const wrapped = api.wrap_location({ obj: fakeOther }).location as { href: string };
+        // Must not be the raw real location object
+        expect(wrapped).not.toBe(fakeOther.location);
+        // Reads pass through
+        expect(wrapped.href).toBe(realLoc.href);
     });
 
     it("wrap_top_window / wrap_parent_window forward properties", () => {

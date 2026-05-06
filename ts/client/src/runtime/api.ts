@@ -27,11 +27,42 @@ import {
     wrapEvalArg,
     wrapEvalMemexp,
 } from "../wrappers/eval";
-import { wrapMemberExpression } from "../wrappers/member-expression";
 import { injectIntoIframe } from "./iframe-injection";
 
 function hasOwnLikeProperty(obj: unknown, key: string): boolean {
     return obj !== null && obj !== undefined && key in (obj as object);
+}
+
+// Returns a Location-shaped object that forwards reads to `realLoc` but
+// proxifies URL-bearing writes so cross-frame navigations go through the proxy.
+// Used for non-targetWindow location accesses (e.g. childIframe.contentWindow.location.href = url).
+function wrapForeignLoc(
+    realLoc: Location,
+    rewriteOne: (url: string) => string,
+): object {
+    return {
+        get href() { return realLoc.href; },
+        set href(v: string) { realLoc.href = rewriteOne(v); },
+        get origin() { return realLoc.origin; },
+        get protocol() { return realLoc.protocol; },
+        set protocol(v: string) { realLoc.protocol = v; },
+        get host() { return realLoc.host; },
+        set host(v: string) { realLoc.host = v; },
+        get hostname() { return realLoc.hostname; },
+        set hostname(v: string) { realLoc.hostname = v; },
+        get port() { return realLoc.port; },
+        set port(v: string) { realLoc.port = v; },
+        get pathname() { return realLoc.pathname; },
+        set pathname(v: string) { realLoc.pathname = v; },
+        get search() { return realLoc.search; },
+        set search(v: string) { realLoc.search = v; },
+        get hash() { return realLoc.hash; },
+        set hash(v: string) { realLoc.hash = v; },
+        assign(url: string) { realLoc.assign(rewriteOne(url)); },
+        replace(url: string) { realLoc.replace(rewriteOne(url)); },
+        reload() { realLoc.reload(); },
+        toString() { return realLoc.href; },
+    };
 }
 
 export function createRewriterApi(
@@ -114,18 +145,17 @@ export function createRewriterApi(
             },
         }),
         wrap_location: (arg) => {
-            // Server rewrites `obj.location` →
-            //   `$rewriter.wrap_location({obj}).location`
-            // When `obj` is the local window, return the WrappedLocation;
-            // otherwise pass through best-effort.
             if (arg.obj === targetWindow) {
                 return { location: wrappedLocation };
             }
-            return {
-                location: hasOwnLikeProperty(arg.obj, "location")
-                    ? (arg.obj as { location: unknown }).location
-                    : undefined,
-            };
+            if (!hasOwnLikeProperty(arg.obj, "location")) {
+                return { location: undefined };
+            }
+            const loc = (arg.obj as { location: unknown }).location;
+            if (!loc || typeof loc !== "object") {
+                return { location: loc };
+            }
+            return { location: wrapForeignLoc(loc as Location, rewriteOne) };
         },
 
         // ── Window tree ────────────────────────────────────────────────────
@@ -137,7 +167,34 @@ export function createRewriterApi(
         // ── Document.write / postMessage / eval / member expression ────────
         wrap_document_write: (arg) => wrapDocumentWrite(arg, rewriteOne, buildBootstrapHtml, initialBaseUrl.origin),
         wrap_postMessage: (arg) => wrapPostMessage(arg, initialBaseUrl.origin),
-        wrap_member_expression: wrapMemberExpression,
+        // Computed member access obj[expr] — mirror what the static-access
+        // wrappers return so that obj["location"], obj["write"], etc. go
+        // through the same interceptors as obj.location, obj.write, etc.
+        wrap_member_expression: (obj: unknown, prop: PropertyKey): unknown => {
+            switch (prop) {
+                case "location":
+                    if (obj === targetWindow) return { location: wrappedLocation };
+                    if (obj && typeof obj === "object" && "location" in obj) {
+                        const loc = (obj as { location: unknown }).location;
+                        if (loc && typeof loc === "object") {
+                            return { location: wrapForeignLoc(loc as Location, rewriteOne) };
+                        }
+                    }
+                    return obj;
+                case "top":
+                    return wrapTopWindow({ obj });
+                case "parent":
+                    return wrapParentWindow({ obj });
+                case "write":
+                case "writeln":
+                    return wrapDocumentWrite({ obj }, rewriteOne, buildBootstrapHtml, initialBaseUrl.origin);
+                case "postMessage":
+                    return wrapPostMessage({ obj }, initialBaseUrl.origin);
+                case "eval":
+                    return wrapEvalMemexp(obj);
+            }
+            return obj;
+        },
         wrap_eval: wrapEval,
         wrap_eval_arg: wrapEvalArg,
         wrap_eval_memexp: wrapEvalMemexp,
@@ -145,6 +202,17 @@ export function createRewriterApi(
         // loads go through URL containment like all other resource fetches.
         wrap_import_arg: (specifier) =>
             typeof specifier === "string" ? rewriteOne(specifier) : specifier,
+        // JS_WRAP_NEW_WORKER — proxify the url argument of `new Worker(url)` /
+        // `new SharedWorker(url)` at the source level so the Worker script is
+        // fetched through the proxy even when page code (e.g. reCAPTCHA)
+        // restores the native Worker constructor after our prototype patch.
+        wrap_worker_url: (url) => {
+            // reCAPTCHA passes a TrustedScriptURL object, not a plain string.
+            // String(TrustedScriptURL) returns the inner URL, which we can then proxify.
+            const urlStr = typeof url === "string" ? url : (url != null ? String(url) : null);
+            if (!urlStr) return url;
+            return rewriteOne(urlStr);
+        },
 
         // ── Cookie hooks ───────────────────────────────────────────────────
         // Both fire from server-injected onload= handlers on script/iframe/img
