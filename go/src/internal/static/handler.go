@@ -25,6 +25,9 @@ type Handler struct {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == h.RewriterJSPath:
+		// Never cache the JS bundle — it's rebuilt frequently and child frames
+		// must always load the current version, not a 304-stale copy.
+		w.Header().Set("Cache-Control", "no-store")
 		h.serveFile(w, r, "client/rewriter.js")
 	case h.IsWebProxy && (r.URL.Path == "/" || r.URL.Path == "/index.html"):
 		h.serveFile(w, r, "index.html")

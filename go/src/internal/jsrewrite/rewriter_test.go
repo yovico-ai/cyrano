@@ -164,6 +164,7 @@ func TestWrapPostMessage_ChainedReceiver(t *testing.T) {
 	}
 }
 
+
 // ── WRAP_EVAL / EVAL_ARG / EVAL_MEMEXP ──────────────────────────────────────
 
 func TestWrapEval_RvalueOnly(t *testing.T) {
@@ -209,6 +210,25 @@ func TestWrapMemberExpression(t *testing.T) {
 	got := rewrite(t, `var v = obj[key];`)
 	if !strings.Contains(got, `$rewriter.wrap_member_expression(obj`) {
 		t.Errorf("wrap_member_expression missing: %s", got)
+	}
+}
+
+func TestWrapMemberExpression_CommaIndex(t *testing.T) {
+	// obj[a, b] — comma operator inside index. The comma must become part of
+	// the assignment RHS, not a third function argument:
+	//   wrap_member_expression(obj, ($var = (a, b)))[$var]
+	// Without parenthesising (a,b), the printer emits
+	//   wrap_member_expression(obj, $var = a, b)
+	// which assigns a to $var and passes b as a third arg — accessing obj[a]
+	// instead of the correct obj[b].
+	got := rewrite(t, `var v = N[GI.prototype.h = z[0](3, xG), 11];`)
+	// The assignment must capture the full comma expression.
+	if !strings.Contains(got, `= (`) {
+		t.Errorf("comma index not parenthesised in assignment: %s", got)
+	}
+	// 11 must NOT appear as a third argument to wrap_member_expression.
+	if strings.Contains(got, `wrap_member_expression(N,`) && strings.Contains(got, `, 11)`) {
+		t.Errorf("11 leaked as third arg to wrap_member_expression: %s", got)
 	}
 }
 
@@ -302,18 +322,17 @@ func TestIdempotent(t *testing.T) {
 
 // ── $apMe declaration prepended when wrap_member_expression fires ─────────
 //
-// Regression: the wrap_member_expression template uses `$apMe = expr` to
-// capture the dynamic key for the bracket access. In strict-mode scripts,
-// assignment to an undeclared name throws ReferenceError. Slashdot's
-// cmp-slashdot.js (and any other "use strict" script using computed
-// property access) hit this in production. We fix by prepending
-// `var $__crn_tmp__;` to the output whenever wrap_member_expression fired.
+// Regression: the wrap_member_expression template uses `$__crn_tmp_N__ = expr`
+// to capture the dynamic key. Each call site gets a unique N so nested bracket
+// accesses cannot clobber each other's key. In strict-mode scripts, assignment
+// to an undeclared name throws ReferenceError; we fix by prepending var
+// declarations for all used names.
 
 func TestRewrite_PrependsCrnTmpDeclaration_WhenMemberExpressionUsed(t *testing.T) {
 	in := `var x = obj["dynamic" + key];`
 	got := rewrite(t, in)
-	if !strings.HasPrefix(got, "var $__crn_tmp__;\n") {
-		t.Errorf("expected `var $__crn_tmp__;` declaration prepended, got: %s", got)
+	if !strings.HasPrefix(got, "var $__crn_tmp_0__;\n") {
+		t.Errorf("expected `var $__crn_tmp_0__;` declaration prepended, got: %s", got)
 	}
 	if !strings.Contains(got, "$rewriter.wrap_member_expression") {
 		t.Errorf("wrap_member_expression should fire on bracket access: %s", got)
@@ -323,24 +342,29 @@ func TestRewrite_PrependsCrnTmpDeclaration_WhenMemberExpressionUsed(t *testing.T
 func TestRewrite_DoesNotPrependCrnTmp_WhenNoMemberExpression(t *testing.T) {
 	in := `var x = location;`
 	got := rewrite(t, in)
-	if strings.Contains(got, "$__crn_tmp__") {
-		t.Errorf("$__crn_tmp__ declaration should NOT appear when wrap_member_expression didn't fire: %s", got)
+	if strings.Contains(got, "$__crn_tmp_") {
+		t.Errorf("$__crn_tmp_N__ declaration should NOT appear when wrap_member_expression didn't fire: %s", got)
 	}
 }
 
-// $__crn_tmp__ survives strict-mode source: feeding the rewritten output back
-// as JS, with "use strict" at the top, the resulting program parses cleanly
-// (we can't EXECUTE it from a Go test, but parse success means the
-// declaration is in scope of every assignment).
+// Multiple member expressions get distinct variable names.
+func TestRewrite_CrnTmpDeclaration_UniquePerCallSite(t *testing.T) {
+	in := `var a = obj[x]; var b = obj[y];`
+	got := rewrite(t, in)
+	if !strings.Contains(got, "$__crn_tmp_0__") || !strings.Contains(got, "$__crn_tmp_1__") {
+		t.Errorf("expected distinct temp vars for two bracket accesses, got: %s", got)
+	}
+}
+
+// Unique temp vars survive strict-mode: feeding rewritten output back parses
+// cleanly (we can't execute from a Go test, but a clean re-parse confirms the
+// declaration is in scope of every assignment and the output is idempotent).
 func TestRewrite_CrnTmpDeclaration_ParsesWithStrictMode(t *testing.T) {
 	in := `"use strict"; var v = obj[key];`
 	got := rewrite(t, in)
-	// A second pass on the already-rewritten output is a no-op (idempotence
-	// guard), but it's a useful smoke check that the prepended declaration
-	// doesn't break the parser the second time around.
 	twice := rewrite(t, got)
 	if got != twice {
-		t.Errorf("re-rewriting var $__crn_tmp__; output drifted:\nonce: %s\ntwice: %s", got, twice)
+		t.Errorf("re-rewriting unique-tmp output drifted:\nonce: %s\ntwice: %s", got, twice)
 	}
 }
 
@@ -743,3 +767,37 @@ func TestRewriteImportSpecifiersFallback_StopsAtNonImport(t *testing.T) {
 		t.Errorf("real import not rewritten: %s", result)
 	}
 }
+
+// ── WRAP_NEW_WORKER ─────────────────────────────────────────────────────────
+
+func TestWrapNewWorker_PlainWorker(t *testing.T) {
+	got := rewrite(t, `var w = new Worker("https://example.com/worker.js");`)
+	if !strings.Contains(got, `$rewriter.wrap_worker_url(`) {
+		t.Errorf("wrap_worker_url not injected: %s", got)
+	}
+	if !strings.Contains(got, `"https://example.com/worker.js"`) {
+		t.Errorf("original url string not preserved inside wrap call: %s", got)
+	}
+}
+
+func TestWrapNewWorker_SharedWorker(t *testing.T) {
+	got := rewrite(t, `var sw = new SharedWorker("https://example.com/sw.js", "name");`)
+	if !strings.Contains(got, `$rewriter.wrap_worker_url(`) {
+		t.Errorf("wrap_worker_url not injected for SharedWorker: %s", got)
+	}
+}
+
+func TestWrapNewWorker_WithVariable(t *testing.T) {
+	got := rewrite(t, `var w = new Worker(workerUrl);`)
+	if !strings.Contains(got, `$rewriter.wrap_worker_url(workerUrl)`) {
+		t.Errorf("wrap_worker_url not injected for variable url: %s", got)
+	}
+}
+
+func TestWrapNewWorker_Disabled(t *testing.T) {
+	got := rewriteWith(t, `new Worker("https://x.com/w.js");`, Options{WrapNewWorker: false})
+	if strings.Contains(got, `wrap_worker_url`) {
+		t.Errorf("wrap_worker_url injected when rule disabled: %s", got)
+	}
+}
+

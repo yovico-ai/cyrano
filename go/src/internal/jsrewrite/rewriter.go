@@ -24,6 +24,7 @@
 //   - WRAP_EVAL_ARG           — `eval(arg, ...)` first arg
 //   - WRAP_EVAL_MEMEXP        — `obj.eval`
 //   - WRAP_MEMBER_EXPRESSION  — `obj[expr]` computed access
+//   - WRAP_NEW_WORKER         — `new Worker(url)` / `new SharedWorker(url)` first arg
 //
 // alreadyRewritten() detects already-rewritten input (`$rewriter.wrap_` or
 // `$rewriter_init(` substring) and short-circuits.
@@ -32,6 +33,7 @@ package jsrewrite
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"net/url"
 	"strings"
@@ -59,6 +61,7 @@ type Options struct {
 	WrapImportArg        bool
 	WrapImportMetaUrl    bool
 	WrapStaticImport     bool
+	WrapNewWorker        bool
 
 	// BaseURL is the URL of the script being rewritten. When set together
 	// with ProxifyURL:
@@ -100,6 +103,7 @@ func DefaultOptions() Options {
 		WrapImportArg:        true,
 		WrapImportMetaUrl:    true,
 		WrapStaticImport:     true,
+		WrapNewWorker:        true,
 	}
 }
 
@@ -139,15 +143,22 @@ func Rewrite(src []byte, opts Options) []byte {
 	r.walkBlockStmt(&ast.BlockStmt)
 
 	var buf bytes.Buffer
-	if r.usedCrnTmp {
-		// Declare the bracket-key intermediate identifier the rewritten
-		// output references. Without this declaration, strict-mode scripts
-		// throw ReferenceError on `$__crn_tmp__ = expr` (assignment to
-		// undeclared name). `var` at script top-level scope-leaks to the
-		// global regardless of strict mode, which is what the
-		// wrap_member_expression template needs (same identifier read on
-		// the bracket-access side of the same expression).
-		buf.WriteString("var $__crn_tmp__;\n")
+	if r.crnTmpCount > 0 {
+		// Declare all unique bracket-key temp variables used in this pass.
+		// Each wrapMemberExpression call gets its own name ($__crn_tmp_0__,
+		// $__crn_tmp_1__, …) so nested member expressions cannot clobber
+		// each other's key values when a function call re-enters rewritten
+		// code. `var` scope-leaks to the global in non-strict scripts and
+		// to the function in strict-mode scripts, which is exactly what the
+		// wrap_member_expression templates require.
+		buf.WriteString("var ")
+		for i := range r.crnTmpCount {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			fmt.Fprintf(&buf, "$__crn_tmp_%d__", i)
+		}
+		buf.WriteString(";\n")
 	}
 	ast.JS(&buf)
 	return buf.Bytes()
@@ -177,11 +188,11 @@ func alreadyRewritten(src []byte) bool {
 // rewriter holds per-pass state.
 type rewriter struct {
 	opts Options
-	// usedCrnTmp tracks whether wrapMemberExpression fired during this pass.
-	// When it has, the output uses an intermediate identifier `$__crn_tmp__`
-	// for the bracket-key expression — Rewrite() prepends a declaration so
-	// strict-mode scripts don't ReferenceError on the implicit assignment.
-	usedCrnTmp bool
+	// crnTmpCount is the number of wrapMemberExpression calls emitted this pass.
+	// Each call gets a unique variable name ($__crn_tmp_0__, $__crn_tmp_1__, …)
+	// so nested member expressions on the same call stack cannot clobber each
+	// other's key values. Rewrite() prepends var declarations for all used names.
+	crnTmpCount int
 }
 
 // ── tree walk ────────────────────────────────────────────────────────────────
@@ -507,6 +518,12 @@ func (r *rewriter) rvalue(e js.IExpr) js.IExpr {
 		}
 		return n
 
+	case *js.CommaExpr:
+		for i := range n.List {
+			n.List[i] = r.rvalue(n.List[i])
+		}
+		return n
+
 	case *js.NewExpr:
 		n.X = r.rvalue(n.X)
 		// If the constructor expression was rewritten to a call-rooted chain
@@ -521,6 +538,18 @@ func (r *rewriter) rvalue(e js.IExpr) js.IExpr {
 			n.X = &js.GroupExpr{X: n.X}
 		}
 		if n.Args != nil {
+			// Rewrite url argument of `new Worker(url, ...)` /
+			// `new SharedWorker(url, ...)` so the Worker script is fetched
+			// through the proxy even when page code restores the native
+			// Worker constructor (e.g. reCAPTCHA anti-tampering).
+			if r.opts.WrapNewWorker && len(n.Args.List) > 0 {
+				if v, ok := n.X.(*js.Var); ok {
+					name := string(v.Data)
+					if name == "Worker" || name == "SharedWorker" {
+						n.Args.List[0].Value = r.wrapWorkerUrl(n.Args.List[0].Value)
+					}
+				}
+			}
 			for i := range n.Args.List {
 				n.Args.List[i].Value = r.rvalue(n.Args.List[i].Value)
 			}
@@ -697,6 +726,23 @@ func (r *rewriter) wrapDotObj(n *js.DotExpr, helper string) js.IExpr {
 	return n
 }
 
+// wrapWorkerUrl rewrites the url argument of `new Worker(url)` or
+// `new SharedWorker(url)` → `$rewriter.wrap_worker_url(url)`.
+// This runs at the source level so the URL is proxied even when page code
+// restores the native Worker constructor (e.g. reCAPTCHA anti-tampering).
+func (r *rewriter) wrapWorkerUrl(arg js.IExpr) js.IExpr {
+	tpl := parseExpr("$rewriter.wrap_worker_url(__REWRITER_PLACEHOLDER__)")
+	if tpl == nil {
+		return arg
+	}
+	call, ok := tpl.(*js.CallExpr)
+	if !ok || len(call.Args.List) == 0 {
+		return arg
+	}
+	call.Args.List[0].Value = arg
+	return call
+}
+
 // wrapImportArg rewrites the specifier of `import(spec)` →
 // `$rewriter.wrap_import_arg(spec)` so the proxy can route the module load.
 func (r *rewriter) wrapImportArg(arg js.IExpr) js.IExpr {
@@ -742,15 +788,19 @@ func (r *rewriter) wrapEvalMemexp(n *js.DotExpr) js.IExpr {
 }
 
 // wrapMemberExpression rewrites `obj[expr]` →
-// `$rewriter.wrap_member_expression(obj, ($__crn_tmp__ = expr))[$__crn_tmp__]`.
-// The sequence-expression on the index keeps `expr` evaluating exactly once
-// while the call accesses obj's resolved property name.
+// `$rewriter.wrap_member_expression(obj, ($__crn_tmp_N__ = expr))[$__crn_tmp_N__]`
+// using a unique N per call so nested member expressions in the same script
+// cannot clobber each other's key values.
 func (r *rewriter) wrapMemberExpression(n *js.IndexExpr) js.IExpr {
-	tpl := parseExpr("$rewriter.wrap_member_expression(__REWRITER_PLACEHOLDER_OBJ__, $__crn_tmp__ = __REWRITER_PLACEHOLDER_E__)[$__crn_tmp__]")
+	varName := fmt.Sprintf("$__crn_tmp_%d__", r.crnTmpCount)
+	r.crnTmpCount++
+	tpl := parseExpr(fmt.Sprintf(
+		"$rewriter.wrap_member_expression(__REWRITER_PLACEHOLDER_OBJ__, %s = __REWRITER_PLACEHOLDER_E__)[%s]",
+		varName, varName,
+	))
 	if tpl == nil {
 		return n
 	}
-	r.usedCrnTmp = true
 	idx, ok := tpl.(*js.IndexExpr)
 	if !ok {
 		return n
@@ -760,9 +810,18 @@ func (r *rewriter) wrapMemberExpression(n *js.IndexExpr) js.IExpr {
 		return n
 	}
 	call.Args.List[0].Value = n.X
-	// Args[1] is `$__crn_tmp__ = E` — replace E.
+	// Args[1] is `$__crn_tmp_N__ = E` — replace E.
+	// If E is a comma expression (e.g. `N[a, b]`), it must be parenthesized:
+	// `$var = (a, b)` so the comma is the RHS of the assignment, not a
+	// second function argument. Without parens the printer emits
+	// `wrap_member_expression(N, $var = a, b)` which passes b as a third
+	// arg and assigns the wrong value to $var.
 	if assign, ok := call.Args.List[1].Value.(*js.BinaryExpr); ok {
-		assign.Y = n.Y
+		key := n.Y
+		if _, isComma := key.(*js.CommaExpr); isComma {
+			key = &js.GroupExpr{X: key}
+		}
+		assign.Y = key
 	}
 	return idx
 }

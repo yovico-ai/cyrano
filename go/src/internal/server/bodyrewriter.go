@@ -134,6 +134,30 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				return fmt.Errorf("read upstream body: %w", err)
 			}
 			rewritten := rewriteJSFor(target)(body)
+			// Worker scripts (Sec-Fetch-Dest: worker/sharedworker) run in a
+			// DedicatedWorkerGlobalScope that has no window and no HTML bootstrap
+			// chain — $rewriter is never defined. Prepend a shim that:
+			//   1. defines $rewriter with passthrough stubs + URL proxification
+			//   2. patches self.importScripts so the URLs it loads go through
+			//      the proxy (and thus get AST-rewritten with $rewriter calls
+			//      the shim can handle)
+			//   3. patches self.fetch / XMLHttpRequest for completeness
+			if resp.Request != nil {
+				dest := strings.ToLower(resp.Request.Header.Get("Sec-Fetch-Dest"))
+				if dest == "worker" || dest == "sharedworker" {
+					shim := buildWorkerShim(urlrewrite.APIBase(proxyCfg))
+					rewritten = append(shim, rewritten...)
+					// Prevent the browser from caching the shimmed worker script.
+					// Without this the browser serves the pre-shim copy from cache
+					// on subsequent loads, causing $rewriter to be undefined inside
+					// the worker (leading to silent challenge failures).
+					resp.Header.Set("Cache-Control", "no-store")
+					resp.Header.Del("Expires")
+					resp.Header.Del("Last-Modified")
+					resp.Header.Del("ETag")
+					logger.Debug("rewriter: prepended worker shim", "target", target.String())
+				}
+			}
 			logger.Debug("rewriter: js rewritten",
 				"target", target.String(), "in", len(body), "out", len(rewritten),
 				"identical", len(body) == len(rewritten))
@@ -304,6 +328,65 @@ func readDecompressedBody(resp *http.Response) ([]byte, error) {
 	default:
 		return io.ReadAll(resp.Body)
 	}
+}
+
+// buildWorkerShim returns a self-invoking JS block to prepend to Worker
+// scripts (Sec-Fetch-Dest: worker/sharedworker). Workers have no window and
+// no HTML bootstrap chain, so $rewriter is never defined — any AST-rewritten
+// code that calls $rewriter.wrap_* would throw ReferenceError.
+//
+// The shim:
+//  1. defines a minimal $rewriter stub (URL methods proxify; others passthrough)
+//  2. patches self.importScripts to proxify URL arguments so the scripts those
+//     loads go through the proxy and get AST-rewritten with $rewriter calls
+//  3. patches self.fetch / XMLHttpRequest for completeness
+//
+// proxyBase is the proxy's public origin, e.g. "https://proxy.example.com".
+func buildWorkerShim(proxyBase string) []byte {
+	// fmt.Sprintf %q produces a Go-quoted double-quoted string which is also
+	// a valid JavaScript string literal for any ASCII-safe URL.
+	b := fmt.Sprintf("%q", proxyBase)
+	return []byte(`(function(){var _b=` + b + `;` +
+		`function _p(u){` +
+		`if(!u||typeof u!=="string")return u;` +
+		`if(u.charAt(0)==="#"||/^(javascript:|data:|blob:|mailto:|tel:|about:)/i.test(u))return u;` +
+		`try{var a=new URL(u,self.location.href);` +
+		`if(!/^https?:$/.test(a.protocol)&&!/^wss?:$/.test(a.protocol))return u;` +
+		`var bh=new URL(_b).host;if(a.host===bh)return u;` +
+		`var r=_b+"/cyrano/"+a.protocol.slice(0,-1)+"/"+a.host+a.pathname;` +
+		`if(a.search)r+=a.search;return r;` +
+		`}catch(e){return u;}}` +
+		`if(typeof $rewriter==="undefined"){self.$rewriter={` +
+		`wrap_get_location:function(l){return l;},` +
+		`wrap_set_location:function(l,s){return{set value(v){s(v);},get value(){return l.href;}};},` +
+		`wrap_location:function(a){return a.obj;},` +
+		`wrap_get_top_window:function(t){return t;},` +
+		`wrap_top_window:function(a){return a.obj;},` +
+		`wrap_get_parent_window:function(t){return t;},` +
+		`wrap_parent_window:function(a){return a.obj;},` +
+		`wrap_document_write:function(a){return a.obj;},` +
+		`wrap_postMessage:function(a){return a.obj;},` +
+		`wrap_eval:function(e){return e;},` +
+		`wrap_eval_arg:function(e,a){return e(a);},` +
+		`wrap_eval_memexp:function(o){return o;},` +
+		`wrap_member_expression:function(o){return o;},` +
+		`wrap_import_arg:function(s){return typeof s==="string"?_p(s):s;},` +
+		`wrap_worker_url:function(u){var s=u!=null?String(u):null;return s?_p(s):u;},` +
+		`};}` +
+		`var _is=self.importScripts;` +
+		`if(typeof _is==="function"){self.importScripts=function(){` +
+		`var a=[];for(var i=0;i<arguments.length;i++)a.push(_p(String(arguments[i])));` +
+		`return _is.apply(self,a);};}` +
+		`var _f=self.fetch;` +
+		`if(typeof _f==="function"){self.fetch=function(i,o){` +
+		`if(typeof i==="string")i=_p(i);` +
+		`else if(typeof URL!=="undefined"&&i instanceof URL)i=_p(i.href);` +
+		`return _f.call(self,i,o);};}` +
+		`if(typeof XMLHttpRequest!=="undefined"){var _xo=XMLHttpRequest.prototype.open;` +
+		`XMLHttpRequest.prototype.open=function(m,u){` +
+		`var a=[];for(var j=0;j<arguments.length;j++)a[j]=arguments[j];` +
+		`a[1]=_p(typeof u==="string"?u:String(u));return _xo.apply(this,a);};}` +
+		`})();` + "\n")
 }
 
 // buildClientPassthrough returns the JSON-serializable subset of vhost
