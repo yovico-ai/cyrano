@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<!--
+  Fixture: gpt-scripts-index
+
+  Reproduces the GPT + APS (apstag) pattern that throws:
+    "No GPT slots provided to apstag.fetchBids() had valid sizes"
+
+  Two mechanisms under test:
+
+  1. document.scripts index stability — the "gpt-shim" below uses
+       document.scripts[document.scripts.length - 1]
+     (the classic synchronous self-identification pattern) to locate itself.
+     If rewriter.js injection shifts indices unexpectedly, the wrong element
+     is read and the slot config is missing.
+
+  2. Numeric type preservation — slot sizes are stored as JSON
+     ([[300,250],[728,90]]) and must survive proxy transformation as numbers.
+     The "apstag-shim" validates typeof size[0] === 'number', the exact check
+     that throws the production error when sizes become strings or are absent.
+
+  PASS: validSlots > 0 (all sizes remain [number, number])
+  FAIL: validSlots === 0 (sizes missing, wrong type, or wrong element read)
+-->
+<html>
+<head><meta charset="utf-8"><title>gpt-scripts-index fixture</title></head>
+<body>
+<div id="result" data-pass="false">pending</div>
+
+<div id="div-gpt-ad-1">
+  <!--
+    Inline slot config — sizes are numbers, not strings.
+    Adjacent to the ad div, as is common in GPT integrations.
+  -->
+  <script id="slot-config" type="application/json">
+    {"path":"/1234/sports","sizes":[[300,250],[728,90]],"divId":"div-gpt-ad-1"}
+  </script>
+</div>
+
+<script id="gpt-shim">
+  // Simulates GPT's self-identification pattern.
+  // A synchronously executing script is always document.scripts[length-1].
+  (function() {
+    var scripts = document.scripts;
+    var me = scripts[scripts.length - 1]; // this element
+
+    // Sanity-check: we should find ourselves by id.
+    window.__gptSelfId = me ? me.id : null;
+
+    var config = JSON.parse(document.getElementById('slot-config').textContent);
+
+    window.googletag = {
+      pubads: function() {
+        return {
+          getSlots: function() {
+            return [{
+              getSlotElementId: function() { return config.divId; },
+              getSizes: function() { return config.sizes; },
+            }];
+          },
+        };
+      },
+    };
+  })();
+</script>
+
+<script>
+  // Simulates the apstag.fetchBids() size-validation loop verbatim.
+  // The production error fires when none of the slots pass this check.
+  (function() {
+    var slots = window.googletag.pubads().getSlots();
+
+    var validSlots = slots.filter(function(slot) {
+      var sizes = slot.getSizes();
+      return Array.isArray(sizes) && sizes.some(function(size) {
+        return Array.isArray(size)
+          && typeof size[0] === 'number'
+          && typeof size[1] === 'number'
+          && size[0] > 0 && size[1] > 0;
+      });
+    });
+
+    var selfOk = window.__gptSelfId === 'gpt-shim';
+    var sizesOk = validSlots.length > 0;
+    var pass = selfOk && sizesOk;
+
+    var el = document.getElementById('result');
+    el.dataset.pass = String(pass);
+    el.dataset.selfId = String(window.__gptSelfId);
+    el.dataset.validSlots = String(validSlots.length);
+    el.textContent = pass
+      ? 'PASS — self=' + window.__gptSelfId + ' validSlots=' + validSlots.length
+      : 'FAIL — self=' + window.__gptSelfId + ' validSlots=' + validSlots.length
+        + (sizesOk ? '' : ' (No GPT slots with valid sizes)');
+  })();
+</script>
+</body>
+</html>
