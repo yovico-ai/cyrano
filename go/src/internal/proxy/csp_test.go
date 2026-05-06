@@ -91,10 +91,28 @@ func TestRewriteCSP(t *testing.T) {
 			want:        "script-src https://cdn.example.com https://proxy.example.com",
 		},
 		{
-			name:        "non-src directives left unchanged",
+			name:        "non-src directives left unchanged; report-uri stripped",
 			in:          "sandbox allow-scripts; report-uri /csp; script-src 'self'",
 			proxyOrigin: "https://proxy.example.com",
-			want:        "sandbox allow-scripts; report-uri /csp; script-src 'self' https://proxy.example.com",
+			want:        "sandbox allow-scripts; script-src 'self' https://proxy.example.com",
+		},
+		{
+			name:        "report-to stripped",
+			in:          "script-src 'self'; report-to default",
+			proxyOrigin: "https://proxy.example.com",
+			want:        "script-src 'self' https://proxy.example.com",
+		},
+		{
+			name:        "object-src 'none' not polluted with proxy origin",
+			in:          "script-src 'self'; object-src 'none'",
+			proxyOrigin: "https://proxy.example.com",
+			want:        "script-src 'self' https://proxy.example.com; object-src 'none'",
+		},
+		{
+			name:        "default-src 'none' not polluted with proxy origin",
+			in:          "default-src 'none'; script-src 'self'",
+			proxyOrigin: "https://proxy.example.com",
+			want:        "default-src 'none'; script-src 'self' https://proxy.example.com",
 		},
 		{
 			name:        "nonce stripped and proxy origin added together",

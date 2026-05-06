@@ -3,7 +3,7 @@ package proxy
 import "strings"
 
 // rewriteCSP rewrites a Content-Security-Policy (or CSP-Report-Only) header
-// value so the proxy can operate transparently. Two mutations are applied:
+// value so the proxy can operate transparently. Three mutations are applied:
 //
 //  1. Nonce stripping (script/style/default-src directives only):
 //     'nonce-…' tokens are removed and 'strict-dynamic' is dropped alongside
@@ -14,23 +14,41 @@ import "strings"
 //
 //  2. Proxy origin injection (all *-src source-list directives):
 //     When proxyOrigin is non-empty (e.g. "https://proxy.example.com"), it is
-//     appended to every directive whose name ends in "-src". This is necessary
-//     because our client-side rewriter rewrites resource URLs to go through
-//     the proxy: a page with "script-src https://cdn.ampproject.org/" would
-//     otherwise block scripts rewritten to
-//     "https://proxy.example.com/cyrano/https/cdn.ampproject.org/…".
+//     appended to every directive whose name ends in "-src" and does not
+//     already have 'none'. This is necessary because our client-side rewriter
+//     rewrites resource URLs to go through the proxy: a page with
+//     "script-src https://cdn.ampproject.org/" would otherwise block scripts
+//     rewritten to "https://proxy.example.com/cyrano/https/cdn.ampproject.org/…".
+//     Directives with 'none' are left alone — 'none' combined with any other
+//     source is a browser warning and the directive type isn't proxied anyway.
 //
-// Directives whose names do NOT end in "-src" (sandbox, report-uri, report-to,
-// upgrade-insecure-requests, …) are passed through unchanged.
+//  3. report-uri / report-to stripping:
+//     These directives cause the browser to POST CSP violation reports directly
+//     to the origin server, leaking proxy-context URL patterns. They are
+//     removed entirely — the origin's CSP report endpoint is meaningless when
+//     all URLs are rewritten through the proxy anyway.
+//
+// All other directives (sandbox, upgrade-insecure-requests, …) pass through
+// unchanged.
 func rewriteCSP(csp, proxyOrigin string) string {
-	directives := strings.Split(csp, ";")
-	for i, dir := range directives {
+	raw := strings.Split(csp, ";")
+	var out []string
+	for _, dir := range raw {
 		parts := strings.Fields(dir)
 		if len(parts) == 0 {
+			out = append(out, dir)
 			continue
 		}
 		name := strings.ToLower(parts[0])
+
+		// Strip report-uri and report-to — they direct the browser to POST
+		// violation reports to the origin server, bypassing URL containment.
+		if name == "report-uri" || name == "report-to" {
+			continue
+		}
+
 		if !strings.Contains(name, "-src") {
+			out = append(out, dir)
 			continue
 		}
 
@@ -43,6 +61,7 @@ func rewriteCSP(csp, proxyOrigin string) string {
 		hadNonce := false
 		hasUnsafeInline := false
 		hasSelf := false
+		hasNone := false
 		hasProxy := proxyOrigin == "" // skip proxy-origin check when not configured
 
 		for _, tok := range parts[1:] {
@@ -54,6 +73,9 @@ func rewriteCSP(csp, proxyOrigin string) string {
 			case isNonceTarget && lower == "'strict-dynamic'":
 				hadNonce = true // mark changed; drop strict-dynamic alongside nonces
 				// stripped
+			case lower == "'none'":
+				hasNone = true
+				kept = append(kept, tok)
 			case lower == "'unsafe-inline'":
 				hasUnsafeInline = true
 				kept = append(kept, tok)
@@ -78,15 +100,22 @@ func rewriteCSP(csp, proxyOrigin string) string {
 			}
 			changed = true
 		}
-		if !hasProxy {
+		// Don't inject proxy origin when 'none' is present — 'none' combined
+		// with any other source is a browser warning and the 'none' is ignored.
+		// Directives locked to 'none' (e.g. object-src 'none') block that
+		// resource type entirely and we don't need to route it through the proxy.
+		if !hasProxy && !hasNone {
 			kept = append(kept, proxyOrigin)
 			changed = true
 		}
+
 		if changed {
-			directives[i] = lead + strings.Join(kept, " ")
+			out = append(out, lead+strings.Join(kept, " "))
+		} else {
+			out = append(out, dir)
 		}
 	}
-	return strings.Join(directives, ";")
+	return strings.Join(out, ";")
 }
 
 func isScriptOrStyleDirective(name string) bool {
