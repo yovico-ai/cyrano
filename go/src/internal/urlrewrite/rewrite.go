@@ -194,6 +194,22 @@ func Rewrite(rawURL string, baseURL *url.URL, cfg ProxyConfig) string {
 		return abs.String()
 	}
 
+	// Detect "virtual-origin + proxy-path" double-encoding: a script combined
+	// the virtual window.location.origin (e.g. "https://www.google.com") with a
+	// real proxy path that already contains "/cyrano/<scheme>/", producing a URL
+	// like "https://www.google.com/cyrano/https/www.google.com/...".
+	// Re-map to our proxy origin instead of proxifying a second time.
+	if _, ok := ParseCyranoPath(abs.Path, abs.RawQuery); ok {
+		out := APIBase(cfg) + abs.Path
+		if abs.RawQuery != "" {
+			out += "?" + abs.RawQuery
+		}
+		if abs.Fragment != "" {
+			out += "#" + abs.Fragment
+		}
+		return out
+	}
+
 	// Strip fragment from the "load" payload (matches the JS rewriter).
 	target := *abs
 	target.Fragment = ""

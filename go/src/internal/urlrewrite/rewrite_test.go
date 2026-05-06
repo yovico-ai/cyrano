@@ -165,6 +165,20 @@ func TestRewrite_Prod_DefaultPortMatchesExplicit(t *testing.T) {
 	}
 }
 
+// ── virtual-origin + proxy-path double-encoding ──────────────────────────
+
+func TestRewrite_VirtualOriginProxyPath(t *testing.T) {
+	// A script read window.location.origin (virtual: "https://www.google.com")
+	// and combined it with a real proxy path ("/cyrano/https/www.google.com/...")
+	// producing a URL that must not be proxified a second time.
+	in := "https://www.google.com/cyrano/https/www.google.com/recaptcha/api2/webworker.js?hl=en&v=abc"
+	want := "http://localhost:9081/cyrano/https/www.google.com/recaptcha/api2/webworker.js?hl=en&v=abc"
+	got := Rewrite(in, mustURL(t, "https://www.google.com/recaptcha/api2/anchor"), devCfg)
+	if got != want {
+		t.Errorf("virtual-origin+proxy-path: got %q, want %q", got, want)
+	}
+}
+
 // ── unwrap ──────────────────────────────────────────────────────────────
 
 func TestUnwrap(t *testing.T) {
