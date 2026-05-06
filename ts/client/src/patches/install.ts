@@ -28,6 +28,7 @@ import { patchSendBeacon } from "./beacon";
 import { patchServiceWorker } from "./service-worker";
 import { patchDocumentCookie } from "./document-cookie";
 import { patchPostMessage } from "./post-message";
+import { patchMessageEventOrigin } from "./message-event";
 import { installMutationObserver } from "./mutation-observer";
 
 const PATCHED_FLAG = Symbol.for("rewriter.patched");
@@ -76,10 +77,11 @@ export function installPatches(
     patchCssRules(targetWindow, rewriteOne);
     patchCssStyleDeclaration(targetWindow, rewriteOne);
     patchFunctionConstructor(targetWindow);
-    patchDynamicIframeAppend(targetWindow, config, () => getCurrentBaseUrl().href);
+    patchDynamicIframeAppend(targetWindow, config, () => getCurrentBaseUrl().href, rewriteOne);
     patchHistory(targetWindow, rewriteOne, setBaseUrl, unwrapOne);
     patchSendBeacon(targetWindow, rewriteOne);
     patchPostMessage(targetWindow, new URL(config.apiBaseURL).origin);
+    patchMessageEventOrigin(targetWindow, config);
     patchDocumentCookie(targetWindow, () => getCurrentBaseUrl().pathname);
     installMutationObserver(
         targetWindow,
