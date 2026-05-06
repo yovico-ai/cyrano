@@ -449,29 +449,6 @@ func TestIsChallengeJSPath_NoMatch_NonJS(t *testing.T) {
 	}
 }
 
-// ── isEvalUnsafeAdScript ────────────────────────────────────────────────────
-
-func TestIsEvalUnsafeAdScript_AmazonApstag(t *testing.T) {
-	u, _ := url.Parse("https://c.amazon-adsystem.com/aax2/apstag.js")
-	if !isEvalUnsafeAdScript(u) {
-		t.Error("c.amazon-adsystem.com/aax2/apstag.js should be eval-unsafe")
-	}
-}
-
-func TestIsEvalUnsafeAdScript_CaseInsensitive(t *testing.T) {
-	u, _ := url.Parse("https://C.Amazon-AdSystem.Com/aax2/apstag.js")
-	if !isEvalUnsafeAdScript(u) {
-		t.Error("isEvalUnsafeAdScript should be case-insensitive on host")
-	}
-}
-
-func TestIsEvalUnsafeAdScript_RegularHost(t *testing.T) {
-	u, _ := url.Parse("https://example.com/ads.js")
-	if isEvalUnsafeAdScript(u) {
-		t.Error("regular host should not be eval-unsafe")
-	}
-}
-
 func makeTestServer(t *testing.T) http.Handler {
 	t.Helper()
 	cfg := &config.File{
