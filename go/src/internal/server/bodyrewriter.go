@@ -127,6 +127,15 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				logger.Debug("rewriter: js passthrough (challenge script)", "target", target.String())
 				break
 			}
+			// Skip rewriting ad-SDK scripts that internally eval() code.
+			// Our AST transforms insert $rewriter.* calls into the script; when the
+			// SDK later eval()s a string containing that transformed code, $rewriter
+			// is not defined in the eval context → ReferenceError. These SDKs don't
+			// carry URLs that need proxification, so passthrough is safe.
+			if isEvalUnsafeAdScript(target) {
+				logger.Debug("rewriter: js passthrough (eval-unsafe ad script)", "target", target.String())
+				break
+			}
 			body, err := readDecompressedBody(resp)
 			if err != nil {
 				logger.Warn("rewriter: read upstream JS body failed",
@@ -264,6 +273,24 @@ func isChallengeJSPath(path string) bool {
 // nonce-gated around a different nonce than the one on our injected script.
 func isChallengeHost(host string) bool {
 	return strings.EqualFold(host, "challenges.cloudflare.com")
+}
+
+// isEvalUnsafeAdScript reports whether the script comes from an ad SDK host
+// known to internally eval() code that our rewriter has already transformed.
+// Our AST transforms insert $rewriter.* calls; when the SDK later eval()s a
+// string containing that code, $rewriter is not defined in the eval context.
+// These scripts do not carry proxy-relevant URLs, so passthrough is safe.
+//
+// Known hosts:
+//
+//	c.amazon-adsystem.com — Amazon APS (apstag.js) uses eval at line ~6470
+func isEvalUnsafeAdScript(u *url.URL) bool {
+	host := strings.ToLower(u.Hostname())
+	switch host {
+	case "c.amazon-adsystem.com":
+		return true
+	}
+	return false
 }
 
 // isChallengeHTML reports whether the HTML body is a bot-challenge interstitial.
