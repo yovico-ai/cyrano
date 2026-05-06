@@ -108,6 +108,16 @@ export function rewriteUrl(
     if (isAlreadyProxified(absolute, config)) return rawUrl;
     if (isProxyOrigin(absolute, config)) return absolute.href;
 
+    // Detect "virtual-origin + proxy-path" double-encoding: a script combined
+    // the virtual window.location.origin (e.g. "https://www.google.com") with a
+    // real proxy path that already carries "/cyrano/<scheme>/", producing a URL
+    // like "https://www.google.com/cyrano/https/www.google.com/...".
+    // Re-map to our proxy origin instead of proxifying a second time.
+    if (/^\/cyrano\/[a-z][a-z0-9+.-]*\//.test(absolute.pathname)) {
+        const apiBase = proxyApiBase(config);
+        return `${apiBase}${absolute.pathname}${absolute.search}${absolute.hash}`;
+    }
+
     const apiBase = proxyApiBase(config);
     const scheme = absolute.protocol.slice(0, -1); // strip trailing ':'
     const cyranoPath = `/cyrano/${scheme}/${absolute.host}${absolute.pathname}`;

@@ -145,6 +145,17 @@ describe("rewriteUrl — already-proxified detection", () => {
     });
 });
 
+describe("rewriteUrl — virtual-origin + proxy-path double-encoding", () => {
+    it("https://virtual-origin/cyrano/... is re-mapped to proxy origin, not proxified again", () => {
+        // reCAPTCHA mixes virtual window.location.origin ("https://www.google.com") with a
+        // real proxy path ("/cyrano/https/www.google.com/...") → must collapse, not double-encode.
+        const mixed = "https://www.google.com/cyrano/https/www.google.com/recaptcha/api2/webworker.js?hl=en&v=abc";
+        const base = new URL("https://www.google.com/recaptcha/api2/anchor");
+        const want = "http://localhost:9081/cyrano/https/www.google.com/recaptcha/api2/webworker.js?hl=en&v=abc";
+        expect(rewriteUrl(mixed, base, devCfg)).toBe(want);
+    });
+});
+
 describe("unwrapProxiedUrl — inverse of rewriteUrl", () => {
     const cases: Array<[string, string]> = [
         // proxified → original
