@@ -149,36 +149,69 @@ function alreadyRewritten(src: string): boolean {
 }
 
 /**
+ * Preamble injected before eval'd code that references $rewriter.* or uses
+ * $__crn_key__. Makes both available even in sandboxed execution contexts
+ * (e.g. GTM custom-template sandbox) where the global object may differ from
+ * the main window. Inserted after a leading "use strict" directive if present
+ * so strict mode is preserved.
+ */
+const EVAL_PREAMBLE = 'var $rewriter=window.$rewriter,$__crn_key__=window.$__crn_key__;';
+
+function withEvalPreamble(code: string): string {
+    // Detect a leading strict-mode directive and insert preamble after it.
+    const m = /^(['"])use strict\1\s*;?\n?/.exec(code);
+    if (m) {
+        return code.slice(0, m[0].length) + EVAL_PREAMBLE + "\n" + code.slice(m[0].length);
+    }
+    return EVAL_PREAMBLE + "\n" + code;
+}
+
+/**
  * Parses src as JS, applies enabled rules, and returns the rewritten source.
- * Returns src unchanged on parse failure or when the input is already-rewritten,
- * matching the server's "fail open — never break a page we can't safely
- * transform" policy.
+ * Returns src unchanged on parse failure, matching the server's
+ * "fail open — never break a page we can't safely transform" policy.
+ *
+ * When the output references $rewriter.* (either from fresh rewriting or
+ * because the input was already server-rewritten), an eval-preamble is
+ * prepended that makes $rewriter and $__crn_key__ accessible in sandboxed
+ * eval contexts.
  */
 export function rewriteJsSource(src: string, opts: JsRewriteOptions): string {
     if (typeof src !== "string" || src.length === 0) return src;
-    if (alreadyRewritten(src)) return src;
 
-    let ast: ProgramNode;
-    try {
-        ast = Parser.parse(src, {
-            ecmaVersion: "latest",
-            sourceType: "script",
-            allowReturnOutsideFunction: true,
-            allowAwaitOutsideFunction: true,
-            allowImportExportEverywhere: true,
-        }) as unknown as ProgramNode;
-    } catch {
-        return src;
+    let result: string;
+    if (alreadyRewritten(src)) {
+        result = src; // don't double-rewrite
+    } else {
+        let ast: ProgramNode;
+        try {
+            ast = Parser.parse(src, {
+                ecmaVersion: "latest",
+                sourceType: "script",
+                allowReturnOutsideFunction: true,
+                allowAwaitOutsideFunction: true,
+                allowImportExportEverywhere: true,
+            }) as unknown as ProgramNode;
+        } catch {
+            return src;
+        }
+
+        const rewriter = new JsRewriter(opts);
+        rewriter.walkProgram(ast);
+
+        try {
+            result = generate(ast);
+        } catch {
+            return src;
+        }
     }
 
-    const rewriter = new JsRewriter(opts);
-    rewriter.walkProgram(ast);
-
-    try {
-        return generate(ast);
-    } catch {
-        return src;
+    // Inject the preamble whenever the code references our runtime — this
+    // covers both freshly-rewritten code and already-server-rewritten fragments.
+    if (result.includes("$rewriter.") || result.includes("$__crn_key__")) {
+        return withEvalPreamble(result);
     }
+    return result;
 }
 
 class JsRewriter {
@@ -524,16 +557,16 @@ class JsRewriter {
 
     /**
      * Rewrites `obj[expr]` to:
-     *   $rewriter.wrap_member_expression(obj, ($apMe = expr))[$apMe]
+     *   $rewriter.wrap_member_expression(obj, ($__crn_key__ = expr))[$__crn_key__]
      *
-     * The sequence-style `($apMe = expr)` keeps the original `expr` evaluating
+     * The sequence-style `($__crn_key__ = expr)` keeps the original `expr` evaluating
      * exactly once while letting the bracket access pick up the resolved name.
      */
     wrapMemberExpression(member: ExpressionNode): ExpressionNode {
         const apMeAssign: ExpressionNode = {
             type: "AssignmentExpression",
             operator: "=",
-            left: makeIdentifier("$apMe"),
+            left: makeIdentifier("$__crn_key__"),
             right: member.property!,
         } as unknown as ExpressionNode;
 
@@ -547,7 +580,7 @@ class JsRewriter {
         return {
             type: "MemberExpression",
             object: wrapperCall,
-            property: makeIdentifier("$apMe"),
+            property: makeIdentifier("$__crn_key__"),
             computed: true,
             optional: false,
         } as unknown as ExpressionNode;

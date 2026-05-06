@@ -35,6 +35,14 @@ export function init(
                 api.wrap_get_location(targetWindow.location),
                 () => api.get_base_url().href,
             );
+            // Publish the shared bracket-key variable as a writable global property.
+            // The server and client JS rewriters emit `$__crn_key__ = expr` to
+            // capture dynamic member-expression keys. In strict-mode eval contexts,
+            // assigning to an undeclared name throws ReferenceError; declaring it
+            // here as a window property ensures any strict-mode eval'd fragment can
+            // assign to it without error (assigning to an existing global property
+            // is always permitted).
+            (targetWindow as Window & { $__crn_key__: null }).$__crn_key__ = null;
             return api;
         },
     };

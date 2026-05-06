@@ -320,51 +320,51 @@ func TestIdempotent(t *testing.T) {
 	}
 }
 
-// ── $apMe declaration prepended when wrap_member_expression fires ─────────
+// ── $__crn_key__ usage in wrap_member_expression ────────────────────────────
 //
-// Regression: the wrap_member_expression template uses `$__crn_tmp_N__ = expr`
-// to capture the dynamic key. Each call site gets a unique N so nested bracket
-// accesses cannot clobber each other's key. In strict-mode scripts, assignment
-// to an undeclared name throws ReferenceError; we fix by prepending var
-// declarations for all used names.
+// wrap_member_expression uses a single shared variable $__crn_key__ to capture
+// the computed key. JS left-to-right evaluation order makes this safe even for
+// nested bracket accesses: each assignment completes and is consumed before the
+// next one runs. The variable is published as window.$__crn_key__ by the client
+// bootstrap so strict-mode eval'd fragments can assign to it without a var decl.
 
-func TestRewrite_PrependsCrnTmpDeclaration_WhenMemberExpressionUsed(t *testing.T) {
+func TestWrapMemberExpression_UsesCrnKey(t *testing.T) {
 	in := `var x = obj["dynamic" + key];`
 	got := rewrite(t, in)
-	if !strings.HasPrefix(got, "var $__crn_tmp_0__;\n") {
-		t.Errorf("expected `var $__crn_tmp_0__;` declaration prepended, got: %s", got)
+	if !strings.Contains(got, "$__crn_key__") {
+		t.Errorf("expected $__crn_key__ in output, got: %s", got)
 	}
 	if !strings.Contains(got, "$rewriter.wrap_member_expression") {
 		t.Errorf("wrap_member_expression should fire on bracket access: %s", got)
 	}
 }
 
-func TestRewrite_DoesNotPrependCrnTmp_WhenNoMemberExpression(t *testing.T) {
+func TestWrapMemberExpression_NoPreambleWhenUnused(t *testing.T) {
 	in := `var x = location;`
 	got := rewrite(t, in)
-	if strings.Contains(got, "$__crn_tmp_") {
-		t.Errorf("$__crn_tmp_N__ declaration should NOT appear when wrap_member_expression didn't fire: %s", got)
+	if strings.Contains(got, "$__crn_key__") {
+		t.Errorf("$__crn_key__ should NOT appear when wrap_member_expression didn't fire: %s", got)
 	}
 }
 
-// Multiple member expressions get distinct variable names.
-func TestRewrite_CrnTmpDeclaration_UniquePerCallSite(t *testing.T) {
+// Multiple bracket accesses share a single $__crn_key__ — safe because JS
+// evaluates left-to-right so each assignment completes before the next runs.
+func TestWrapMemberExpression_SharedKeyForMultipleSites(t *testing.T) {
 	in := `var a = obj[x]; var b = obj[y];`
 	got := rewrite(t, in)
-	if !strings.Contains(got, "$__crn_tmp_0__") || !strings.Contains(got, "$__crn_tmp_1__") {
-		t.Errorf("expected distinct temp vars for two bracket accesses, got: %s", got)
+	count := strings.Count(got, "$__crn_key__")
+	if count < 4 {
+		t.Errorf("expected $__crn_key__ to appear at least 4 times (assign+read x2), got %d: %s", count, got)
 	}
 }
 
-// Unique temp vars survive strict-mode: feeding rewritten output back parses
-// cleanly (we can't execute from a Go test, but a clean re-parse confirms the
-// declaration is in scope of every assignment and the output is idempotent).
-func TestRewrite_CrnTmpDeclaration_ParsesWithStrictMode(t *testing.T) {
+// Re-rewriting idempotent: feeding output back through the rewriter is a no-op.
+func TestWrapMemberExpression_IdempotentRewrite(t *testing.T) {
 	in := `"use strict"; var v = obj[key];`
 	got := rewrite(t, in)
 	twice := rewrite(t, got)
 	if got != twice {
-		t.Errorf("re-rewriting unique-tmp output drifted:\nonce: %s\ntwice: %s", got, twice)
+		t.Errorf("re-rewriting output drifted:\nonce: %s\ntwice: %s", got, twice)
 	}
 }
 

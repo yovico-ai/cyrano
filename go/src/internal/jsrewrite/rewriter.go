@@ -143,23 +143,6 @@ func Rewrite(src []byte, opts Options) []byte {
 	r.walkBlockStmt(&ast.BlockStmt)
 
 	var buf bytes.Buffer
-	if r.crnTmpCount > 0 {
-		// Declare all unique bracket-key temp variables used in this pass.
-		// Each wrapMemberExpression call gets its own name ($__crn_tmp_0__,
-		// $__crn_tmp_1__, …) so nested member expressions cannot clobber
-		// each other's key values when a function call re-enters rewritten
-		// code. `var` scope-leaks to the global in non-strict scripts and
-		// to the function in strict-mode scripts, which is exactly what the
-		// wrap_member_expression templates require.
-		buf.WriteString("var ")
-		for i := range r.crnTmpCount {
-			if i > 0 {
-				buf.WriteByte(',')
-			}
-			fmt.Fprintf(&buf, "$__crn_tmp_%d__", i)
-		}
-		buf.WriteString(";\n")
-	}
 	ast.JS(&buf)
 	return buf.Bytes()
 }
@@ -188,11 +171,6 @@ func alreadyRewritten(src []byte) bool {
 // rewriter holds per-pass state.
 type rewriter struct {
 	opts Options
-	// crnTmpCount is the number of wrapMemberExpression calls emitted this pass.
-	// Each call gets a unique variable name ($__crn_tmp_0__, $__crn_tmp_1__, …)
-	// so nested member expressions on the same call stack cannot clobber each
-	// other's key values. Rewrite() prepends var declarations for all used names.
-	crnTmpCount int
 }
 
 // ── tree walk ────────────────────────────────────────────────────────────────
@@ -788,12 +766,15 @@ func (r *rewriter) wrapEvalMemexp(n *js.DotExpr) js.IExpr {
 }
 
 // wrapMemberExpression rewrites `obj[expr]` →
-// `$rewriter.wrap_member_expression(obj, ($__crn_tmp_N__ = expr))[$__crn_tmp_N__]`
-// using a unique N per call so nested member expressions in the same script
-// cannot clobber each other's key values.
+// `$rewriter.wrap_member_expression(obj, ($__crn_key__ = expr))[$__crn_key__]`.
+//
+// A single shared key variable is safe: JavaScript evaluates function arguments
+// strictly left-to-right, so for nested accesses like obj[a][b] the inner
+// assignment ($__crn_key__ = a) completes and is used before the outer
+// ($__crn_key__ = b) runs. The variable is published as window.$__crn_key__ by
+// the client bootstrap so strict-mode eval'd fragments can assign to it.
 func (r *rewriter) wrapMemberExpression(n *js.IndexExpr) js.IExpr {
-	varName := fmt.Sprintf("$__crn_tmp_%d__", r.crnTmpCount)
-	r.crnTmpCount++
+	const varName = "$__crn_key__"
 	tpl := parseExpr(fmt.Sprintf(
 		"$rewriter.wrap_member_expression(__REWRITER_PLACEHOLDER_OBJ__, %s = __REWRITER_PLACEHOLDER_E__)[%s]",
 		varName, varName,
@@ -810,7 +791,7 @@ func (r *rewriter) wrapMemberExpression(n *js.IndexExpr) js.IExpr {
 		return n
 	}
 	call.Args.List[0].Value = n.X
-	// Args[1] is `$__crn_tmp_N__ = E` — replace E.
+	// Args[1] is `$__crn_key__ = E` — replace E.
 	// If E is a comma expression (e.g. `N[a, b]`), it must be parenthesized:
 	// `$var = (a, b)` so the comma is the RHS of the assignment, not a
 	// second function argument. Without parens the printer emits

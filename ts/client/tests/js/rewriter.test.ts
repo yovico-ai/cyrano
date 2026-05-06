@@ -20,9 +20,13 @@ function squash(s: string): string {
 }
 
 describe("rewriteJsSource — already-rewritten input is left alone", () => {
-    it("skips input containing $rewriter.wrap_", () => {
+    it("does not double-wrap input containing $rewriter.wrap_", () => {
         const src = "$rewriter.wrap_get_location(location);";
-        expect(rewriteJsSource(src, all)).toBe(src);
+        const got = rewriteJsSource(src, all);
+        // The preamble is prepended for eval-context accessibility, but the
+        // original $rewriter.wrap_get_location call must appear unchanged.
+        expect(got).toContain(src);
+        expect(got).not.toContain("$rewriter.wrap_get_location($rewriter"); // no double-wrap
     });
 
     it("skips input containing $rewriter_init(", () => {
@@ -133,10 +137,10 @@ describe("rewriteJsSource — eval call argument wrapping", () => {
 });
 
 describe("rewriteJsSource — computed member expressions", () => {
-    it("wraps obj[expr] with wrap_member_expression", () => {
+    it("wraps obj[expr] with wrap_member_expression using $__crn_key__", () => {
         const got = rewriteJsSource("var x = obj['locat' + 'ion'];", all);
         expect(got).toContain("$rewriter.wrap_member_expression(obj");
-        expect(got).toContain("$apMe");
+        expect(got).toContain("$__crn_key__");
     });
 });
 

@@ -32,10 +32,14 @@ describe("wrapEvalArg — rewrites JS source", () => {
         expect(got).toBe(42);
     });
 
-    it("already-rewritten input is left alone", () => {
+    it("already-rewritten input is not double-wrapped", () => {
         const src = "$rewriter.wrap_get_location(location);";
         // eslint-disable-next-line no-eval
-        expect(wrapEvalArg(eval, src)).toBe(src);
+        const got = wrapEvalArg(eval, src) as string;
+        // The preamble is prepended for eval-context accessibility but the
+        // original call must appear unchanged (no double-wrapping).
+        expect(got).toContain(src);
+        expect(got).not.toContain("$rewriter.wrap_get_location($rewriter");
     });
 });
 

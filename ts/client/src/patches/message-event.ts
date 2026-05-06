@@ -82,7 +82,7 @@ function makeWrappedHandler(
     return function wrappedMessageHandler(this: unknown, event: Event): unknown {
         const msg = event as MessageEvent;
         if (msg.origin === proxyOrigin && msg.source != null) {
-            const upstreamOrigin = upstreamOriginOf(msg.source, config);
+            const upstreamOrigin = upstreamOriginOf(msg.source as Window, config);
             if (upstreamOrigin) {
                 // Present the handler with a view where .origin is the upstream value.
                 const translated = new Proxy(msg, {
