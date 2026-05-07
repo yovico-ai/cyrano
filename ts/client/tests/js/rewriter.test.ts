@@ -201,6 +201,23 @@ describe("rewriteJsSource — selective rule disabling", () => {
     });
 });
 
+describe("rewriteJsSource — eval preamble frame-walk fallback", () => {
+    it("preamble includes parent-frame walk for $rewriter in contexts without bootstrap", () => {
+        // Any rewrite that produces $rewriter.* calls gets the preamble.
+        // The preamble must not just read window.$rewriter — it must walk up
+        // the frame tree so ad iframes (no bootstrap) can borrow it from the
+        // parent. Verify the frame-walk is present in the emitted code.
+        const got = rewriteJsSource("var x = location;", all);
+        expect(got).toContain("window.$rewriter");
+        expect(got).toContain("_w.parent.$rewriter"); // frame-walk fallback
+    });
+
+    it("preamble does not appear for code with no $rewriter references", () => {
+        const got = rewriteJsSource("var x = a + b;", all);
+        expect(got).not.toContain("_w.parent.$rewriter");
+    });
+});
+
 describe("rewriteJsSource — non-rewrite cases", () => {
     it("local `var location = ...` is still rewritten on the rvalue side", () => {
         // Note: server rewriter doesn't track scopes either. Bare `location`

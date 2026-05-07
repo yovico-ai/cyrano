@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<!--
+  Fixture: doc-write-iframe
+
+  Reproduces the GPT ad-iframe pattern that throws:
+    TypeError: Cannot read properties of undefined (reading 'wrap_member_expression')
+
+  Root cause: GPT calls document.write() to inject ad scripts into an iframe.
+  Our wrap_document_write rewrites the HTML (adding $rewriter.wrap_* calls),
+  but the iframe has no bootstrap — window.$rewriter is undefined — so the
+  rewritten scripts throw on first $rewriter.* access.
+
+  Fix: the eval preamble now walks up the frame tree so scripts in unbootstrapped
+  iframes can borrow $rewriter from the nearest bootstrapped ancestor.
+
+  The test creates an iframe, document.write()s a script fragment into it that
+  uses a computed member access (window[key] — triggers wrap_member_expression),
+  and verifies it executes without error.
+
+  PASS: iframe script ran without TypeError
+  FAIL: TypeError was thrown inside the iframe
+-->
+<html>
+<head><meta charset="utf-8"><title>doc-write-iframe fixture</title></head>
+<body>
+<div id="result" data-pass="false">pending</div>
+
+<script>
+(function() {
+    // Create an iframe and document.write a script fragment into it — the same
+    // pattern GPT's pubads_impl.js uses when rendering ad slots.
+    var frame = document.createElement('iframe');
+    document.body.appendChild(frame);
+
+    var fdoc = frame.contentDocument || frame.contentWindow.document;
+    fdoc.open();
+    // Computed member access (window[key]) triggers wrap_member_expression.
+    // The rewriter adds the preamble which must find $rewriter via parent walk.
+    fdoc.write(
+        '<scr' + 'ipt>' +
+        'try {' +
+        '  var key = "location";' +
+        '  var _ = window[key];' +   // → $rewriter.wrap_member_expression(window, $__crn_key__=key)[$__crn_key__]
+        '  window.__iframeOk = true;' +
+        '} catch(e) {' +
+        '  window.__iframeOk = false;' +
+        '  window.__iframeErr = e.message;' +
+        '}' +
+        '<\/scr' + 'ipt>'
+    );
+    fdoc.close();
+
+    // Classic scripts in document.write run synchronously; result is available now.
+    var r = frame.contentWindow.__iframeOk;
+    var err = frame.contentWindow.__iframeErr || '';
+
+    var el = document.getElementById('result');
+    el.dataset.pass = String(r === true);
+    el.textContent = r === true
+        ? 'PASS — iframe script ran without TypeError'
+        : 'FAIL — ' + (err || 'no result set in iframe');
+})();
+</script>
+</body>
+</html>

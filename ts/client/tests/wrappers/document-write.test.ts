@@ -134,7 +134,7 @@ describe("wrapDocumentWrite — head bootstrap injection", () => {
         expect(written).not.toContain(BOOTSTRAP);
     });
 
-    it("does not inject when HTML has no <head>", () => {
+    it("does not inject when HTML has no <head> and no <script>", () => {
         const doc = fakeDocument();
         const wrapper = wrapDocumentWrite({ obj: doc }, tag, getBootstrapHtml);
         wrapper.write("<div><p>fragment</p></div>");
@@ -147,6 +147,51 @@ describe("wrapDocumentWrite — head bootstrap injection", () => {
         const doc = fakeDocument();
         const wrapper = wrapDocumentWrite({ obj: doc }, tag, null);
         wrapper.write("<html><head></head><body></body></html>");
+
+        const written = doc.write.mock.calls[0]?.[0] as string;
+        expect(written).not.toContain(BOOTSTRAP);
+    });
+});
+
+describe("wrapDocumentWrite — script-fragment bootstrap injection", () => {
+    const BOOTSTRAP = "<!--BOOTSTRAP-->";
+    const getBootstrapHtml = () => BOOTSTRAP;
+
+    it("prepends bootstrap before <script> fragment when window has no $rewriter", () => {
+        const doc = fakeDocument();
+        const wrapper = wrapDocumentWrite({ obj: doc }, tag, getBootstrapHtml);
+        wrapper.write("<script>var x = 1;<\/script>");
+
+        const written = doc.write.mock.calls[0]?.[0] as string;
+        const bsIdx = written.indexOf(BOOTSTRAP);
+        const scIdx = written.indexOf("<script>");
+        expect(bsIdx).toBeGreaterThanOrEqual(0);
+        expect(bsIdx).toBeLessThan(scIdx);
+    });
+
+    it("prepends bootstrap via writeln too", () => {
+        const doc = fakeDocument();
+        const wrapper = wrapDocumentWrite({ obj: doc }, tag, getBootstrapHtml);
+        wrapper.writeln("<script>var x = 1;<\/script>");
+
+        const written = doc.writeln.mock.calls[0]?.[0] as string;
+        expect(written).toContain(BOOTSTRAP);
+        expect(written.indexOf(BOOTSTRAP)).toBeLessThan(written.indexOf("<script>"));
+    });
+
+    it("does not prepend when window already has $rewriter", () => {
+        const doc = fakeDocument({ hasRewriter: true });
+        const wrapper = wrapDocumentWrite({ obj: doc }, tag, getBootstrapHtml);
+        wrapper.write("<script>var x = 1;<\/script>");
+
+        const written = doc.write.mock.calls[0]?.[0] as string;
+        expect(written).not.toContain(BOOTSTRAP);
+    });
+
+    it("does not prepend for plain HTML fragment with no <script>", () => {
+        const doc = fakeDocument();
+        const wrapper = wrapDocumentWrite({ obj: doc }, tag, getBootstrapHtml);
+        wrapper.write("<div>ad content</div>");
 
         const written = doc.write.mock.calls[0]?.[0] as string;
         expect(written).not.toContain(BOOTSTRAP);
