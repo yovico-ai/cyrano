@@ -154,8 +154,18 @@ function alreadyRewritten(src: string): boolean {
  * (e.g. GTM custom-template sandbox) where the global object may differ from
  * the main window. Inserted after a leading "use strict" directive if present
  * so strict mode is preserved.
+ *
+ * The $rewriter fallback walks up the frame tree — ad iframes written via
+ * document.write don't have the bootstrap injected into their window, so
+ * window.$rewriter is undefined. All proxied frames share the same proxy
+ * origin, so parent frame access is always same-origin safe.
  */
-const EVAL_PREAMBLE = 'var $rewriter=window.$rewriter,$__crn_key__=window.$__crn_key__;';
+const EVAL_PREAMBLE =
+    'var $rewriter=window.$rewriter||(function(){' +
+    'try{for(var _w=window;_w!==_w.parent;_w=_w.parent)' +
+    'if(_w.parent.$rewriter)return _w.parent.$rewriter;}' +
+    'catch(_e){}return null}()),' +
+    '$__crn_key__=window.$__crn_key__||0;';
 
 function withEvalPreamble(code: string): string {
     // Detect a leading strict-mode directive and insert preamble after it.
