@@ -326,6 +326,7 @@ func TestServeHTTPWithTarget_HeaderReconstitution(t *testing.T) {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'")
 		w.Header().Set("X-Frame-Options", "deny")
 		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		w.Header().Set("Cross-Origin-Embedder-Policy", "require-corp")
 		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -351,6 +352,15 @@ func TestServeHTTPWithTarget_HeaderReconstitution(t *testing.T) {
 		t.Errorf("Feature-Policy should be stripped, got %q", v)
 	}
 
+	// Must be stripped — break cross-origin subresource loading or window
+	// isolation in ways that are harmful under the proxy's single-origin model.
+	if v := rec.Header().Get("Cross-Origin-Embedder-Policy"); v != "" {
+		t.Errorf("COEP should be stripped, got %q", v)
+	}
+	if v := rec.Header().Get("Cross-Origin-Opener-Policy"); v != "" {
+		t.Errorf("COOP should be stripped, got %q", v)
+	}
+
 	// Must pass through — these use 'self' which the browser evaluates
 	// relative to the proxy origin, so they work correctly as-is.
 	if v := rec.Header().Get("Content-Security-Policy"); v == "" {
@@ -358,9 +368,6 @@ func TestServeHTTPWithTarget_HeaderReconstitution(t *testing.T) {
 	}
 	if v := rec.Header().Get("X-Frame-Options"); v == "" {
 		t.Error("X-Frame-Options should pass through, got empty")
-	}
-	if v := rec.Header().Get("Cross-Origin-Opener-Policy"); v == "" {
-		t.Error("COOP should pass through, got empty")
 	}
 	if v := rec.Header().Get("Cross-Origin-Resource-Policy"); v == "" {
 		t.Error("CORP should pass through, got empty")

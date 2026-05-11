@@ -128,19 +128,28 @@ var hopByHopHeaders = []string{
 //     Many sites send pre-spec syntax with unquoted origins that browsers now
 //     reject with warnings. There is no safe way to rewrite these for the
 //     proxy context, so we drop them.
+//   - Cross-Origin-Embedder-Policy: COEP "require-corp" requires every
+//     cross-origin subresource to carry a Cross-Origin-Resource-Policy header.
+//     Third-party CDN scripts (e.g. Cloudflare challenge, ad networks) rarely
+//     do, so the browser blocks them with net::ERR_BLOCKED_BY_RESPONSE. All
+//     proxied frames already share the proxy origin, so cross-origin isolation
+//     via COEP provides no additional safety benefit here.
+//   - Cross-Origin-Opener-Policy: COOP "same-origin" severs window.opener
+//     references across origins, which breaks OAuth pop-ups and payment flows
+//     that rely on postMessage back to the opener. Proxied sites sit on the
+//     same proxy origin anyway, so COOP isolation is redundant and harmful.
 //
-// Headers like CSP, X-Frame-Options, and Cross-Origin-* are NOT stripped.
-// They use the `'self'` keyword, which the browser evaluates relative to the
-// current page origin (the proxy origin). Our rewriter.js is served at
-// /rewriter.js on the proxy origin, so it is covered by `'self'` in any
-// script-src directive. Cross-Origin-* policies also work correctly because
-// all proxied resources share the proxy origin.
+// CSP and X-Frame-Options are NOT stripped — they use the `'self'` keyword
+// which the browser evaluates against the proxy origin, and our rewriter.js
+// is served at /rewriter.js on that origin so it is always covered.
 var stripResponseHeaders = []string{
 	"Strict-Transport-Security",
 	"Public-Key-Pins",
 	"Alt-Svc",
 	"Permissions-Policy",
 	"Feature-Policy",
+	"Cross-Origin-Embedder-Policy",
+	"Cross-Origin-Opener-Policy",
 }
 
 // dropOnRequest are headers we never forward upstream — they leak the proxy
