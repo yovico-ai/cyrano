@@ -544,7 +544,7 @@ func TestCookieIsolation_SetCookiePrefixedInResponse(t *testing.T) {
 func TestCookieIsolation_ForwardsMatchingPrefix(t *testing.T) {
 	upstream, cap := startUpstream(t)
 	upstreamURL, _ := url.Parse(upstream.URL)
-	prefix := cookiePrefixFor(upstreamURL.Host)
+	prefix := CookiePrefixFor(upstreamURL.Host)
 
 	publicURL, _ := url.Parse("http://localhost:9081")
 	h := New(Options{ProxyCfg: urlrewrite.ProxyConfig{PublicURL: publicURL}})
@@ -600,10 +600,10 @@ func startUpstreamMultiCookie(t *testing.T, setCookies ...string) (*httptest.Ser
 	return srv, captured
 }
 
-func TestCookieJar_AllCookiesStoredInJar(t *testing.T) {
-	// Both HttpOnly and non-HttpOnly upstream cookies must be absorbed into the
-	// server-side jar. Neither should appear in the browser response (the page
-	// bootstrap script delivers them instead).
+func TestCookieJar_HttpOnlyCookiesStoredInJar(t *testing.T) {
+	// HttpOnly upstream cookies go to the session jar; non-HttpOnly cookies are
+	// prefixed and forwarded to the browser so page JS can read them via
+	// document.cookie (e.g. orchestrate.js reading cf_chl_1 for the POST body).
 	upstream, _ := startUpstreamMultiCookie(t,
 		"session=secret; Path=/; HttpOnly",
 		"pref=dark; Path=/",
@@ -621,21 +621,32 @@ func TestCookieJar_AllCookiesStoredInJar(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTPWithTarget(rec, req, target)
 
-	// Only the proxy-issued crnsct cookie should reach the browser.
+	upstreamHost := strings.TrimPrefix(upstream.URL, "http://")
+	prefix := CookiePrefixFor(upstreamHost)
+
 	var sessionID string
+	sawPrefixed := false
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == "crnsct" {
+		switch {
+		case c.Name == "crnsct":
 			sessionID = c.Value
-			continue
+		case c.Name == prefix+"pref":
+			sawPrefixed = true
+			if c.Value != "dark" {
+				t.Errorf("non-HttpOnly cookie value wrong: got %q want %q", c.Value, "dark")
+			}
+		default:
+			t.Errorf("unexpected cookie forwarded to browser: %q=%q", c.Name, c.Value)
 		}
-		t.Errorf("unexpected upstream cookie forwarded to browser: %q=%q", c.Name, c.Value)
 	}
 	if sessionID == "" {
 		t.Fatal("crnsct session cookie not issued")
 	}
+	if !sawPrefixed {
+		t.Errorf("non-HttpOnly 'pref' cookie not forwarded to browser with prefix %q", prefix)
+	}
 
-	// Both upstream cookies must be stored in the jar.
-	upstreamHost := strings.TrimPrefix(upstream.URL, "http://")
+	// Only the HttpOnly cookie must be in the jar.
 	cookies := jar.RetrieveForRequest(sessionID, upstreamHost, "/")
 	names := make(map[string]string)
 	for _, c := range cookies {
@@ -644,8 +655,8 @@ func TestCookieJar_AllCookiesStoredInJar(t *testing.T) {
 	if names["session"] != "secret" {
 		t.Errorf("HttpOnly 'session' cookie not in jar: %v", names)
 	}
-	if names["pref"] != "dark" {
-		t.Errorf("non-HttpOnly 'pref' cookie not in jar: %v", names)
+	if _, has := names["pref"]; has {
+		t.Errorf("non-HttpOnly 'pref' cookie must NOT be in jar (it is in the browser store): %v", names)
 	}
 }
 

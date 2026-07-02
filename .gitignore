@@ -23,3 +23,4 @@ ts/bug-miner/node_modules/
 
 # Claude Code project-local config
 .claude/
+.serena/

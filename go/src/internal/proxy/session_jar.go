@@ -17,8 +17,9 @@ import (
 // sites and prevents upstream session tokens from accumulating in browser
 // storage forever.
 type SessionJar struct {
-	mu      sync.Mutex
-	entries map[string]map[string][]*jarEntry // sessionID → siteKey → entries
+	mu               sync.Mutex
+	entries          map[string]map[string][]*jarEntry // sessionID → siteKey → entries
+	challengeOrigins map[string][2]string              // sessionID → [scheme, host] of last challenge page
 }
 
 type jarEntry struct {
@@ -33,7 +34,38 @@ type jarEntry struct {
 
 // NewSessionJar returns an empty in-memory jar.
 func NewSessionJar() *SessionJar {
-	return &SessionJar{entries: make(map[string]map[string][]*jarEntry)}
+	return &SessionJar{
+		entries:          make(map[string]map[string][]*jarEntry),
+		challengeOrigins: make(map[string][2]string),
+	}
+}
+
+// StoreChallengeOrigin records the origin (scheme + host) of the challenge
+// page most recently served to sessionID. Used to route bare-path
+// /cdn-cgi/challenge-platform/ requests from blob workers (which have no
+// Referer) back to the correct upstream.
+func (j *SessionJar) StoreChallengeOrigin(sessionID, scheme, host string) {
+	if sessionID == "" {
+		return
+	}
+	j.mu.Lock()
+	j.challengeOrigins[sessionID] = [2]string{scheme, host}
+	j.mu.Unlock()
+}
+
+// ChallengeOrigin returns the scheme and host stored by StoreChallengeOrigin
+// for sessionID. Returns ("", "", false) when none is found.
+func (j *SessionJar) ChallengeOrigin(sessionID string) (scheme, host string, ok bool) {
+	if sessionID == "" {
+		return "", "", false
+	}
+	j.mu.Lock()
+	v, found := j.challengeOrigins[sessionID]
+	j.mu.Unlock()
+	if !found {
+		return "", "", false
+	}
+	return v[0], v[1], true
 }
 
 // GenerateSessionID returns a cryptographically random 128-bit hex session ID.

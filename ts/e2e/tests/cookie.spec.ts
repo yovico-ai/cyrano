@@ -89,3 +89,25 @@ test("cross-site: site A cannot read site B's cookies", async ({ page, context }
     await loadFixture(page, "fixture-a.test", "/cookie-cross-site.html");
     await assertPass(page);
 });
+
+// ── challenge-page document.cookie shim ──────────────────────────────────────
+
+test("challenge page: document.cookie getter strips prefix, setter adds prefix", async ({ page, context }) => {
+    // The fixture HTML contains /cdn-cgi/challenge-platform/ so the proxy
+    // injects the minimal challengePathFixScript shim instead of the full
+    // rewriter bootstrap. The shim patches document.cookie.
+    //
+    // Pre-seed a cookie that the shim would have stored after a JS set: the
+    // raw browser store holds the prefixed name; the getter must strip it.
+    await context.addCookies([
+        {
+            name:   "__crn__fixture-a_test__chl_seed",
+            value:  "seeded",
+            domain: "localhost",
+            path:   "/",
+        },
+    ]);
+
+    await loadFixture(page, "fixture-a.test", "/challenge-cookie.html");
+    await assertPass(page);
+});

@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 	"github.com/yovico/cyrano/internal/config"
 	"github.com/yovico/cyrano/internal/cssrewrite"
 	"github.com/yovico/cyrano/internal/htmlrewrite"
@@ -31,7 +33,8 @@ import (
 // All errors are returned to the caller AND logged with target/content-type
 // context — ReverseProxy turns the error into a 502 but the log gives us
 // enough to diagnose without re-running.
-func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logger *slog.Logger, jar *proxy.SessionJar, sessName string) func(*http.Response, *url.URL) error {
+func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logger *slog.Logger, jar *proxy.SessionJar, sessName string, prettify bool) func(*http.Response, *url.URL) error {
+	debugEnabled := logger.Enabled(context.Background(), slog.LevelDebug)
 	clientPassthrough := buildClientPassthrough(vhost, proxyCfg)
 	jsOpts := jsrewrite.DefaultOptions()
 	jsOpts.Logger = logger.With("component", "jsrewrite")
@@ -72,11 +75,26 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				Proxy:   proxyCfg,
 				Logger:  cssLogger,
 			})
+			if prettify {
+				rewritten = cssrewrite.Prettify(rewritten)
+			}
 			logger.Debug("rewriter: css rewritten",
 				"target", target.String(), "in", len(body), "out", len(rewritten))
 			replaceBody(resp, rewritten)
 
 		case isHTML(resp):
+			// Only rewrite HTML that will actually be rendered by a browser.
+			// Responses to fetch/XHR (Sec-Fetch-Dest: empty) carry text/html
+			// content consumed programmatically — e.g. Cloudflare's challenge
+			// platform returns text/html from its flow API endpoint, and
+			// orchestrate.js reads it as text. Injecting bootstrap scripts
+			// into such responses corrupts the payload.
+			if resp.Request != nil {
+				dest := strings.ToLower(resp.Request.Header.Get("Sec-Fetch-Dest"))
+				if dest != "" && dest != "document" && dest != "frame" && dest != "iframe" && dest != "embed" && dest != "object" {
+					break
+				}
+			}
 			body, err := readDecompressedBody(resp)
 			if err != nil {
 				logger.Warn("rewriter: read upstream body failed",
@@ -100,8 +118,9 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				HeadInjectionPath: vhost.HeadInjectionPath,
 				// Don't inject our bootstrap into challenge pages — challenge.js
 				// does PoW/fingerprinting and must run in an unmodified environment.
-				// Our fetch/XHR patches interfere with its API calls and cause the
-				// PoW solution to compute as all-zeros, failing the challenge.
+				// Our full fetch/XHR/prototype patches interfere with its API calls
+				// and cause the PoW solution to compute as all-zeros, failing the
+				// challenge.
 				InjectBootstrap:   !isChallenge,
 				ClientPassthrough: clientPassthrough,
 				PageCookies:       pageCookies,
@@ -110,7 +129,25 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				cfg.RewriteInlineJS = rewriteJSFor(target)
 				cfg.RewriteInlineCSS = rewriteCSS(target)
 			} else {
-				logger.Debug("rewriter: html passthrough (challenge page, no injection)", "target", target.String())
+				// Inject a minimal URL-fix script so challenge pages can load
+				// Cloudflare's orchestrate script through the proxy. The script
+				// patches HTMLScriptElement.prototype.src, fetch, and XHR.open to
+				// rewrite absolute paths (e.g. /cdn-cgi/...) to the correct proxied
+				// URL (e.g. /cyrano/https/claude.ai/cdn-cgi/...). Unlike the full
+				// bootstrap, it does not define $rewriter and does not rewrite
+				// inline JS, so it does not interfere with the PoW computation.
+				cfg.ChallengePathPrefix = "/cyrano/" + target.Scheme + "/" + target.Host
+				cfg.ChallengeCookiePrefix = proxy.CookiePrefixFor(target.Host)
+				cfg.ChallengeDebug = debugEnabled
+				// Record this session's challenge origin so bare-path /cdn-cgi/
+				// requests from blob workers (which have no Referer) can be routed
+				// to the correct upstream without needing a /cyrano/ URL prefix.
+				if jar != nil && sessName != "" && resp.Request != nil {
+					if sessID, _ := resp.Request.Context().Value(proxy.SessionContextKey{}).(string); sessID != "" {
+						jar.StoreChallengeOrigin(sessID, target.Scheme, target.Host)
+					}
+				}
+				logger.Debug("rewriter: html passthrough (challenge page, minimal url-fix injection)", "target", target.String())
 			}
 			if err := htmlrewrite.Rewrite(&out, bytes.NewReader(body), cfg); err != nil {
 				logger.Warn("rewriter: html rewrite failed",
@@ -125,6 +162,12 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			// Skip rewriting challenge scripts and any content from challenge hosts.
 			if isChallengeScript(target) || isChallengeHost(target.Hostname()) {
 				logger.Debug("rewriter: js passthrough (challenge script)", "target", target.String())
+				if prettify {
+					body, err := readDecompressedBody(resp)
+					if err == nil {
+						replaceBody(resp, jsrewrite.Prettify(body))
+					}
+				}
 				break
 			}
 			body, err := readDecompressedBody(resp)
@@ -134,6 +177,9 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				return fmt.Errorf("read upstream body: %w", err)
 			}
 			rewritten := rewriteJSFor(target)(body)
+			if prettify {
+				rewritten = jsrewrite.Prettify(rewritten)
+			}
 			// Worker scripts (Sec-Fetch-Dest: worker/sharedworker) run in a
 			// DedicatedWorkerGlobalScope that has no window and no HTML bootstrap
 			// chain — $rewriter is never defined. Prepend a shim that:
@@ -192,18 +238,19 @@ func isJS(resp *http.Response) bool {
 }
 
 // isChallengeScript reports whether the URL is a bot-challenge script that
-// must not be rewritten. These scripts do browser fingerprinting; any AST
-// transformation breaks them. URL patterns seen in the wild:
+// must not be rewritten. These scripts do browser fingerprinting that requires
+// an unmodified execution environment. URL patterns seen in the wild:
 //
 //	/__challenge_*/challenge.js
 //	/__cf_chl_*/challenge.js
-//	/cdn-cgi/challenge-platform/*/   (Cloudflare Bot Management / jsd/main.js)
 //	/<b64seg>/<b64seg>/...?v=<uuid>  (Akamai Bot Manager — randomised paths)
+//
+// Cloudflare challenge-platform scripts (orchestrate, jsd, etc.) are NOT
+// excluded here — they are JS-rewritten so that location.* accesses are
+// wrapped via $rewriter.wrap_get_location, and the challenge page injects a
+// minimal $rewriter shim that returns the upstream origin from that wrapper.
 func isChallengeScript(u *url.URL) bool {
 	p := u.Path
-	if strings.Contains(p, "/cdn-cgi/challenge-platform/") {
-		return true
-	}
 	if (strings.Contains(p, "/__challenge_") || strings.Contains(p, "/__cf_chl")) &&
 		strings.HasSuffix(p, "/challenge.js") {
 		return true
@@ -269,9 +316,14 @@ func isChallengeHost(host string) bool {
 // isChallengeHTML reports whether the HTML body is a bot-challenge interstitial.
 // Cloudflare challenge pages reference their challenge script via a distinctive
 // path prefix; that reference appears in the raw HTML before any rewriting.
+//
+// Two challenge styles:
+//   - Legacy / JS-challenge:  /__challenge_*/challenge.js  or  /__cf_chl*/
+//   - Managed / Turnstile:    /cdn-cgi/challenge-platform/  (orchestrate endpoint)
 func isChallengeHTML(body []byte) bool {
 	return bytes.Contains(body, []byte("/__challenge_")) ||
-		bytes.Contains(body, []byte("/__cf_chl"))
+		bytes.Contains(body, []byte("/__cf_chl")) ||
+		bytes.Contains(body, []byte("/cdn-cgi/challenge-platform/"))
 }
 
 // isCSS reports whether the response Content-Type is rewritable CSS.
@@ -300,9 +352,11 @@ func fixContentType(resp *http.Response, target *url.URL) {
 	}
 }
 
-// readDecompressedBody reads resp.Body, transparently decompressing gzip or
-// brotli content. Removes Content-Encoding so the rewritten response we
-// substitute back is treated as plain text by the browser.
+// readDecompressedBody reads resp.Body, transparently decompressing gzip,
+// brotli, or zstd content. Removes Content-Encoding so the rewritten response
+// we substitute back is treated as plain text by the browser. zstd is included
+// because a real Chrome advertises it in Accept-Encoding (see the Director);
+// advertising an encoding we can't decode would corrupt rewritten responses.
 func readDecompressedBody(resp *http.Response) ([]byte, error) {
 	defer resp.Body.Close()
 	switch strings.ToLower(resp.Header.Get("Content-Encoding")) {
@@ -320,6 +374,18 @@ func readDecompressedBody(resp *http.Response) ([]byte, error) {
 		return body, nil
 	case "br":
 		body, err := io.ReadAll(brotli.NewReader(resp.Body))
+		if err != nil {
+			return nil, err
+		}
+		resp.Header.Del("Content-Encoding")
+		return body, nil
+	case "zstd":
+		zr, err := zstd.NewReader(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		defer zr.Close()
+		body, err := io.ReadAll(zr)
 		if err != nil {
 			return nil, err
 		}

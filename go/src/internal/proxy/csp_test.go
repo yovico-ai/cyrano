@@ -120,6 +120,23 @@ func TestRewriteCSP(t *testing.T) {
 			proxyOrigin: "https://proxy.example.com",
 			want:        "script-src https://cdn.ampproject.org/ 'unsafe-inline' 'self' https://proxy.example.com",
 		},
+
+		// ── Trusted Types stripping ─────────────────────────────────────────
+		{
+			name: "require-trusted-types-for stripped",
+			in:   "script-src 'self'; require-trusted-types-for 'script'",
+			want: "script-src 'self'",
+		},
+		{
+			name: "trusted-types directive stripped",
+			in:   "script-src 'self'; trusted-types default dompurify",
+			want: "script-src 'self'",
+		},
+		{
+			name: "both trusted-types directives stripped together",
+			in:   "default-src 'self'; trusted-types default; require-trusted-types-for 'script'; script-src 'nonce-abc'",
+			want: "default-src 'self'; script-src 'unsafe-inline' 'self'",
+		},
 	}
 
 	for _, tc := range cases {

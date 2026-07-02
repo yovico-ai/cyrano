@@ -3,7 +3,7 @@ package proxy
 import "strings"
 
 // rewriteCSP rewrites a Content-Security-Policy (or CSP-Report-Only) header
-// value so the proxy can operate transparently. Three mutations are applied:
+// value so the proxy can operate transparently. Four mutations are applied:
 //
 //  1. Nonce stripping (script/style/default-src directives only):
 //     'nonce-…' tokens are removed and 'strict-dynamic' is dropped alongside
@@ -28,6 +28,15 @@ import "strings"
 //     removed entirely — the origin's CSP report endpoint is meaningless when
 //     all URLs are rewritten through the proxy anyway.
 //
+//  4. Trusted Types stripping (require-trusted-types-for / trusted-types):
+//     Trusted Types enforcement requires DOM-mutating operations (innerHTML,
+//     script.src, eval) to go through a registered policy that produces
+//     TrustedHTML/TrustedScript/TrustedScriptURL objects. Our injected scripts
+//     and prototype patches (e.g. the script.src getter that de-proxifies URLs)
+//     return plain strings that fail enforcement. Since we already modify page
+//     content (JS/HTML rewriting), the Trusted Types security model cannot be
+//     upheld in proxy context anyway — strip both directives to disable it.
+//
 // All other directives (sandbox, upgrade-insecure-requests, …) pass through
 // unchanged.
 func rewriteCSP(csp, proxyOrigin string) string {
@@ -44,6 +53,11 @@ func rewriteCSP(csp, proxyOrigin string) string {
 		// Strip report-uri and report-to — they direct the browser to POST
 		// violation reports to the origin server, bypassing URL containment.
 		if name == "report-uri" || name == "report-to" {
+			continue
+		}
+		// Strip Trusted Types directives — enforcement breaks our injected
+		// scripts and prototype patches that return plain strings.
+		if name == "require-trusted-types-for" || name == "trusted-types" {
 			continue
 		}
 

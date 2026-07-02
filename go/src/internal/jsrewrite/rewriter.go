@@ -147,6 +147,20 @@ func Rewrite(src []byte, opts Options) []byte {
 	return buf.Bytes()
 }
 
+// Prettify parses src as JavaScript and re-emits it with statement-level
+// newlines and block indentation, making minified bundles readable in
+// DevTools. No semantic changes are made — only whitespace is added.
+// If parsing fails, src is returned unchanged (fail-open like Rewrite).
+func Prettify(src []byte) []byte {
+	a, err := js.Parse(parse.NewInputBytes(src), js.Options{})
+	if err != nil {
+		return src
+	}
+	var buf bytes.Buffer
+	a.JS(&buf)
+	return buf.Bytes()
+}
+
 // snippet returns up to n leading bytes of src as a string with newlines
 // flattened — useful for log lines.
 func snippet(src []byte, n int) string {

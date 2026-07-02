@@ -20,6 +20,7 @@ func main() {
 	configPath := flag.String("config", "", "path to proxy config JSON (default: read from env)")
 	assetsRoot := flag.String("assets", "", "static asset root (default: ../assets relative to the binary)")
 	logLevel := flag.String("log-level", "info", "log verbosity: debug | info | warn | error")
+	prettify := flag.Bool("prettify", false, "reformat JS and CSS responses for readability (debug only, never use in production)")
 	flag.Parse()
 
 	level := parseLogLevel(*logLevel)
@@ -54,6 +55,7 @@ func main() {
 	}
 
 	s := server.New(cfg, root, logger)
+	s.Prettify = *prettify
 	if err := s.ListenAndServe(); err != nil {
 		logger.Error("server exited", "err", err)
 		os.Exit(1)

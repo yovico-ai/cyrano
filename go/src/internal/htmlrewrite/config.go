@@ -61,6 +61,34 @@ type Config struct {
 	// Set-Cookie-style string (e.g. "name=value; Path=/; Max-Age=3600").
 	// Populated by the body rewriter from the server-side session jar.
 	PageCookies []string
+
+	// ChallengePathPrefix, when non-empty, causes a small inline script to be
+	// injected at the start of <head>. The script patches
+	// HTMLScriptElement.prototype.src, window.fetch, and
+	// XMLHttpRequest.prototype.open to prepend this prefix to absolute-path
+	// URLs (e.g. "/cdn-cgi/...") so challenge pages can load Cloudflare's
+	// orchestrate script through the proxy without the full $rewriter bootstrap.
+	//
+	// Example value: "/cyrano/https/claude.ai"
+	ChallengePathPrefix string
+
+	// ChallengeCookiePrefix is the site-namespace prefix applied to cookie
+	// names by the challenge-page shim (e.g. "__crn__claude_ai__"). The shim
+	// patches document.cookie so JS-set cookies are stored with this prefix in
+	// the browser and the Director's existing prefix-strip logic forwards them
+	// to the upstream unmodified. Must match proxy.CookiePrefixFor(host).
+	ChallengeCookiePrefix string
+
+	// ChallengeDebug, when true, injects console.log instrumentation into the
+	// challenge shim: XHR open/send/done, fetch URL/status, and cookie writes.
+	// Enabled automatically when the server runs at slog.LevelDebug.
+	ChallengeDebug bool
+
+	// Prettify, when true, runs JS and CSS content through a formatter before
+	// serving. Makes minified challenge scripts readable in DevTools.
+	// Never set in production — it changes source text and can interfere with
+	// scripts that inspect Function.toString() output.
+	Prettify bool
 }
 
 // externalResourceAttrs is the (tagName → attribute names) map that drives

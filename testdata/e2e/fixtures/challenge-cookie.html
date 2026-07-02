@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<!--
+  Fixture: challenge-cookie
+  Simulates a Cloudflare challenge page as seen by the proxy.
+
+  The proxy detects this as a challenge page because the body contains:
+    /cdn-cgi/challenge-platform/
+  ...and injects the challengePathFixScript (minimal shim) with the
+  document.cookie getter/setter patch instead of the full rewriter bootstrap.
+
+  Tests:
+    1. Getter strips the site-namespace prefix: page JS sees plain names.
+    2. Setter prepends the prefix so Director forwards the cookie correctly.
+
+  data-pass="true" when both hold.
+-->
+<html>
+<head><meta charset="utf-8"><title>challenge-cookie fixture</title>
+<!-- challenge trigger: /cdn-cgi/challenge-platform/ -->
+</head>
+<body>
+<pre id="log"></pre>
+<div id="result" data-pass="false">pending</div>
+<script>
+(function() {
+  var log = [];
+  function check(label, ok, detail) {
+    log.push((ok ? "PASS" : "FAIL") + " " + label + (detail ? ": " + detail : ""));
+    return ok;
+  }
+
+  // 1. Getter: the Playwright test pre-seeds __crn__fixture-a_test__chl_seed=seeded
+  //    in the browser; the patched getter must return it as "chl_seed=seeded".
+  var before = document.cookie;
+  var cookies1 = before.split(";").map(function(s) { return s.trim(); }).filter(Boolean);
+  var hasSeed   = cookies1.some(function(kv) { return kv === "chl_seed=seeded"; });
+  var hasPrefix = cookies1.some(function(kv) { return kv.indexOf("__crn__") === 0; });
+  check("getter sees pre-seeded cookie without prefix", hasSeed,   JSON.stringify(before));
+  check("getter strips site-namespace prefix",          !hasPrefix, JSON.stringify(before));
+
+  // 2. Setter: write a cookie; the shim must store it with the prefix so the
+  //    getter can return it as the plain name.
+  document.cookie = "chl_rc=1; Path=/";
+  var after = document.cookie;
+  var cookies2 = after.split(";").map(function(s) { return s.trim(); }).filter(Boolean);
+  var hasWritten = cookies2.some(function(kv) { return kv === "chl_rc=1"; });
+  check("setter: cookie readable back as plain name", hasWritten, JSON.stringify(after));
+
+  var pass = hasSeed && !hasPrefix && hasWritten;
+  document.getElementById("log").textContent = log.join("\n");
+  var el = document.getElementById("result");
+  el.dataset.pass = String(pass);
+  el.textContent = pass ? "PASS" : log.filter(function(l) { return l.indexOf("FAIL") === 0; }).join("; ");
+})();
+</script>
+</body>
+</html>

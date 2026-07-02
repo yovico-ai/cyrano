@@ -12,6 +12,24 @@ it's talking to `example.com`; the wire and DNS only ever touch
 proxy setting — the user just visits a proxified URL like
 `http://proxy/?goto=<base64(https://example.com/)>` and the rest is rewriting.
 
+## Design principle
+
+**Data is never modified as data. Only function calls and property assignments are intercepted.**
+
+The proxy intercepts browser APIs — `location.hostname`, `fetch()`, `XMLHttpRequest.open()`,
+`Element.setAttribute()`, `eval()`, etc. — by wrapping the interfaces themselves, not by
+patching the underlying data (URL strings, headers, script bodies) in place. This means:
+
+- Raw values flowing through the system are never silently mutated.
+- Every interception point is an explicit function call or property accessor.
+- Where a browser property cannot be redefined (e.g. `window.location` is `[LegacyUnforgeable]`),
+  the fix is applied at the JS AST level on the server/client rewriters so that every
+  reference becomes a call into `$rewriter.wrap_get_location(location).*` — a function
+  call interception, not a data patch.
+- No exceptions. If a script category was previously excluded from JS rewriting to
+  avoid breaking it, the correct fix is to provide the minimal `$rewriter` shim it
+  needs, not to leave it unrewritten.
+
 ## What it must do
 
 ### 1. URL containment

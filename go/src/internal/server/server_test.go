@@ -175,12 +175,49 @@ func TestServer_RefererRouting(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusFound {
-		t.Fatalf("status %d; want 302, body=%q", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("status %d; want 307, body=%q", rec.Code, rec.Body.String())
 	}
 	want := "http://localhost:9081/cyrano/http/" + upURL.Host + "/chunk-abc.js"
 	if got := rec.Header().Get("Location"); got != want {
 		t.Errorf("Location %q; want %q", got, want)
+	}
+}
+
+func TestServer_RefererRouting_307_PreservesMethod(t *testing.T) {
+	// Referer-based routing must use 307 (not 302) so POST method and body are
+	// preserved when challenge scripts redirect their API calls. A 302 would
+	// silently convert POST → GET and drop the body, breaking challenge submission.
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	}))
+	t.Cleanup(upstream.Close)
+
+	cfg := &config.File{
+		Servers: []config.Server{{Port: 9081}},
+		VHosts: []config.VHost{{
+			Hostnames:         []string{"localhost"},
+			HTTPPort:          9081,
+			Mode:              "webproxy",
+			RewriterJSPath:    "/rewriter.js",
+			HeadInjectionPath: "/head-injection",
+			CookiesJSONPath:   "/cookies.json",
+		}},
+	}
+	srv := New(cfg, t.TempDir(), nil)
+	handler := srv.Handler()
+
+	referer := cyranoURL(upstream.URL + "/page")
+	req := httptest.NewRequest("POST", "/cdn-cgi/challenge-platform/api/v1/report", strings.NewReader("token=abc"))
+	req.Host = "localhost:9081"
+	req.Header.Set("Referer", referer)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("status %d; want 307 to preserve POST method, body=%q", rec.Code, rec.Body.String())
 	}
 }
 
@@ -352,6 +389,14 @@ func TestIsChallengeHTML_OldChallengePath(t *testing.T) {
 }
 
 
+func TestIsChallengeHTML_ManagedChallenge(t *testing.T) {
+	// Cloudflare managed/Turnstile challenge — references /cdn-cgi/challenge-platform/
+	body := []byte(`<script>a.src = '/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1?ray=abc';</script>`)
+	if !isChallengeHTML(body) {
+		t.Error("managed challenge page with /cdn-cgi/challenge-platform/ should be detected")
+	}
+}
+
 func TestIsChallengeHTML_NormalPage(t *testing.T) {
 	if isChallengeHTML([]byte(`<html><body><p>Hello world</p></body></html>`)) {
 		t.Error("normal HTML page should not be detected as challenge HTML")
@@ -361,9 +406,13 @@ func TestIsChallengeHTML_NormalPage(t *testing.T) {
 // ── isChallengeScript ────────────────────────────────────────────────────────
 
 func TestIsChallengeScript_CdnCgiChallengePlatform(t *testing.T) {
+	// Cloudflare challenge-platform scripts (orchestrate, jsd, etc.) are
+	// JS-rewritten so that location.* accesses are wrapped via
+	// $rewriter.wrap_get_location. The challenge page injects a minimal
+	// $rewriter shim, so these scripts must NOT be excluded from rewriting.
 	u, _ := url.Parse("https://www.wordreference.com/cdn-cgi/challenge-platform/scripts/jsd/main.js")
-	if !isChallengeScript(u) {
-		t.Error("cdn-cgi/challenge-platform path should be detected as challenge script")
+	if isChallengeScript(u) {
+		t.Error("cdn-cgi/challenge-platform scripts should NOT be excluded from JS rewriting — they need wrap_get_location to see the upstream hostname")
 	}
 }
 

@@ -37,4 +37,4 @@ if [[ ! -x "$binary" ]]; then
   exit 1
 fi
 
-exec "$binary" --assets "$assets" --log-level debug
+exec "$binary" --assets "$assets" --log-level debug --prettify

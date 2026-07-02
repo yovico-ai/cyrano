@@ -222,3 +222,72 @@ func unescapeCSS(s string) string {
 func isHexDigit(c byte) bool {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
+
+// Prettify formats src as CSS by adding newlines and indentation — enough
+// to make minified stylesheets readable in DevTools. Original whitespace is
+// discarded and replaced with structural whitespace only. The resulting CSS
+// is semantically equivalent (only whitespace is added).
+func Prettify(src []byte) []byte {
+	var out bytes.Buffer
+	depth := 0
+	prevNonWS := css.ErrorToken
+	l := css.NewLexer(parse.NewInputBytes(src))
+
+	indent := func() {
+		for i := 0; i < depth; i++ {
+			out.WriteString("  ")
+		}
+	}
+
+	for {
+		tt, data := l.Next()
+		if tt == css.ErrorToken {
+			break
+		}
+		if tt == css.WhitespaceToken || tt == css.CommentToken {
+			continue // we control all whitespace
+		}
+
+		switch tt {
+		case css.LeftBraceToken:
+			out.WriteString(" {\n")
+			depth++
+			indent()
+		case css.RightBraceToken:
+			out.WriteByte('\n')
+			depth--
+			if depth < 0 {
+				depth = 0
+			}
+			indent()
+			out.WriteString("}\n")
+			indent()
+		case css.SemicolonToken:
+			out.WriteString(";\n")
+			indent()
+		case css.ColonToken:
+			// property: value — no space before colon, one space after
+			out.WriteString(": ")
+		case css.CommaToken:
+			out.WriteString(", ")
+		default:
+			// Add a space between adjacent tokens that are not structural.
+			if prevNonWS != css.ErrorToken &&
+				prevNonWS != css.LeftBraceToken &&
+				prevNonWS != css.SemicolonToken &&
+				prevNonWS != css.RightBraceToken &&
+				prevNonWS != css.ColonToken &&
+				prevNonWS != css.CommaToken &&
+				tt != css.SemicolonToken &&
+				tt != css.LeftBraceToken &&
+				tt != css.RightBraceToken &&
+				tt != css.ColonToken &&
+				tt != css.CommaToken {
+				out.WriteByte(' ')
+			}
+			out.Write(data)
+		}
+		prevNonWS = tt
+	}
+	return bytes.TrimSpace(out.Bytes())
+}

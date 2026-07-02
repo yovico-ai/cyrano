@@ -21,7 +21,7 @@ import (
 
 	"golang.org/x/net/publicsuffix"
 
-	"github.com/yovico/cyrano/internal/tlsdial"
+	"github.com/yovico/cyrano/internal/upstream"
 	"github.com/yovico/cyrano/internal/urlrewrite"
 )
 
@@ -75,7 +75,7 @@ type SessionContextKey struct{}
 // can be mounted into an http.ServeMux directly.
 type Handler struct {
 	opts      Options
-	transport *http.Transport
+	transport http.RoundTripper
 }
 
 // New constructs a Handler with sensible defaults applied.
@@ -86,23 +86,10 @@ func New(opts Options) *Handler {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	tcpDialer := &net.Dialer{
-		Timeout:   10 * time.Second,
-		KeepAlive: 30 * time.Second,
-	}
-	t := &http.Transport{
-		DialContext:    tcpDialer.DialContext,
-		DialTLSContext: tlsdial.NewDialTLSContext(tcpDialer, opts.SkipTLSVerify),
-		// TLSClientConfig and TLSHandshakeTimeout are intentionally absent:
-		// DialTLSContext owns TLS config and the handshake timeout.
-		// ForceAttemptHTTP2 is omitted: tlsdial limits ALPN to http/1.1 so
-		// servers never select h2 (see tlsdial package comment).
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   8,
-		IdleConnTimeout:       90 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		ResponseHeaderTimeout: opts.Timeout,
-	}
+	// Browser-impersonating upstream transport: https targets negotiate a real
+	// Chrome JA3/JA4 + HTTP/2 fingerprint (via uTLS + fhttp), plaintext http
+	// targets use a stdlib transport. See the upstream package doc.
+	t := upstream.NewRoundTripper(opts.SkipTLSVerify)
 	return &Handler{opts: opts, transport: t}
 }
 
@@ -215,6 +202,23 @@ func (h *Handler) ServeHTTPWithTarget(w http.ResponseWriter, r *http.Request, ta
 
 // serveTarget runs the httputil.ReverseProxy for an already-resolved target.
 func (h *Handler) serveTarget(w http.ResponseWriter, r *http.Request, target *url.URL) {
+	// Short-circuit Cloudflare Privacy Access Token (PAT) probes.
+	// PAT (RFC 9577) tokens are origin-bound and require Apple/Google device
+	// attestation, neither of which a transparent HTTP proxy can satisfy.
+	// Forwarding always yields a 401 with a WWW-Authenticate challenge the
+	// browser cannot redeem (the URL is the proxy origin — the browser's PAT
+	// interceptor doesn't even engage). Returning an immediate 401 with NO
+	// WWW-Authenticate saves the round-trip and lets Cloudflare's challenge JS
+	// fall back to the (solvable) Turnstile path. Handled here in serveTarget
+	// so it covers both entry points: /cyrano/ requests (ServeHTTP) and
+	// bare-path challenge requests routed by session origin (ServeHTTPWithTarget,
+	// used by blob workers that have no Referer).
+	if isPATProbe(target.Path) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Content-Length", "0")
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
 	rp := &httputil.ReverseProxy{
 		Director:       h.makeDirector(target),
 		ModifyResponse: h.modifyResponse,
@@ -225,6 +229,12 @@ func (h *Handler) serveTarget(w http.ResponseWriter, r *http.Request, target *ur
 		// re-add a fresh one if needed.
 	}
 	rp.ServeHTTP(w, r)
+}
+
+// isPATProbe reports whether path is a Cloudflare Privacy Access Token probe
+// under the challenge-platform tree.
+func isPATProbe(path string) bool {
+	return strings.Contains(path, "/cdn-cgi/challenge-platform/h/b/pat/")
 }
 
 // makeDirector returns a Director closure that mutates the outgoing request
@@ -264,7 +274,7 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		// suspicious. The prefix is stripped before forwarding so the upstream
 		// sees plain cookie names.
 		if cookieHeader := req.Header.Get("Cookie"); cookieHeader != "" {
-			prefix := cookiePrefixFor(target.Host)
+			prefix := CookiePrefixFor(target.Host)
 			var forwarded []string
 			for _, kv := range strings.Split(cookieHeader, ";") {
 				kv = strings.TrimSpace(kv)
@@ -298,15 +308,13 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		}
 
 		// Advertise the same encodings a real browser sends. "gzip only" is a
-		// trivial bot fingerprint that WAFs (Akamai, Cloudflare, etc.) key on.
-		// readDecompressedBody handles gzip and br; zstd is stripped here so
-		// we don't receive an encoding we can't decompress yet.
-		ae := req.Header.Get("Accept-Encoding")
-		ae = removeEncoding(ae, "zstd")
-		if ae == "" {
-			ae = "gzip, deflate, br"
+		// trivial bot fingerprint that WAFs (Akamai, Cloudflare, etc.) key on,
+		// so forward the browser's Accept-Encoding verbatim (Chrome sends
+		// "gzip, deflate, br, zstd"). readDecompressedBody decodes gzip, br, and
+		// zstd; the fallback below matches Chrome for the rare empty-header case.
+		if req.Header.Get("Accept-Encoding") == "" {
+			req.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
 		}
-		req.Header.Set("Accept-Encoding", ae)
 
 		// Translate proxy Referer → original page URL so CDN hotlink
 		// protection sees the correct origin domain instead of localhost.
@@ -448,15 +456,22 @@ func (h *Handler) modifyResponse(resp *http.Response) error {
 	return nil
 }
 
-// routeSetCookies absorbs all upstream Set-Cookie headers into the server-side
-// session jar. No upstream cookies are forwarded to the browser — the body
-// rewriter injects them into the page bootstrap script instead, so page JS
-// reads them from the in-memory store rather than the browser cookie store.
+// routeSetCookies splits upstream Set-Cookie headers between the server-side
+// session jar and the browser cookie store.
 //
-// When CookieJar is nil, all cookies go through the existing rewrite path.
-// When a new session ID must be issued (first ever response for this client),
-// a crnsct session cookie is appended to the response, and the new session ID
-// is stashed back into the request context so the body rewriter can use it.
+//   - HttpOnly cookies go into the session jar. They are invisible to page JS
+//     by definition, so keeping them server-side is safe and avoids polluting
+//     the browser store. The Director injects them back on outgoing requests.
+//
+//   - Non-HttpOnly cookies are prefixed (see rewriteOneCookie) and forwarded
+//     to the browser. Page JS (e.g. orchestrate.js) must be able to read these
+//     via document.cookie — if they were stored server-side JS would see empty
+//     values and construct incorrect challenge POST payloads.
+//
+// When CookieJar is nil, all cookies go through rewriteSetCookies (the
+// no-jar path that prefixes and forwards everything to the browser).
+// When a new session must be issued, a crnsct cookie is appended and the ID
+// is stashed into the request context for the body rewriter.
 func (h *Handler) routeSetCookies(resp *http.Response) {
 	if h.opts.CookieJar == nil {
 		rewriteSetCookies(resp, h.opts.ProxyCfg.PublicURL, resp.Request.URL.Host)
@@ -468,25 +483,33 @@ func (h *Handler) routeSetCookies(resp *http.Response) {
 	newSession := sessionID == ""
 	if newSession {
 		sessionID = GenerateSessionID()
-		// Propagate the new session ID to the body rewriter, which runs after us.
 		ctx := context.WithValue(resp.Request.Context(), SessionContextKey{}, sessionID)
 		resp.Request = resp.Request.WithContext(ctx)
 	}
 
-	// Store ALL upstream cookies server-side — none go to the browser.
+	isHTTPS := strings.EqualFold(h.opts.ProxyCfg.PublicURL.Scheme, "https")
+	prefix := CookiePrefixFor(resp.Request.URL.Host)
+
 	var forJar []*http.Cookie
+	var forBrowser []string
 	for _, raw := range resp.Header["Set-Cookie"] {
-		forJar = append(forJar, ParseSetCookieHeader(raw))
+		c := ParseSetCookieHeader(raw)
+		if c.HttpOnly {
+			forJar = append(forJar, c)
+		} else {
+			forBrowser = append(forBrowser, rewriteOneCookie(raw, isHTTPS, prefix))
+		}
 	}
 	if len(forJar) > 0 {
 		h.opts.CookieJar.StoreServerCookies(sessionID, resp.Request.URL.Host, forJar)
 	}
 	resp.Header.Del("Set-Cookie")
+	for _, raw := range forBrowser {
+		resp.Header.Add("Set-Cookie", raw)
+	}
 
-	// Issue the proxy session cookie on first contact. Added after Del so it
-	// doesn't get cleared along with the upstream cookies.
+	// Issue the proxy session cookie on first contact.
 	if newSession {
-		isHTTPS := strings.EqualFold(h.opts.ProxyCfg.PublicURL.Scheme, "https")
 		sc := &http.Cookie{
 			Name:     h.opts.SessionCookieName,
 			Value:    sessionID,
@@ -525,12 +548,12 @@ func cookieSiteKey(host string) string {
 	return strings.ReplaceAll(host, ".", "_")
 }
 
-// cookiePrefixFor returns the namespace prefix for cookies belonging to host.
+// CookiePrefixFor returns the namespace prefix for cookies belonging to host.
 // Cookies are stored with this prefix in the browser so that the Director can
 // filter them back to only the originating site when forwarding requests,
 // preventing cross-site cookie contamination (e.g. cf_clearance from site A
 // being forwarded to site B's upstream).
-func cookiePrefixFor(host string) string {
+func CookiePrefixFor(host string) string {
 	return "__crn__" + cookieSiteKey(host) + "__"
 }
 
@@ -549,7 +572,7 @@ func rewriteSetCookies(resp *http.Response, publicURL *url.URL, upstreamHost str
 		return
 	}
 	isHTTPS := strings.EqualFold(publicURL.Scheme, "https")
-	prefix := cookiePrefixFor(upstreamHost)
+	prefix := CookiePrefixFor(upstreamHost)
 	rewritten := make([]string, 0, len(cookies))
 	for _, raw := range cookies {
 		rewritten = append(rewritten, rewriteOneCookie(raw, isHTTPS, prefix))
@@ -618,22 +641,3 @@ func IsLoadRequest(r *http.Request) bool {
 	return strings.HasPrefix(r.URL.Path, "/cyrano/")
 }
 
-// removeEncoding removes a named token from a comma-separated
-// Accept-Encoding value (e.g. removes "zstd" from "gzip, deflate, br, zstd").
-// Returns the original string if the token is not present.
-func removeEncoding(ae, token string) string {
-	parts := strings.Split(ae, ",")
-	out := parts[:0]
-	for _, p := range parts {
-		// Each part may be "token" or "token;q=0.x" — trim both.
-		name := strings.ToLower(strings.TrimSpace(strings.SplitN(p, ";", 2)[0]))
-		if name == strings.ToLower(token) {
-			continue
-		}
-		out = append(out, p)
-	}
-	if len(out) == len(parts) {
-		return ae
-	}
-	return strings.TrimLeft(strings.Join(out, ","), " ,")
-}

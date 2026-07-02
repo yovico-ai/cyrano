@@ -7,6 +7,41 @@ import (
 	"time"
 )
 
+func TestSessionJar_ChallengeOriginRoundtrip(t *testing.T) {
+	j := NewSessionJar()
+
+	// Unknown session → not found.
+	if _, _, ok := j.ChallengeOrigin("sess-1"); ok {
+		t.Fatal("expected no challenge origin before storing")
+	}
+
+	j.StoreChallengeOrigin("sess-1", "https", "claude.ai")
+	scheme, host, ok := j.ChallengeOrigin("sess-1")
+	if !ok || scheme != "https" || host != "claude.ai" {
+		t.Fatalf("ChallengeOrigin = (%q, %q, %v), want (https, claude.ai, true)", scheme, host, ok)
+	}
+
+	// Latest write wins (a later challenge page replaces the origin).
+	j.StoreChallengeOrigin("sess-1", "https", "www.example.com")
+	if _, host, _ := j.ChallengeOrigin("sess-1"); host != "www.example.com" {
+		t.Errorf("challenge origin not updated: got %q", host)
+	}
+
+	// Sessions are isolated.
+	if _, _, ok := j.ChallengeOrigin("sess-2"); ok {
+		t.Error("challenge origin leaked across sessions")
+	}
+}
+
+func TestSessionJar_ChallengeOriginEmptySession(t *testing.T) {
+	j := NewSessionJar()
+	// Empty session ID is a no-op on store and never resolves on lookup.
+	j.StoreChallengeOrigin("", "https", "claude.ai")
+	if _, _, ok := j.ChallengeOrigin(""); ok {
+		t.Error("empty session ID must not resolve a challenge origin")
+	}
+}
+
 func TestSessionJar_BasicRoundtrip(t *testing.T) {
 	jar := NewSessionJar()
 	sess := "testsession"

@@ -79,14 +79,13 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 
 			// Inject the bootstrap chain immediately after <head> opens,
 			// so it runs before any other inline script in the document.
-			if cfg.InjectBootstrap && !bootstrapDone && tag == "head" {
-				emitRaw([]byte(bootstrapScript(&cfg)))
-				bootstrapDone = true
-			}
-			// Fallback: some documents omit <head> entirely. Inject before
-			// any <body> content so the runtime is available to inline scripts.
-			if cfg.InjectBootstrap && !bootstrapDone && tag == "body" {
-				emitRaw([]byte(bootstrapScript(&cfg)))
+			if !bootstrapDone && (tag == "head" || tag == "body") {
+				if cfg.ChallengePathPrefix != "" {
+					emitRaw([]byte(challengePathFixScript(cfg.ChallengePathPrefix, cfg.ChallengeCookiePrefix, cfg.ChallengeDebug)))
+				}
+				if cfg.InjectBootstrap {
+					emitRaw([]byte(bootstrapScript(&cfg)))
+				}
 				bootstrapDone = true
 			}
 
@@ -237,7 +236,8 @@ func applyAttrRules(tag string, attrs []html.Attribute, cfg *Config) []html.Attr
 	}
 
 	// HTML_PROCESS_SERVER_COOKIES — script/iframe loads sync cookies on done.
-	if (tag == "script" || tag == "iframe") {
+	// Only when the bootstrap is injected — $rewriter doesn't exist otherwise.
+	if cfg.InjectBootstrap && (tag == "script" || tag == "iframe") {
 		if _, ok := getAttr(attrs, "src"); ok {
 			cur, _ := getAttr(attrs, "onload")
 			if !strings.Contains(cur, "$rewriter.process_server_cookies()") {
@@ -249,7 +249,7 @@ func applyAttrRules(tag string, attrs []html.Attribute, cfg *Config) []html.Attr
 	// Called on load so that both proxy-served iframes (which already have
 	// bootstrap injected by the HTML rewriter) and about:blank / document.write
 	// iframes (which don't) get $rewriter in their window.
-	if tag == "iframe" {
+	if cfg.InjectBootstrap && tag == "iframe" {
 		if _, ok := getAttr(attrs, "src"); ok {
 			cur, _ := getAttr(attrs, "onload")
 			if !strings.Contains(cur, "$rewriter.append_rewrite_script_into_iframe") {
@@ -258,7 +258,7 @@ func applyAttrRules(tag string, attrs []html.Attribute, cfg *Config) []html.Attr
 		}
 	}
 	// HTML_FETCH_COOKIES — img loads sync cross-origin cookies on done.
-	if tag == "img" {
+	if cfg.InjectBootstrap && tag == "img" {
 		if _, ok := getAttr(attrs, "src"); ok {
 			cur, _ := getAttr(attrs, "onload")
 			if !strings.Contains(cur, "$rewriter.fetch_cookies") {

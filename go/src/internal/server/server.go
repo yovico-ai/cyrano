@@ -24,6 +24,7 @@ type Server struct {
 	Config     *config.File
 	AssetsRoot string // absolute path to <repo>/go/assets
 	Logger     *slog.Logger
+	Prettify   bool // format JS and CSS responses for readability (debug only)
 }
 
 // New constructs a Server with sensible defaults applied.
@@ -176,7 +177,7 @@ func (s *Server) Handler() http.Handler {
 			proxyHandler := proxy.New(proxy.Options{
 				SkipTLSVerify:     false,
 				Logger:            proxyLogger,
-				BodyRewriter:      makeBodyRewriter(vhost, proxyCfg, rewriterLogger, jar, vhost.SecretCookieName),
+				BodyRewriter:      makeBodyRewriter(vhost, proxyCfg, rewriterLogger, jar, vhost.SecretCookieName, s.Prettify),
 				ProxyCfg:          proxyCfg,
 				CookieJar:         jar,
 				SessionCookieName: vhost.SecretCookieName,
@@ -199,20 +200,47 @@ func (s *Server) Handler() http.Handler {
 			if r.URL.RawQuery != "" {
 				dest += "?" + r.URL.RawQuery
 			}
-			http.Redirect(w, r, dest, http.StatusFound)
+			// 307 (not 302) so POST method and body are preserved when
+			// challenge scripts redirect their API calls through here.
+			http.Redirect(w, r, dest, http.StatusTemporaryRedirect)
 			return
 		}
 
-		// Cloudflare Bot Management scripts (/cdn-cgi/challenge-platform/...)
-		// that arrive without a usable Referer (e.g. from an about:blank
-		// sandbox created by jsd/main.js) cannot be routed to an upstream
-		// because we have no origin to forward them to. Return an empty 200
-		// so the challenge fails silently instead of with a noisy 404 and a
-		// MIME-type error that breaks the page console.
-		if isChallengeJSPath(r.URL.Path) {
-			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-			w.WriteHeader(http.StatusOK)
-			return
+		// Cloudflare challenge-platform requests from blob workers or
+		// about:blank sandboxes have no usable Referer. If the session cookie
+		// is present and we recorded a challenge origin for this session,
+		// proxy the request directly to that origin.
+		if isChallengeplatformPath(r.URL.Path) {
+			proxyCfgForChallenge := s.proxyEndpoints(vhost)
+			proxyLogger := s.Logger.With("component", "proxy")
+			rewriterLogger := s.Logger.With("component", "rewriter")
+			challengeProxyHandler := proxy.New(proxy.Options{
+				SkipTLSVerify:     false,
+				Logger:            proxyLogger,
+				BodyRewriter:      makeBodyRewriter(vhost, proxyCfgForChallenge, rewriterLogger, jar, vhost.SecretCookieName, s.Prettify),
+				ProxyCfg:          proxyCfgForChallenge,
+				CookieJar:         jar,
+				SessionCookieName: vhost.SecretCookieName,
+			})
+			if scheme, host, ok := challengeOriginFromSession(r, jar, vhost.SecretCookieName); ok {
+				target := &url.URL{
+					Scheme:   scheme,
+					Host:     host,
+					Path:     r.URL.Path,
+					RawQuery: r.URL.RawQuery,
+				}
+				s.Logger.Debug("challenge: routing via session origin",
+					"path", r.URL.Path, "target", target.String())
+				challengeProxyHandler.ServeHTTPWithTarget(w, r, target)
+				return
+			}
+			// No session origin — fall through to empty-200 for .js files (legacy
+			// fallback for about:blank sandboxes that predate session tracking).
+			if isChallengeJSPath(r.URL.Path) {
+				w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+				w.WriteHeader(http.StatusOK)
+				return
+			}
 		}
 
 		// Static / landing page / rewriter.js bundle (fallback).
@@ -275,6 +303,27 @@ func inferOriginFromReferer(r *http.Request, publicURL *url.URL) *url.URL {
 		return nil
 	}
 	return &url.URL{Scheme: target.Scheme, Host: target.Host}
+}
+
+// isChallengeplatformPath reports whether the path is a Cloudflare
+// challenge-platform path that should be routed via session-based origin
+// lookup when no Referer is available.
+func isChallengeplatformPath(path string) bool {
+	return strings.Contains(strings.ToLower(path), "/cdn-cgi/challenge-platform/")
+}
+
+// challengeOriginFromSession extracts the session ID from r's cookies and
+// looks up the challenge origin stored by StoreChallengeOrigin. Returns the
+// scheme and host when found, (_, _, false) otherwise.
+func challengeOriginFromSession(r *http.Request, jar *proxy.SessionJar, sessName string) (string, string, bool) {
+	if jar == nil || sessName == "" {
+		return "", "", false
+	}
+	c, err := r.Cookie(sessName)
+	if err != nil {
+		return "", "", false
+	}
+	return jar.ChallengeOrigin(c.Value)
 }
 
 // logRequests is a tiny middleware that emits one slog line per request.
