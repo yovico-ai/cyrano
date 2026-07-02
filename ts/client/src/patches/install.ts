@@ -17,6 +17,7 @@ import { patchXmlHttpRequest } from "./xhr";
 import { patchWebSocket } from "./websocket";
 import { patchEventSource } from "./event-source";
 import { patchWorker } from "./worker";
+import { patchBlobWorkerSource } from "./blob-worker-source";
 import { patchUrlAttributes, patchAnchorUrlReflection } from "./url-attributes";
 import { patchDynamicHtml } from "./dynamic-html";
 import { patchCssRules } from "./css-rules";
@@ -67,6 +68,7 @@ export function installPatches(
     patchWebSocket(targetWindow, rewriteOne, unwrapOne);
     patchEventSource(targetWindow, rewriteOne, unwrapOne);
     patchWorker(targetWindow, rewriteOne);
+    patchBlobWorkerSource(config, getCurrentBaseUrl);
     patchServiceWorker(targetWindow);
     // Dynamic-HTML patches must come BEFORE the per-class property-setter
     // patches: dynamic-html captures Element.prototype.setAttribute as the
