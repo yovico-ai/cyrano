@@ -30,7 +30,6 @@ import { patchServiceWorker } from "./service-worker";
 import { patchDocumentCookie } from "./document-cookie";
 import { patchPostMessage } from "./post-message";
 import { patchMessageEventOrigin } from "./message-event";
-import { installMutationObserver } from "./mutation-observer";
 
 const PATCHED_FLAG = Symbol.for("rewriter.patched");
 
@@ -47,12 +46,6 @@ export function installPatches(
     const flagged = targetWindow as PatchableWindow;
     if (flagged[PATCHED_FLAG]) return;
     flagged[PATCHED_FLAG] = true;
-
-    // Capture native setAttribute/getAttribute before patchDynamicHtml replaces
-    // them. The MutationObserver uses the native versions to read/write raw DOM
-    // values (proxy URLs) without going through our unwrap/rewrite patches.
-    const nativeSetAttribute = Element.prototype.setAttribute;
-    const nativeGetAttribute = Element.prototype.getAttribute;
 
     const rewriteOne = (rawUrl: string): string =>
         rewriteUrl(rawUrl, getCurrentBaseUrl(), config);
@@ -85,12 +78,4 @@ export function installPatches(
     patchPostMessage(targetWindow, new URL(config.apiBaseURL).origin);
     patchMessageEventOrigin(targetWindow, config);
     patchDocumentCookie(targetWindow, () => getCurrentBaseUrl().pathname);
-    installMutationObserver(
-        targetWindow,
-        rewriteOne,
-        config,
-        () => getCurrentBaseUrl().href,
-        nativeSetAttribute,
-        nativeGetAttribute,
-    );
 }

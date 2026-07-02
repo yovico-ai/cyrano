@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<!--
+  Fixture: challenge-history
+  Simulates a Cloudflare challenge page recording a completion token in the
+  address bar via history.replaceState/pushState, without a full reload —
+  the exact pattern that exposed two bugs in the minimal challenge shim
+  (challengePathFixScript in inject.go):
+
+    1. history.pushState/replaceState were never rewritten at all, so an
+       un-prefixed relative URL (e.g. "/?token=1") landed on window.location
+       verbatim, stripping the /cyrano/<scheme>/<host> prefix from the
+       address bar with no navigation cyrano could ever see or fix.
+    2. Once pushState/replaceState route through _f(), a value that's
+       *already* proxified (e.g. read back from window.location.pathname,
+       as real challenge scripts commonly do) got the prefix prepended a
+       second time, producing /cyrano/https/host/cyrano/https/host/....
+
+  Tests:
+    1. replaceState with a bare relative URL preserves the proxy prefix on
+       window.location.pathname afterward (bug #1).
+    2. pushState with a value that already starts with the proxy prefix
+       (as if read back from location.pathname) does not double it (bug #2).
+
+  data-pass="true" when both hold.
+-->
+<html>
+<head><meta charset="utf-8"><title>challenge-history fixture</title>
+<!-- challenge trigger: /cdn-cgi/challenge-platform/ -->
+</head>
+<body>
+<pre id="log"></pre>
+<div id="result" data-pass="false">pending</div>
+<script>
+(function() {
+  var log = [];
+  function check(label, ok, detail) {
+    log.push((ok ? "PASS" : "FAIL") + " " + label + (detail ? ": " + detail : ""));
+    return ok;
+  }
+
+  // The proxy prefix is /cyrano/https/<host> — derive it the same way the
+  // shim does, from the current (already-proxified) pathname.
+  var parts = location.pathname.split("/");
+  var proxyPrefix = "/" + parts[1] + "/" + parts[2] + "/" + parts[3];
+
+  // 1. Bare relative URL through replaceState must keep the prefix.
+  history.replaceState(null, "", "/?token=1");
+  var afterBare = location.pathname + location.search;
+  var keptPrefix = afterBare.indexOf(proxyPrefix) === 0;
+  check("replaceState('/?token=1') keeps the proxy prefix", keptPrefix, afterBare);
+
+  // 2. An already-proxified value (as if read back from location.pathname)
+  //    must not be double-prefixed.
+  var alreadyProxified = proxyPrefix + "/some/path?again=1";
+  history.pushState(null, "", alreadyProxified);
+  var afterProxified = location.pathname + location.search;
+  var notDoubled = afterProxified.indexOf(proxyPrefix + proxyPrefix) === -1;
+  check("pushState with an already-proxified URL is not double-prefixed", notDoubled, afterProxified);
+
+  var pass = keptPrefix && notDoubled;
+  document.getElementById("log").textContent = log.join("\n");
+  var el = document.getElementById("result");
+  el.dataset.pass = String(pass);
+  el.textContent = pass ? "PASS" : log.filter(function(l) { return l.indexOf("FAIL") === 0; }).join("; ");
+})();
+</script>
+</body>
+</html>

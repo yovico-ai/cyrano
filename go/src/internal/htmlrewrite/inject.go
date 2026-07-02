@@ -11,11 +11,11 @@ import (
 //
 //  1. <script src="<rewriterJsPath>">   — loads the client runtime
 //  2. inline <script>                   — calls $rewriter_init(window, config).inject(),
-//                                         then immediately calls
-//                                         $rewriter.set_location(originalURL) so
-//                                         the runtime's base-URL state is correct
-//                                         before any of the page's own inline
-//                                         scripts run.
+//     then immediately calls
+//     $rewriter.set_location(originalURL) so
+//     the runtime's base-URL state is correct
+//     before any of the page's own inline
+//     scripts run.
 //
 // Both reference the single public origin (cfg.Proxy.PublicURL).
 //
@@ -107,37 +107,37 @@ func challengePathFixScript(prefix, cookiePrefix string, debug bool) string {
 	if debug {
 		debugPatch = // Announce shim activation with the prefix and upstream origin.
 			`console.log('[crn-chl]','shim active prefix='+_p+' origin='+_origin);` +
-			// XHR: add a URL-storing second wrapper around the already-patched open,
-			// then wrap send to log dispatch and completion.
-			`var _xod=XMLHttpRequest.prototype.open;` +
-			`XMLHttpRequest.prototype.open=function(){` +
-			`this._crn_m=arguments[0];this._crn_u=arguments[1];` +
-			`return _xod.apply(this,arguments);};` +
-			`var _xsd=XMLHttpRequest.prototype.send;` +
-			`XMLHttpRequest.prototype.send=function(){` +
-			`var xhr=this,m=xhr._crn_m||'?',u=xhr._crn_u||'?';` +
-			`console.log('[crn-chl]','XHR.send',m,u);` +
-			`xhr.addEventListener('load',function(){` +
-			`console.log('[crn-chl]','XHR.done',m,u,xhr.status);});` +
-			`return _xsd.apply(this,arguments);};` +
-			// Fetch: wrap the already-patched window.fetch to log URL and status.
-			`var _fed=window.fetch;` +
-			`if(typeof _fed==='function'){window.fetch=function(){` +
-			`var u=typeof arguments[0]==='string'?arguments[0]:` +
-			`(arguments[0]&&arguments[0].url)||'?';` +
-			`console.log('[crn-chl]','fetch',u);` +
-			`return _fed.apply(window,arguments).then(` +
-			`function(r){console.log('[crn-chl]','fetch.done',u,r.status);return r;},` +
-			`function(e){console.log('[crn-chl]','fetch.err',u,''+e);throw e;});};}` +
-			// Cookie setter: log each document.cookie write (before prefix is applied).
-			// Getter is intentionally NOT logged — it fires too often to be useful.
-			`var _dcdbg=Object.getOwnPropertyDescriptor(document,'cookie');` +
-			`if(_dcdbg&&_dcdbg.set){var _csdbg=_dcdbg.set;` +
-			`Object.defineProperty(document,'cookie',{configurable:true,` +
-			`enumerable:_dcdbg.enumerable,get:_dcdbg.get,` +
-			`set:function(v){` +
-			`console.log('[crn-chl]','cookie.set',v.substring(0,120));` +
-			`return _csdbg.call(this,v);}});}`
+				// XHR: add a URL-storing second wrapper around the already-patched open,
+				// then wrap send to log dispatch and completion.
+				`var _xod=XMLHttpRequest.prototype.open;` +
+				`XMLHttpRequest.prototype.open=function(){` +
+				`this._crn_m=arguments[0];this._crn_u=arguments[1];` +
+				`return _xod.apply(this,arguments);};` +
+				`var _xsd=XMLHttpRequest.prototype.send;` +
+				`XMLHttpRequest.prototype.send=function(){` +
+				`var xhr=this,m=xhr._crn_m||'?',u=xhr._crn_u||'?';` +
+				`console.log('[crn-chl]','XHR.send',m,u);` +
+				`xhr.addEventListener('load',function(){` +
+				`console.log('[crn-chl]','XHR.done',m,u,xhr.status);});` +
+				`return _xsd.apply(this,arguments);};` +
+				// Fetch: wrap the already-patched window.fetch to log URL and status.
+				`var _fed=window.fetch;` +
+				`if(typeof _fed==='function'){window.fetch=function(){` +
+				`var u=typeof arguments[0]==='string'?arguments[0]:` +
+				`(arguments[0]&&arguments[0].url)||'?';` +
+				`console.log('[crn-chl]','fetch',u);` +
+				`return _fed.apply(window,arguments).then(` +
+				`function(r){console.log('[crn-chl]','fetch.done',u,r.status);return r;},` +
+				`function(e){console.log('[crn-chl]','fetch.err',u,''+e);throw e;});};}` +
+				// Cookie setter: log each document.cookie write (before prefix is applied).
+				// Getter is intentionally NOT logged — it fires too often to be useful.
+				`var _dcdbg=Object.getOwnPropertyDescriptor(document,'cookie');` +
+				`if(_dcdbg&&_dcdbg.set){var _csdbg=_dcdbg.set;` +
+				`Object.defineProperty(document,'cookie',{configurable:true,` +
+				`enumerable:_dcdbg.enumerable,get:_dcdbg.get,` +
+				`set:function(v){` +
+				`console.log('[crn-chl]','cookie.set',v.substring(0,120));` +
+				`return _csdbg.call(this,v);}});}`
 	}
 
 	return `<script>(function(){` +
@@ -158,9 +158,13 @@ func challengePathFixScript(prefix, cookiePrefix string, debug bool) string {
 		//  - same-upstream URL (https://claude.ai/foo) → same
 		//  - any other http/https URL (e.g. https://challenges.cloudflare.com/foo)
 		//    → _rl.origin + /cyrano/<scheme>/<host><path>
-		// _rl.host guard prevents double-proxying already-rewritten URLs.
+		// The leading /cyrano/ check and the _rl.host guard (third branch) both
+		// prevent double-proxying already-rewritten URLs — needed now that
+		// history.pushState/replaceState (below) can hand this an already-
+		// proxified value read back from window.location.pathname.
 		`function _f(v){` +
 		`if(typeof v!=='string')return v;` +
+		`if(v.indexOf('/cyrano/')===0)return v;` +
 		`if(v.charAt(0)==='/'&&v.charAt(1)!=='/')return _p+v;` +
 		`var _ol=_origin.length;` +
 		`if(v.length>_ol&&v.indexOf(_origin)===0&&v.charAt(_ol)==='/')return _p+v.slice(_ol);` +
@@ -272,6 +276,22 @@ func challengePathFixScript(prefix, cookiePrefix string, debug bool) string {
 		`if(_lhd&&_lhd.set){var _lhs=_lhd.set;` +
 		`Object.defineProperty(_lp,'href',{configurable:true,enumerable:_lhd.enumerable,` +
 		`get:_lhd.get,set:function(v){_lhs.call(this,_f(v));}});}` +
+		// History.prototype.pushState/replaceState — challenge scripts commonly
+		// record a completion token in the address bar without a full reload
+		// (e.g. history.replaceState(null,'','/?__cf_chl_rt_tk=...')). That's a
+		// same-origin, in-page URL change from the browser's perspective — no
+		// navigation, no request cyrano ever sees — so unlike location.replace/
+		// assign/href above, nothing else catches it. An un-rewritten relative
+		// URL here still lands on window.location (pushState/replaceState update
+		// it even without navigating), stripping the /cyrano/<scheme>/<host>
+		// prefix from the address bar and leaving anything that resolves a
+		// relative URL against window.location afterward pointed at the bare
+		// proxy origin instead of the upstream site.
+		`var _hpo=history.pushState,_hro=history.replaceState;` +
+		`if(typeof _hpo==='function')history.pushState=function(d,t,u){` +
+		`return _hpo.call(this,d,t,u==null?u:_f(u));};` +
+		`if(typeof _hro==='function')history.replaceState=function(d,t,u){` +
+		`return _hro.call(this,d,t,u==null?u:_f(u));};` +
 		// Element.prototype.setAttribute — intercept src on script/iframe elements
 		// and csp on iframe elements. The csp attribute enforces a CSP on the
 		// loaded document regardless of its own HTTP headers; strip TT directives
