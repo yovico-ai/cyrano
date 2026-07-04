@@ -84,6 +84,18 @@ func rewriteCSP(csp, proxyOrigin string) string {
 			case isNonceTarget && strings.HasPrefix(lower, "'nonce-"):
 				hadNonce = true
 				// stripped
+			case isNonceTarget && (strings.HasPrefix(lower, "'sha256-") ||
+				strings.HasPrefix(lower, "'sha384-") ||
+				strings.HasPrefix(lower, "'sha512-")):
+				// Strip hash-sources too. Like nonces, the mere presence of a
+				// hash-source makes the browser IGNORE 'unsafe-inline' — so an
+				// origin that hash-pins its own inline scripts would block our
+				// injected bootstrap (different content, different hash) and
+				// $rewriter would never be defined. Dropping the hashes lets the
+				// 'unsafe-inline' we add below cover both the page's inline
+				// scripts and ours.
+				hadNonce = true
+				// stripped
 			case isNonceTarget && lower == "'strict-dynamic'":
 				hadNonce = true // mark changed; drop strict-dynamic alongside nonces
 				// stripped

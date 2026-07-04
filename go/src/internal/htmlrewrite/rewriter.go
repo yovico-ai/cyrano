@@ -22,10 +22,10 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 		return errors.New("htmlrewrite: Config.BaseURL required")
 	}
 	z := html.NewTokenizer(r)
-	bootstrapDone := false  // guard against multiple <head> (e.g. nested srcdoc)
-	inScript := false       // currently inside <script>...</script> with rewritable content
-	inStyle := false        // currently inside <style>...</style>
-	inNoscript := false     // currently inside <noscript>...</noscript>
+	bootstrapDone := false // guard against multiple <head> (e.g. nested srcdoc)
+	inScript := false      // currently inside <script>...</script> with rewritable content
+	inStyle := false       // currently inside <style>...</style>
+	inNoscript := false    // currently inside <noscript>...</noscript>
 	emitted := bytes.Buffer{}
 
 	flush := func() error {
@@ -81,7 +81,7 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 			// so it runs before any other inline script in the document.
 			if !bootstrapDone && (tag == "head" || tag == "body") {
 				if cfg.ChallengePathPrefix != "" {
-					emitRaw([]byte(challengePathFixScript(cfg.ChallengePathPrefix, cfg.ChallengeCookiePrefix, cfg.ChallengeDebug)))
+					emitRaw([]byte(challengePathFixScript(cfg.ChallengePathPrefix, cfg.ChallengeCookiePrefix)))
 				}
 				if cfg.InjectBootstrap {
 					emitRaw([]byte(bootstrapScript(&cfg)))
@@ -187,12 +187,22 @@ func applyAttrRules(tag string, attrs []html.Attribute, cfg *Config) []html.Attr
 	attrs = removeAttr(attrs, "integrity")
 
 	// HTML_CROSSORIGIN — force `use-credentials` so cookies follow the
-	// rewritten request. Skip <link rel="preload"> — the preload's credentials
-	// mode must match whatever the actual JS fetch uses; we can't know that
-	// statically, and mismatching causes the preload to be silently discarded.
+	// rewritten (now same-origin) request. This MUST be applied consistently to
+	// a resource and its <link rel=preload>: cyrano forces <script> to
+	// use-credentials, so a script preload left at "anonymous" has a different
+	// credentials mode, the browser refuses to reuse it for the script, and the
+	// bundle is fetched twice — the unused preload hangs and, under HTTP/2
+	// coalescing, wedges the connection (the vendor.js/main.js pending-forever
+	// bug). Exception: a font preload stays in its original (anonymous)
+	// credentials mode to match the @font-face fetch, which is not credentialed
+	// — forcing it would instead double-fetch the font.
 	if _, ok := getAttr(attrs, "crossorigin"); ok {
 		rel, _ := getAttr(attrs, "rel")
-		if !(tag == "link" && strings.EqualFold(rel, "preload")) {
+		as, _ := getAttr(attrs, "as")
+		isFontPreload := tag == "link" &&
+			(strings.EqualFold(rel, "preload") || strings.EqualFold(rel, "prefetch")) &&
+			strings.EqualFold(as, "font")
+		if !isFontPreload {
 			attrs = setAttr(attrs, "crossorigin", "use-credentials")
 		}
 	}
@@ -207,7 +217,7 @@ func applyAttrRules(tag string, attrs []html.Attribute, cfg *Config) []html.Attr
 	}
 
 	// HTML_SRCSET — comma-separated URL list with descriptors.
-	if (tag == "img" || tag == "source") {
+	if tag == "img" || tag == "source" {
 		if v, ok := getAttr(attrs, "srcset"); ok {
 			attrs = setAttr(attrs, "srcset",
 				rewriteSrcset(v, func(u string) string { return rewriteOne(u, urlOpts{}) }))
@@ -350,23 +360,23 @@ func removeAttr(attrs []html.Attribute, key string) []html.Attribute {
 // jsMimeTypes is the set of <script type="..."> values whose content is JS.
 // Empty/missing type is also treated as JS by default.
 var jsMimeTypes = map[string]bool{
-	"application/ecmascript":  true,
-	"application/javascript":  true,
+	"application/ecmascript":   true,
+	"application/javascript":   true,
 	"application/x-ecmascript": true,
 	"application/x-javascript": true,
-	"text/ecmascript":  true,
-	"text/javascript":  true,
-	"text/javascript1.0": true,
-	"text/javascript1.1": true,
-	"text/javascript1.2": true,
-	"text/javascript1.3": true,
-	"text/javascript1.4": true,
-	"text/javascript1.5": true,
-	"text/jscript":      true,
-	"text/livescript":   true,
-	"text/x-ecmascript": true,
-	"text/x-javascript": true,
-	"module":            true,
+	"text/ecmascript":          true,
+	"text/javascript":          true,
+	"text/javascript1.0":       true,
+	"text/javascript1.1":       true,
+	"text/javascript1.2":       true,
+	"text/javascript1.3":       true,
+	"text/javascript1.4":       true,
+	"text/javascript1.5":       true,
+	"text/jscript":             true,
+	"text/livescript":          true,
+	"text/x-ecmascript":        true,
+	"text/x-javascript":        true,
+	"module":                   true,
 }
 
 // isJSScript reports whether a <script> tag's body should be processed by

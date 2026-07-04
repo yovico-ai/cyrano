@@ -247,6 +247,15 @@ func (r *rewriter) walkStmt(s js.IStmt) js.IStmt {
 		if n.Value != nil {
 			n.Value = r.rvalue(n.Value)
 		}
+	case *js.DebuggerStmt:
+		// Strip `debugger;` from proxied third-party JS. It's a no-op when
+		// DevTools is closed, but Cloudflare's challenge uses it two ways: to
+		// freeze open DevTools, and — in a tight loop bracketed by timestamps —
+		// to DETECT open DevTools (a long pause across the statement ⇒ a debugger
+		// is attached). We already rewrite this JS, so replacing it with an empty
+		// statement removes the DevTools trap and defeats the timing-based
+		// detection, with no effect on normal execution.
+		return &js.EmptyStmt{}
 	case *js.BlockStmt:
 		r.walkBlockStmt(n)
 	case *js.SwitchStmt:
@@ -461,9 +470,17 @@ func (r *rewriter) rvalue(e js.IExpr) js.IExpr {
 		// `obj[expr]` — JS_WRAP_MEMBER_EXPRESSION. Wraps both sides.
 		n.X = r.rvalue(n.X)
 		n.Y = r.rvalue(n.Y)
-		// Skip optional-chain accesses (obj?.[key]): wrapping would lose the
-		// ?. and turn safe null-guards into TypeError crashes.
-		if r.opts.WrapMemberExpression && !n.Optional {
+		// Skip optional-chain accesses. Two forms must be left alone:
+		//   1. obj?.[key]           — n.Optional is set on this IndexExpr.
+		//   2. (a?.b)[key], a?.b.c[key], … — the *object* is an optional chain
+		//      that can short-circuit to undefined, but the [key] itself is
+		//      written without ?. so n.Optional is false. Wrapping it as
+		//      wrap_member_expression(a?.b, key)[key] moves the [key] OUT of the
+		//      chain: when `a` is nullish, `a?.b` is undefined, the wrapper
+		//      returns undefined, and undefined[key] throws instead of
+		//      short-circuiting. (This is exactly what crashed TanStack Router:
+		//      `n?.routes[t.routeId]` → "Cannot read properties of undefined".)
+		if r.opts.WrapMemberExpression && !n.Optional && !inOptionalChain(n.X) {
 			return r.wrapMemberExpression(n)
 		}
 		return n
@@ -787,6 +804,38 @@ func (r *rewriter) wrapEvalMemexp(n *js.DotExpr) js.IExpr {
 // assignment ($__crn_key__ = a) completes and is used before the outer
 // ($__crn_key__ = b) runs. The variable is published as window.$__crn_key__ by
 // the client bootstrap so strict-mode eval'd fragments can assign to it.
+// inOptionalChain reports whether e is (part of) an optional chain that can
+// short-circuit to undefined — i.e. any DotExpr/IndexExpr/CallExpr in its
+// left-hand spine carries the `?.` marker. A computed access whose object is
+// such a chain must NOT be lifted into a wrap_member_expression(obj,key)[key]
+// form, because the trailing [key] would then evaluate outside the chain and
+// throw on the short-circuit instead of yielding undefined.
+func inOptionalChain(e js.IExpr) bool {
+	for {
+		switch n := e.(type) {
+		case *js.DotExpr:
+			if n.Optional {
+				return true
+			}
+			e = n.X
+		case *js.IndexExpr:
+			if n.Optional {
+				return true
+			}
+			e = n.X
+		case *js.CallExpr:
+			if n.Optional {
+				return true
+			}
+			e = n.X
+		case *js.GroupExpr:
+			e = n.X
+		default:
+			return false
+		}
+	}
+}
+
 func (r *rewriter) wrapMemberExpression(n *js.IndexExpr) js.IExpr {
 	const varName = "$__crn_key__"
 	tpl := parseExpr(fmt.Sprintf(

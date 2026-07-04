@@ -28,3 +28,18 @@ declare global {
 
 (globalThis as unknown as Window).$rewriter_init = init;
 (globalThis as unknown as Window).$rewriter_init_worker = initWorker;
+
+// Remove our own injected <script> element from the DOM once it has executed.
+// Everything it defines ($rewriter_init/_worker) lives on globalThis, so
+// removing the element loses nothing — but it keeps document.scripts.length
+// matching an un-proxied page. Anti-bot widgets (e.g. Cloudflare Turnstile)
+// count document.scripts and treat an unexpected extra one as tampering, so
+// any injected-and-left script inflates the fingerprint. Main-thread only:
+// under importScripts in a Worker there is no document and no element to drop.
+try {
+    const doc = (globalThis as { document?: Document }).document;
+    const self = doc?.currentScript;
+    if (self && typeof self.remove === "function") self.remove();
+} catch {
+    /* non-fatal — leaving the element is only a cosmetic fingerprint cost */
+}

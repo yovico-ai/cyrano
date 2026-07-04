@@ -3,7 +3,6 @@ package server
 import (
 	"bytes"
 	"compress/gzip"
-	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -34,7 +33,6 @@ import (
 // context — ReverseProxy turns the error into a 502 but the log gives us
 // enough to diagnose without re-running.
 func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logger *slog.Logger, jar *proxy.SessionJar, sessName string, prettify bool) func(*http.Response, *url.URL) error {
-	debugEnabled := logger.Enabled(context.Background(), slog.LevelDebug)
 	clientPassthrough := buildClientPassthrough(vhost, proxyCfg)
 	jsOpts := jsrewrite.DefaultOptions()
 	jsOpts.Logger = logger.With("component", "jsrewrite")
@@ -138,7 +136,6 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				// inline JS, so it does not interfere with the PoW computation.
 				cfg.ChallengePathPrefix = "/cyrano/" + target.Scheme + "/" + target.Host
 				cfg.ChallengeCookiePrefix = proxy.CookiePrefixFor(target.Host)
-				cfg.ChallengeDebug = debugEnabled
 				// Record this session's challenge origin so bare-path /cdn-cgi/
 				// requests from blob workers (which have no Referer) can be routed
 				// to the correct upstream without needing a /cyrano/ URL prefix.
@@ -159,8 +156,20 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			replaceBody(resp, out.Bytes())
 
 		case isJS(resp):
-			// Skip rewriting challenge scripts and any content from challenge hosts.
-			if isChallengeScript(target) || isChallengeHost(target.Hostname()) {
+			// EXPERIMENT: rewrite Turnstile's api.js even though it lives on the
+			// challenge host. api.js assembles the extraParams fingerprint and
+			// reads the host page's location.href directly (leaking the proxy URL
+			// as the "url"/"lH" fields → 600010). Rewriting routes those reads
+			// through $rewriter.wrap_get_location so they report the upstream URL.
+			isApiJS := strings.Contains(target.Path, "/turnstile/") && strings.HasSuffix(target.Path, "/api.js")
+			// Skip rewriting challenge scripts, Cloudflare's jsd bot-detection
+			// telemetry, and any content from challenge hosts. jsd is heavily
+			// obfuscated and self-integrity-checked: JS-rewriting it changes its
+			// source, its check fails, and function Z spins in a tight loop that
+			// pegs the main thread and freezes the whole page (94% of CPU, proven
+			// via CPU profile). Serve it unmodified — it's passive bot telemetry
+			// the app doesn't need to render.
+			if !isApiJS && (isChallengeScript(target) || isJSDScript(target) || isChallengeHost(target.Hostname())) {
 				logger.Debug("rewriter: js passthrough (challenge script)", "target", target.String())
 				if prettify {
 					body, err := readDecompressedBody(resp)
@@ -180,6 +189,15 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			if prettify {
 				rewritten = jsrewrite.Prettify(rewritten)
 			}
+			// Pass the upstream's cache headers through unchanged. These bundles
+			// are content-hash-immutable (e.g. vendor.<hash>.js) and the JS
+			// rewriter is deterministic, so the browser may safely cache the
+			// rewritten bytes under the upstream's (often immutable) Cache-Control.
+			// Forcing no-store here defeated that: every reference re-fetched, and
+			// with x.com's preload+script double-load the refetch volume piled up
+			// streams on the one coalesced HTTP/2 connection until it wedged.
+			// Caveat: a rewriter change will NOT invalidate an already-cached copy
+			// — during rewriter development, hard-reload or use "Disable cache".
 			// Worker scripts (Sec-Fetch-Dest: worker/sharedworker) run in a
 			// DedicatedWorkerGlobalScope that has no window and no HTML bootstrap
 			// chain — $rewriter is never defined. Prepend a shim that:
@@ -258,6 +276,17 @@ func isChallengeScript(u *url.URL) bool {
 	return isAkamaiScript(u)
 }
 
+// isJSDScript detects Cloudflare's "jsd" (JavaScript Detection) bot-telemetry
+// scripts, e.g. /cdn-cgi/challenge-platform/scripts/jsd/main.js and the
+// versioned /cdn-cgi/challenge-platform/h/<x>/scripts/jsd/<hash>/main.js. These
+// are obfuscated and self-integrity-checked; rewriting them makes the script
+// spin forever (see the passthrough note in makeBodyRewriter), so they must be
+// served unmodified.
+func isJSDScript(u *url.URL) bool {
+	p := strings.ToLower(u.Path)
+	return strings.Contains(p, "/cdn-cgi/challenge-platform/") && strings.Contains(p, "/scripts/jsd/")
+}
+
 // isAkamaiScript detects Akamai Bot Manager scripts by their distinctive URL
 // shape: all path segments are URL-safe base64 characters (no dots, no
 // extension) and the query string contains a v= parameter with a UUID value.
@@ -323,7 +352,16 @@ func isChallengeHost(host string) bool {
 func isChallengeHTML(body []byte) bool {
 	return bytes.Contains(body, []byte("/__challenge_")) ||
 		bytes.Contains(body, []byte("/__cf_chl")) ||
-		bytes.Contains(body, []byte("/cdn-cgi/challenge-platform/"))
+		// _cf_chl_opt is the Cloudflare interstitial's config object — present
+		// only on an actual challenge page. The "h/" segment (h/b, h/g) is the
+		// real challenge tree (orchestrate, fo, ci). We deliberately do NOT match
+		// the bare "/cdn-cgi/challenge-platform/" prefix: Cloudflare injects a
+		// passive telemetry script (/cdn-cgi/challenge-platform/scripts/jsd/main.js)
+		// into NORMAL pages too, and matching it misclassifies every proxied app
+		// page as a challenge — so it gets the minimal challenge shim instead of
+		// the full $rewriter client, and the app breaks ($rewriter undefined).
+		bytes.Contains(body, []byte("_cf_chl_opt")) ||
+		bytes.Contains(body, []byte("/cdn-cgi/challenge-platform/h/"))
 }
 
 // isCSS reports whether the response Content-Type is rewritable CSS.
@@ -464,9 +502,9 @@ func buildWorkerShim(proxyBase string) []byte {
 // resources) by appending paths to it.
 func buildClientPassthrough(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig) map[string]any {
 	return map[string]any{
-		"apiBaseURL":         urlrewrite.APIBase(proxyCfg),
-		"cacheKey":           "",
-		"source":             vhost.RewriterJSPath,
+		"apiBaseURL":            urlrewrite.APIBase(proxyCfg),
+		"cacheKey":              "",
+		"source":                vhost.RewriterJSPath,
 		"secretCookieName":      vhost.SecretCookieName,
 		"userDataEncryption":    vhost.UserDataEncryption,
 		"version":               vhost.Version,

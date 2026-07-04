@@ -63,14 +63,27 @@ describe("upstreamOriginOf — $rewriter path (primary)", () => {
     });
 });
 
-describe("upstreamOriginOf — fallback path (no $rewriter, proxified location)", () => {
-    it("returns upstream origin when real location href is a proxified URL", () => {
+describe("upstreamOriginOf — fallback path (no $rewriter, real proxy location)", () => {
+    it("unwraps the sender's real proxy location.href to the upstream origin", () => {
         const config = makeConfig();
-        // Simulate a non-patched window whose location.href IS a proxy URL.
-        // The fallback path reads via Object.getOwnPropertyDescriptor(Window.prototype, 'location')
-        // which in Node env is undefined, so we verify graceful null return.
-        const source = {} as Window;
-        // In Node (no DOM), the fallback silently returns null — no crash.
+        // A challenge-shim frame (e.g. an embedded Turnstile widget) exposes no
+        // $rewriter.get_base_url; its real location IS the proxy URL. The fallback
+        // reads location.href off the source window directly (NOT via the
+        // Window.prototype descriptor, which is undefined because location is
+        // [LegacyUnforgeable]) and unwraps it.
+        const source = {
+            location: { href: "http://localhost:9081/cyrano/https/challenges.cloudflare.com/turnstile/f/x" },
+        } as unknown as Window;
+        expect(upstreamOriginOf(source, config)).toBe("https://challenges.cloudflare.com");
+    });
+
+    it("returns null when the sender location is not a proxy URL", () => {
+        const config = makeConfig();
+        const source = { location: { href: "https://example.com/x" } } as unknown as Window;
         expect(upstreamOriginOf(source, config)).toBeNull();
+    });
+
+    it("returns null (no crash) when the sender has no readable location", () => {
+        expect(upstreamOriginOf({} as Window, makeConfig())).toBeNull();
     });
 });

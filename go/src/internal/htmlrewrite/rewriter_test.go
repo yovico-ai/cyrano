@@ -154,6 +154,29 @@ func TestRewrite_CrossoriginToUseCredentials(t *testing.T) {
 	}
 }
 
+// A script preload must be normalized to use-credentials too, so it matches the
+// (also-forced) use-credentials <script> and the browser reuses the preload
+// instead of double-fetching the bundle (which, under HTTP/2 coalescing, wedged
+// the connection). Regression for the vendor.js/main.js pending-forever bug.
+func TestRewrite_CrossoriginScriptPreloadToUseCredentials(t *testing.T) {
+	got := rewrite(t, `<link rel="preload" as="script" crossorigin="anonymous" href="/x.js">`)
+	if !strings.Contains(got, `crossorigin="use-credentials"`) {
+		t.Errorf("script preload crossorigin not normalized: %s", got)
+	}
+}
+
+// A font preload must stay anonymous to match the (non-credentialed) @font-face
+// fetch; forcing use-credentials there would double-fetch the font instead.
+func TestRewrite_CrossoriginFontPreloadStaysAnonymous(t *testing.T) {
+	got := rewrite(t, `<link rel="preload" as="font" crossorigin="anonymous" href="/x.woff2">`)
+	if strings.Contains(got, `crossorigin="use-credentials"`) {
+		t.Errorf("font preload crossorigin should stay anonymous: %s", got)
+	}
+	if !strings.Contains(got, `crossorigin="anonymous"`) {
+		t.Errorf("font preload lost its crossorigin: %s", got)
+	}
+}
+
 // ── HTML_METATAG (CSP) ───────────────────────────────────────────────────────
 
 func TestRewrite_DropsCspMeta(t *testing.T) {
@@ -592,6 +615,26 @@ func TestRewrite_ChallengePathPrefix_InjectsScript(t *testing.T) {
 	}
 	if !strings.Contains(got, `"/cyrano/https/claude.ai"`) {
 		t.Errorf("challenge path prefix not present in injected script: %s", got)
+	}
+}
+
+func TestRewrite_ChallengeShim_WrapsOriginProperties(t *testing.T) {
+	// window.origin/self.origin, document.domain and location.ancestorOrigins
+	// otherwise leak the proxy (localhost) origin. The challenge shim must wrap
+	// them to report the upstream origin/host. General origin-leak fix mirrored
+	// in the TS client (patches/location.ts + WrappedLocation.ancestorOrigins).
+	in := `<html><head><title>challenge</title></head><body></body></html>`
+	got := rewrite(t, in, func(cfg *Config) {
+		cfg.ChallengePathPrefix = "/cyrano/https/claude.ai"
+	})
+	for _, want := range []string{
+		`Object.defineProperty(window,'origin'`,
+		`Object.defineProperty(document,'domain'`,
+		`Object.defineProperty(_wl,'ancestorOrigins'`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("challenge shim missing origin-leak wrap %q in: %s", want, got)
+		}
 	}
 }
 

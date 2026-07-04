@@ -127,3 +127,68 @@ describe("WrappedLocation writes route through the proxy", () => {
         );
     });
 });
+
+describe("WrappedLocation.ancestorOrigins", () => {
+    // Under the proxy every frame is served from the proxy origin, so each
+    // ancestor's real href is a /cyrano/<scheme>/<host>... URL that we
+    // de-proxify back to its upstream origin.
+    function fakeWin(href: string): Window {
+        return { location: { href } } as unknown as Window;
+    }
+
+    it("returns the de-proxified upstream origins of ancestor frames", () => {
+        const state = new BaseUrlState(
+            new URL("https://challenges.cloudflare.com/turnstile"),
+        );
+        const top = fakeWin("http://localhost:9081/cyrano/https/claude.ai/");
+        // top is its own parent and its own top (frame root).
+        (top as unknown as { parent: Window }).parent = top;
+        (top as unknown as { top: Window }).top = top;
+
+        const child = fakeWin(
+            "http://localhost:9081/cyrano/https/challenges.cloudflare.com/turnstile",
+        );
+        (child as unknown as { parent: Window }).parent = top;
+        (child as unknown as { top: Window }).top = top;
+
+        const wrapped = new WrappedLocation(
+            state,
+            makeFakeLocation() as unknown as Location,
+            config,
+            child,
+        );
+
+        const ao = wrapped.ancestorOrigins;
+        expect(ao.length).toBe(1);
+        expect(ao[0]).toBe("https://claude.ai");
+        expect(ao.item(0)).toBe("https://claude.ai");
+        expect(ao.item(1)).toBeNull();
+        expect(ao.contains("https://claude.ai")).toBe(true);
+        expect(ao.contains("https://evil.com")).toBe(false);
+    });
+
+    it("is empty for a top-level frame (no ancestors)", () => {
+        const state = new BaseUrlState(new URL("https://claude.ai/"));
+        const top = fakeWin("http://localhost:9081/cyrano/https/claude.ai/");
+        (top as unknown as { parent: Window }).parent = top;
+        (top as unknown as { top: Window }).top = top;
+
+        const wrapped = new WrappedLocation(
+            state,
+            makeFakeLocation() as unknown as Location,
+            config,
+            top,
+        );
+        expect(wrapped.ancestorOrigins.length).toBe(0);
+    });
+
+    it("returns empty when no window reference is available (worker/test)", () => {
+        const state = new BaseUrlState(new URL("https://claude.ai/"));
+        const wrapped = new WrappedLocation(
+            state,
+            makeFakeLocation() as unknown as Location,
+            config,
+        );
+        expect(wrapped.ancestorOrigins.length).toBe(0);
+    });
+});

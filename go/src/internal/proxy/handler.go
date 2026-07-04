@@ -65,6 +65,15 @@ type Options struct {
 	// (e.g. "crnsct"). Used as the key into CookieJar. Has no effect when
 	// CookieJar is nil.
 	SessionCookieName string
+
+	// Transport, when non-nil, is the upstream RoundTripper this handler
+	// dispatches through. It MUST be shared across requests (created once at
+	// server startup) so the per-session HTTP/2 connection pools persist and
+	// connections get reused/multiplexed instead of one-per-request. When nil,
+	// New creates a fresh RoundTripper — convenient for tests, but never do
+	// that on the hot path: a per-request transport discards its pool every
+	// request, dialing a new upstream connection for every fetch.
+	Transport http.RoundTripper
 }
 
 // SessionContextKey is the context key used to propagate the proxy session ID
@@ -88,8 +97,13 @@ func New(opts Options) *Handler {
 	}
 	// Browser-impersonating upstream transport: https targets negotiate a real
 	// Chrome JA3/JA4 + HTTP/2 fingerprint (via uTLS + fhttp), plaintext http
-	// targets use a stdlib transport. See the upstream package doc.
-	t := upstream.NewRoundTripper(opts.SkipTLSVerify)
+	// targets use a stdlib transport. See the upstream package doc. A shared
+	// transport MUST be injected via Options.Transport so connection pools
+	// persist across requests; the fallback here is for tests only.
+	t := opts.Transport
+	if t == nil {
+		t = upstream.NewRoundTripper(opts.SkipTLSVerify)
+	}
 	return &Handler{opts: opts, transport: t}
 }
 
@@ -202,39 +216,36 @@ func (h *Handler) ServeHTTPWithTarget(w http.ResponseWriter, r *http.Request, ta
 
 // serveTarget runs the httputil.ReverseProxy for an already-resolved target.
 func (h *Handler) serveTarget(w http.ResponseWriter, r *http.Request, target *url.URL) {
-	// Short-circuit Cloudflare Privacy Access Token (PAT) probes.
-	// PAT (RFC 9577) tokens are origin-bound and require Apple/Google device
-	// attestation, neither of which a transparent HTTP proxy can satisfy.
-	// Forwarding always yields a 401 with a WWW-Authenticate challenge the
-	// browser cannot redeem (the URL is the proxy origin — the browser's PAT
-	// interceptor doesn't even engage). Returning an immediate 401 with NO
-	// WWW-Authenticate saves the round-trip and lets Cloudflare's challenge JS
-	// fall back to the (solvable) Turnstile path. Handled here in serveTarget
-	// so it covers both entry points: /cyrano/ requests (ServeHTTP) and
-	// bare-path challenge requests routed by session origin (ServeHTTPWithTarget,
-	// used by blob workers that have no Referer).
-	if isPATProbe(target.Path) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Header().Set("Content-Length", "0")
-		w.WriteHeader(http.StatusUnauthorized)
-		return
-	}
+	// Cloudflare Privacy Access Token (PAT) probes (/cdn-cgi/challenge-platform/
+	// h/b/pat/) are forwarded to the upstream unchanged. PAT (RFC 9577) tokens
+	// are origin-bound and require device attestation the proxy can't satisfy,
+	// so the browser can't redeem the resulting challenge — but forwarding hands
+	// the browser the EXACT response a direct browser sees (a real 401 with
+	// WWW-Authenticate: PrivateToken), which desktop Chrome ignores before
+	// falling back to Turnstile. Previously we fabricated a bare 401 with no
+	// WWW-Authenticate to save the round-trip; that's a response no direct
+	// browser ever produces, and in a clean session it was the one request that
+	// stood out as failing — so we now let it through to match direct behavior.
 	rp := &httputil.ReverseProxy{
 		Director:       h.makeDirector(target),
 		ModifyResponse: h.modifyResponse,
 		Transport:      h.transport,
 		ErrorHandler:   h.errorHandler(target),
+		// Flush every write straight to the client. cyrano serves the browser
+		// over HTTP/1.1 (plain localhost), so the browser has only ~6 connections
+		// per origin. A streaming or long-lived upstream response (SSE, a
+		// long-poll, x.com's real-time pipeline) that we buffer instead of flush
+		// holds its connection open and never delivers, exhausting that pool —
+		// every subsequent request then shows "pending" forever. -1 disables
+		// buffering so streamed bytes reach the browser (and the request
+		// completes) as they arrive. Rewritten bodies are already fully buffered
+		// in ModifyResponse, so per-write flushing costs them nothing.
+		FlushInterval: -1,
 		// httputil.ReverseProxy default Director adds X-Forwarded-For; we
 		// strip ours explicitly via dropOnRequest in makeDirector and let it
 		// re-add a fresh one if needed.
 	}
 	rp.ServeHTTP(w, r)
-}
-
-// isPATProbe reports whether path is a Cloudflare Privacy Access Token probe
-// under the challenge-platform tree.
-func isPATProbe(path string) bool {
-	return strings.Contains(path, "/cdn-cgi/challenge-platform/h/b/pat/")
 }
 
 // makeDirector returns a Director closure that mutates the outgoing request
@@ -261,9 +272,12 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 				sessionID = c.Value
 			}
 			// Stash for ModifyResponse via context — Director can't return a value.
-			*req = *req.WithContext(
-				context.WithValue(req.Context(), SessionContextKey{}, sessionID),
-			)
+			// Also expose it to the upstream RoundTripper (upstream.SessionKey)
+			// so it scopes the connection pool to this session — connections are
+			// reused within the session but never shared across sessions.
+			ctx := context.WithValue(req.Context(), SessionContextKey{}, sessionID)
+			ctx = context.WithValue(ctx, upstream.SessionKey{}, sessionID)
+			*req = *req.WithContext(ctx)
 		}
 
 		// Forward only cookies that belong to this upstream. Cookies are stored
@@ -349,6 +363,49 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 			}
 		}
 
+		// Recompute Sec-Fetch-Site against the REAL upstream origins. The browser
+		// only ever sees our single proxy origin, so it stamps every fetch
+		// same-origin (or "none" for a user-initiated top navigation). A request
+		// that is genuinely cross-site upstream — e.g. the claude.ai challenge
+		// page loading challenges.cloudflare.com's api.js or Turnstile iframe —
+		// would otherwise arrive with Sec-Fetch-Site: same-origin alongside a
+		// cross-site Origin/Referer, a combination no real browser produces and a
+		// clean proxy tell. Sec-Fetch-* are forbidden headers (JS can't set them),
+		// so the correction has to happen server-side. "none" is preserved (no
+		// initiator to compare against). Match what a direct browser would send.
+		if sfs := req.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "none" {
+			initiator := translatedRefOrigin
+			if initiator == "" {
+				if o := req.Header.Get("Origin"); o != "" && !h.isProxyOrigin(o) {
+					initiator = o
+				}
+			}
+			if site := secFetchSite(initiator, target); site != "" {
+				req.Header.Set("Sec-Fetch-Site", site)
+			}
+		}
+
+		// For Cloudflare's challenge flow specifically, re-apply the default
+		// Referrer-Policy (strict-origin-when-cross-origin) against the real
+		// upstream origins. The browser applied the policy relative to our single
+		// proxy origin — where everything is same-origin, so nothing was trimmed —
+		// so a cross-origin challenge load (claude.ai → challenges.cloudflare.com
+		// api.js / Turnstile iframe) would otherwise carry the full proxy-page URL,
+		// including the ?__cf_chl_rt_tk token, where a direct browser sends
+		// origin-only. Scoped to challenge hosts so the deliberate full-referer
+		// forwarding for CDN hotlink protection stays intact everywhere else.
+		if isCloudflareChallengeTarget(target) {
+			if ref := req.Header.Get("Referer"); ref != "" {
+				if v, keep := defaultPolicyReferer(ref, target); keep {
+					if v != ref {
+						req.Header.Set("Referer", v)
+					}
+				} else {
+					req.Header.Del("Referer")
+				}
+			}
+		}
+
 		// User-Agent isn't auto-set if the request had none and the Director
 		// cleared it; keep whatever the client sent (or nothing).
 		if _, ok := req.Header["User-Agent"]; !ok {
@@ -405,6 +462,69 @@ func (h *Handler) translateReferer(referer string) string {
 		return ""
 	}
 	return target.String()
+}
+
+// isCloudflareChallengeTarget reports whether target is part of Cloudflare's
+// challenge flow: the challenges.cloudflare.com widget host, or a
+// challenge-platform / turnstile path on the protected origin. Used to scope
+// challenge-specific header corrections without touching ordinary traffic.
+func isCloudflareChallengeTarget(target *url.URL) bool {
+	if strings.Contains(target.Host, "challenges.cloudflare.com") {
+		return true
+	}
+	return strings.Contains(target.Path, "/cdn-cgi/challenge-platform/") ||
+		strings.Contains(target.Path, "/turnstile/")
+}
+
+// defaultPolicyReferer re-applies the default Referrer-Policy
+// (strict-origin-when-cross-origin) to referer (an already-translated upstream
+// URL) against target, the URL the request is actually going to. Returns
+// (value, true) to send that Referer, or ("", false) to drop it entirely:
+//   - same-origin  → full URL, unchanged
+//   - cross-origin → origin only ("scheme://host/")
+//   - https→http downgrade → dropped
+//
+// The browser applied the page's policy against the single proxy origin (where
+// everything is same-origin, so nothing was trimmed); this restores what a
+// direct browser would send.
+func defaultPolicyReferer(referer string, target *url.URL) (string, bool) {
+	ru, err := url.Parse(referer)
+	if err != nil || ru.Host == "" {
+		return referer, true
+	}
+	if strings.EqualFold(ru.Scheme, target.Scheme) && strings.EqualFold(ru.Host, target.Host) {
+		return referer, true
+	}
+	if strings.EqualFold(ru.Scheme, "https") && strings.EqualFold(target.Scheme, "http") {
+		return "", false
+	}
+	return ru.Scheme + "://" + ru.Host + "/", true
+}
+
+// secFetchSite computes the Sec-Fetch-Site value a direct (un-proxied) browser
+// would send for a request from initiator (an upstream origin like
+// "https://claude.ai") to target (the upstream request URL). Returns "" when
+// the initiator can't be parsed, so the caller leaves the header untouched.
+//
+// Matches Chrome's "schemeful same-site": same-origin requires scheme+host+port
+// to match; same-site requires the same scheme and the same registrable domain
+// (eTLD+1); everything else is cross-site.
+func secFetchSite(initiator string, target *url.URL) string {
+	iu, err := url.Parse(initiator)
+	if err != nil || iu.Host == "" {
+		return ""
+	}
+	if strings.EqualFold(iu.Scheme, target.Scheme) && strings.EqualFold(iu.Host, target.Host) {
+		return "same-origin"
+	}
+	if strings.EqualFold(iu.Scheme, target.Scheme) {
+		iSite, e1 := publicsuffix.EffectiveTLDPlusOne(iu.Hostname())
+		tSite, e2 := publicsuffix.EffectiveTLDPlusOne(target.Hostname())
+		if e1 == nil && e2 == nil && strings.EqualFold(iSite, tSite) {
+			return "same-site"
+		}
+	}
+	return "cross-site"
 }
 
 // modifyResponse runs after the upstream response headers arrive and before
@@ -640,4 +760,3 @@ func (h *Handler) errorHandler(target *url.URL) func(http.ResponseWriter, *http.
 func IsLoadRequest(r *http.Request) bool {
 	return strings.HasPrefix(r.URL.Path, "/cyrano/")
 }
-

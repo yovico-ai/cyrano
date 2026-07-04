@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,15 +31,42 @@ import (
 	"github.com/bogdanfinn/tls-client/profiles"
 )
 
+// SessionKey is the request-context key under which the proxy stashes the
+// browser session ID (the crnsct value). RoundTrip reads it to give each
+// session its own impersonation client — hence its own HTTP/2 connection
+// pool — so upstream connections are reused/multiplexed WITHIN a session
+// (browser-like) but never shared ACROSS sessions. The proxy package sets
+// this in its Director; defining the key here (not in proxy) avoids an
+// import cycle, since proxy already imports upstream.
+type SessionKey struct{}
+
+// Client-eviction cadence. Per-session clients accumulate as sessions come
+// and go; a client idle longer than clientTTL is closed and dropped. The
+// sweep is opportunistic (run under mu on clientFor) so there's no background
+// goroutine to leak — important because tests construct RoundTrippers freely.
+const (
+	clientTTL     = 10 * time.Minute
+	sweepInterval = 1 * time.Minute
+)
+
+type clientEntry struct {
+	client   tls_client.HttpClient
+	lastUsed time.Time
+}
+
 // RoundTripper implements http.RoundTripper by fanning https requests out to a
-// per-profile pool of Chrome-impersonating clients and http requests to a
-// stdlib transport. Safe for concurrent use.
+// per-(session, profile) pool of Chrome-impersonating clients and http requests
+// to a stdlib transport. A single RoundTripper is created once at server
+// startup and shared across all requests, so each session's connection pool
+// persists between its requests (that persistence is what makes HTTP/2
+// connection reuse possible at all). Safe for concurrent use.
 type RoundTripper struct {
 	skipVerify bool
 	plain      *http.Transport
 
-	mu      sync.Mutex
-	clients map[string]tls_client.HttpClient // profile key → client
+	mu        sync.Mutex
+	clients   map[string]*clientEntry // "sessionID\x00profileKey" → client
+	lastSweep time.Time
 }
 
 // NewRoundTripper returns a RoundTripper. skipVerify disables upstream TLS
@@ -55,7 +83,7 @@ func NewRoundTripper(skipVerify bool) *RoundTripper {
 			ExpectContinueTimeout: 1 * time.Second,
 			ResponseHeaderTimeout: 15 * time.Second,
 		},
-		clients: make(map[string]tls_client.HttpClient),
+		clients: make(map[string]*clientEntry),
 	}
 }
 
@@ -66,8 +94,14 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		return rt.plain.RoundTrip(req)
 	}
 
-	key, profile := selectProfile(req.Header.Get("User-Agent"))
-	client, err := rt.clientFor(key, profile)
+	profileKey, profile := selectProfile(req.Header.Get("User-Agent"))
+	// Scope the connection pool to the browser session: each session gets its
+	// own impersonation client (and thus its own h2 connections), so requests
+	// within a session reuse/multiplex while sessions stay isolated from one
+	// another. Session-less requests (pre-login navigations, static probes)
+	// share the "" bucket; they carry no session credentials.
+	sessionID, _ := req.Context().Value(SessionKey{}).(string)
+	client, err := rt.clientFor(sessionID+"\x00"+profileKey, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -102,10 +136,23 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	// synthesize them from the UA when the incoming request didn't carry any.
 	ensureClientHints(fReq.Header, req.Header.Get("User-Agent"))
 
-	// Impose Chrome's request header order; the pseudo-header order and HTTP/2
-	// SETTINGS come from the client profile. fhttp emits present headers in
-	// this order and appends any not listed.
-	fReq.Header[fhttp.HeaderOrderKey] = chromeHeaderOrder
+	// Impose Chrome's request header order. Modern Chrome (verified against a
+	// real Chrome 139 capture) emits HTTP/2 request headers in ALPHABETICAL
+	// order — not a fixed template — so per-request headers (custom X-*, trace,
+	// origin, priority, cookie) always land in their sorted position. A fixed
+	// list misorders those and stands out in Cloudflare's HPACK header-order
+	// fingerprint, which is what challenges cyrano's leg while a direct browser
+	// on the same IP passes. Pseudo-header order + H2 SETTINGS come from the
+	// client profile; here we order only the regular headers.
+	names := make([]string, 0, len(fReq.Header))
+	for k := range fReq.Header {
+		if strings.Contains(k, ":") { // skip Header-Order:/PHeader-Order:/pseudo-headers
+			continue
+		}
+		names = append(names, strings.ToLower(k))
+	}
+	sort.Strings(names)
+	fReq.Header[fhttp.HeaderOrderKey] = names
 
 	fResp, err := client.Do(fReq)
 	if err != nil {
@@ -130,13 +177,16 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	}, nil
 }
 
-// clientFor returns the cached impersonation client for the given profile,
-// creating it on first use.
+// clientFor returns the cached impersonation client for the given cache key
+// (session-scoped; see RoundTrip), creating it on first use.
 func (rt *RoundTripper) clientFor(key string, profile profiles.ClientProfile) (tls_client.HttpClient, error) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	if c, ok := rt.clients[key]; ok {
-		return c, nil
+	now := time.Now()
+	rt.sweepLocked(now)
+	if e, ok := rt.clients[key]; ok {
+		e.lastUsed = now
+		return e.client, nil
 	}
 	idle := 90 * time.Second
 	opts := []tls_client.HttpClientOption{
@@ -171,31 +221,23 @@ func (rt *RoundTripper) clientFor(key string, profile profiles.ClientProfile) (t
 	if err != nil {
 		return nil, err
 	}
-	rt.clients[key] = c
+	rt.clients[key] = &clientEntry{client: c, lastUsed: now}
 	return c, nil
 }
 
-// chromeHeaderOrder is a representative Chrome request header order (lowercase
-// to match HTTP/2's lowercased field names). Headers absent from a given
-// request are skipped; unlisted headers are appended in map order.
-var chromeHeaderOrder = []string{
-	"host",
-	"connection",
-	"cache-control",
-	"sec-ch-ua",
-	"sec-ch-ua-mobile",
-	"sec-ch-ua-platform",
-	"upgrade-insecure-requests",
-	"user-agent",
-	"accept",
-	"sec-fetch-site",
-	"sec-fetch-mode",
-	"sec-fetch-user",
-	"sec-fetch-dest",
-	"referer",
-	"accept-encoding",
-	"accept-language",
-	"cookie",
+// sweepLocked evicts session clients idle longer than clientTTL, closing their
+// pooled connections. Runs at most once per sweepInterval. Caller holds rt.mu.
+func (rt *RoundTripper) sweepLocked(now time.Time) {
+	if now.Sub(rt.lastSweep) < sweepInterval {
+		return
+	}
+	rt.lastSweep = now
+	for k, e := range rt.clients {
+		if now.Sub(e.lastUsed) > clientTTL {
+			e.client.CloseIdleConnections()
+			delete(rt.clients, k)
+		}
+	}
 }
 
 var chromeUARe = regexp.MustCompile(`Chrome/(\d+)`)
@@ -243,8 +285,14 @@ func selectProfile(ua string) (string, profiles.ClientProfile) {
 	if m := chromeUARe.FindStringSubmatch(ua); m != nil {
 		if v, err := strconv.Atoi(m[1]); err == nil {
 			switch {
+			case v >= 146:
+				return "chrome146", profiles.Chrome_146
 			case v >= 133:
-				return "chrome133", profiles.Chrome_133
+				// 133..145 → Chrome_144: its ClientHello (post-quantum key share,
+				// ECH GREASE, extension set) tracks current Chrome far better than
+				// the stale Chrome_133 profile, which Cloudflare flags as a
+				// non-browser TLS fingerprint against a modern Chrome UA.
+				return "chrome144", profiles.Chrome_144
 			case v >= 131:
 				return "chrome131", profiles.Chrome_131
 			case v >= 124:
@@ -254,7 +302,7 @@ func selectProfile(ua string) (string, profiles.ClientProfile) {
 			}
 		}
 	}
-	return "chrome133", profiles.Chrome_133
+	return "chrome146", profiles.Chrome_146
 }
 
 // convertHeader copies an fhttp response header into a stdlib header with

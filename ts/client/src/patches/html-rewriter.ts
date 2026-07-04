@@ -144,9 +144,23 @@ export function rewriteHtmlString(
         // 2. HTML_INTEGRITY — SRI hashes won't match rewritten content; drop.
         element.removeAttribute("integrity");
 
-        // 3. HTML_CROSSORIGIN — normalize to use-credentials.
+        // 3. HTML_CROSSORIGIN — normalize to use-credentials so cookies follow
+        // the rewritten same-origin request, consistently across a resource and
+        // its <link rel=preload>. A script preload left at "anonymous" mismatches
+        // the forced use-credentials <script>, so the browser discards the
+        // preload and double-fetches the bundle (wedging the coalesced HTTP/2
+        // connection). Exception: a font preload stays anonymous to match the
+        // non-credentialed @font-face fetch — forcing it double-fetches the font.
         if (element.hasAttribute("crossorigin")) {
-            natives.setAttribute.call(element, "crossorigin", "use-credentials");
+            const rel = (element.getAttribute("rel") || "").toLowerCase();
+            const as = (element.getAttribute("as") || "").toLowerCase();
+            const isFontPreload =
+                element.tagName === "LINK" &&
+                (rel === "preload" || rel === "prefetch") &&
+                as === "font";
+            if (!isFontPreload) {
+                natives.setAttribute.call(element, "crossorigin", "use-credentials");
+            }
         }
 
         // 4. Global `style="..."` attribute — applies to every element.

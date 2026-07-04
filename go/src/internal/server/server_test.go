@@ -388,7 +388,6 @@ func TestIsChallengeHTML_OldChallengePath(t *testing.T) {
 	}
 }
 
-
 func TestIsChallengeHTML_ManagedChallenge(t *testing.T) {
 	// Cloudflare managed/Turnstile challenge — references /cdn-cgi/challenge-platform/
 	body := []byte(`<script>a.src = '/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1?ray=abc';</script>`)
@@ -400,6 +399,23 @@ func TestIsChallengeHTML_ManagedChallenge(t *testing.T) {
 func TestIsChallengeHTML_NormalPage(t *testing.T) {
 	if isChallengeHTML([]byte(`<html><body><p>Hello world</p></body></html>`)) {
 		t.Error("normal HTML page should not be detected as challenge HTML")
+	}
+}
+
+func TestIsChallengeHTML_PassiveJsdIsNotChallenge(t *testing.T) {
+	// Cloudflare injects a passive telemetry script into NORMAL pages
+	// (/cdn-cgi/challenge-platform/scripts/jsd/main.js). It must NOT be
+	// classified as a challenge — otherwise the app page gets the minimal
+	// challenge shim instead of the full $rewriter client and breaks.
+	body := []byte(`<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script><div id="app">real app</div>`)
+	if isChallengeHTML(body) {
+		t.Error("passive jsd telemetry script must NOT be detected as a challenge page")
+	}
+}
+
+func TestIsChallengeHTML_CfChlOptInterstitial(t *testing.T) {
+	if !isChallengeHTML([]byte(`<script>window._cf_chl_opt={cType:'managed'};</script>`)) {
+		t.Error("_cf_chl_opt interstitial config should be detected as challenge HTML")
 	}
 }
 

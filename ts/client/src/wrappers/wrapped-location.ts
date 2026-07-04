@@ -15,13 +15,16 @@
 
 import type { ClientConfig } from "../config";
 import type { BaseUrlState } from "../runtime/base-url-state";
-import { rewriteUrl } from "../url/containment";
+import { rewriteUrl, unwrapProxiedUrl } from "../url/containment";
 
 export class WrappedLocation {
     constructor(
         private readonly baseUrl: BaseUrlState,
         private readonly realLocation: Location,
         private readonly config: ClientConfig,
+        // The frame's window, used to walk the ancestor chain for
+        // ancestorOrigins. Optional so worker/test callers can omit it.
+        private readonly realWindow?: Window,
     ) {}
 
     private get base(): URL {
@@ -34,6 +37,30 @@ export class WrappedLocation {
 
     // ── origin / protocol / host / hostname / port ─────────────────────────
     get origin(): string { return this.base.origin; }
+
+    // ── ancestorOrigins ────────────────────────────────────────────────────
+    // The browser reports the real (proxy) origin for every ancestor frame.
+    // Under the proxy all frames are same-origin (the proxy origin), so we can
+    // read each ancestor's href and de-proxify it to its upstream origin.
+    // Anti-embedding / same-origin checks (e.g. Cloudflare Turnstile) read this
+    // to verify which page a widget is embedded on.
+    get ancestorOrigins(): DOMStringList {
+        const origins: string[] = [];
+        try {
+            let w: Window | undefined = this.realWindow;
+            while (w && w !== w.parent) {
+                w = w.parent;
+                try {
+                    const upstream = unwrapProxiedUrl(w.location.href, this.config);
+                    origins.push(new URL(upstream).origin);
+                } catch {
+                    break; // cross-origin ancestor we can't read — stop walking
+                }
+                if (w === w.top) break;
+            }
+        } catch { /* no ancestor access — return empty */ }
+        return makeDomStringList(origins);
+    }
 
     get protocol(): string { return this.base.protocol; }
     set protocol(value: string) {
@@ -108,4 +135,25 @@ export class WrappedLocation {
     toString(): string {
         return this.base.href;
     }
+}
+
+// Builds a DOMStringList-shaped object (length, indexed access, item(),
+// contains()) from a plain array — the browser has no public constructor for
+// DOMStringList, so rewritten code that reads location.ancestorOrigins gets an
+// object that quacks like one.
+function makeDomStringList(items: readonly string[]): DOMStringList {
+    const list: Record<PropertyKey, unknown> = {
+        length: items.length,
+        item(index: number): string | null {
+            return index >= 0 && index < items.length ? items[index] ?? null : null;
+        },
+        contains(value: string): boolean {
+            return items.includes(value);
+        },
+        [Symbol.iterator](): IterableIterator<string> {
+            return items[Symbol.iterator]() as IterableIterator<string>;
+        },
+    };
+    for (let i = 0; i < items.length; i++) list[i] = items[i];
+    return list as unknown as DOMStringList;
 }

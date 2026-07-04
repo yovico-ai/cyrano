@@ -5,11 +5,40 @@ import (
 	"compress/gzip"
 	"io"
 	"net/http"
+	"net/url"
 	"testing"
 
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
 )
+
+// jsd (Cloudflare bot-detection) scripts must be detected so they are served
+// unmodified — rewriting them trips their self-integrity check and the script
+// spins in a tight loop that freezes the whole page.
+func TestIsJSDScript(t *testing.T) {
+	jsd := []string{
+		"https://x.com/cdn-cgi/challenge-platform/scripts/jsd/main.js",
+		"https://x.com/cdn-cgi/challenge-platform/scripts/jsd/api.js?onload=jsdOnload",
+		"https://x.com/cdn-cgi/challenge-platform/h/b/scripts/jsd/80a697ecdece/main.js",
+	}
+	notJSD := []string{
+		"https://x.com/cdn-cgi/challenge-platform/orchestrate/chl_page/v1",
+		"https://abs.twimg.com/responsive-web/client-web/vendor.f1cda39a.js",
+		"https://x.com/i/api/graphql/x",
+	}
+	for _, s := range jsd {
+		u, _ := url.Parse(s)
+		if !isJSDScript(u) {
+			t.Errorf("isJSDScript(%q) = false, want true", s)
+		}
+	}
+	for _, s := range notJSD {
+		u, _ := url.Parse(s)
+		if isJSDScript(u) {
+			t.Errorf("isJSDScript(%q) = true, want false", s)
+		}
+	}
+}
 
 func mkResp(encoding string, body []byte) *http.Response {
 	h := http.Header{}

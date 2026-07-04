@@ -78,7 +78,7 @@ func bootstrapScript(cfg *Config) string {
 //     window.fetch calls, and XMLHttpRequest.open calls so that challenge
 //     resources like /cdn-cgi/challenge-platform/... are fetched through the
 //     proxy rather than resolving against the proxy origin directly.
-func challengePathFixScript(prefix, cookiePrefix string, debug bool) string {
+func challengePathFixScript(prefix, cookiePrefix string) string {
 	lit := string(jsStringLiteral(prefix))
 
 	// document.cookie getter/setter patch: apply the site-namespace prefix on
@@ -98,46 +98,6 @@ func challengePathFixScript(prefix, cookiePrefix string, debug bool) string {
 			`var t=c.trim();if(t.indexOf(_cp)===0){o.push(t.slice(_cp.length));}});}` +
 			`return o.join('; ');},` +
 			`set:function(v){_cs.call(this,_cp+v);}});}`
-	}
-
-	// debugPatch adds console.log instrumentation when the server runs at debug
-	// level. A second XHR.open wrapper stores method+URL on the instance for
-	// the send logger. Fetch and cookie set operations are logged verbatim.
-	debugPatch := ""
-	if debug {
-		debugPatch = // Announce shim activation with the prefix and upstream origin.
-			`console.log('[crn-chl]','shim active prefix='+_p+' origin='+_origin);` +
-				// XHR: add a URL-storing second wrapper around the already-patched open,
-				// then wrap send to log dispatch and completion.
-				`var _xod=XMLHttpRequest.prototype.open;` +
-				`XMLHttpRequest.prototype.open=function(){` +
-				`this._crn_m=arguments[0];this._crn_u=arguments[1];` +
-				`return _xod.apply(this,arguments);};` +
-				`var _xsd=XMLHttpRequest.prototype.send;` +
-				`XMLHttpRequest.prototype.send=function(){` +
-				`var xhr=this,m=xhr._crn_m||'?',u=xhr._crn_u||'?';` +
-				`console.log('[crn-chl]','XHR.send',m,u);` +
-				`xhr.addEventListener('load',function(){` +
-				`console.log('[crn-chl]','XHR.done',m,u,xhr.status);});` +
-				`return _xsd.apply(this,arguments);};` +
-				// Fetch: wrap the already-patched window.fetch to log URL and status.
-				`var _fed=window.fetch;` +
-				`if(typeof _fed==='function'){window.fetch=function(){` +
-				`var u=typeof arguments[0]==='string'?arguments[0]:` +
-				`(arguments[0]&&arguments[0].url)||'?';` +
-				`console.log('[crn-chl]','fetch',u);` +
-				`return _fed.apply(window,arguments).then(` +
-				`function(r){console.log('[crn-chl]','fetch.done',u,r.status);return r;},` +
-				`function(e){console.log('[crn-chl]','fetch.err',u,''+e);throw e;});};}` +
-				// Cookie setter: log each document.cookie write (before prefix is applied).
-				// Getter is intentionally NOT logged — it fires too often to be useful.
-				`var _dcdbg=Object.getOwnPropertyDescriptor(document,'cookie');` +
-				`if(_dcdbg&&_dcdbg.set){var _csdbg=_dcdbg.set;` +
-				`Object.defineProperty(document,'cookie',{configurable:true,` +
-				`enumerable:_dcdbg.enumerable,get:_dcdbg.get,` +
-				`set:function(v){` +
-				`console.log('[crn-chl]','cookie.set',v.substring(0,120));` +
-				`return _csdbg.call(this,v);}});}`
 	}
 
 	return `<script>(function(){` +
@@ -195,6 +155,36 @@ func challengePathFixScript(prefix, cookiePrefix string, debug bool) string {
 		`var t=ds[i].trim(),sp=t.indexOf(' '),n=(sp<0?t:t.slice(0,sp)).toLowerCase();` +
 		`if(n!=='require-trusted-types-for'&&n!=='trusted-types')kept.push(ds[i]);}` +
 		`return kept.join(';');}` +
+		// Error stack de-proxification. Cloudflare's Turnstile deliberately
+		// captures `new Error().stack` and submits it (the "cs" field). Left
+		// alone, that stack leaks two dead giveaways of a rewriting proxy:
+		//   1. every frame's URL is a proxy URL (http://<proxy>/cyrano/<sch>/<host>/…)
+		//   2. our AST-rewrite wrapper frames (`$rewriter.wrap_member_expression`
+		//      etc.) appear as named call frames — a signature no genuine
+		//      Turnstile execution ever has.
+		// Both read as tampering → challenge fails with code 600010. V8 lets us
+		// own the stack string via Error.prepareStackTrace: rebuild the standard
+		// "    at fn (url:line:col)" format, but rewrite proxy URLs back to their
+		// upstream form and drop any `$rewriter` frame — yielding a stack
+		// indistinguishable from a real, un-proxied run.
+		`var _prx=_rl.origin+'/cyrano/';` +
+		`function _deproxAll(s){` +
+		`if(typeof s!=='string')return s;` +
+		`var out='',i=0;` +
+		`while(true){var j=s.indexOf(_prx,i);` +
+		`if(j<0){out+=s.slice(i);break;}` +
+		"out+=s.slice(i,j);var rest=s.slice(j+_prx.length);" +
+		"var m=/^([a-z][a-z0-9+.-]*)\\/([^\\/:)\\s\"']+)/.exec(rest);" +
+		`if(m){out+=m[1]+'://'+m[2];i=j+_prx.length+m[0].length;}` +
+		`else{out+=_prx;i=j+_prx.length;}}` +
+		`return out;}` +
+		`try{Error.prepareStackTrace=function(e,fr){` +
+		`var h=(e&&e.name?e.name:'Error');if(e&&e.message)h+=': '+e.message;` +
+		`var L=[h];for(var k=0;k<fr.length;k++){` +
+		`var t;try{t=fr[k].toString();}catch(_z){t='';}` +
+		`if(!t||t.indexOf('$rewriter')>=0)continue;` +
+		`L.push('    at '+_deproxAll(t));}` +
+		`return L.join('\\n');};}catch(_e){}` +
 		// _wl: fake Location object returning upstream values.
 		// JS-rewritten scripts call $rewriter.wrap_get_location(location).hostname
 		// rather than location.hostname directly, so returning _wl from
@@ -208,6 +198,24 @@ func challengePathFixScript(prefix, cookiePrefix string, debug bool) string {
 		`replace:function(u){_rl.replace(_f(u));},` +
 		`reload:function(){_rl.reload();},` +
 		`toString:function(){return _uhref();}};` +
+		// window.origin/self.origin, document.domain and location.ancestorOrigins
+		// all report the frame's TRUE origin/host — under the proxy that's the
+		// localhost proxy origin, not the upstream. Wrap them to report upstream
+		// values. This is a general origin-leak fix (mirrored in the TS client's
+		// patches/location.ts + WrappedLocation), independent of any one challenge:
+		// any page reading self.origin or location.ancestorOrigins would otherwise
+		// see localhost and fail same-origin/embedding checks.
+		`try{Object.defineProperty(window,'origin',{configurable:true,get:function(){return _origin;}});}catch(_e){}` +
+		`try{Object.defineProperty(document,'domain',{configurable:true,get:function(){return _hostname;},set:function(){}});}catch(_e){}` +
+		// ancestorOrigins: browser-populated list of ancestor frame origins. Under
+		// the proxy every frame is same-origin (localhost), so each ancestor's
+		// proxied href is readable and de-proxifiable to its upstream origin.
+		// Exposed on _wl (what rewritten code sees); the real Location getter is
+		// [LegacyUnforgeable] and can't be redefined.
+		`function _upOrigin(h){var pf=_rl.origin+'/cyrano/';if(typeof h!=='string'||h.indexOf(pf)!==0)return null;var r=h.slice(pf.length),si=r.indexOf('/');if(si<=0)return null;var sc=r.slice(0,si),rest=r.slice(si+1),hi=rest.indexOf('/');return sc+'://'+(hi>=0?rest.slice(0,hi):rest);}` +
+		`function _ancestors(){var out=[];try{var w=window;while(w&&w!==w.parent){w=w.parent;var o=null;try{o=_upOrigin(w.location.href);}catch(_e){o=null;}if(o)out.push(o);if(w===window.top)break;}}catch(_e){}return out;}` +
+		`function _mkAO(){var a=_ancestors(),o={length:a.length,item:function(i){return (i>=0&&i<a.length)?a[i]:null;},contains:function(s){for(var i=0;i<a.length;i++)if(a[i]===s)return true;return false;}};for(var i=0;i<a.length;i++)o[i]=a[i];return o;}` +
+		`try{Object.defineProperty(_wl,'ancestorOrigins',{configurable:true,get:function(){return _mkAO();}});}catch(_e){}` +
 		// $rewriter shim — satisfies every wrap_* call the AST rewriter may have
 		// emitted in challenge scripts (orchestrate, jsd, etc.).
 		`if(typeof $rewriter==='undefined'){window.$rewriter={` +
@@ -231,6 +239,23 @@ func challengePathFixScript(prefix, cookiePrefix string, debug bool) string {
 		// on the document object and can be patched directly.
 		`try{var _ud={get:function(){return _uhref();},configurable:true};` +
 		`Object.defineProperty(document,'URL',_ud);Object.defineProperty(document,'baseURI',_ud);}catch(e){}` +
+		// document.referrer — the referrer of THIS document is the URL of the page
+		// that loaded it, which for the Turnstile widget iframe is the parent
+		// (top) page; both arrive as proxy URLs. Turnstile submits this as the
+		// host-page URL ("url"/"lH" in extraParams). It's a configurable own
+		// getter, so de-proxify it here rather than leaking the proxy origin.
+		`try{var _rref=document.referrer;var _rrefd=_deproxAll(_rref);` +
+		`Object.defineProperty(document,'referrer',{get:function(){return _rrefd;},configurable:true});}catch(_e){}` +
+		// PerformanceEntry.name — resource- and navigation-timing entries expose
+		// the URL the browser actually fetched, which is the raw proxy URL
+		// (…/cyrano/https/host/…). The challenge reads performance entries
+		// (PerformanceObserver + getEntries) to fingerprint loaded resources, so
+		// an un-de-proxified name leaks /cyrano/ straight into the /fo/ blob.
+		// Patch the base-class getter to de-proxify (covers resource + navigation
+		// subclasses, which inherit `name` from PerformanceEntry.prototype).
+		`try{if(typeof PerformanceEntry!=='undefined'){var _ped=Object.getOwnPropertyDescriptor(PerformanceEntry.prototype,'name');` +
+		`if(_ped&&_ped.get){var _peg=_ped.get;Object.defineProperty(PerformanceEntry.prototype,'name',{configurable:true,enumerable:_ped.enumerable,` +
+		`get:function(){return _deproxAll(_peg.call(this));}});}}}catch(_e){}` +
 		// document.cookie — namespace all JS-set cookies with the site prefix so
 		// they can be forwarded to the upstream by the Director (which strips the
 		// prefix). The getter strips the prefix so page JS sees plain cookie names.
@@ -245,6 +270,18 @@ func challengePathFixScript(prefix, cookiePrefix string, debug bool) string {
 		`{configurable:true,enumerable:sd.enumerable,` +
 		`get:function(){return _dp(_og.call(this));},` +
 		`set:function(v){_os.call(this,_f(v));}});}` +
+		// HTMLImageElement.prototype.src — Cloudflare's challenge fires image
+		// beacons (e.g. the /cdn-cgi/.../ci/ clearance ping) by setting img.src to
+		// an absolute path. Without rewriting, that resolves against the proxy
+		// origin as a bare /cdn-cgi/... URL (no /cyrano/ prefix), escaping
+		// containment and only working via a server-side redirect — a round-trip
+		// no real browser makes, and a proxy tell. Rewrite on set so the beacon
+		// goes straight to the proxied upstream.
+		`var _imd=Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src');` +
+		`if(_imd&&_imd.set&&_imd.get){var _ims=_imd.set,_imgg=_imd.get;Object.defineProperty(HTMLImageElement.prototype,'src',` +
+		`{configurable:true,enumerable:_imd.enumerable,` +
+		`get:function(){return _dp(_imgg.call(this));},` +
+		`set:function(v){_ims.call(this,_f(v));}});}` +
 		// HTMLIFrameElement.prototype.src — rewrite on set so the browser fetches
 		// the frame through the proxy. Without this, JS-created iframes (e.g.
 		// Cloudflare Turnstile widget created by orchestrate.js) load directly
@@ -300,7 +337,7 @@ func challengePathFixScript(prefix, cookiePrefix string, debug bool) string {
 		`Element.prototype.setAttribute=function(n,v){` +
 		`var a=[];for(var i=0;i<arguments.length;i++)a[i]=arguments[i];` +
 		`if(typeof n==='string'){var _nl=n.toLowerCase(),_tg=this.tagName;` +
-		`if(_nl==='src'&&(_tg==='SCRIPT'||_tg==='IFRAME')){a[1]=_f(v);` +
+		`if(_nl==='src'&&(_tg==='SCRIPT'||_tg==='IFRAME'||_tg==='IMG')){a[1]=_f(v);` +
 		`if(_tg==='IFRAME'&&typeof v==='string'&&v.indexOf('challenges.cloudflare.com')>=0)window.__crnCFIframe=this;}` +
 		`if(_nl==='csp')a[1]=_stripTT(v);}` +
 		`return _osa.apply(this,a);};` +
@@ -387,7 +424,14 @@ func challengePathFixScript(prefix, cookiePrefix string, debug bool) string {
 		`var s=ifs[i].getAttribute('src')||'';` +
 		`if(s.indexOf('/cyrano/https/challenges.cloudflare.com/')>=0)return ifs[i].contentWindow;}}}catch(_e){}` +
 		`return origSrc;}});}` +
-		debugPatch +
+		// Self-remove this injected <script> element. Its effects ($rewriter,
+		// the prototype/getter patches) live on window and the prototypes, so
+		// removing the element from the DOM loses nothing — but it drops the
+		// challenge page's script count back to what a real (un-proxied) page
+		// has. Cloudflare's orchestrate counts document.scripts (the "sL"
+		// fingerprint field) and knows how many belong on its own page; an
+		// extra injected script reads as tampering (contributes to 600010).
+		`try{var _sr=document.currentScript;if(_sr&&_sr.parentNode)_sr.parentNode.removeChild(_sr);}catch(_e){}` +
 		`})();</script>`
 }
 

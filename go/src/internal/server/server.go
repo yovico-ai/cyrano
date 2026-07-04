@@ -15,6 +15,7 @@ import (
 	"github.com/yovico/cyrano/internal/config"
 	"github.com/yovico/cyrano/internal/proxy"
 	"github.com/yovico/cyrano/internal/static"
+	"github.com/yovico/cyrano/internal/upstream"
 	"github.com/yovico/cyrano/internal/urlrewrite"
 	"github.com/yovico/cyrano/internal/wsproxy"
 )
@@ -104,6 +105,16 @@ func (s *Server) Handler() http.Handler {
 	// set on response N are available to forward on request N+1.
 	jar := proxy.NewSessionJar()
 
+	// One upstream transport per server lifetime, shared across all requests
+	// and all per-request proxy.Handler instances. This is what makes HTTP/2
+	// connection reuse possible: the transport keys its connection pool by
+	// session, so a session's requests multiplex over its own connections
+	// instead of dialing a fresh one each time. Constructing a transport
+	// per request (as this code used to, implicitly, via proxy.New) discards
+	// the pool every request — a connection storm that stalls fan-out-heavy
+	// sites (x.com) behind the upstream edge's per-connection limits.
+	transport := upstream.NewRoundTripper(false)
+
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Internal status endpoints checked before vhost lookup.
 		switch r.URL.Path {
@@ -181,6 +192,7 @@ func (s *Server) Handler() http.Handler {
 				ProxyCfg:          proxyCfg,
 				CookieJar:         jar,
 				SessionCookieName: vhost.SecretCookieName,
+				Transport:         transport,
 			})
 			proxyHandler.ServeHTTP(w, r)
 			return
@@ -221,6 +233,7 @@ func (s *Server) Handler() http.Handler {
 				ProxyCfg:          proxyCfgForChallenge,
 				CookieJar:         jar,
 				SessionCookieName: vhost.SecretCookieName,
+				Transport:         transport,
 			})
 			if scheme, host, ok := challengeOriginFromSession(r, jar, vhost.SecretCookieName); ok {
 				target := &url.URL{

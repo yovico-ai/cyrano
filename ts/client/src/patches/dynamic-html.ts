@@ -170,8 +170,24 @@ function patchSetAttribute(
             return;
         }
 
-        // HTML_CROSSORIGIN — force use-credentials so cookies follow through.
+        // HTML_CROSSORIGIN — force use-credentials so cookies follow through,
+        // consistently with the resource's <link rel=preload> (a script preload
+        // left at "anonymous" mismatches the forced use-credentials <script> and
+        // gets discarded → double-fetch). Exception: a font preload keeps its
+        // original (anonymous) mode to match the non-credentialed @font-face
+        // fetch. Mirrors the server HTML rewriter's HTML_CROSSORIGIN rule. (rel/as
+        // are read best-effort — if set after crossorigin, the default applies.)
         if (lowerName === "crossorigin") {
+            const el = this as Element;
+            const rel = (el.getAttribute("rel") || "").toLowerCase();
+            const as = (el.getAttribute("as") || "").toLowerCase();
+            const isFontPreload =
+                el.tagName === "LINK" &&
+                (rel === "preload" || rel === "prefetch") &&
+                as === "font";
+            if (isFontPreload) {
+                return originalSetAttribute.call(this, name, value);
+            }
             return originalSetAttribute.call(this, name, "use-credentials");
         }
 

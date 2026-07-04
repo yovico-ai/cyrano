@@ -43,4 +43,29 @@ export function patchWindowLocation(
             });
         }
     } catch { /* non-fatal */ }
+
+    // window.origin / self.origin is the frame's serialized origin — a distinct
+    // own property from location.origin (which the AST rewriter already handles
+    // via WrappedLocation). Under the proxy it reports the proxy origin, so any
+    // same-origin comparison (`ev.origin === self.origin`) breaks. Report the
+    // upstream origin instead. It's a configurable own property on window.
+    try {
+        Object.defineProperty(targetWindow, "origin", {
+            get(): string { return wrappedLocation.origin; },
+            configurable: true,
+        });
+    } catch { /* non-fatal */ }
+
+    // document.domain reports the proxy hostname (localhost). Report the
+    // upstream hostname. The setter is a no-op: legacy domain relaxation is
+    // meaningless under a single proxy origin (all frames are already
+    // same-origin), and forwarding to the native setter would throw when the
+    // value isn't a suffix of the real (localhost) host.
+    try {
+        Object.defineProperty(targetWindow.document, "domain", {
+            get(): string { return wrappedLocation.hostname; },
+            set(): void { /* no-op — see above */ },
+            configurable: true,
+        });
+    } catch { /* non-fatal */ }
 }

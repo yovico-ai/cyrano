@@ -801,3 +801,34 @@ func TestWrapNewWorker_Disabled(t *testing.T) {
 	}
 }
 
+
+func TestRewrite_StripsDebuggerStatements(t *testing.T) {
+	in := `function f(){debugger;var x=1;if(x){debugger}return x;}`
+	out := string(Rewrite([]byte(in), DefaultOptions()))
+	if strings.Contains(out, "debugger") {
+		t.Errorf("debugger statement not stripped: %s", out)
+	}
+	if !strings.Contains(out, "var x") || !strings.Contains(out, "return x") {
+		t.Errorf("stripping debugger corrupted surrounding code: %s", out)
+	}
+}
+
+func TestRewrite_PreservesOptionalChainOnComputedAccess(t *testing.T) {
+	opts := DefaultOptions()
+	opts.WrapMemberExpression = true
+	// n?.routes[k] must NOT become wrap_member_expression(n?.routes,k)[k], which
+	// throws when n is nullish instead of short-circuiting (TanStack Router bug).
+	out := string(Rewrite([]byte(`function f(n,k){return n?.routes[k];}`), opts))
+	if strings.Contains(out, "wrap_member_expression(n?.routes") ||
+		strings.Contains(out, "wrap_member_expression(n == null") {
+		t.Errorf("optional-chain object was wrapped (breaks short-circuit): %s", out)
+	}
+	if !strings.Contains(out, "?.") {
+		t.Errorf("optional chaining lost entirely: %s", out)
+	}
+	// Plain computed access on a non-optional object is still wrapped.
+	out2 := string(Rewrite([]byte(`function g(o,k){return o[k];}`), opts))
+	if !strings.Contains(out2, "wrap_member_expression") {
+		t.Errorf("non-optional computed access should still be wrapped: %s", out2)
+	}
+}

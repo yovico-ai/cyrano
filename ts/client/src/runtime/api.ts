@@ -79,6 +79,7 @@ export function createRewriterApi(
         baseUrlState,
         targetWindow.location,
         config,
+        targetWindow,
     );
 
     // Lazy resolver for the per-session secret used to decrypt cookie payloads.

@@ -1,6 +1,9 @@
 package proxy
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRewriteCSP(t *testing.T) {
 	cases := []struct {
@@ -146,5 +149,19 @@ func TestRewriteCSP(t *testing.T) {
 				t.Errorf("\n got:  %q\n want: %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRewriteCSP_StripsHashSourcesSoUnsafeInlineApplies(t *testing.T) {
+	in := "script-src 'sha256-AAAA' 'sha256-BBBB' 'unsafe-inline' 'self'; object-src 'none'"
+	got := rewriteCSP(in, "http://localhost:9081")
+	if strings.Contains(got, "sha256-") {
+		t.Errorf("hash-sources must be stripped from script-src so 'unsafe-inline' takes effect; got %q", got)
+	}
+	if !strings.Contains(got, "'unsafe-inline'") {
+		t.Errorf("'unsafe-inline' must remain so our injected bootstrap runs; got %q", got)
+	}
+	if !strings.Contains(got, "object-src 'none'") {
+		t.Errorf("unrelated directives must be preserved; got %q", got)
 	}
 }

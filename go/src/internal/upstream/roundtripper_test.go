@@ -330,10 +330,12 @@ func TestSelectProfile(t *testing.T) {
 		{"... Chrome/131.0.0.0 Safari/537.36", "chrome131"},
 		{"... Chrome/124.0.0.0 ...", "chrome124"},
 		{"... Chrome/121.0.0.0 ...", "chrome120"},
-		{"... Chrome/140.0.0.0 ...", "chrome133"}, // newer than known → latest
-		{"... Chrome/119.0.0.0 ...", "chrome133"}, // older than oldest → latest fallback
-		{"Mozilla/5.0 ... Firefox/121.0", "chrome133"},
-		{"", "chrome133"},
+		{"... Chrome/139.0.0.0 ...", "chrome144"}, // 133..145 → current-tracking profile
+		{"... Chrome/146.0.0.0 ...", "chrome146"}, // newest
+		{"... Chrome/140.0.0.0 ...", "chrome144"},
+		{"... Chrome/119.0.0.0 ...", "chrome146"}, // older than oldest → latest fallback
+		{"Mozilla/5.0 ... Firefox/121.0", "chrome146"},
+		{"", "chrome146"},
 	}
 	for _, c := range cases {
 		gotKey, gotProfile := selectProfile(c.ua)

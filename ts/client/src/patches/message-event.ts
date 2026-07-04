@@ -112,14 +112,19 @@ export function upstreamOriginOf(source: Window, config: ClientConfig): string |
             const base = sourceRewriter.get_base_url();
             if (base) return base.origin;
         }
-        // Fallback: source window isn't proxied — try unwrapping its real proxy URL.
-        // location is patched as an own property on the instance; call the prototype
-        // getter directly to get the real URL, then unwrap it.
-        const realHref = Object.getOwnPropertyDescriptor(Window.prototype, "location")
-            ?.get?.call(source) as Location | undefined;
-        if (!realHref) return null;
-        const upstream = unwrapProxiedUrl(realHref.href, config);
-        if (upstream === realHref.href) return null;
+        // Fallback for sender frames that don't expose get_base_url — notably
+        // challenge-shim frames (an embedded Cloudflare Turnstile widget iframe):
+        // read the sender's real (proxy) location and unwrap it to the upstream
+        // origin. window.location is [LegacyUnforgeable] — an OWN property on the
+        // window instance, NOT on Window.prototype — so the old prototype-getter
+        // lookup returned undefined and this fallback never fired, leaving
+        // Turnstile to reject every cross-frame message ("wrong origin:
+        // localhost"). Read it off the source window directly; under the proxy
+        // all frames are same-origin so this doesn't throw a SecurityError.
+        const realHref = (source as unknown as { location?: { href?: string } }).location?.href;
+        if (typeof realHref !== "string") return null;
+        const upstream = unwrapProxiedUrl(realHref, config);
+        if (upstream === realHref) return null;
         return new URL(upstream).origin;
     } catch {
         return null;

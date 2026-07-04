@@ -79,11 +79,6 @@ type Config struct {
 	// to the upstream unmodified. Must match proxy.CookiePrefixFor(host).
 	ChallengeCookiePrefix string
 
-	// ChallengeDebug, when true, injects console.log instrumentation into the
-	// challenge shim: XHR open/send/done, fetch URL/status, and cookie writes.
-	// Enabled automatically when the server runs at slog.LevelDebug.
-	ChallengeDebug bool
-
 	// Prettify, when true, runs JS and CSS content through a formatter before
 	// serving. Makes minified challenge scripts readable in DevTools.
 	// Never set in production — it changes source text and can interfere with
