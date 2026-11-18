@@ -27,6 +27,7 @@
 // is no recursion concern.
 
 import { rewriteCssText } from "../css/rewriter";
+import { wrapMethod } from "../native/surface";
 
 let patched = false;
 
@@ -143,24 +144,11 @@ function patchInsertRuleOn(
     proto: object | null,
     rewriteOne: (url: string) => string,
 ): void {
-    if (!proto) return;
-    const desc = Object.getOwnPropertyDescriptor(proto, "insertRule");
-    if (!desc || typeof desc.value !== "function") return;
-
-    const original = desc.value as (rule: string, index?: number) => number;
-    Object.defineProperty(proto, "insertRule", {
-        configurable: desc.configurable ?? true,
-        writable: desc.writable ?? true,
-        enumerable: desc.enumerable ?? false,
-        value: function patchedInsertRule(
-            this: CSSStyleSheet | CSSGroupingRule,
-            rule: string,
-            index?: number,
-        ): number {
-            const rewritten = typeof rule === "string"
-                ? rewriteCssText(rule, rewriteOne)
-                : rule;
-            return original.call(this, rewritten, index);
-        },
+    if (!proto || !Object.prototype.hasOwnProperty.call(proto, "insertRule")) return;
+    wrapMethod<(...a: unknown[]) => number>(proto, "insertRule", (native, self, args) => {
+        if (typeof args[0] !== "string") return Reflect.apply(native, self, args) as number;
+        const next = args.slice();
+        next[0] = rewriteCssText(args[0], rewriteOne);
+        return Reflect.apply(native, self, next) as number;
     });
 }

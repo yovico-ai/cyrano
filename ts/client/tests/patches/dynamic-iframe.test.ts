@@ -2,11 +2,11 @@
 // rewriter injected synchronously inside the appendChild/insertBefore call —
 // before the caller gets control back to access contentDocument.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { rewriteUrl } from "../../src/url/containment";
 import { patchDynamicIframeAppend, unpatchDynamicIframeAppend } from "../../src/patches/dynamic-iframe";
 import * as iframeInjection from "../../src/runtime/iframe-injection";
 import { init } from "../../src/runtime/bootstrap";
-import { clearStore } from "../../src/cookies/in-memory-store";
 
 const PROXY_ORIGIN = "http://localhost:9081";
 const BASE_HREF = `${PROXY_ORIGIN}/?goto=aHR0cHM6Ly9leGFtcGxlLmNvbS8`;
@@ -15,8 +15,6 @@ const config = {
     apiBaseURL: PROXY_ORIGIN,
     cacheKey: "",
     source: "/rewriter.js",
-    secretCookieName: "crnsct",
-    userDataEncryption: false,
     version: "",
     rewrite_css_selectors: false,
 };
@@ -24,13 +22,8 @@ const config = {
 const UPSTREAM = "https://pagead2.googlesyndication.com/bg/script.js";
 const PROXIED  = `${PROXY_ORIGIN}/cyrano/https/pagead2.googlesyndication.com/bg/script.js`;
 
-function rewriteOne(url: string): string {
-    if (url.startsWith("https://") || url.startsWith("http://")) {
-        const u = new URL(url);
-        return `${PROXY_ORIGIN}/cyrano/${u.protocol.replace(":", "")}/${u.host}${u.pathname}`;
-    }
-    return url;
-}
+// The real containment function, as install.ts passes it.
+const rewriteOne = (url: string): string => rewriteUrl(url, new URL(BASE_HREF), config);
 
 function install(): void {
     patchDynamicIframeAppend(window, config, () => BASE_HREF, rewriteOne);
@@ -168,12 +161,12 @@ describe("patchDynamicIframeAppend — URL rewriting before insert", () => {
         expect(script.getAttribute("src")).toBe(PROXIED);
     });
 
-    it("leaves relative script.src unchanged (not an absolute upstream URL)", () => {
+    it("proxifies a relative script.src against the page (else it would load from the proxy origin)", () => {
         install();
         const script = document.createElement("script");
         script.setAttribute("src", "/static/bundle.js");
         document.head.appendChild(script);
-        expect(script.getAttribute("src")).toBe("/static/bundle.js");
+        expect(script.getAttribute("src")).toBe(rewriteUrl("/static/bundle.js", new URL(BASE_HREF), config));
     });
 
     it("rewrites upstream iframe.src before appendChild", () => {
@@ -199,21 +192,32 @@ describe("patchDynamicIframeAppend — URL rewriting before insert", () => {
 // The fix: skip injection for iframes whose src is already a proxied URL.
 // The two tests below verify both sides of the invariant.
 
-const PATCHED_FLAG = Symbol.for("rewriter.patched");
 
-describe("iframe bootstrap / PATCHED_FLAG (end-to-end)", () => {
-    beforeEach(() => {
-        clearStore();
+// happy-dom gives an about:blank iframe no cookie jar; a browser shares the
+// parent origin's. Give the child document a jar, as natively.
+function giveJar(child: Window): void {
+    const jar = new Map<string, string>();
+    Object.defineProperty(Object.getPrototypeOf(child.document) as object, "cookie", {
+        configurable: true,
+        enumerable: true,
+        get: () => [...jar].map(([n, v]) => `${n}=${v}`).join("; "),
+        set: (v: string) => {
+            const pair = v.split(";")[0]!;
+            const i = pair.indexOf("=");
+            jar.set(pair.slice(0, i), pair.slice(i + 1));
+        },
     });
+}
 
+describe("iframe bootstrap: one runtime per window (end-to-end)", () => {
     it("without prior injection: bootstrap installs patches with iframe's own URL", () => {
         // No patchDynamicIframeAppend installed — simulates our fix skipping
         // injection for a proxied-src iframe.  Bootstrap runs on a clean window.
         const iframe = document.createElement("iframe");
         document.body.appendChild(iframe);
         const child = iframe.contentWindow!;
+        giveJar(child);
 
-        expect((child as unknown as Record<symbol, unknown>)[PATCHED_FLAG]).toBeUndefined();
 
         // Bootstrap: install with the iframe's own URL.
         const api = init(child, config).inject();
@@ -228,29 +232,27 @@ describe("iframe bootstrap / PATCHED_FLAG (end-to-end)", () => {
         expect(child.document.cookie).not.toContain("other=xyz");
     });
 
-    it("with PATCHED_FLAG pre-set (old behaviour): bootstrap is a no-op, patches use parent URL", () => {
-        // Demonstrates the bug that the proxied-src skip prevents.
-        // We manually simulate the pre-fix scenario: parent injection stamps
-        // PATCHED_FLAG before the bootstrap runs.
+    it("a window already initialized by its parent: the page's own bootstrap reaches the same runtime", () => {
+        // A parent injects the runtime into a child window; the child's own
+        // bootstrap then runs in that same window (a same-origin navigation
+        // from about:blank keeps it). The window is patched once, and the
+        // second initialization gets the first one's API — so its
+        // set_location moves the URL the installed patches read.
         const iframe = document.createElement("iframe");
         document.body.appendChild(iframe);
         const child = iframe.contentWindow!;
+        giveJar(child);
 
-        // Parent injection: stamp flag, set parent URL.
         const parentApi = init(child, config).inject();
         parentApi.set_location("https://www.zerohedge.com/news");
 
-        // Bootstrap runs but inject() is a no-op — PATCHED_FLAG is already set.
         const bootstrapApi = init(child, config).inject();
+        expect(bootstrapApi).toBe(parentApi);
         bootstrapApi.set_location("https://embed.example.com/widget/comments");
 
-        // document.cookie is stuck on the parent closure's URL (/news).
-        // A cookie at Path=/widget does NOT match /news → invisible to the iframe.
         child.document.cookie = "embed_tok=abc; Path=/widget";
-        expect(child.document.cookie).not.toContain("embed_tok=abc");
-
-        // A cookie at Path=/news matches — parent-scoped cookies bleed in.
-        child.document.cookie = "news_tok=xyz; Path=/news";
-        expect(child.document.cookie).toContain("news_tok=xyz");
+        expect(child.document.cookie).toContain("embed_tok=abc");
+        // Nothing marks the window itself.
+        expect(Object.getOwnPropertySymbols(child).filter((sy) => /rewriter|cyrano/i.test(String(sy)))).toEqual([]);
     });
 });

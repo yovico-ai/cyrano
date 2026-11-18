@@ -21,7 +21,10 @@
 // inside appendChild itself, before it returns to the caller.
 
 import type { ClientConfig } from "../config";
+import { replaceValue, wrapMethod } from "../native/surface";
+import { unwrapProxiedUrl } from "../url/containment";
 import { injectIntoIframe } from "../runtime/iframe-injection";
+import { rewriteTextNode } from "./dynamic-html";
 
 interface SavedOriginals {
     proto: Record<string, unknown>;
@@ -90,10 +93,8 @@ export function patchDynamicIframeAppend(
         try {
             const raw = nativeGetAttr.call(node as Element, attrName);
             if (!raw) return;
-            // Already proxied — nothing to do.
-            if (raw.indexOf("/cyrano/") !== -1) return;
-            // Only rewrite absolute URLs with a scheme we know the proxy handles.
-            if (!raw.startsWith("http://") && !raw.startsWith("https://")) return;
+            // rewriteUrl keeps an already-proxified URL, and other schemes,
+            // as written (spec/Containment.agda).
             const rewritten = rewriteOne(raw);
             if (rewritten !== raw) {
                 nativeSetAttr.call(node as Element, attrName, rewritten);
@@ -118,39 +119,34 @@ export function patchDynamicIframeAppend(
         // this window's parent-page closure instead of the iframe's own.
         // Only inject immediately for about:blank / no-src frames (e.g. the
         // Cloudflare beacon pattern that accesses contentDocument synchronously).
-        const src = iframe.src;
-        if (src && src.indexOf("/cyrano/") !== -1) return;
+        // The raw attribute (iframe.src itself reads back the original URL).
+        const src = nativeGetAttr.call(iframe, "src");
+        if (src && unwrapProxiedUrl(src, config) !== src) return;
 
         injectIntoIframe(iframe, targetWindow, config, getBaseHref());
     }
 
-    proto["appendChild"] = function patchedAppendChild<T extends Node>(
-        this: Node,
-        node: T,
-    ): T {
-        rewriteUrlBeforeInsert(node);
-        const result = origAppendChild.call(this, node) as T;
-        maybeInjectIframe(node);
-        return result;
-    };
-
-    proto["insertBefore"] = function patchedInsertBefore<T extends Node>(
-        this: Node,
-        node: T,
-        refNode: Node | null,
-    ): T {
-        rewriteUrlBeforeInsert(node);
-        const result = origInsertBefore.call(this, node, refNode) as T;
-        maybeInjectIframe(node);
-        return result;
-    };
+    // Known gap: append, prepend, replaceChild, before/after/replaceWith and
+    // insertAdjacentElement insert nodes too and are not covered yet.
+    for (const key of ["appendChild", "insertBefore"] as const) {
+        wrapMethod<(...a: unknown[]) => Node>(proto, key, (native, self, args) => {
+            const node = args[0];
+            // A text node headed into a <script> or <style>: its JS or CSS.
+            const parent = self as Element | null;
+            if (parent && (parent.tagName === "SCRIPT" || parent.tagName === "STYLE")) rewriteTextNode(parent, node, rewriteOne);
+            if (node instanceof Object) rewriteUrlBeforeInsert(node as Node);
+            const result = Reflect.apply(native, self, args) as Node;
+            if (node instanceof Object) maybeInjectIframe(node as Node);
+            return result;
+        });
+    }
 }
 
 /** Test-only: undo the patches for a given window. */
 export function unpatchDynamicIframeAppend(targetWindow: Window): void {
     const saved = savedByWindow.get(targetWindow);
     if (!saved) return;
-    saved.proto["appendChild"] = saved.origAppendChild;
-    saved.proto["insertBefore"] = saved.origInsertBefore;
+    replaceValue(saved.proto, "appendChild", saved.origAppendChild);
+    replaceValue(saved.proto, "insertBefore", saved.origInsertBefore);
     savedByWindow.delete(targetWindow);
 }

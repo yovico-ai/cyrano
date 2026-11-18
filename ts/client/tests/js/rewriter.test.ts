@@ -208,8 +208,17 @@ describe("rewriteJsSource — eval preamble frame-walk fallback", () => {
         // the frame tree so ad iframes (no bootstrap) can borrow it from the
         // parent. Verify the frame-walk is present in the emitted code.
         const got = rewriteJsSource("var x = location;", all);
-        expect(got).toContain("window.$rewriter");
+        expect(got).toContain("globalThis.$rewriter");
         expect(got).toContain("_w.parent.$rewriter"); // frame-walk fallback
+    });
+
+    it("preamble runs where there is no window (workers)", () => {
+        const got = rewriteJsSource("var x = location;", all);
+        const preamble = got.slice(0, got.indexOf("\n"));
+        // Evaluated with no `window` in scope and no `parent`: must not throw.
+        const run = new Function("globalThis", `"use strict"; ${preamble.replace(/^var /, "let ")}; return $rewriter;`);
+        expect(run({ $rewriter: "R" })).toBe("R");
+        expect(run({})).toBe(null);
     });
 
     it("preamble does not appear for code with no $rewriter references", () => {

@@ -1,92 +1,42 @@
-// @vitest-environment node
-//
-// document.cookie getter/setter patch — in-memory store wiring.
-//
-// The new implementation replaces native document.cookie with direct reads
-// and writes to the module-level in-memory store. Path filtering is done by
-// the store; the patch just wires up the accessor.
+// document.cookie over the browser's own jar (src/patches/document-cookie.ts).
+// The rules themselves are checked against the spec and against Chromium
+// (tests/spec/cookies-*.test.ts); here: the accessor wiring.
 
-import { describe, expect, it, beforeEach } from "vitest";
-import { patchDocumentCookie } from "../../src/patches/document-cookie";
-import { setCookie, getCookiesForPath, clearStore } from "../../src/cookies/in-memory-store";
+import { describe, expect, it } from "vitest";
+import { isPublicSuffix, nativeCookieWrite, patchDocumentCookie } from "../../src/patches/document-cookie";
 
-function makeFakeWindow(): Window {
-    const doc = {} as Document;
-    Object.defineProperty(doc, "cookie", {
-        get: () => "",
-        set: (_v: string) => { /* native — will be replaced by patch */ },
-        configurable: true,
-        enumerable: true,
+const page = new URL("https://www.a.example/app/page");
+
+describe("nativeCookieWrite", () => {
+    it("writes the wire form with Path=/ and the expiry as written", () => {
+        expect(nativeCookieWrite("sid=abc; Path=/app; Max-Age=60; Expires=Wed, 21 Oct 2037 07:28:00 GMT", page))
+            .toBe("__crn!h!www.a.example!%2Fapp!sid=iu:abc; Path=/; Expires=Wed, 21 Oct 2037 07:28:00 GMT; Max-Age=60");
     });
-    return { document: doc } as unknown as Window;
-}
-
-beforeEach(() => {
-    clearStore();
-});
-
-describe("patchDocumentCookie — getter", () => {
-    it("returns cookies matching the current pathname", () => {
-        setCookie("admin_tok=abc; Path=/admin");
-        setCookie("root_tok=xyz; Path=/");
-        const win = makeFakeWindow();
-        patchDocumentCookie(win, () => "/admin/page");
-        // Both root and /admin cookies should be visible
-        const result = win.document.cookie;
-        expect(result).toContain("admin_tok=abc");
-        expect(result).toContain("root_tok=xyz");
+    it("a deletion deletes the same jar entry", () => {
+        expect(nativeCookieWrite("sid=; Path=/app; Max-Age=0", page)).toBe("__crn!h!www.a.example!%2Fapp!sid=iu:; Path=/; Max-Age=0");
     });
-
-    it("hides cookies whose path does not match", () => {
-        setCookie("admin_tok=abc; Path=/admin");
-        const win = makeFakeWindow();
-        patchDocumentCookie(win, () => "/public");
-        expect(win.document.cookie).toBe("");
+    it("stores nothing for what the browser would ignore", () => {
+        expect(nativeCookieWrite("a=1; HttpOnly", page)).toBeNull();
+        expect(nativeCookieWrite("a=1; Domain=b.example", page)).toBeNull();
+        expect(nativeCookieWrite("a=1; Domain=example", page)).toBeNull(); // a public suffix
+        expect(nativeCookieWrite("a=1; Secure", new URL("http://www.a.example/"))).toBeNull();
     });
-
-    it("resolves pathname at read time, not patch time", () => {
-        setCookie("a=1; Path=/first");
-        setCookie("b=2; Path=/second");
-        let pathname = "/first";
-        const win = makeFakeWindow();
-        patchDocumentCookie(win, () => pathname);
-
-        expect(win.document.cookie).toBe("a=1");
-
-        pathname = "/second";
-        expect(win.document.cookie).toBe("b=2");
-    });
-
-    it("returns empty string when store is empty", () => {
-        const win = makeFakeWindow();
-        patchDocumentCookie(win, () => "/");
-        expect(win.document.cookie).toBe("");
+    it("knows public suffixes, private registries included", () => {
+        expect([isPublicSuffix("com"), isPublicSuffix("co.uk"), isPublicSuffix("github.io"), isPublicSuffix("a.example"), isPublicSuffix("")])
+            .toEqual([true, true, true, false, false]);
     });
 });
 
-describe("patchDocumentCookie — setter", () => {
-    it("writes a cookie into the in-memory store", () => {
-        const win = makeFakeWindow();
-        patchDocumentCookie(win, () => "/");
-        win.document.cookie = "tok=secret; Path=/";
-        expect(getCookiesForPath("/")).toBe("tok=secret");
-    });
-
-    it("setter deletion removes the cookie from the store", () => {
-        setCookie("tok=old; Path=/");
-        const win = makeFakeWindow();
-        patchDocumentCookie(win, () => "/");
-        win.document.cookie = "tok=; Max-Age=0; Path=/";
-        expect(getCookiesForPath("/")).toBe("");
-    });
-
-    it("getter reflects setter writes immediately", () => {
-        const win = makeFakeWindow();
-        patchDocumentCookie(win, () => "/");
-        win.document.cookie = "x=1; Path=/";
-        win.document.cookie = "y=2; Path=/";
-        const result = win.document.cookie;
-        expect(result).toContain("x=1");
-        expect(result).toContain("y=2");
+describe("patchDocumentCookie", () => {
+    it("reads the page's cookies from the jar and writes the wire form", () => {
+        let jar = "__crn!h!www.a.example!%2F!x=iu:1; __crn!h!b.example!%2F!y=iu:2; other=3";
+        const proto = { get cookie(): string { return jar; }, set cookie(v: string) { jar = `${jar}; ${v.split(";")[0]}`; } };
+        const doc = Object.create(proto) as Document;
+        patchDocumentCookie({ document: doc } as unknown as Window, () => page);
+        expect(doc.cookie).toBe("x=1");
+        doc.cookie = "z=9";
+        expect(doc.cookie).toBe("z=9; x=1"); // /app (default path) is longer than /
+        doc.cookie = "bad=1; HttpOnly";
+        expect(doc.cookie).toBe("z=9; x=1");
     });
 });

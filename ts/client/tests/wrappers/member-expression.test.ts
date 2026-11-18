@@ -10,8 +10,6 @@ const cfg: ClientConfig = {
     source: "/rewriter.js",
     cacheKey: "test",
     version: "test",
-    userDataEncryption: false,
-    secretCookieName: "",
     rewrite_css_selectors: false,
 };
 

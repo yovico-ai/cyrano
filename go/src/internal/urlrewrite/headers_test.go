@@ -1,0 +1,33 @@
+package urlrewrite
+
+import (
+	"net/url"
+	"testing"
+)
+
+func TestRewriteLinkHeaderAndRefresh(t *testing.T) {
+	cfg := ProxyConfig{PublicURL: &url.URL{Scheme: "http", Host: "localhost:9081"}}
+	base, _ := url.Parse("https://site.example/a/page")
+	P := "http://localhost:9081/cyrano/https/"
+	for _, c := range []struct{ in, want string }{
+		{`<https://cdn.example/app.js>; rel=preload; as=script`, `<` + P + `cdn.example/app.js>; rel=preload; as=script`},
+		{`</s.css>; rel=preload; as=style, <img/x.png>; rel="preload"; title="a, <b>"`, `<` + P + `site.example/s.css>; rel=preload; as=style, <` + P + `site.example/a/img/x.png>; rel="preload"; title="a, <b>"`},
+		{`rel=preload`, `rel=preload`},
+	} {
+		if got := RewriteLinkHeader(c.in, base, cfg); got != c.want {
+			t.Errorf("RewriteLinkHeader(%q)\n got  %q\n want %q", c.in, got, c.want)
+		}
+	}
+	for _, c := range []struct{ in, want string }{
+		{`5`, `5`},
+		{`0; url=/next`, `0; url=` + P + `site.example/next`},
+		{`0;URL='https://other.example/x'`, `0;URL='` + P + `other.example/x'`},
+		{`3, "rel/y"`, `3, "` + P + `site.example/a/rel/y"`},
+		{` 1.5 ;  url = z`, ` 1.5 ;  url = ` + P + `site.example/a/z`},
+		{`soon`, `soon`},
+	} {
+		if got := RewriteRefresh(c.in, base, cfg); got != c.want {
+			t.Errorf("RewriteRefresh(%q)\n got  %q\n want %q", c.in, got, c.want)
+		}
+	}
+}

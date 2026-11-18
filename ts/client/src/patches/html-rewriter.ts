@@ -27,6 +27,7 @@
 // patches by calling the originals directly.
 
 import { rewriteCssText } from "../css/rewriter";
+import { ORIGINALS_ATTR } from "../native/originals";
 import { defaultJsRewriteOptions, rewriteJsSource } from "../js/rewriter";
 import { rewriteSrcsetAttribute } from "./srcset";
 import { urlAttrsForTagName } from "./url-attribute-map";
@@ -100,6 +101,14 @@ export function rewriteHtmlString(
     // The template content is a DocumentFragment; walk all element descendants.
     // querySelectorAll('*') matches all elements, in document order.
     const elements = template.content.querySelectorAll("*");
+    // Each element's attributes as the page wrote them, to record what the
+    // rewriting below changes (native/originals.ts).
+    const written = new Map<Element, Map<string, string>>();
+    for (const element of elements) {
+        const m = new Map<string, string>();
+        for (const a of Array.from(element.attributes)) m.set(a.name, a.value);
+        written.set(element, m);
+    }
     for (const element of elements) {
         // 1a. Inline <style> content — rewrite as a CSS source string.
         if (element.tagName === "STYLE") {
@@ -188,6 +197,17 @@ export function rewriteHtmlString(
         }
     }
 
+    // The originals attribute, as the server writes it: what changed.
+    for (const [element, was] of written) {
+        const o: Record<string, string | null> = {};
+        let changed = false;
+        const now = new Map<string, string>();
+        for (const a of Array.from(element.attributes)) now.set(a.name, a.value);
+        for (const [name, value] of was) if (now.get(name) !== value) { o[name] = value; changed = true; }
+        for (const name of now.keys()) if (!was.has(name)) { o[name] = null; changed = true; }
+        if (changed) natives.setAttribute.call(element, ORIGINALS_ATTR, JSON.stringify(o));
+    }
+
     return natives.innerHTMLGet.call(template);
 }
 
@@ -200,6 +220,19 @@ function rewriteCspContent(csp: string, proxyOrigin: string): string {
         const parts = dir.trim().split(/\s+/);
         if (parts.length === 0 || !parts[0]) continue;
         const name = parts[0].toLowerCase();
+        // As the server's rewriteCSP (go/src/internal/proxy/csp.go): reports
+        // would go straight to the origin; Trusted Types enforcement breaks
+        // the runtime; and on an http proxy, upgrade-insecure-requests /
+        // block-all-mixed-content would upgrade or block every proxied load.
+        if (
+            name === "report-uri" || name === "report-to" ||
+            name === "require-trusted-types-for" || name === "trusted-types" ||
+            ((name === "upgrade-insecure-requests" || name === "block-all-mixed-content") &&
+                proxyOrigin.toLowerCase().startsWith("http://"))
+        ) {
+            directives[i] = "";
+            continue;
+        }
         if (!name.includes("-src")) continue;
 
         // Check if proxy origin is already present.
@@ -216,5 +249,5 @@ function rewriteCspContent(csp: string, proxyOrigin: string): string {
             directives[i] = dir.slice(0, lead) + parts.join(" ") + " " + proxyOrigin;
         }
     }
-    return directives.join(";");
+    return directives.filter((d, i) => d !== "" || csp.split(";")[i] === "").join(";");
 }

@@ -56,28 +56,13 @@ type Config struct {
 	// Same decoupling pattern as RewriteInlineJS.
 	RewriteInlineCSS func([]byte) []byte
 
-	// PageCookies is the set of cookies to inject into the page via the
-	// bootstrap script's $rewriter.set_cookies() call. Each element is a
-	// Set-Cookie-style string (e.g. "name=value; Path=/; Max-Age=3600").
-	// Populated by the body rewriter from the server-side session jar.
-	PageCookies []string
+	// ScriptNonce, when set, is put on the injected bootstrap scripts: the
+	// page's CSP authorizes scripts by this nonce (proxy.ScriptNonce).
+	ScriptNonce string
 
-	// ChallengePathPrefix, when non-empty, causes a small inline script to be
-	// injected at the start of <head>. The script patches
-	// HTMLScriptElement.prototype.src, window.fetch, and
-	// XMLHttpRequest.prototype.open to prepend this prefix to absolute-path
-	// URLs (e.g. "/cdn-cgi/...") so challenge pages can load Cloudflare's
-	// orchestrate script through the proxy without the full $rewriter bootstrap.
-	//
-	// Example value: "/cyrano/https/claude.ai"
-	ChallengePathPrefix string
-
-	// ChallengeCookiePrefix is the site-namespace prefix applied to cookie
-	// names by the challenge-page shim (e.g. "__crn__claude_ai__"). The shim
-	// patches document.cookie so JS-set cookies are stored with this prefix in
-	// the browser and the Director's existing prefix-strip logic forwards them
-	// to the upstream unmodified. Must match proxy.CookiePrefixFor(host).
-	ChallengeCookiePrefix string
+	// NoOriginals suppresses the originals attribute (OriginalsAttr): for
+	// markup no runtime will read (a <noscript> body, re-parsed as text).
+	NoOriginals bool
 
 	// Prettify, when true, runs JS and CSS content through a formatter before
 	// serving. Makes minified challenge scripts readable in DevTools.

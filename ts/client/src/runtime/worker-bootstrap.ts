@@ -17,7 +17,7 @@
 // importScripts patching are worker-specific.
 
 import type { ClientConfig } from "../config";
-import { rewriteUrl, unwrapProxiedUrl } from "../url/containment";
+import { isUrlLikeSpecifier, rewriteUrl, unwrapProxiedUrl } from "../url/containment";
 import { WorkerWrappedLocation } from "../wrappers/worker-location";
 import {
     wrapGetTopWindow,
@@ -27,6 +27,14 @@ import {
 import { wrapDocumentWrite } from "../wrappers/document-write";
 import { wrapPostMessage } from "../wrappers/post-message";
 import { wrapEval, wrapEvalArg, wrapEvalMemexp } from "../wrappers/eval";
+import { installToStringMask, wrapAccessor, wrapMethod } from "../native/surface";
+import { patchErrorStacks } from "../native/error-stack";
+import { patchFetch } from "../patches/fetch";
+import { patchXmlHttpRequest } from "../patches/xhr";
+import { patchWebSocket } from "../patches/websocket";
+import { patchEventSource } from "../patches/event-source";
+import { patchWorker } from "../patches/worker";
+import { patchFunctionConstructor } from "../patches/function-ctor";
 
 // Subset of RewriterApi (api-types.ts) that's meaningful inside a Worker —
 // no DOM, no cookies, no iframe/window-tree navigation.
@@ -43,7 +51,7 @@ export interface WorkerRewriterApi {
     wrap_eval(evalFn: typeof eval): typeof eval;
     wrap_eval_arg(evalFn: typeof eval, source: unknown): unknown;
     wrap_eval_memexp(obj: unknown): unknown;
-    wrap_import_arg(specifier: unknown): unknown;
+    wrap_import_arg(specifier: unknown, scriptUrl?: unknown): unknown;
     wrap_worker_url(url: unknown): unknown;
 }
 
@@ -64,7 +72,7 @@ export function initWorker(
     const rewriteOne = (rawUrl: string): string => rewriteUrl(rawUrl, baseUrl, config);
     const unwrapOne = (proxiedUrl: string): string => unwrapProxiedUrl(proxiedUrl, config);
 
-    patchWorkerScope(scope, rewriteOne, unwrapOne);
+    patchWorkerScope(scope, config, baseUrl, rewriteOne, unwrapOne);
 
     const api: WorkerRewriterApi = {
         wrap_get_location: (_loc) => wrappedLocation,
@@ -72,23 +80,25 @@ export function initWorker(
             set value(v: string) { setter(rewriteOne(v)); },
             get value(): string { return baseUrl.href; },
         }),
-        wrap_location: (arg) => {
-            if (!arg.obj || typeof arg.obj !== "object" || !("location" in arg.obj)) {
-                return { location: undefined };
-            }
-            return { location: wrappedLocation };
-        },
+        // The worker scope's own location is the view; any other object's
+        // `location` is its own property, read and written in place.
+        wrap_location: (arg) => ({
+            get location(): unknown {
+                return arg.obj === scope ? wrappedLocation : (arg.obj as { location: unknown }).location;
+            },
+            set location(v: unknown) {
+                if (arg.obj !== scope) (arg.obj as { location: unknown }).location = v;
+            },
+        }),
         wrap_get_top_window: wrapGetTopWindow as WorkerRewriterApi["wrap_get_top_window"],
         wrap_top_window: wrapTopWindow,
         wrap_parent_window: wrapParentWindow,
         wrap_document_write: (arg) => wrapDocumentWrite(arg, rewriteOne),
-        wrap_postMessage: (arg) => wrapPostMessage(arg, new URL(config.apiBaseURL).origin),
+        wrap_postMessage: (arg) => wrapPostMessage(arg, new URL(config.apiBaseURL).origin, () => null, (h: string) => h),
         wrap_member_expression: (obj, prop) => {
             switch (prop) {
                 case "location":
-                    return obj && typeof obj === "object" && "location" in obj
-                        ? { location: wrappedLocation }
-                        : obj;
+                    return obj === scope ? { location: wrappedLocation } : obj;
                 case "top":
                     return wrapTopWindow({ obj });
                 case "parent":
@@ -97,7 +107,7 @@ export function initWorker(
                 case "writeln":
                     return wrapDocumentWrite({ obj }, rewriteOne);
                 case "postMessage":
-                    return wrapPostMessage({ obj }, new URL(config.apiBaseURL).origin);
+                    return wrapPostMessage({ obj }, new URL(config.apiBaseURL).origin, () => null, (h: string) => h);
                 case "eval":
                     return wrapEvalMemexp(obj);
             }
@@ -106,8 +116,14 @@ export function initWorker(
         wrap_eval: wrapEval,
         wrap_eval_arg: wrapEvalArg,
         wrap_eval_memexp: wrapEvalMemexp,
-        wrap_import_arg: (specifier) =>
-            typeof specifier === "string" ? rewriteOne(specifier) : specifier,
+        wrap_import_arg: (specifier, scriptUrl) => {
+            if (typeof specifier !== "string" || !isUrlLikeSpecifier(specifier)) return specifier;
+            let base = baseUrl;
+            if (typeof scriptUrl === "string") {
+                try { base = new URL(scriptUrl); } catch { /* keep the worker's */ }
+            }
+            return rewriteUrl(specifier, base, config);
+        },
         wrap_worker_url: (url) => {
             const urlStr = typeof url === "string" ? url : (url != null ? String(url) : null);
             return urlStr ? rewriteOne(urlStr) : url;
@@ -117,72 +133,39 @@ export function initWorker(
 }
 
 /**
- * Patches this worker's own `fetch`/`XMLHttpRequest`/`importScripts` so its
- * outbound requests are proxified the same way the main thread's are — the
- * fix for bare, un-prefixed requests landing on the proxy's own origin.
+ * Patches this worker's own scope with the same native-surface patches the
+ * page gets (fetch, XHR, WebSocket, EventSource, nested workers, error
+ * stacks, Function), plus importScripts, and WorkerLocation reading back
+ * the worker's original URL.
  */
 function patchWorkerScope(
     scope: PatchableWorkerScope,
+    config: ClientConfig,
+    baseUrl: URL,
     rewriteOne: (url: string) => string,
     unwrapOne: (url: string) => string,
 ): void {
-    if (scope.fetch) {
-        const nativeFetch = scope.fetch.bind(scope);
-        scope.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-            if (typeof input === "string") return nativeFetch(rewriteOne(input), init);
-            if (input instanceof URL) return nativeFetch(rewriteOne(input.href), init);
-            if (typeof Request !== "undefined" && input instanceof Request) {
-                return nativeFetch(new Request(rewriteOne(input.url), input), init);
-            }
-            return nativeFetch(rewriteOne(String(input)), init);
-        }) as typeof fetch;
-
-        for (const Ctor of [
-            typeof Request !== "undefined" ? Request : undefined,
-            typeof Response !== "undefined" ? Response : undefined,
-        ]) {
-            if (!Ctor?.prototype) continue;
-            const urlDesc = Object.getOwnPropertyDescriptor(Ctor.prototype, "url");
-            if (!urlDesc?.get) continue;
-            const nativeGet = urlDesc.get;
-            Object.defineProperty(Ctor.prototype, "url", {
-                ...urlDesc,
-                get(): string { return unwrapOne(nativeGet.call(this) as string); },
-            });
-        }
-    }
-
-    if (scope.XMLHttpRequest?.prototype) {
-        const proto = scope.XMLHttpRequest.prototype;
-        const originalOpen = proto.open;
-        proto.open = function patchedOpen(
-            this: XMLHttpRequest,
-            method: string,
-            url: string | URL,
-            ...rest: unknown[]
-        ): void {
-            const rawUrl = typeof url === "string" ? url : String(url);
-            return (originalOpen as (...args: unknown[]) => void).call(
-                this, method, rewriteOne(rawUrl), ...rest,
-            );
-        } as typeof proto.open;
-
-        const responseURLDesc = Object.getOwnPropertyDescriptor(proto, "responseURL");
-        if (responseURLDesc?.get) {
-            const nativeGet = responseURLDesc.get;
-            Object.defineProperty(proto, "responseURL", {
-                ...responseURLDesc,
-                get(): string { return unwrapOne(nativeGet.call(this) as string); },
-            });
-        }
-    }
-
-    // importScripts is classic-worker-only (absent in module workers) and
-    // synchronous — rewrite every URL argument before delegating.
+    const realm = scope as unknown as Window;
+    installToStringMask(scope as unknown as typeof globalThis);
+    patchErrorStacks(realm, config.apiBaseURL + config.source, unwrapOne);
+    patchFetch(realm, rewriteOne, unwrapOne, () => baseUrl);
+    patchXmlHttpRequest(realm, rewriteOne, unwrapOne);
+    patchWebSocket(realm, rewriteOne, unwrapOne, () => baseUrl.origin);
+    patchEventSource(realm, rewriteOne, unwrapOne);
+    patchWorker(realm, rewriteOne);
+    patchFunctionConstructor(realm);
+    // importScripts is classic-worker-only and synchronous.
     if (typeof scope.importScripts === "function") {
-        const nativeImportScripts = scope.importScripts.bind(scope);
-        scope.importScripts = (...urls: string[]): void => {
-            nativeImportScripts(...urls.map(rewriteOne));
-        };
+        wrapMethod<(...a: unknown[]) => void>(scope, "importScripts", (native, self, args) =>
+            Reflect.apply(native, self, args.map((u) => rewriteOne(String(u)))) as void);
+    }
+    // self.location is a WorkerLocation; its accessors report the worker's
+    // original URL (natively the worker script's own URL).
+    const WL = (scope as unknown as { WorkerLocation?: { prototype: object } }).WorkerLocation;
+    if (WL?.prototype) {
+        for (const part of ["href", "origin", "protocol", "host", "hostname", "port", "pathname", "search", "hash"] as const) {
+            wrapAccessor<string>(WL.prototype, part, { get: () => baseUrl[part] });
+        }
+        wrapMethod(WL.prototype, "toString", () => baseUrl.href);
     }
 }

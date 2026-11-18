@@ -12,9 +12,69 @@ it's talking to `example.com`; the wire and DNS only ever touch
 proxy setting — the user just visits a proxified URL like
 `http://proxy/?goto=<base64(https://example.com/)>` and the rest is rewriting.
 
+## Fundamental principle: the page cannot tell
+
+**The page's own JavaScript must see no difference between loading the site
+directly and loading it through cyrano.** Every object, function, property,
+event and error it can reach returns the same value, of the same type, with
+the same behaviour, as it would on the origin itself. This is the criterion
+every rewriting decision is judged by; where two choices are possible, the
+one that keeps the page unaware wins, and any rule that contradicts it is a
+bug, whoever wrote it.
+
+Concretely, what page code reads back is the direct value, byte for byte:
+
+- **URLs**: `location.*`, `document.URL` / `baseURI` / `referrer` / `domain`,
+  `a.href` and its components, `img.src` / `currentSrc`, `Request.url`,
+  `Response.url`, `event.origin`, performance entries, … — the original URL
+  exactly as the browser would serialize it (a bare `?` or `#` and
+  `user:pass@` included).
+- **Attribute and markup text**: `getAttribute`, `attributes`, `img.srcset`,
+  `innerHTML` / `outerHTML`, `style.cssText` — the text exactly as the page
+  wrote it, relative URLs still relative, spacing untouched.
+- **Errors and edge behaviour**: what throws natively still throws, with the
+  same error type (e.g. `fetch()` on a URL with credentials is a
+  `TypeError`); nothing that fails natively succeeds through cyrano.
+- **Introspection**: wrapped functions and accessors look native
+  (`toString`, `name`, `length`, property descriptors, prototype chain).
+
+**The whole native surface.** Every function, property and method of the
+browser's built-in classes (native ones only — not the page's own) that
+could show a difference is wrapped or overridden, so the page's classes
+work against them as if everything were native: `Location`, `URL`,
+`Request`/`Response`, `Element` and its reflected attributes,
+`Document`, `History`, `MessageEvent`, `Performance*`, `Error.stack`,
+`Function.prototype.toString`, property descriptors, and so on.
+
+**This part is heuristic, not guaranteed.** The page's code may fight it:
+it can capture natives before cyrano runs, override the same properties
+and methods itself, or probe the wrappers. Cyrano loads first and wraps
+in ways that survive common probing, but it cannot prove that every
+path a page takes reaches a wrapper. The line runs here: the
+*translations* (rewrite, unwrap, what each wrapper returns) are specified
+in `spec/` and proved or property-checked against the browser; *whether
+every native path reaches one* is engineering, checked by review and by
+direct-vs-proxied DOM diffing (`ts/bug-miner`).
+
+Every piece of code is reviewed as it is brought under the spec: each
+hand-written parser or wrapper is either replaced by the specified
+implementation or specified itself.
+
+The page's own code is what this protects; cyrano's injected runtime is
+not part of it. Out of scope: what a page can learn only with a server's
+help or from timing.
+
+Formally, for the URL rules in `spec/` this is a law the spec proves:
+what page code is shown for a rewritten value equals what the browser
+shows for the original — `unwrap(rewrite(base, raw)) = href(parse(base, raw))`.
+
 ## Design principle
 
 **Data is never modified as data. Only function calls and property assignments are intercepted.**
+
+(This is the means to the principle above: values the page holds stay the
+page's own, and every point where cyrano translates is an interception that
+can translate back.)
 
 The proxy intercepts browser APIs — `location.hostname`, `fetch()`, `XMLHttpRequest.open()`,
 `Element.setAttribute()`, `eval()`, etc. — by wrapping the interfaces themselves, not by
@@ -35,14 +95,15 @@ patching the underlying data (URL strings, headers, script bodies) in place. Thi
 ### 1. URL containment
 
 Every URL the browser would otherwise send to a third party must be rewritten
-to land at the proxy. The encoding scheme:
+to land at the proxy, and read back as the original (see the principle
+above). The authority is `spec/Containment.agda`; in short:
 
-- `https://example.com/path?q=1` → `http://proxy:9080/?goto=<base64url(https://example.com/path?q=1)>`
-- Base64url with no padding (RFC 4648 §5)
-- Anchor URLs (`#foo`) and special schemes (`javascript:`, `data:`, `blob:`,
-  `mailto:`, `tel:`, `about:`) pass through unchanged
-- URLs already on the proxy host with a `load=` param pass through unchanged
-  (don't double-rewrite)
+- `https://example.com/path?q=1` → `<proxy>/cyrano/https/example.com/path?q=1`
+  (http, https, ws, wss; the target normalized as the browser does)
+- Anchor URLs (`#foo`) and other schemes (`javascript:`, `data:`, `blob:`,
+  `mailto:`, `tel:`, `about:`, …) are left exactly as written
+- URLs already on the proxy under `/cyrano/` are left as they are (never
+  wrapped twice)
 
 ### 2. Server-side body rewriting
 

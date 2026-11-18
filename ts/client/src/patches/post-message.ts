@@ -1,61 +1,40 @@
-// Prototype-level patch for Window.prototype.postMessage.
+// window.postMessage, as page code sees it natively — for every caller,
+// rewritten or not.
 //
-// The AST rewriter wraps every `obj.postMessage(…)` call site with
-// $rewriter.wrap_postMessage({obj}).postMessage(…), which translates the
-// targetOrigin argument for rewritten scripts. But scripts that are NOT
-// rewritten (ad SDKs loaded from third-party CDNs, inline scripts generated
-// by document.write, etc.) bypass the AST wrapper and call the native method
-// directly — so the targetOrigin is never translated and the browser throws a
-// SecurityError because the target window's REAL origin is the proxy origin
-// (e.g. 'http://localhost:9081'), not the upstream origin that the script
-// expects (e.g. 'https://www.zerohedge.com').
-//
-// This patch closes that gap by wrapping Window.prototype.postMessage itself,
-// so EVERY postMessage call on any window in this realm goes through the
-// translation, regardless of whether the caller was AST-rewritten.
-//
-// Cross-origin guard: the browser throws a SecurityError when code reads any
-// property of a cross-origin window's location. We try to read the recipient's
-// location inside a try/catch; if that succeeds the window is same-origin
-// (= proxied) and we translate; if it throws we leave the targetOrigin
-// unchanged so postMessage to truly external windows is unaffected.
+// postMessage is an own property of each window (Window is a [Global]
+// interface), wrapped there. targetOrigin follows HTML against the windows'
+// original origins (messaging/target-origin.ts delivery). The message is
+// sent through the send helper of the window whose code is calling, found
+// from the call stack, so the browser stamps that window as event.source
+// (and event.origin, derived from it, is the sender's original origin): a
+// window posting to itself, or a caller that cannot be told, goes to the
+// native from here.
 
-type WindowGlobals = Record<string, { prototype: Record<string, unknown> } | undefined>;
+import type { ClientConfig } from "../config";
+import { wrapMethod } from "../native/surface";
+import type { Internals } from "../native/internals";
+import { callingWindow, delivery, installSender, originalOrigin, sendAs } from "../messaging/target-origin";
 
-export function patchPostMessage(targetWindow: Window, proxyOrigin: string): void {
-    const globals = targetWindow as unknown as WindowGlobals;
-    const TargetWindow = globals["Window"];
-    if (!TargetWindow?.prototype) return;
-
-    const proto = TargetWindow.prototype;
-    const orig = proto["postMessage"];
-    if (typeof orig !== "function") return;
-
-    proto["postMessage"] = function patchedPostMessage(
-        this: Window,
-        ...args: unknown[]
-    ): void {
-        (orig as (...a: unknown[]) => void).apply(this, translateOrigin(this, args, proxyOrigin));
-    };
-}
-
-function translateOrigin(recipient: unknown, args: unknown[], proxyOrigin: string): unknown[] {
-    if (args.length < 2) return args;
-    const targetOrigin = args[1];
-    if (typeof targetOrigin !== "string" || targetOrigin === "*" || targetOrigin === "/" || targetOrigin === proxyOrigin) return args;
-
-    try {
-        // Reading .location throws SecurityError for cross-origin windows.
-        // If it succeeds, the recipient is same-origin = a proxied window.
-        const win = recipient as { location?: unknown };
-        const loc = win.location;
-        if (loc != null) {
-            const fixed = args.slice();
-            fixed[1] = proxyOrigin;
-            return fixed;
+export function patchPostMessage(
+    targetWindow: Window,
+    config: ClientConfig,
+    unwrap: (href: string) => string,
+    internals: Internals,
+): void {
+    const proxyOrigin = new URL(config.apiBaseURL).origin;
+    const runtimeUrl = config.apiBaseURL + config.source;
+    const PE = (targetWindow as unknown as { PerformanceEntry?: { prototype: PerformanceEntry } }).PerformanceEntry;
+    const nameGet = PE ? Object.getOwnPropertyDescriptor(PE.prototype, "name")?.get : undefined;
+    const nameOf = (e: PerformanceEntry): string => (nameGet ? (nameGet.call(e) as string) : e.name);
+    const native = wrapMethod<(...a: unknown[]) => void>(targetWindow, "postMessage", (nativeFn, self, args) => {
+        const sender = callingWindow(targetWindow, runtimeUrl, nameOf, unwrap) ?? targetWindow;
+        const d = delivery(self, args[1], originalOrigin(sender, unwrap), proxyOrigin, unwrap);
+        if (d.kind === "drop") return;
+        const next = d.kind === "send" ? [args[0], d.origin, ...args.slice(2)] : args;
+        if (sender === self || sender === targetWindow && self === targetWindow) {
+            return Reflect.apply(nativeFn, self, next) as void;
         }
-    } catch {
-        // Cross-origin recipient — leave targetOrigin unchanged.
-    }
-    return args;
+        return sendAs(sender, self, next, () => Reflect.apply(nativeFn, self, next)) as void;
+    });
+    if (native) installSender(internals, native);
 }

@@ -37,4 +37,6 @@ if [[ ! -x "$binary" ]]; then
   exit 1
 fi
 
-exec "$binary" --assets "$assets" --log-level debug --prettify
+# --prettify reformats rewritten JS for reading; leave it off when checking
+# fidelity (it changes what Function.prototype.toString shows page code).
+exec "$binary" --assets "$assets" --log-level debug

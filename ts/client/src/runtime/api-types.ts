@@ -23,7 +23,6 @@ export interface RewriterApi {
     get_base_url(): URL;
     set_base_url(href: string): void;
     set_location(href: string): void;
-    set_cookies(payload: string): void;
 
     // ── JS_WRAP_* runtime helpers (one per server-side AST rule) ───────────
     wrap_get_location(loc: Location): WrappedLocation;
@@ -45,12 +44,10 @@ export interface RewriterApi {
     wrap_eval(evalFn: typeof eval): typeof eval;
     wrap_eval_arg(evalFn: typeof eval, source: unknown): unknown;
     wrap_eval_memexp(obj: unknown): unknown;
-    wrap_import_arg(specifier: unknown): unknown;
+    wrap_import_arg(specifier: unknown, scriptUrl?: unknown): unknown;
     wrap_worker_url(url: unknown): unknown;
 
     // ── HTML attribute hooks (injected by the server-side HTML rewriter) ───
-    process_server_cookies(): void;
-    fetch_cookies(elem: HTMLElement, cb?: () => void): void;
     append_rewrite_script_into_iframe(iframe: HTMLIFrameElement): void;
     get_top_level_window(w: Window): Window;
 }

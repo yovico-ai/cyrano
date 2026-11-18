@@ -23,8 +23,6 @@ function makeConfig(apiBaseURL: string): ClientConfig {
         apiBaseURL,
         cacheKey: "",
         source: "/rewriter.js",
-        secretCookieName: "crnsct",
-        userDataEncryption: false,
         version: "0.0.1",
         rewrite_css_selectors: false,
     };

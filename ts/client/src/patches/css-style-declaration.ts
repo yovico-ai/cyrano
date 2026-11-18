@@ -29,6 +29,7 @@
 // it inside the patched setter is recursion-free.
 
 import { rewriteCssText } from "../css/rewriter";
+import { wrapAccessor, wrapMethod } from "../native/surface";
 
 // Camel-case named CSS properties that carry a URL value (the form the JS
 // API exposes). The CSS-attribute form (with hyphens) is what setProperty
@@ -111,35 +112,18 @@ function patchSetProperty(
     proto: object,
     rewriteOne: (url: string) => string,
 ): void {
-    const desc = Object.getOwnPropertyDescriptor(proto, "setProperty");
-    if (!desc || typeof desc.value !== "function") return;
-    const original = desc.value as (
-        name: string, value: string, priority?: string,
-    ) => void;
-
-    Object.defineProperty(proto, "setProperty", {
-        configurable: desc.configurable ?? true,
-        writable: desc.writable ?? true,
-        enumerable: desc.enumerable ?? false,
-        value: function patchedSetProperty(
-            this: CSSStyleDeclaration,
-            name: string,
-            value: string,
-            priority?: string,
-        ): void {
-            if (typeof name === "string" && typeof value === "string") {
-                const lowerName = name.toLowerCase();
-                // Rewrite if either: the property is in our known URL-bearing
-                // set, or the value itself contains url()/@import (defensive
-                // fallback for unknown shorthand / future props).
-                const shouldRewrite = URL_BEARING_KEBAB_SET.has(lowerName) ||
-                    /url\s*\(|@import/.test(value);
-                if (shouldRewrite) {
-                    value = rewriteCssText(value, rewriteOne);
-                }
+    wrapMethod<(...a: unknown[]) => void>(proto, "setProperty", (native, self, args) => {
+        const [name, value] = args;
+        if (typeof name === "string" && typeof value === "string") {
+            // A known URL-bearing property, or a value with url()/@import
+            // (unknown shorthands, future properties).
+            if (URL_BEARING_KEBAB_SET.has(name.toLowerCase()) || /url\s*\(|@import/i.test(value)) {
+                const next = args.slice();
+                next[1] = rewriteCssText(value, rewriteOne);
+                return Reflect.apply(native, self, next) as void;
             }
-            return original.call(this, name, value, priority);
-        },
+        }
+        return Reflect.apply(native, self, args) as void;
     });
 }
 
@@ -147,22 +131,8 @@ function patchCssTextSetter(
     proto: object,
     rewriteOne: (url: string) => string,
 ): void {
-    const desc = Object.getOwnPropertyDescriptor(proto, "cssText");
-    if (!desc?.set || !desc?.get) return;
-    const originalSet = desc.set;
-    const originalGet = desc.get;
-
-    Object.defineProperty(proto, "cssText", {
-        configurable: desc.configurable ?? true,
-        enumerable: desc.enumerable ?? false,
-        get(): unknown { return originalGet.call(this); },
-        set(value: unknown): void {
-            if (typeof value === "string") {
-                originalSet.call(this, rewriteCssText(value, rewriteOne));
-            } else {
-                originalSet.call(this, value);
-            }
-        },
+    wrapAccessor<unknown>(proto, "cssText", {
+        set: (set, self, value) => set.call(self, typeof value === "string" ? rewriteCssText(value, rewriteOne) : value),
     });
 }
 
@@ -171,21 +141,8 @@ function patchNamedSetters(
     rewriteOne: (url: string) => string,
 ): void {
     for (const propName of URL_BEARING_CAMEL) {
-        const desc = Object.getOwnPropertyDescriptor(proto, propName);
-        if (!desc?.set || !desc?.get) continue; // some env may not expose
-        const originalSet = desc.set;
-        const originalGet = desc.get;
-        Object.defineProperty(proto, propName, {
-            configurable: desc.configurable ?? true,
-            enumerable: desc.enumerable ?? false,
-            get(): unknown { return originalGet.call(this); },
-            set(value: unknown): void {
-                if (typeof value === "string") {
-                    originalSet.call(this, rewriteCssText(value, rewriteOne));
-                } else {
-                    originalSet.call(this, value);
-                }
-            },
+        wrapAccessor<unknown>(proto, propName, {
+            set: (set, self, value) => set.call(self, typeof value === "string" ? rewriteCssText(value, rewriteOne) : value),
         });
     }
 }

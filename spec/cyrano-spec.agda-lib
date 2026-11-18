@@ -1,0 +1,3 @@
+name: cyrano-spec
+depend: standard-library
+include: .

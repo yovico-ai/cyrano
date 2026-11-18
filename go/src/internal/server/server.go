@@ -6,6 +6,7 @@ package server
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/yovico/cyrano/internal/config"
+	"github.com/yovico/cyrano/internal/headerorder"
 	"github.com/yovico/cyrano/internal/proxy"
 	"github.com/yovico/cyrano/internal/static"
 	"github.com/yovico/cyrano/internal/upstream"
@@ -168,6 +170,9 @@ func (s *Server) Handler() http.Handler {
 		case vhost.RewriterJSPath:
 			sh.ServeHTTP(w, r)
 			return
+		case WorkerInitPath:
+			workerInitHandler(vhost, s.proxyEndpoints(vhost)).ServeHTTP(w, r)
+			return
 		}
 
 		// Browsers auto-fetch /favicon.ico on every navigation. We silence it
@@ -203,13 +208,9 @@ func (s *Server) Handler() http.Handler {
 		// browser's address bar stays correct and client-side routing works.
 		proxyCfgForReferer := s.proxyEndpoints(vhost)
 		if origin := inferOriginFromReferer(r, proxyCfgForReferer.PublicURL); origin != nil {
-			escapedPath := r.URL.EscapedPath()
-			if escapedPath == "" {
-				escapedPath = "/"
-			}
 			dest := proxyCfgForReferer.PublicURL.String() +
-				"/cyrano/" + origin.Scheme + "/" + origin.Host + escapedPath
-			if r.URL.RawQuery != "" {
+				urlrewrite.ProxifiedPath(origin.Scheme, origin.Host, r.URL.EscapedPath())
+			if r.URL.RawQuery != "" || r.URL.ForceQuery {
 				dest += "?" + r.URL.RawQuery
 			}
 			// 307 (not 302) so POST method and body are preserved when
@@ -236,11 +237,15 @@ func (s *Server) Handler() http.Handler {
 				Transport:         transport,
 			})
 			if scheme, host, ok := challengeOriginFromSession(r, jar, vhost.SecretCookieName); ok {
+				// The path exactly as the browser sent it (RawPath is what the
+				// upstream transport puts on the wire), and a bare "?" kept.
 				target := &url.URL{
-					Scheme:   scheme,
-					Host:     host,
-					Path:     r.URL.Path,
-					RawQuery: r.URL.RawQuery,
+					Scheme:     scheme,
+					Host:       host,
+					Path:       r.URL.Path,
+					RawPath:    r.URL.EscapedPath(),
+					RawQuery:   r.URL.RawQuery,
+					ForceQuery: r.URL.ForceQuery,
 				}
 				s.Logger.Debug("challenge: routing via session origin",
 					"path", r.URL.Path, "target", target.String())
@@ -279,7 +284,15 @@ func (s *Server) ListenAndServe() error {
 				}
 				errs <- http.ListenAndServeTLS(addr, srv.SSLCert, srv.SSLKey, handler)
 			} else {
-				errs <- http.ListenAndServe(addr, handler)
+				// Record the order in which the browser sends its headers
+				// (headerorder): the upstream gets them in the same order.
+				l, err := net.Listen("tcp", addr)
+				if err != nil {
+					errs <- err
+					return
+				}
+				hs := &http.Server{Handler: headerorder.Handler(handler), ConnContext: headerorder.ConnContext}
+				errs <- hs.Serve(headerorder.Listener(l))
 			}
 		}()
 	}
@@ -308,7 +321,7 @@ func inferOriginFromReferer(r *http.Request, publicURL *url.URL) *url.URL {
 	if !strings.EqualFold(ref.Host, publicURL.Host) {
 		return nil
 	}
-	target, ok := urlrewrite.ParseCyranoPath(ref.Path, ref.RawQuery)
+	target, ok := urlrewrite.ParseCyranoURL(ref)
 	if !ok {
 		return nil
 	}

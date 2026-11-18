@@ -10,8 +10,6 @@ const config: ClientConfig = {
     apiBaseURL: "http://localhost:9081",
     cacheKey: "",
     source: "/rewriter.js",
-    secretCookieName: "crnsct",
-    userDataEncryption: false,
     version: "0.0.1",
     rewrite_css_selectors: false,
 };
@@ -55,16 +53,26 @@ describe("createRewriterApi — wrap_* surface", () => {
         expect(wrapped.location).toBe(api.wrap_get_location(window.location));
     });
 
-    it("wrap_location({obj: other}) wraps the location to proxify URL assignments", () => {
+    it("wrap_location of another window gives its location view (the original URL)", () => {
         const api = createRewriterApi(window, config);
         api.set_base_url("https://example.com/page");
         const realLoc = { href: "http://localhost:9081/cyrano/https/example.com/page", assign: (_u: string) => {}, replace: (_u: string) => {}, reload: () => {} } as unknown as Location;
-        const fakeOther = { location: realLoc };
-        const wrapped = api.wrap_location({ obj: fakeOther }).location as { href: string };
-        // Must not be the raw real location object
-        expect(wrapped).not.toBe(fakeOther.location);
-        // Reads pass through
-        expect(wrapped.href).toBe(realLoc.href);
+        const other: Record<string, unknown> = { location: realLoc };
+        other["window"] = other; // window-like: window.window === window
+        const wrapped = api.wrap_location({ obj: other }).location as { href: string };
+        expect(wrapped).not.toBe(realLoc);
+        expect(wrapped.href).toBe("https://example.com/page");
+    });
+
+    it("wrap_location of any other object reads and writes its own property", () => {
+        const api = createRewriterApi(window, config);
+        // A router's `this.location = new URL(...)` must land on the object.
+        const router: { location?: unknown } = {};
+        const url = new URL("https://example.com/next");
+        api.wrap_location({ obj: router }).location = url;
+        expect(router.location).toBe(url);
+        expect(api.wrap_location({ obj: router }).location).toBe(url);
+        expect(api.wrap_location({ obj: {} }).location).toBeUndefined();
     });
 
     it("wrap_top_window / wrap_parent_window forward properties", () => {

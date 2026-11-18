@@ -2,6 +2,7 @@ package htmlrewrite
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +25,7 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 	z := html.NewTokenizer(r)
 	bootstrapDone := false // guard against multiple <head> (e.g. nested srcdoc)
 	inScript := false      // currently inside <script>...</script> with rewritable content
+	inImportMap := false   // currently inside <script type="importmap">
 	inStyle := false       // currently inside <style>...</style>
 	inNoscript := false    // currently inside <noscript>...</noscript>
 	emitted := bytes.Buffer{}
@@ -56,7 +58,19 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 		case html.StartTagToken, html.SelfClosingTagToken:
 			token := z.Token()
 			tag := token.Data
+			written := append([]html.Attribute(nil), token.Attr...)
 			attrs := applyAttrRules(tag, token.Attr, &cfg)
+			if !cfg.NoOriginals {
+				attrs = withOriginals(written, attrs)
+			}
+
+			// A document with no <head> or <body> tag (a fragment-like page,
+			// common in ad frames): the bootstrap goes before its first
+			// element, so its scripts — rewritten to call $rewriter — find it.
+			if !bootstrapDone && cfg.InjectBootstrap && tag != "html" && tag != "head" && tag != "body" {
+				emitRaw([]byte(bootstrapScript(&cfg)))
+				bootstrapDone = true
+			}
 
 			emitTag(&emitted, tt, tag, attrs)
 
@@ -65,6 +79,13 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 			// is the script body — pipe it through the JS rewriter.
 			if tt == html.StartTagToken && tag == "script" && cfg.RewriteInlineJS != nil {
 				inScript = isJSScript(attrs)
+			}
+			// An import map: JSON whose URLs must match the proxified module
+			// specifiers.
+			if tt == html.StartTagToken && tag == "script" {
+				t, _ := getAttr(attrs, "type")
+				_, hasSrc := getAttr(attrs, "src")
+				inImportMap = !hasSrc && strings.EqualFold(strings.TrimSpace(t), "importmap")
 			}
 			// Same idea for <style> — the body is CSS.
 			if tt == html.StartTagToken && tag == "style" && cfg.RewriteInlineCSS != nil {
@@ -80,9 +101,6 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 			// Inject the bootstrap chain immediately after <head> opens,
 			// so it runs before any other inline script in the document.
 			if !bootstrapDone && (tag == "head" || tag == "body") {
-				if cfg.ChallengePathPrefix != "" {
-					emitRaw([]byte(challengePathFixScript(cfg.ChallengePathPrefix, cfg.ChallengeCookiePrefix)))
-				}
 				if cfg.InjectBootstrap {
 					emitRaw([]byte(bootstrapScript(&cfg)))
 				}
@@ -95,6 +113,7 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 			switch string(tn) {
 			case "script":
 				inScript = false
+				inImportMap = false
 			case "style":
 				inStyle = false
 			case "noscript":
@@ -103,6 +122,8 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 
 		case html.TextToken:
 			switch {
+			case inImportMap:
+				emitRaw(urlrewrite.RewriteImportMap(append([]byte(nil), z.Text()...), cfg.BaseURL, cfg.Proxy))
 			case inScript && cfg.RewriteInlineJS != nil:
 				// CRITICAL: copy z.Text() before handing it to the JS rewriter.
 				// z.Text() returns a slice that aliases the html tokenizer's
@@ -122,6 +143,7 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 				// as an HTML fragment so its URL-bearing attributes get rewritten.
 				fragCfg := cfg
 				fragCfg.InjectBootstrap = false
+				fragCfg.NoOriginals = true // inert text: nothing consumes them
 				var fragBuf bytes.Buffer
 				if err := Rewrite(&fragBuf, bytes.NewReader(z.Raw()), fragCfg); err == nil {
 					emitRaw(fragBuf.Bytes())
@@ -179,6 +201,12 @@ func applyAttrRules(tag string, attrs []html.Attribute, cfg *Config) []html.Attr
 		if eq, ok := getAttr(attrs, "http-equiv"); ok && strings.EqualFold(eq, "content-security-policy") {
 			attrs = removeAttr(attrs, "content")
 			attrs = removeAttr(attrs, "http-equiv")
+		}
+		// A declarative refresh navigates like a link: through the proxy.
+		if eq, ok := getAttr(attrs, "http-equiv"); ok && strings.EqualFold(strings.TrimSpace(eq), "refresh") {
+			if c, ok := getAttr(attrs, "content"); ok && cfg.BaseURL != nil {
+				attrs = setAttr(attrs, "content", urlrewrite.RewriteRefresh(c, cfg.BaseURL, cfg.Proxy))
+			}
 		}
 	}
 
@@ -242,42 +270,6 @@ func applyAttrRules(tag string, attrs []html.Attribute, cfg *Config) []html.Attr
 			}
 			rewritten := rewriteOne(v, urlOpts{tag: tag, attr: a})
 			attrs = setAttr(attrs, a, rewritten)
-		}
-	}
-
-	// HTML_PROCESS_SERVER_COOKIES — script/iframe loads sync cookies on done.
-	// Only when the bootstrap is injected — $rewriter doesn't exist otherwise.
-	if cfg.InjectBootstrap && (tag == "script" || tag == "iframe") {
-		if _, ok := getAttr(attrs, "src"); ok {
-			cur, _ := getAttr(attrs, "onload")
-			if !strings.Contains(cur, "$rewriter.process_server_cookies()") {
-				attrs = setAttr(attrs, "onload", "$rewriter.process_server_cookies();"+cur)
-			}
-		}
-	}
-	// HTML_IFRAME_INJECTION — inject the rewriter runtime into child iframes.
-	// Called on load so that both proxy-served iframes (which already have
-	// bootstrap injected by the HTML rewriter) and about:blank / document.write
-	// iframes (which don't) get $rewriter in their window.
-	if cfg.InjectBootstrap && tag == "iframe" {
-		if _, ok := getAttr(attrs, "src"); ok {
-			cur, _ := getAttr(attrs, "onload")
-			if !strings.Contains(cur, "$rewriter.append_rewrite_script_into_iframe") {
-				attrs = setAttr(attrs, "onload", cur+"$rewriter.append_rewrite_script_into_iframe(this);")
-			}
-		}
-	}
-	// HTML_FETCH_COOKIES — img loads sync cross-origin cookies on done.
-	if cfg.InjectBootstrap && tag == "img" {
-		if _, ok := getAttr(attrs, "src"); ok {
-			cur, _ := getAttr(attrs, "onload")
-			if !strings.Contains(cur, "$rewriter.fetch_cookies") {
-				if cur == "" {
-					attrs = setAttr(attrs, "onload", "$rewriter.fetch_cookies(this);")
-				} else {
-					attrs = setAttr(attrs, "onload", fmt.Sprintf("$rewriter.fetch_cookies(this, () => {;%s});", cur))
-				}
-			}
 		}
 	}
 
@@ -391,4 +383,66 @@ func isJSScript(attrs []html.Attribute) bool {
 		return true
 	}
 	return jsMimeTypes[strings.ToLower(strings.TrimSpace(t))]
+}
+
+// OriginalsAttr carries, on an element of rewritten HTML, the text of each
+// attribute as the page wrote it, for those cyrano changed: a JSON object
+// of name → value, or null for an attribute the page did not have. The
+// client runtime reads it into its store and removes it before any page
+// script runs (ts/client/src/native/originals.ts), so getAttribute,
+// outerHTML and the rest show the page its own markup.
+const OriginalsAttr = "crn-o"
+
+// withOriginals appends OriginalsAttr to attrs when they differ from the
+// attributes as written.
+func withOriginals(written, attrs []html.Attribute) []html.Attribute {
+	first := func(list []html.Attribute) (map[string]string, []string) {
+		m := make(map[string]string, len(list))
+		var order []string
+		for _, a := range list {
+			if a.Namespace != "" {
+				continue
+			}
+			if _, dup := m[a.Key]; !dup {
+				m[a.Key] = a.Val
+				order = append(order, a.Key)
+			}
+		}
+		return m, order
+	}
+	was, wasOrder := first(written)
+	now, nowOrder := first(attrs)
+	var b strings.Builder
+	add := func(name string, val *string) {
+		if b.Len() == 0 {
+			b.WriteByte('{')
+		} else {
+			b.WriteByte(',')
+		}
+		k, _ := json.Marshal(name)
+		b.Write(k)
+		b.WriteByte(':')
+		if val == nil {
+			b.WriteString("null")
+		} else {
+			v, _ := json.Marshal(*val)
+			b.Write(v)
+		}
+	}
+	for _, name := range wasOrder {
+		if v, ok := now[name]; !ok || v != was[name] {
+			w := was[name]
+			add(name, &w)
+		}
+	}
+	for _, name := range nowOrder {
+		if _, ok := was[name]; !ok {
+			add(name, nil)
+		}
+	}
+	if b.Len() == 0 {
+		return attrs
+	}
+	b.WriteByte('}')
+	return append(attrs, html.Attribute{Key: OriginalsAttr, Val: b.String()})
 }

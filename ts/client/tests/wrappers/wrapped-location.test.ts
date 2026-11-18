@@ -13,14 +13,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClientConfig } from "../../src/config";
 import { BaseUrlState } from "../../src/runtime/base-url-state";
-import { WrappedLocation } from "../../src/wrappers/wrapped-location";
+import { makeLocationView, type WrappedLocation } from "../../src/wrappers/wrapped-location";
 
 const config: ClientConfig = {
     apiBaseURL: "http://localhost:9081",
     cacheKey: "",
     source: "/rewriter.js",
-    secretCookieName: "crnsct",
-    userDataEncryption: false,
     version: "0.0.1",
     rewrite_css_selectors: false,
 };
@@ -32,14 +30,25 @@ interface FakeLocation {
     reload: ReturnType<typeof vi.fn>;
 }
 
+// Chromium's DOMStringList shape: item/contains/iterator on the prototype.
+class FakeDOMStringList {
+    item(): string | null { return null; }
+    contains(): boolean { return false; }
+    *[Symbol.iterator](): Iterator<string> { /* empty */ }
+}
+
 function makeFakeLocation(): FakeLocation {
     return {
         hash: "",
         assign: vi.fn(),
         replace: vi.fn(),
         reload: vi.fn(),
-    };
+        ancestorOrigins: new FakeDOMStringList(),
+    } as FakeLocation;
 }
+
+const view = (state: BaseUrlState, real: Location, cfg: typeof config, win?: Window): WrappedLocation =>
+    makeLocationView(real, { base: () => state.get(), setBase: (u) => state.setFromUrl(u), config: cfg, ...(win ? { win } : {}) });
 
 describe("WrappedLocation reads", () => {
     let state: BaseUrlState;
@@ -49,7 +58,7 @@ describe("WrappedLocation reads", () => {
     beforeEach(() => {
         state = new BaseUrlState(new URL("https://example.com:8443/foo/bar?q=1#frag"));
         realLoc = makeFakeLocation();
-        wrapped = new WrappedLocation(state, realLoc as unknown as Location, config);
+        wrapped = view(state, realLoc as unknown as Location, config);
     });
 
     it("href / origin / protocol / host / hostname / port reflect the base URL", () => {
@@ -80,7 +89,7 @@ describe("WrappedLocation writes route through the proxy", () => {
     beforeEach(() => {
         state = new BaseUrlState(new URL("https://example.com/"));
         realLoc = makeFakeLocation();
-        wrapped = new WrappedLocation(state, realLoc as unknown as Location, config);
+        wrapped = view(state, realLoc as unknown as Location, config);
     });
 
     it("href = '...' assigns the proxified URL on the real Location", () => {
@@ -151,12 +160,7 @@ describe("WrappedLocation.ancestorOrigins", () => {
         (child as unknown as { parent: Window }).parent = top;
         (child as unknown as { top: Window }).top = top;
 
-        const wrapped = new WrappedLocation(
-            state,
-            makeFakeLocation() as unknown as Location,
-            config,
-            child,
-        );
+        const wrapped = view(state, makeFakeLocation() as unknown as Location, config, child);
 
         const ao = wrapped.ancestorOrigins;
         expect(ao.length).toBe(1);
@@ -173,22 +177,13 @@ describe("WrappedLocation.ancestorOrigins", () => {
         (top as unknown as { parent: Window }).parent = top;
         (top as unknown as { top: Window }).top = top;
 
-        const wrapped = new WrappedLocation(
-            state,
-            makeFakeLocation() as unknown as Location,
-            config,
-            top,
-        );
+        const wrapped = view(state, makeFakeLocation() as unknown as Location, config, top);
         expect(wrapped.ancestorOrigins.length).toBe(0);
     });
 
     it("returns empty when no window reference is available (worker/test)", () => {
         const state = new BaseUrlState(new URL("https://claude.ai/"));
-        const wrapped = new WrappedLocation(
-            state,
-            makeFakeLocation() as unknown as Location,
-            config,
-        );
+        const wrapped = view(state, makeFakeLocation() as unknown as Location, config);
         expect(wrapped.ancestorOrigins.length).toBe(0);
     });
 });

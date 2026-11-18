@@ -10,8 +10,6 @@ const config: ClientConfig = {
     apiBaseURL: "http://localhost:9081",
     cacheKey: "",
     source: "/rewriter.js",
-    secretCookieName: "crnsct",
-    userDataEncryption: false,
     version: "0.0.1",
     rewrite_css_selectors: false,
 };
@@ -57,11 +55,13 @@ describe("initWorker — location", () => {
 });
 
 describe("initWorker — wrap_member_expression", () => {
-    it("dispatches obj['location'] to the wrapped location when obj looks location-bearing", () => {
+    it("self['location'] is the worker's location view; another object's is its own property", () => {
         const { scope } = makeFakeScope();
         const api = initWorker(config, "https://claude.ai/", scope);
-        const result = api.wrap_member_expression({ location: {} }, "location") as { location: unknown };
+        const result = api.wrap_member_expression(scope, "location") as { location: unknown };
         expect((result.location as { host: string }).host).toBe("claude.ai");
+        const own = { location: { host: "its-own" } };
+        expect((api.wrap_member_expression(own, "location") as typeof own).location.host).toBe("its-own");
     });
 
     it("passes through unrelated properties unchanged", () => {
@@ -88,9 +88,9 @@ describe("initWorker — patches the worker's own fetch/XHR/importScripts", () =
 
         await scope.fetch("/cdn-cgi/challenge-platform/h/g/ci/rayid/1/tok");
 
+        // Called with the caller's own arity (fetch(url) stays one argument).
         expect(fetchSpy).toHaveBeenCalledWith(
             "http://localhost:9081/cyrano/https/claude.ai/cdn-cgi/challenge-platform/h/g/ci/rayid/1/tok",
-            undefined,
         );
     });
 

@@ -5,12 +5,17 @@ import "strings"
 // rewriteCSP rewrites a Content-Security-Policy (or CSP-Report-Only) header
 // value so the proxy can operate transparently. Four mutations are applied:
 //
-//  1. Nonce stripping (script/style/default-src directives only):
-//     'nonce-…' tokens are removed and 'strict-dynamic' is dropped alongside
-//     them. 'self' and 'unsafe-inline' are added so our injected rewriter.js
-//     and bootstrap <script> block can load and execute. Nonces serve no
-//     isolation purpose in a proxy context — all frames are already same-origin
-//     with the proxy, so nonces only block us.
+//  1. Nonces and hashes (script/style/default-src directives only):
+//     A nonce is kept, and 'strict-dynamic' with it: the page's scripts
+//     carry their nonce attribute through rewriting, and cyrano's injected
+//     bootstrap scripts are given the same nonce (ScriptNonce; the HTML
+//     rewriter's Config.ScriptNonce). Keeping it matters: a nonce authorizes
+//     a script whatever its URL — Facebook loads scripts from data: URLs
+//     that only the nonce allows.
+//     A hash is of the page's original inline script; the rewritten script
+//     cannot match it. A directive with hashes therefore falls back to
+//     dropping its nonces, hashes and 'strict-dynamic' and adding
+//     'unsafe-inline' and 'self'.
 //
 //  2. Proxy origin injection (all *-src source-list directives):
 //     When proxyOrigin is non-empty (e.g. "https://proxy.example.com"), it is
@@ -60,6 +65,15 @@ func rewriteCSP(csp, proxyOrigin string) string {
 		if name == "require-trusted-types-for" || name == "trusted-types" {
 			continue
 		}
+		// The page's resources are all fetched from the proxy. Served over
+		// plain http, "upgrade-insecure-requests" would turn every one of
+		// them into an https request the proxy does not answer, and
+		// "block-all-mixed-content" would block them. (Over https the
+		// directives are harmless and stay.)
+		if (name == "upgrade-insecure-requests" || name == "block-all-mixed-content") &&
+			strings.HasPrefix(strings.ToLower(proxyOrigin), "http://") {
+			continue
+		}
 
 		if !strings.Contains(name, "-src") {
 			out = append(out, dir)
@@ -78,9 +92,18 @@ func rewriteCSP(csp, proxyOrigin string) string {
 		hasNone := false
 		hasProxy := proxyOrigin == "" // skip proxy-origin check when not configured
 
+		// Hash-pinned: the fallback (see 1. above). Otherwise nonces stay.
+		hashPinned := false
+		for _, tok := range parts[1:] {
+			if isHashSource(strings.ToLower(tok)) {
+				hashPinned = isNonceTarget
+			}
+		}
 		for _, tok := range parts[1:] {
 			lower := strings.ToLower(tok)
 			switch {
+			case isNonceTarget && !hashPinned && (strings.HasPrefix(lower, "'nonce-") || lower == "'strict-dynamic'"):
+				kept = append(kept, tok)
 			case isNonceTarget && strings.HasPrefix(lower, "'nonce-"):
 				hadNonce = true
 				// stripped
@@ -152,4 +175,40 @@ func isScriptOrStyleDirective(name string) bool {
 		return true
 	}
 	return false
+}
+
+func isHashSource(lower string) bool {
+	return strings.HasPrefix(lower, "'sha256-") || strings.HasPrefix(lower, "'sha384-") || strings.HasPrefix(lower, "'sha512-")
+}
+
+// ScriptNonce is the nonce a script needs under the (rewritten) policies of
+// a response, or "" when none asks for one: the first 'nonce-…' of the
+// directive that governs script elements (script-src-elem, else script-src,
+// else default-src) in the first policy that has one. Report-only policies
+// do not block and are not consulted.
+func ScriptNonce(policies []string) string {
+	for _, policy := range policies {
+		byName := map[string][]string{}
+		for _, dir := range strings.Split(policy, ";") {
+			f := strings.Fields(dir)
+			if len(f) > 0 {
+				if _, dup := byName[strings.ToLower(f[0])]; !dup {
+					byName[strings.ToLower(f[0])] = f[1:]
+				}
+			}
+		}
+		for _, name := range []string{"script-src-elem", "script-src", "default-src"} {
+			toks, ok := byName[name]
+			if !ok {
+				continue
+			}
+			for _, t := range toks {
+				if l := strings.ToLower(t); strings.HasPrefix(l, "'nonce-") && strings.HasSuffix(t, "'") {
+					return t[len("'nonce-") : len(t)-1]
+				}
+			}
+			break // this directive governs; it has no nonce
+		}
+	}
+	return ""
 }

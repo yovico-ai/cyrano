@@ -16,9 +16,11 @@
 package upstream
 
 import (
+	"github.com/yovico/cyrano/internal/headerorder"
 	"net"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -91,6 +93,16 @@ func NewRoundTripper(skipVerify bool) *RoundTripper {
 // stdlib transport (everything else).
 func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.URL.Scheme != "https" {
+		if p := exactPath(req.URL); p != "" {
+			// Send the exact path without altering the caller's request.
+			out := req.Clone(req.Context())
+			out.URL.Opaque = p
+			resp, err := rt.plain.RoundTrip(out)
+			if resp != nil {
+				resp.Request = req
+			}
+			return resp, err
+		}
 		return rt.plain.RoundTrip(req)
 	}
 
@@ -109,6 +121,9 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	fReq, err := fhttp.NewRequestWithContext(req.Context(), req.Method, req.URL.String(), req.Body)
 	if err != nil {
 		return nil, err
+	}
+	if p := exactPath(req.URL); p != "" {
+		fReq.URL.Opaque = p
 	}
 	fReq.Host = req.Host
 	fReq.ContentLength = req.ContentLength
@@ -136,14 +151,12 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	// synthesize them from the UA when the incoming request didn't carry any.
 	ensureClientHints(fReq.Header, req.Header.Get("User-Agent"))
 
-	// Impose Chrome's request header order. Modern Chrome (verified against a
-	// real Chrome 139 capture) emits HTTP/2 request headers in ALPHABETICAL
-	// order — not a fixed template — so per-request headers (custom X-*, trace,
-	// origin, priority, cookie) always land in their sorted position. A fixed
-	// list misorders those and stands out in Cloudflare's HPACK header-order
-	// fingerprint, which is what challenges cyrano's leg while a direct browser
-	// on the same IP passes. Pseudo-header order + H2 SETTINGS come from the
-	// client profile; here we order only the regular headers.
+	// Header order is part of the fingerprint. Send the headers in the
+	// order the browser itself sent them (recorded on its connection:
+	// headerorder), which is exact for any request and any page code; when
+	// that is not known (the browser reached the proxy over HTTP/2), in
+	// Chrome's usual order for the kind of request. Pseudo-header order and
+	// H2 SETTINGS come from the client profile.
 	names := make([]string, 0, len(fReq.Header))
 	for k := range fReq.Header {
 		if strings.Contains(k, ":") { // skip Header-Order:/PHeader-Order:/pseudo-headers
@@ -151,7 +164,12 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		names = append(names, strings.ToLower(k))
 	}
-	sort.Strings(names)
+	sort.Strings(names) // a stable starting point
+	if order := headerorder.FromContext(req.Context()); order != nil {
+		names = headerorder.Apply(order, names)
+	} else {
+		names = headerorder.ChromeDefault(names, strings.EqualFold(req.Header.Get("Sec-Fetch-Mode"), "navigate"))
+	}
 	fReq.Header[fhttp.HeaderOrderKey] = names
 
 	fResp, err := client.Do(fReq)
@@ -175,6 +193,19 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		// upstream URL, so it must be the original stdlib request.
 		Request: req,
 	}, nil
+}
+
+// exactPath is the request path to put on the wire byte for byte — the
+// URL's RawPath as cyrano set it from the browser's own URL (it may hold
+// what net/url would re-escape: "/100%.jpg", "/a^|") — or "" to let the
+// transport serialize the path itself. A path starting "//" cannot go on the
+// wire as URL.Opaque (it would read as an authority); see CLAUDE.md.
+func exactPath(u *url.URL) string {
+	p := u.RawPath
+	if p == "" || strings.HasPrefix(p, "//") {
+		return ""
+	}
+	return p
 }
 
 // clientFor returns the cached impersonation client for the given cache key

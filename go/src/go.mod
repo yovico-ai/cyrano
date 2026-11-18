@@ -10,6 +10,7 @@ require (
 	github.com/refraction-networking/utls v1.8.2
 	github.com/tdewolff/parse/v2 v2.8.12
 	golang.org/x/net v0.53.0
+	pgregory.net/rapid v1.2.0
 )
 
 require (

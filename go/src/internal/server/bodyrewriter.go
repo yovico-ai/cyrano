@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -73,9 +74,6 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				Proxy:   proxyCfg,
 				Logger:  cssLogger,
 			})
-			if prettify {
-				rewritten = cssrewrite.Prettify(rewritten)
-			}
 			logger.Debug("rewriter: css rewritten",
 				"target", target.String(), "in", len(body), "out", len(rewritten))
 			replaceBody(resp, rewritten)
@@ -102,40 +100,26 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			var out bytes.Buffer
 			isChallenge := isChallengeHTML(body) || isChallengeHost(target.Hostname())
 
-			var pageCookies []string
-			if jar != nil && sessName != "" && resp.Request != nil {
-				if sessID, _ := resp.Request.Context().Value(proxy.SessionContextKey{}).(string); sessID != "" {
-					pageCookies = jar.ForPageCookies(sessID, target.Host)
-				}
-			}
-
 			cfg := htmlrewrite.Config{
 				BaseURL:           target,
 				Proxy:             proxyCfg,
 				RewriterJSPath:    vhost.RewriterJSPath,
 				HeadInjectionPath: vhost.HeadInjectionPath,
-				// Don't inject our bootstrap into challenge pages — challenge.js
-				// does PoW/fingerprinting and must run in an unmodified environment.
-				// Our full fetch/XHR/prototype patches interfere with its API calls
-				// and cause the PoW solution to compute as all-zeros, failing the
-				// challenge.
-				InjectBootstrap:   !isChallenge,
-				ClientPassthrough: clientPassthrough,
-				PageCookies:       pageCookies,
+				// Every page gets the one runtime. Its patches keep the native
+				// surface (ts/client/src/native/surface.ts), so a challenge's
+				// integrity and fingerprint checks see native APIs; a challenge
+				// page's own scripts are not rewritten (below).
+				InjectBootstrap:   true,
+				ClientPassthrough: pageConfig(clientPassthrough, resp),
+				ScriptNonce:       proxy.ScriptNonce(resp.Header.Values("Content-Security-Policy")),
 			}
 			if !isChallenge {
 				cfg.RewriteInlineJS = rewriteJSFor(target)
 				cfg.RewriteInlineCSS = rewriteCSS(target)
 			} else {
-				// Inject a minimal URL-fix script so challenge pages can load
-				// Cloudflare's orchestrate script through the proxy. The script
-				// patches HTMLScriptElement.prototype.src, fetch, and XHR.open to
-				// rewrite absolute paths (e.g. /cdn-cgi/...) to the correct proxied
-				// URL (e.g. /cyrano/https/claude.ai/cdn-cgi/...). Unlike the full
-				// bootstrap, it does not define $rewriter and does not rewrite
-				// inline JS, so it does not interfere with the PoW computation.
-				cfg.ChallengePathPrefix = "/cyrano/" + target.Scheme + "/" + target.Host
-				cfg.ChallengeCookiePrefix = proxy.CookiePrefixFor(target.Host)
+				// A challenge page's own scripts are integrity-checked: left as
+				// written, intercepted only through the runtime's native-surface
+				// patches.
 				// Record this session's challenge origin so bare-path /cdn-cgi/
 				// requests from blob workers (which have no Referer) can be routed
 				// to the correct upstream without needing a /cyrano/ URL prefix.
@@ -144,7 +128,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 						jar.StoreChallengeOrigin(sessID, target.Scheme, target.Host)
 					}
 				}
-				logger.Debug("rewriter: html passthrough (challenge page, minimal url-fix injection)", "target", target.String())
+				logger.Debug("rewriter: challenge page (scripts left unrewritten)", "target", target.String())
 			}
 			if err := htmlrewrite.Rewrite(&out, bytes.NewReader(body), cfg); err != nil {
 				logger.Warn("rewriter: html rewrite failed",
@@ -170,13 +154,9 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			// via CPU profile). Serve it unmodified — it's passive bot telemetry
 			// the app doesn't need to render.
 			if !isApiJS && (isChallengeScript(target) || isJSDScript(target) || isChallengeHost(target.Hostname())) {
+				// Passed through means byte for byte: these scripts check their
+				// own source, so not even the debug formatter may touch them.
 				logger.Debug("rewriter: js passthrough (challenge script)", "target", target.String())
-				if prettify {
-					body, err := readDecompressedBody(resp)
-					if err == nil {
-						replaceBody(resp, jsrewrite.Prettify(body))
-					}
-				}
 				break
 			}
 			body, err := readDecompressedBody(resp)
@@ -199,18 +179,14 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			// Caveat: a rewriter change will NOT invalidate an already-cached copy
 			// — during rewriter development, hard-reload or use "Disable cache".
 			// Worker scripts (Sec-Fetch-Dest: worker/sharedworker) run in a
-			// DedicatedWorkerGlobalScope that has no window and no HTML bootstrap
-			// chain — $rewriter is never defined. Prepend a shim that:
-			//   1. defines $rewriter with passthrough stubs + URL proxification
-			//   2. patches self.importScripts so the URLs it loads go through
-			//      the proxy (and thus get AST-rewritten with $rewriter calls
-			//      the shim can handle)
-			//   3. patches self.fetch / XMLHttpRequest for completeness
+			// worker scope with no window and no HTML bootstrap: prepend the
+			// client runtime's worker preamble (workerPreamble).
 			if resp.Request != nil {
 				dest := strings.ToLower(resp.Request.Header.Get("Sec-Fetch-Dest"))
 				if dest == "worker" || dest == "sharedworker" {
-					shim := buildWorkerShim(urlrewrite.APIBase(proxyCfg))
-					rewritten = append(shim, rewritten...)
+					module := strings.EqualFold(resp.Request.Header.Get("Sec-Fetch-Mode"), "cors")
+					pre := workerPreamble(urlrewrite.APIBase(proxyCfg), vhost.RewriterJSPath, clientPassthrough, target.String(), module)
+					rewritten = append(pre, rewritten...)
 					// Prevent the browser from caching the shimmed worker script.
 					// Without this the browser serves the pre-shim copy from cache
 					// on subsequent loads, causing $rewriter to be undefined inside
@@ -219,7 +195,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 					resp.Header.Del("Expires")
 					resp.Header.Del("Last-Modified")
 					resp.Header.Del("ETag")
-					logger.Debug("rewriter: prepended worker shim", "target", target.String())
+					logger.Debug("rewriter: prepended worker preamble", "target", target.String())
 				}
 			}
 			logger.Debug("rewriter: js rewritten",
@@ -434,63 +410,31 @@ func readDecompressedBody(resp *http.Response) ([]byte, error) {
 	}
 }
 
-// buildWorkerShim returns a self-invoking JS block to prepend to Worker
-// scripts (Sec-Fetch-Dest: worker/sharedworker). Workers have no window and
-// no HTML bootstrap chain, so $rewriter is never defined — any AST-rewritten
-// code that calls $rewriter.wrap_* would throw ReferenceError.
+// workerPreamble is what runs first in a Worker script cyrano serves
+// (Sec-Fetch-Dest: worker/sharedworker): it loads the one client runtime
+// into the worker's own scope and initializes it for the worker's original
+// URL — the same preamble ts/client/src/patches/blob-worker-source.ts puts
+// before a Blob worker's source. A worker has no window and no HTML
+// bootstrap, so without it the rewritten code's $rewriter calls would throw,
+// and the worker's own fetch/XHR/importScripts would not be proxified.
 //
-// The shim:
-//  1. defines a minimal $rewriter stub (URL methods proxify; others passthrough)
-//  2. patches self.importScripts to proxify URL arguments so the scripts those
-//     loads go through the proxy and get AST-rewritten with $rewriter calls
-//  3. patches self.fetch / XMLHttpRequest for completeness
-//
-// proxyBase is the proxy's public origin, e.g. "https://proxy.example.com".
-func buildWorkerShim(proxyBase string) []byte {
-	// fmt.Sprintf %q produces a Go-quoted double-quoted string which is also
-	// a valid JavaScript string literal for any ASCII-safe URL.
-	b := fmt.Sprintf("%q", proxyBase)
-	return []byte(`(function(){var _b=` + b + `;` +
-		`function _p(u){` +
-		`if(!u||typeof u!=="string")return u;` +
-		`if(u.charAt(0)==="#"||/^(javascript:|data:|blob:|mailto:|tel:|about:)/i.test(u))return u;` +
-		`try{var a=new URL(u,self.location.href);` +
-		`if(!/^https?:$/.test(a.protocol)&&!/^wss?:$/.test(a.protocol))return u;` +
-		`var bh=new URL(_b).host;if(a.host===bh)return u;` +
-		`var r=_b+"/cyrano/"+a.protocol.slice(0,-1)+"/"+a.host+a.pathname;` +
-		`if(a.search)r+=a.search;return r;` +
-		`}catch(e){return u;}}` +
-		`if(typeof $rewriter==="undefined"){self.$rewriter={` +
-		`wrap_get_location:function(l){return l;},` +
-		`wrap_set_location:function(l,s){return{set value(v){s(v);},get value(){return l.href;}};},` +
-		`wrap_location:function(a){return a.obj;},` +
-		`wrap_get_top_window:function(t){return t;},` +
-		`wrap_top_window:function(a){return a.obj;},` +
-		`wrap_get_parent_window:function(t){return t;},` +
-		`wrap_parent_window:function(a){return a.obj;},` +
-		`wrap_document_write:function(a){return a.obj;},` +
-		`wrap_postMessage:function(a){return a.obj;},` +
-		`wrap_eval:function(e){return e;},` +
-		`wrap_eval_arg:function(e,a){return e(a);},` +
-		`wrap_eval_memexp:function(o){return o;},` +
-		`wrap_member_expression:function(o){return o;},` +
-		`wrap_import_arg:function(s){return typeof s==="string"?_p(s):s;},` +
-		`wrap_worker_url:function(u){var s=u!=null?String(u):null;return s?_p(s):u;},` +
-		`};}` +
-		`var _is=self.importScripts;` +
-		`if(typeof _is==="function"){self.importScripts=function(){` +
-		`var a=[];for(var i=0;i<arguments.length;i++)a.push(_p(String(arguments[i])));` +
-		`return _is.apply(self,a);};}` +
-		`var _f=self.fetch;` +
-		`if(typeof _f==="function"){self.fetch=function(i,o){` +
-		`if(typeof i==="string")i=_p(i);` +
-		`else if(typeof URL!=="undefined"&&i instanceof URL)i=_p(i.href);` +
-		`return _f.call(self,i,o);};}` +
-		`if(typeof XMLHttpRequest!=="undefined"){var _xo=XMLHttpRequest.prototype.open;` +
-		`XMLHttpRequest.prototype.open=function(m,u){` +
-		`var a=[];for(var j=0;j<arguments.length;j++)a[j]=arguments[j];` +
-		`a[1]=_p(typeof u==="string"?u:String(u));return _xo.apply(this,a);};}` +
-		`})();` + "\n")
+// A module worker (fetched with Sec-Fetch-Mode: cors) has no importScripts,
+// and evaluates its static imports before its body: it gets an import of
+// the init module (WorkerInitPath) first, which runs the same preamble.
+func workerPreamble(proxyBase, rewriterPath string, config map[string]any, workerURL string, module bool) []byte {
+	if module {
+		src, _ := json.Marshal(proxyBase + WorkerInitPath + "?u=" + url.QueryEscape(workerURL))
+		return []byte("import " + string(src) + ";\n")
+	}
+	cfg, err := json.Marshal(config)
+	if err != nil {
+		cfg = []byte("{}")
+	}
+	src, _ := json.Marshal(proxyBase + rewriterPath)
+	href, _ := json.Marshal(workerURL)
+	return []byte("importScripts(" + string(src) + ");" +
+		"self.$rewriter=self.$rewriter_init_worker(" + string(cfg) + "," + string(href) + ");" +
+		"self.$__crn_key__=null;\n")
 }
 
 // buildClientPassthrough returns the JSON-serializable subset of vhost
@@ -505,9 +449,49 @@ func buildClientPassthrough(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig
 		"apiBaseURL":            urlrewrite.APIBase(proxyCfg),
 		"cacheKey":              "",
 		"source":                vhost.RewriterJSPath,
-		"secretCookieName":      vhost.SecretCookieName,
-		"userDataEncryption":    vhost.UserDataEncryption,
 		"version":               vhost.Version,
 		"rewrite_css_selectors": false,
 	}
+}
+
+// pageConfig is the client config for one document: the vhost's, plus
+// document.referrer — natively the Referer the document was requested
+// with, which is what the upstream was sent for it (proxy.directFetchHeaders).
+func pageConfig(base map[string]any, resp *http.Response) map[string]any {
+	cp := make(map[string]any, len(base)+2)
+	for k, v := range base {
+		cp[k] = v
+	}
+	referrer := ""
+	if resp.Request != nil {
+		referrer = resp.Request.Header.Get("Referer")
+	}
+	cp["referrer"] = referrer
+	// The nonce the page's CSP asks of scripts, for bootstraps the client
+	// writes itself (document.write'd documents).
+	if n := proxy.ScriptNonce(resp.Header.Values("Content-Security-Policy")); n != "" {
+		cp["nonce"] = n
+	}
+	return cp
+}
+
+// WorkerInitPath serves a module worker's preamble (workerPreamble): the
+// client runtime, initialized for the worker's original URL (?u=).
+const WorkerInitPath = "/cyrano-worker-init.js"
+
+func workerInitHandler(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		workerURL := r.URL.Query().Get("u")
+		cfg, err := json.Marshal(buildClientPassthrough(vhost, proxyCfg))
+		if err != nil {
+			cfg = []byte("{}")
+		}
+		src, _ := json.Marshal(urlrewrite.APIBase(proxyCfg) + vhost.RewriterJSPath)
+		href, _ := json.Marshal(workerURL)
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write([]byte("import " + string(src) + ";\n" +
+			"self.$rewriter=self.$rewriter_init_worker(" + string(cfg) + "," + string(href) + ");" +
+			"self.$__crn_key__=null;\n"))
+	})
 }

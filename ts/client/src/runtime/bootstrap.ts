@@ -10,6 +10,8 @@ import type { RewriterApi } from "./api-types";
 import { createRewriterApi } from "./api";
 import { installPatches } from "../patches/install";
 import { patchWindowLocation } from "../patches/location";
+import { unwrapProxiedUrl } from "../url/containment";
+import { internalsOf, publish, type Internals } from "../native/internals";
 
 export interface RewriterBootstrap {
     inject(): RewriterApi;
@@ -19,21 +21,31 @@ export function init(
     targetWindow: Window,
     config: ClientConfig,
 ): RewriterBootstrap {
-    const api = createRewriterApi(targetWindow, config);
     return {
         inject(): RewriterApi {
+            // A window is patched once. A second initialization — the page's
+            // own bootstrap after a parent injected the runtime into the
+            // same window, which a same-origin navigation from about:blank
+            // keeps — gets the first one's API, so its set_location reaches
+            // the state the installed patches read.
+            const existing = internalsOf(targetWindow);
+            if (existing) return existing.api;
+            const api = createRewriterApi(targetWindow, config);
+            const internals: Internals = { api };
             installPatches(
                 targetWindow,
                 () => api.get_base_url(),
                 (href) => api.set_base_url(href),
                 config,
+                internals,
             );
             // Globally override window.location so unmodified scripts (e.g.
             // Cloudflare challenge.js) see the upstream URL, not the proxy URL.
             patchWindowLocation(
                 targetWindow,
                 api.wrap_get_location(targetWindow.location),
-                () => api.get_base_url().href,
+                (u) => unwrapProxiedUrl(u, config),
+                config.referrer,
             );
             // Publish the shared bracket-key variable as a writable global property.
             // The server and client JS rewriters emit `$__crn_key__ = expr` to
@@ -43,6 +55,7 @@ export function init(
             // assign to it without error (assigning to an existing global property
             // is always permitted).
             (targetWindow as Window & { $__crn_key__: null }).$__crn_key__ = null;
+            publish(targetWindow, api, internals);
             return api;
         },
     };

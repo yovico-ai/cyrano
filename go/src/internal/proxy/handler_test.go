@@ -109,8 +109,8 @@ func TestProxy_RejectsBadLoadParam(t *testing.T) {
 	h := New(Options{})
 
 	cases := []string{
-		"/cyrano/",              // no scheme segment
-		"/cyrano/http/",         // no host
+		"/cyrano/",               // no scheme segment
+		"/cyrano/http/",          // no host
 		"/cyrano/ftp/nope.test/", // unsupported scheme
 	}
 	for _, p := range cases {
@@ -374,7 +374,7 @@ func TestServeHTTPWithTarget_HeaderReconstitution(t *testing.T) {
 	}
 }
 
-func TestServeHTTPWithTarget_CSPNoncesStripped(t *testing.T) {
+func TestServeHTTPWithTarget_CSPNoncesKept(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		// Typical nonce-gated CSP (e.g. Cloudflare Turnstile widget pages).
@@ -391,14 +391,13 @@ func TestServeHTTPWithTarget_CSPNoncesStripped(t *testing.T) {
 	h.ServeHTTPWithTarget(rec, req, target)
 
 	got := rec.Header().Get("Content-Security-Policy")
-	if strings.Contains(got, "nonce-") {
-		t.Errorf("CSP nonce should be stripped, got %q", got)
+	// A nonce authorizes a script whatever its URL; it is kept (cyrano's own
+	// bootstrap scripts carry the same nonce).
+	if !strings.Contains(got, "'nonce-abc123'") || !strings.Contains(got, "'nonce-xyz'") {
+		t.Errorf("CSP nonces should be kept, got %q", got)
 	}
-	if !strings.Contains(got, "'unsafe-inline'") {
-		t.Errorf("CSP should contain 'unsafe-inline' after nonce strip, got %q", got)
-	}
-	if !strings.Contains(got, "'self'") {
-		t.Errorf("CSP should contain 'self' after nonce strip, got %q", got)
+	if strings.Contains(got, "'unsafe-inline'") {
+		t.Errorf("CSP should not be loosened to 'unsafe-inline', got %q", got)
 	}
 }
 
@@ -420,9 +419,11 @@ func TestDirector_TranslatesReferer(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTPWithTarget(rec, req, target)
 
+	// Cross-origin under the default policy: a direct browser sends the
+	// page's origin only — never the proxy's URL (spec/Referrer.agda).
 	got := cap.headers.Get("Referer")
-	if got != "https://example.com/page" {
-		t.Errorf("upstream Referer = %q; want %q", got, "https://example.com/page")
+	if got != "https://example.com/" {
+		t.Errorf("upstream Referer = %q; want %q", got, "https://example.com/")
 	}
 }
 
@@ -467,42 +468,6 @@ func TestIsLoadRequest(t *testing.T) {
 
 // ── cookie isolation ─────────────────────────────────────────────────────────
 
-func TestCookieSiteKey(t *testing.T) {
-	cases := []struct{ host, want string }{
-		{"www.casio.com", "casio_com"},
-		{"casio.com", "casio_com"},
-		{"cdn.casio.com", "casio_com"},       // same eTLD+1
-		{"stackoverflow.com", "stackoverflow_com"},
-		{"www.bbc.co.uk", "bbc_co_uk"},       // two-part TLD
-		{"localhost:9081", "localhost"},       // dev proxy host
-		{"127.0.0.1", "127_0_0_1"},
-	}
-	for _, c := range cases {
-		if got := cookieSiteKey(c.host); got != c.want {
-			t.Errorf("cookieSiteKey(%q) = %q; want %q", c.host, got, c.want)
-		}
-	}
-}
-
-func TestRewriteOneCookie_PrefixesName(t *testing.T) {
-	raw := "ak_bmsc=abc123; Path=/; Domain=.casio.com; Secure; SameSite=None"
-	got := rewriteOneCookie(raw, true /*proxyHTTPS*/, "__crn__casio_com__")
-	if !strings.HasPrefix(got, "__crn__casio_com__ak_bmsc=abc123") {
-		t.Errorf("name not prefixed: %q", got)
-	}
-	if strings.Contains(got, "Domain=") {
-		t.Errorf("Domain= not stripped: %q", got)
-	}
-}
-
-func TestRewriteOneCookie_NoPrefixWhenEmpty(t *testing.T) {
-	raw := "session=xyz; Path=/"
-	got := rewriteOneCookie(raw, false, "")
-	if !strings.HasPrefix(got, "session=xyz") {
-		t.Errorf("unexpected change with empty prefix: %q", got)
-	}
-}
-
 // startUpstreamWithSetCookie is like startUpstream but also sets a cookie
 // in the response so we can verify it arrives at the browser prefixed.
 func startUpstreamWithSetCookie(t *testing.T, cookieVal string) (*httptest.Server, *capturedRequest) {
@@ -515,71 +480,6 @@ func startUpstreamWithSetCookie(t *testing.T, cookieVal string) (*httptest.Serve
 	}))
 	t.Cleanup(srv.Close)
 	return srv, captured
-}
-
-func TestCookieIsolation_SetCookiePrefixedInResponse(t *testing.T) {
-	upstream, _ := startUpstreamWithSetCookie(t, "ak_bmsc=secretval; Path=/; Domain=.casio.com")
-	publicURL, _ := url.Parse("http://localhost:9081")
-	h := New(Options{ProxyCfg: urlrewrite.ProxyConfig{PublicURL: publicURL}})
-
-	target, _ := url.Parse(upstream.URL + "/")
-	req := httptest.NewRequest("GET", "/", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTPWithTarget(rec, req, target)
-
-	setCookies := rec.Result().Cookies()
-	if len(setCookies) == 0 {
-		t.Fatal("no Set-Cookie in response")
-	}
-	// The upstream host is the httptest server (127.0.0.1:port); its site key
-	// is based on that host. We verify the name starts with the prefix token.
-	if !strings.HasPrefix(setCookies[0].Name, "__crn__") {
-		t.Errorf("Set-Cookie name not prefixed: %q", setCookies[0].Name)
-	}
-	if strings.Contains(setCookies[0].Name, "ak_bmsc") == false {
-		t.Errorf("original cookie name missing: %q", setCookies[0].Name)
-	}
-}
-
-func TestCookieIsolation_ForwardsMatchingPrefix(t *testing.T) {
-	upstream, cap := startUpstream(t)
-	upstreamURL, _ := url.Parse(upstream.URL)
-	prefix := CookiePrefixFor(upstreamURL.Host)
-
-	publicURL, _ := url.Parse("http://localhost:9081")
-	h := New(Options{ProxyCfg: urlrewrite.ProxyConfig{PublicURL: publicURL}})
-
-	target, _ := url.Parse(upstream.URL + "/")
-	req := httptest.NewRequest("GET", "/", nil)
-	// Simulate browser sending one matching cookie and one from a different site.
-	req.Header.Set("Cookie", prefix+"session=abc; __crn__other_site__token=xyz")
-
-	rec := httptest.NewRecorder()
-	h.ServeHTTPWithTarget(rec, req, target)
-
-	got := cap.headers.Get("Cookie")
-	if got != "session=abc" {
-		t.Errorf("upstream Cookie = %q; want %q", got, "session=abc")
-	}
-}
-
-func TestCookieIsolation_DropsOtherSiteCookies(t *testing.T) {
-	upstream, cap := startUpstream(t)
-
-	publicURL, _ := url.Parse("http://localhost:9081")
-	h := New(Options{ProxyCfg: urlrewrite.ProxyConfig{PublicURL: publicURL}})
-
-	target, _ := url.Parse(upstream.URL + "/")
-	req := httptest.NewRequest("GET", "/", nil)
-	// Only cookies from a different site — none should reach this upstream.
-	req.Header.Set("Cookie", "__crn__other_site__cf_clearance=abc; crnsct=proxy-internal")
-
-	rec := httptest.NewRecorder()
-	h.ServeHTTPWithTarget(rec, req, target)
-
-	if got := cap.headers.Get("Cookie"); got != "" {
-		t.Errorf("upstream received cookies it shouldn't: Cookie=%q", got)
-	}
 }
 
 // ── server-side HttpOnly cookie jar ──────────────────────────────────────────
@@ -598,162 +498,4 @@ func startUpstreamMultiCookie(t *testing.T, setCookies ...string) (*httptest.Ser
 	}))
 	t.Cleanup(srv.Close)
 	return srv, captured
-}
-
-func TestCookieJar_HttpOnlyCookiesStoredInJar(t *testing.T) {
-	// HttpOnly upstream cookies go to the session jar; non-HttpOnly cookies are
-	// prefixed and forwarded to the browser so page JS can read them via
-	// document.cookie (e.g. orchestrate.js reading cf_chl_1 for the POST body).
-	upstream, _ := startUpstreamMultiCookie(t,
-		"session=secret; Path=/; HttpOnly",
-		"pref=dark; Path=/",
-	)
-	publicURL, _ := url.Parse("http://localhost:9081")
-	jar := NewSessionJar()
-	h := New(Options{
-		ProxyCfg:          urlrewrite.ProxyConfig{PublicURL: publicURL},
-		CookieJar:         jar,
-		SessionCookieName: "crnsct",
-	})
-
-	target, _ := url.Parse(upstream.URL + "/")
-	req := httptest.NewRequest("GET", "/", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTPWithTarget(rec, req, target)
-
-	upstreamHost := strings.TrimPrefix(upstream.URL, "http://")
-	prefix := CookiePrefixFor(upstreamHost)
-
-	var sessionID string
-	sawPrefixed := false
-	for _, c := range rec.Result().Cookies() {
-		switch {
-		case c.Name == "crnsct":
-			sessionID = c.Value
-		case c.Name == prefix+"pref":
-			sawPrefixed = true
-			if c.Value != "dark" {
-				t.Errorf("non-HttpOnly cookie value wrong: got %q want %q", c.Value, "dark")
-			}
-		default:
-			t.Errorf("unexpected cookie forwarded to browser: %q=%q", c.Name, c.Value)
-		}
-	}
-	if sessionID == "" {
-		t.Fatal("crnsct session cookie not issued")
-	}
-	if !sawPrefixed {
-		t.Errorf("non-HttpOnly 'pref' cookie not forwarded to browser with prefix %q", prefix)
-	}
-
-	// Only the HttpOnly cookie must be in the jar.
-	cookies := jar.RetrieveForRequest(sessionID, upstreamHost, "/")
-	names := make(map[string]string)
-	for _, c := range cookies {
-		names[c.Name] = c.Value
-	}
-	if names["session"] != "secret" {
-		t.Errorf("HttpOnly 'session' cookie not in jar: %v", names)
-	}
-	if _, has := names["pref"]; has {
-		t.Errorf("non-HttpOnly 'pref' cookie must NOT be in jar (it is in the browser store): %v", names)
-	}
-}
-
-func TestCookieJar_SessionCookieIssuedOnFirstResponse(t *testing.T) {
-	upstream, _ := startUpstreamMultiCookie(t)
-	publicURL, _ := url.Parse("http://localhost:9081")
-	jar := NewSessionJar()
-	h := New(Options{
-		ProxyCfg:          urlrewrite.ProxyConfig{PublicURL: publicURL},
-		CookieJar:         jar,
-		SessionCookieName: "crnsct",
-	})
-
-	target, _ := url.Parse(upstream.URL + "/")
-	req := httptest.NewRequest("GET", "/", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTPWithTarget(rec, req, target)
-
-	var sessionCookie *http.Cookie
-	for _, c := range rec.Result().Cookies() {
-		if c.Name == "crnsct" {
-			sessionCookie = c
-		}
-	}
-	if sessionCookie == nil {
-		t.Fatal("session cookie crnsct not set on first response")
-	}
-	if !sessionCookie.HttpOnly {
-		t.Error("session cookie must be HttpOnly")
-	}
-	if sessionCookie.Value == "" {
-		t.Error("session cookie must have a non-empty value")
-	}
-}
-
-func TestCookieJar_JarCookiesForwardedToUpstream(t *testing.T) {
-	// First request: upstream sets an HttpOnly cookie.
-	// Second request: that cookie must be injected into the outgoing Cookie header.
-	upstream, captured := startUpstreamMultiCookie(t,
-		"session=tok123; Path=/; HttpOnly",
-	)
-	publicURL, _ := url.Parse("http://localhost:9081")
-	jar := NewSessionJar()
-	h := New(Options{
-		ProxyCfg:          urlrewrite.ProxyConfig{PublicURL: publicURL},
-		CookieJar:         jar,
-		SessionCookieName: "crnsct",
-	})
-	target, _ := url.Parse(upstream.URL + "/")
-
-	// First request — no session cookie yet; upstream sets HttpOnly session.
-	req1 := httptest.NewRequest("GET", "/", nil)
-	rec1 := httptest.NewRecorder()
-	h.ServeHTTPWithTarget(rec1, req1, target)
-
-	// Extract the crnsct session ID from the response.
-	var sessionID string
-	for _, c := range rec1.Result().Cookies() {
-		if c.Name == "crnsct" {
-			sessionID = c.Value
-		}
-	}
-	if sessionID == "" {
-		t.Fatal("no crnsct session cookie on first response")
-	}
-
-	// Second request — browser echoes crnsct; jar must inject session=tok123.
-	req2 := httptest.NewRequest("GET", "/", nil)
-	req2.Header.Set("Cookie", "crnsct="+sessionID)
-	rec2 := httptest.NewRecorder()
-	h.ServeHTTPWithTarget(rec2, req2, target)
-
-	upstreamCookie := captured.headers.Get("Cookie")
-	if !strings.Contains(upstreamCookie, "session=tok123") {
-		t.Errorf("jar cookie not injected into upstream request; Cookie=%q", upstreamCookie)
-	}
-}
-
-func TestCookieJar_SessionCookieNotReissuedWhenPresent(t *testing.T) {
-	upstream, _ := startUpstreamMultiCookie(t)
-	publicURL, _ := url.Parse("http://localhost:9081")
-	jar := NewSessionJar()
-	h := New(Options{
-		ProxyCfg:          urlrewrite.ProxyConfig{PublicURL: publicURL},
-		CookieJar:         jar,
-		SessionCookieName: "crnsct",
-	})
-	target, _ := url.Parse(upstream.URL + "/")
-
-	req := httptest.NewRequest("GET", "/", nil)
-	req.Header.Set("Cookie", "crnsct=existing-id-abc")
-	rec := httptest.NewRecorder()
-	h.ServeHTTPWithTarget(rec, req, target)
-
-	for _, c := range rec.Result().Cookies() {
-		if c.Name == "crnsct" {
-			t.Errorf("crnsct session cookie should not be re-issued when already present, got %q", c.Value)
-		}
-	}
 }

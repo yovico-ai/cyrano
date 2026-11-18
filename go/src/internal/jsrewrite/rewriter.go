@@ -33,10 +33,13 @@ package jsrewrite
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/url"
 	"strings"
+
+	"github.com/yovico/cyrano/internal/urlrewrite"
 
 	"github.com/tdewolff/parse/v2"
 	"github.com/tdewolff/parse/v2/js"
@@ -226,11 +229,17 @@ func (r *rewriter) walkStmt(s js.IStmt) js.IStmt {
 		}
 		r.walkBlockStmt(n.Body)
 	case *js.ForInStmt:
-		// Init is the iteration variable target (lvalue) — leave it alone for
-		// now. Value side is rvalue.
+		// The iteration variable is a target; a declared pattern may hold
+		// defaults. The value side is an rvalue.
+		if vd, ok := n.Init.(*js.VarDecl); ok {
+			r.walkStmt(vd)
+		}
 		n.Value = r.rvalue(n.Value)
 		r.walkBlockStmt(n.Body)
 	case *js.ForOfStmt:
+		if vd, ok := n.Init.(*js.VarDecl); ok {
+			r.walkStmt(vd)
+		}
 		n.Value = r.rvalue(n.Value)
 		r.walkBlockStmt(n.Body)
 	case *js.WhileStmt:
@@ -271,6 +280,7 @@ func (r *rewriter) walkStmt(s js.IStmt) js.IStmt {
 		}
 	case *js.TryStmt:
 		r.walkBlockStmt(n.Body)
+		r.walkBinding(n.Binding)
 		if n.Catch != nil {
 			r.walkBlockStmt(n.Catch)
 		}
@@ -280,11 +290,12 @@ func (r *rewriter) walkStmt(s js.IStmt) js.IStmt {
 	case *js.LabelledStmt:
 		n.Value = r.walkStmt(n.Value)
 	case *js.FuncDecl:
-		r.walkBlockStmt(&n.Body)
+		r.walkFunc(&n.Params, &n.Body)
 	case *js.ClassDecl:
-		// Class bodies are handled inside their methods; tdewolff models
-		// each as a FuncDecl-like node within the class. Skip for now —
-		// nothing in the rule set needs to peek into class members.
+		r.walkClass(n)
+	case *js.WithStmt:
+		n.Cond = r.rvalue(n.Cond)
+		n.Body = r.walkStmt(n.Body)
 	case *js.ImportStmt:
 		// static `import … from "specifier"` — rewrite the specifier when
 		// BaseURL+ProxifyURL are set so chunks are fetched via the proxy.
@@ -298,6 +309,15 @@ func (r *rewriter) walkStmt(s js.IStmt) js.IStmt {
 		if r.opts.WrapStaticImport && r.opts.BaseURL != nil && r.opts.ProxifyURL != nil && len(n.Module) >= 2 {
 			n.Module = r.proxifyModuleSpecifier(n.Module)
 		}
+		// What is exported: `export const x = …`, `export function …`,
+		// `export class …`, `export default <expression>`.
+		switch d := n.Decl.(type) {
+		case nil:
+		case *js.VarDecl:
+			r.walkStmt(d)
+		default:
+			n.Decl = r.rvalue(d)
+		}
 	}
 	return s
 }
@@ -309,11 +329,75 @@ func (r *rewriter) walkStmtAsBlock(s js.IStmt) js.IStmt {
 	return r.walkStmt(s)
 }
 
+// walkBindingElement: a binding's default value is an expression like any
+// other, and the binding itself may be a pattern with more of them.
 func (r *rewriter) walkBindingElement(be *js.BindingElement) {
-	if be == nil || be.Default == nil {
+	if be == nil {
 		return
 	}
-	be.Default = r.rvalue(be.Default)
+	if be.Default != nil {
+		be.Default = r.rvalue(be.Default)
+	}
+	r.walkBinding(be.Binding)
+}
+
+// walkBinding walks a destructuring pattern: defaults and computed keys.
+func (r *rewriter) walkBinding(b js.IBinding) {
+	switch n := b.(type) {
+	case *js.BindingArray:
+		for i := range n.List {
+			r.walkBindingElement(&n.List[i])
+		}
+		r.walkBinding(n.Rest)
+	case *js.BindingObject:
+		for i := range n.List {
+			r.walkPropertyName(n.List[i].Key)
+			r.walkBindingElement(&n.List[i].Value)
+		}
+	}
+}
+
+func (r *rewriter) walkPropertyName(pn *js.PropertyName) {
+	if pn != nil && pn.Computed != nil {
+		pn.Computed = r.rvalue(pn.Computed)
+	}
+}
+
+// walkFunc walks a function of any kind: parameter defaults and patterns,
+// then the body.
+func (r *rewriter) walkFunc(params *js.Params, body *js.BlockStmt) {
+	for i := range params.List {
+		r.walkBindingElement(&params.List[i])
+	}
+	r.walkBinding(params.Rest)
+	r.walkBlockStmt(body)
+}
+
+func (r *rewriter) walkMethod(m *js.MethodDecl) {
+	r.walkPropertyName(&m.Name.PropertyName)
+	r.walkFunc(&m.Params, &m.Body)
+}
+
+// walkClass walks everything a class holds: the heritage expression,
+// methods, accessors, field initializers, computed names and static blocks.
+func (r *rewriter) walkClass(c *js.ClassDecl) {
+	if c.Extends != nil {
+		c.Extends = r.rvalue(c.Extends)
+	}
+	for i := range c.List {
+		el := &c.List[i]
+		switch {
+		case el.StaticBlock != nil:
+			r.walkBlockStmt(el.StaticBlock)
+		case el.Method != nil:
+			r.walkMethod(el.Method)
+		default:
+			r.walkPropertyName(&el.Name.PropertyName)
+			if el.Init != nil {
+				el.Init = r.rvalue(el.Init)
+			}
+		}
+	}
 }
 
 // rvalue applies rule to expr in a value-read context, recurses into children
@@ -389,9 +473,7 @@ func (r *rewriter) rvalue(e js.IExpr) js.IExpr {
 					// Static specifier: resolve + proxify now so the browser
 					// fetches the right ?goto= URL regardless of the page's
 					// base URL at call time.
-					specifier := string(lit.Data[1 : len(lit.Data)-1])
-					proxified := r.opts.ProxifyURL(specifier, r.opts.BaseURL)
-					lit.Data = append(append([]byte{'"'}, []byte(proxified)...), '"')
+					lit.Data = r.proxifyModuleSpecifier(lit.Data)
 					// lit is updated in place; no need to reassign the arg.
 				} else {
 					n.Args.List[0].Value = r.wrapImportArg(r.rvalue(arg))
@@ -515,10 +597,24 @@ func (r *rewriter) rvalue(e js.IExpr) js.IExpr {
 
 	case *js.ObjectExpr:
 		for i := range n.List {
+			r.walkPropertyName(n.List[i].Name)
 			if n.List[i].Value != nil {
 				n.List[i].Value = r.rvalue(n.List[i].Value)
 			}
+			if n.List[i].Init != nil {
+				n.List[i].Init = r.rvalue(n.List[i].Init)
+			}
 		}
+		return n
+
+	case *js.VarDecl:
+		// A declaration in expression position (a for-loop's init).
+		r.walkStmt(n)
+		return n
+
+	case *js.MethodDecl:
+		// An object literal's method, getter or setter.
+		r.walkMethod(n)
 		return n
 
 	case *js.TemplateExpr:
@@ -570,16 +666,15 @@ func (r *rewriter) rvalue(e js.IExpr) js.IExpr {
 		return n
 
 	case *js.ArrowFunc:
-		// Function bodies are statements; recurse via walkBlockStmt.
-		r.walkBlockStmt(&n.Body)
+		r.walkFunc(&n.Params, &n.Body)
 		return n
 
 	case *js.FuncDecl:
-		r.walkBlockStmt(&n.Body)
+		r.walkFunc(&n.Params, &n.Body)
 		return n
 
 	case *js.ClassDecl:
-		// Skip class internals for now — see walkStmt comment.
+		r.walkClass(n)
 		return n
 	}
 	return e
@@ -641,6 +736,12 @@ func (r *rewriter) proxifyModuleSpecifier(raw []byte) []byte {
 		return raw
 	}
 	inner := string(raw[1 : len(raw)-1])
+	// A bare specifier ("react") is not a URL: the page's import map
+	// resolves it. A literal with escapes is left as written (its text here
+	// is not its value).
+	if !urlrewrite.IsURLLikeSpecifier(inner) || strings.ContainsRune(inner, '\\') {
+		return raw
+	}
 	proxified := r.opts.ProxifyURL(inner, r.opts.BaseURL)
 	if proxified == inner {
 		return raw
@@ -755,7 +856,15 @@ func (r *rewriter) wrapWorkerUrl(arg js.IExpr) js.IExpr {
 // wrapImportArg rewrites the specifier of `import(spec)` →
 // `$rewriter.wrap_import_arg(spec)` so the proxy can route the module load.
 func (r *rewriter) wrapImportArg(arg js.IExpr) js.IExpr {
-	tpl := parseExpr("$rewriter.wrap_import_arg(__REWRITER_PLACEHOLDER__)")
+	// A relative specifier resolves against the importing script's own URL
+	// (HTML, "resolve a module specifier"), not the page's: pass it along.
+	src := "$rewriter.wrap_import_arg(__REWRITER_PLACEHOLDER__)"
+	if r.opts.BaseURL != nil {
+		if b, err := json.Marshal(r.opts.BaseURL.String()); err == nil {
+			src = "$rewriter.wrap_import_arg(__REWRITER_PLACEHOLDER__," + string(b) + ")"
+		}
+	}
+	tpl := parseExpr(src)
 	if tpl == nil {
 		return arg
 	}

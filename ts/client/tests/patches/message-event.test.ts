@@ -27,8 +27,6 @@ function makeConfig(): ClientConfig {
         apiBaseURL: PROXY_ORIGIN,
         cacheKey: "",
         source: "/rewriter.js",
-        secretCookieName: "crnsct",
-        userDataEncryption: false,
         version: "0.0.1",
         rewrite_css_selectors: false,
     };

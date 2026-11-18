@@ -1,63 +1,54 @@
-// Spec-compliant srcset rewriter.
+// Spec-compliant srcset rewriter: a port of spec/Srcset.agda, which is the
+// authority. Algorithm mirrors go/src/internal/htmlrewrite/srcset.go — keep
+// all three in step.
 //
 // Per https://html.spec.whatwg.org/multipage/images.html#parse-a-srcset-attribute
-// URLs end at ASCII whitespace — commas within a URL (e.g. Cloudflare Image
-// Resizing paths like /cdn-cgi/image/width=640,quality=75,format=auto/...) are
-// valid and must NOT be treated as candidate separators. The separator between
-// candidates is a comma that appears AFTER a descriptor (or after a URL-only
-// entry with no descriptor).
-//
-// Algorithm mirrors go/src/internal/htmlrewrite/srcset.go — keep in sync.
+//   - A URL ends at ASCII whitespace (tab, LF, FF, CR, space). Commas inside it
+//     (e.g. Cloudflare Image Resizing /cdn-cgi/image/width=640,quality=75/...)
+//     are part of it.
+//   - A URL that ends in commas ends its candidate: the commas separate it from
+//     the next candidate ("a.jpg, b.jpg 2x").
+//   - Otherwise the descriptor runs to the next comma outside parentheses.
 
-const WS = /[ \t\n\r\v]/;
+const isWS = (ch: string): boolean =>
+    ch === " " || ch === "\t" || ch === "\n" || ch === "\f" || ch === "\r";
 
 export function rewriteSrcsetAttribute(
     srcset: string,
     rewriteOne: (url: string) => string,
 ): string {
     const out: string[] = [];
-    let s = srcset;
-
-    while (true) {
-        // Skip leading whitespace and commas (separators from previous candidate).
-        s = s.replace(/^[ \t\n\r\v,]+/, "");
-        if (s === "") break;
-
-        // URL token ends at first ASCII whitespace.
-        const wsIdx = s.search(WS);
-        let urlToken: string;
-        if (wsIdx === -1) {
-            urlToken = s;
-            s = "";
-        } else {
-            urlToken = s.slice(0, wsIdx);
-            s = s.slice(wsIdx);
+    const emit = (u: string, desc: string): void => {
+        out.push(desc === "" ? rewriteOne(u) : `${rewriteOne(u)} ${desc}`);
+    };
+    const cs = [...srcset];
+    let i = 0;
+    while (i < cs.length) {
+        // Between candidates: whitespace and commas.
+        if (isWS(cs[i]!) || cs[i] === ",") {
+            i++;
+            continue;
         }
-
-        // Trailing commas on the URL itself are candidate separators.
-        urlToken = urlToken.replace(/,+$/, "");
-        if (urlToken === "") continue;
-
-        // Skip whitespace between URL and optional descriptor.
-        s = s.replace(/^[ \t\n\r\v]+/, "");
-
-        // Descriptor: everything up to the next comma.
-        const commaIdx = s.indexOf(",");
-        let descriptor: string;
-        if (commaIdx === -1) {
-            descriptor = s.trim();
-            s = "";
-        } else {
-            descriptor = s.slice(0, commaIdx).trim();
-            s = s.slice(commaIdx); // leave the comma for next iteration's trim
+        // The URL: up to whitespace.
+        let start = i;
+        while (i < cs.length && !isWS(cs[i]!)) i++;
+        const u = cs.slice(start, i).join("");
+        if (u.endsWith(",")) {
+            emit(u.replace(/,+$/, ""), "");
+            continue;
         }
-
-        if (descriptor !== "") {
-            out.push(`${rewriteOne(urlToken)} ${descriptor}`);
-        } else {
-            out.push(rewriteOne(urlToken));
+        // The descriptor: up to a comma outside parentheses.
+        while (i < cs.length && isWS(cs[i]!)) i++;
+        start = i;
+        let paren = false;
+        while (i < cs.length && (paren || cs[i] !== ",")) {
+            if (cs[i] === "(") paren = true;
+            else if (cs[i] === ")") paren = false;
+            i++;
         }
+        let end = i;
+        while (end > start && isWS(cs[end - 1]!)) end--;
+        emit(u, cs.slice(start, end).join(""));
     }
-
     return out.join(", ");
 }

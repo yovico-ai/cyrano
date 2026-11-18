@@ -1,58 +1,24 @@
-// Patch the `Worker` and `SharedWorker` constructors so dynamic worker
-// scripts go through the proxy.
-//
-// Two near-identical patches in one module because they share enough that
-// keeping them together reads better than splitting. Each is no-op when the
-// global is missing (older browsers / restrictive contexts).
+// new Worker(url, options) and new SharedWorker(url, options), as page code
+// sees them natively (see websocket.ts). The script URL is proxified, or —
+// for an object URL of a JS Blob the page made — replaced by a private
+// object URL holding the worker runtime and the rewritten source
+// (blob-worker-source.ts); the page's own Blob and URL are untouched.
 
-import { getGlobal, setGlobal } from "./globals";
-
-type WorkerCtor = new (url: string | URL, options?: WorkerOptions) => Worker;
-type SharedWorkerCtor = new (
-    url: string | URL,
-    options?: string | WorkerOptions,
-) => SharedWorker;
+import { wrapConstructor } from "../native/surface";
+import type { WorkerScriptFor } from "./blob-worker-source";
 
 export function patchWorker(
-    _targetWindow: Window,
+    targetWindow: Window,
     rewriteOne: (url: string) => string,
+    workerScriptFor: WorkerScriptFor = () => undefined,
 ): void {
-    patchPlainWorker(rewriteOne);
-    patchSharedWorker(rewriteOne);
-}
-
-function patchPlainWorker(rewriteOne: (url: string) => string): void {
-    const NativeWorker = getGlobal<WorkerCtor>("Worker");
-    if (!NativeWorker) return;
-    const Native = NativeWorker;
-
-    function PatchedWorker(
-        this: unknown,
-        url: string | URL,
-        options?: WorkerOptions,
-    ): Worker {
-        const rawUrl = typeof url === "string" ? url : String(url);
-        return new Native(rewriteOne(rawUrl), options);
+    for (const name of ["Worker", "SharedWorker"] as const) {
+        wrapConstructor<typeof Worker>(targetWindow, name, (Native, args, newTarget) => {
+            if (!args.length) return Reflect.construct(Native, args, newTarget as typeof Worker);
+            const url = String(args[0]);
+            const opts = args[1] as { type?: unknown } | string | undefined;
+            const module = typeof opts === "object" && opts !== null && opts.type === "module";
+            return Reflect.construct(Native, [workerScriptFor(url, module) ?? rewriteOne(url), ...args.slice(1)], newTarget as typeof Worker);
+        });
     }
-    PatchedWorker.prototype = Native.prototype;
-
-    setGlobal("Worker", PatchedWorker);
-}
-
-function patchSharedWorker(rewriteOne: (url: string) => string): void {
-    const NativeSharedWorker = getGlobal<SharedWorkerCtor>("SharedWorker");
-    if (!NativeSharedWorker) return;
-    const Native = NativeSharedWorker;
-
-    function PatchedSharedWorker(
-        this: unknown,
-        url: string | URL,
-        options?: string | WorkerOptions,
-    ): SharedWorker {
-        const rawUrl = typeof url === "string" ? url : String(url);
-        return new Native(rewriteOne(rawUrl), options);
-    }
-    PatchedSharedWorker.prototype = Native.prototype;
-
-    setGlobal("SharedWorker", PatchedSharedWorker);
 }

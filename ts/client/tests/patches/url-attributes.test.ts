@@ -168,14 +168,17 @@ describe("patchUrlAttributes getter unwrapping", () => {
         expect(img.src).toBe("http://example.com/photo.jpg");
     });
 
-    it("srcset getter is NOT unwrapped (only single-URL attrs are unwrapped)", () => {
+    it("srcset getter unwraps each candidate's URL, the rest byte for byte", () => {
         snapshotAll();
         patchUrlAttributes(window, tag, untag);
 
         const img = document.createElement("img");
-        img.setAttribute("srcset", "http://example.com/a.jpg?proxified=1 1x");
-        // srcset getter returns the stored value without unwrapping
-        expect(img.srcset).toContain("proxified=1");
+        img.setAttribute("srcset", "http://example.com/a.jpg?proxified=1 1x,  http://example.com/b.jpg?proxified=1   2x");
+        // Page code must not see the proxified URLs (the page cannot tell).
+        // Pending (spec/Srcset.agda): candidates are still rejoined with ", "
+        // and the descriptor's inner whitespace kept; the principle wants
+        // only the URL spans changed, every other byte as written.
+        expect(img.srcset).toBe("http://example.com/a.jpg 1x, http://example.com/b.jpg 2x");
     });
 });
 
@@ -196,7 +199,7 @@ describe("patchAnchorUrlReflection", () => {
         snapshotAll();
         // patchAnchorUrlReflection MUST be called before patchUrlAttributes
         // so it captures the native href getter.
-        patchAnchorUrlReflection(untag, tag);
+        patchAnchorUrlReflection(window, untag, tag);
         patchUrlAttributes(window, tag, untag);
 
         const a = document.createElement("a");
@@ -208,7 +211,7 @@ describe("patchAnchorUrlReflection", () => {
 
     it("a.protocol reflects upstream protocol", () => {
         snapshotAll();
-        patchAnchorUrlReflection(untag, tag);
+        patchAnchorUrlReflection(window, untag, tag);
         patchUrlAttributes(window, tag, untag);
 
         const a = document.createElement("a");
@@ -218,7 +221,7 @@ describe("patchAnchorUrlReflection", () => {
 
     it("a.hostname reflects upstream hostname (no port)", () => {
         snapshotAll();
-        patchAnchorUrlReflection(untag, tag);
+        patchAnchorUrlReflection(window, untag, tag);
         patchUrlAttributes(window, tag, untag);
 
         const a = document.createElement("a");
@@ -228,7 +231,7 @@ describe("patchAnchorUrlReflection", () => {
 
     it("a.port reflects upstream port", () => {
         snapshotAll();
-        patchAnchorUrlReflection(untag, tag);
+        patchAnchorUrlReflection(window, untag, tag);
         patchUrlAttributes(window, tag, untag);
 
         const a = document.createElement("a");
@@ -238,7 +241,7 @@ describe("patchAnchorUrlReflection", () => {
 
     it("a.pathname reflects upstream pathname", () => {
         snapshotAll();
-        patchAnchorUrlReflection(untag, tag);
+        patchAnchorUrlReflection(window, untag, tag);
         patchUrlAttributes(window, tag, untag);
 
         const a = document.createElement("a");
@@ -248,7 +251,7 @@ describe("patchAnchorUrlReflection", () => {
 
     it("non-proxified href: URL parts pass through unchanged", () => {
         snapshotAll();
-        patchAnchorUrlReflection(untag, tag);
+        patchAnchorUrlReflection(window, untag, tag);
         patchUrlAttributes(window, tag, untag);
 
         const a = document.createElement("a");
@@ -261,7 +264,7 @@ describe("patchAnchorUrlReflection", () => {
 
     it("a.hostname setter updates the upstream URL and re-proxifies", () => {
         snapshotAll();
-        patchAnchorUrlReflection(untag, tag);
+        patchAnchorUrlReflection(window, untag, tag);
         patchUrlAttributes(window, tag, untag);
 
         const a = document.createElement("a");
@@ -276,7 +279,7 @@ describe("patchAnchorUrlReflection", () => {
 
     it("a.pathname setter updates the upstream URL and re-proxifies", () => {
         snapshotAll();
-        patchAnchorUrlReflection(untag, tag);
+        patchAnchorUrlReflection(window, untag, tag);
         patchUrlAttributes(window, tag, untag);
 
         const a = document.createElement("a");
@@ -289,7 +292,7 @@ describe("patchAnchorUrlReflection", () => {
 
     it("a.hostname setter on non-proxified href delegates to native", () => {
         snapshotAll();
-        patchAnchorUrlReflection(untag, tag);
+        patchAnchorUrlReflection(window, untag, tag);
         patchUrlAttributes(window, tag, untag);
 
         const a = document.createElement("a");
@@ -303,7 +306,7 @@ describe("patchAnchorUrlReflection", () => {
 
     it("wrapping an already-proxified URL is idempotent (setter)", () => {
         snapshotAll();
-        patchAnchorUrlReflection(untag, tag);
+        patchAnchorUrlReflection(window, untag, tag);
         patchUrlAttributes(window, tag, untag);
 
         const a = document.createElement("a");
@@ -316,7 +319,7 @@ describe("patchAnchorUrlReflection", () => {
 
     it("unwrapping a real (non-proxified) URL is a no-op (getter)", () => {
         snapshotAll();
-        patchAnchorUrlReflection(untag, tag);
+        patchAnchorUrlReflection(window, untag, tag);
         patchUrlAttributes(window, tag, untag);
 
         const a = document.createElement("a");

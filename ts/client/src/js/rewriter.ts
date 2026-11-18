@@ -22,6 +22,10 @@
 import { Parser, type Node } from "acorn";
 import { generate } from "astring";
 
+// A node whose shape is read dynamically (patterns, classes, chains).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Loose = Record<string, any>;
+
 // ESTree node types we touch. We use loose interface declarations rather
 // than @types/estree to keep the dependency surface minimal — acorn's runtime
 // shapes match these.
@@ -160,12 +164,15 @@ function alreadyRewritten(src: string): boolean {
  * window.$rewriter is undefined. All proxied frames share the same proxy
  * origin, so parent frame access is always same-origin safe.
  */
+// globalThis, not window: the same source also runs in workers (Blob
+// workers' rewritten source), where there is no window — and a page's own
+// `var self` cannot shadow it. A worker has no parent: the walk stops.
 const EVAL_PREAMBLE =
-    'var $rewriter=window.$rewriter||(function(){' +
-    'try{for(var _w=window;_w!==_w.parent;_w=_w.parent)' +
+    'var $rewriter=globalThis.$rewriter||(function(){' +
+    'try{for(var _w=globalThis;_w.parent&&_w!==_w.parent;_w=_w.parent)' +
     'if(_w.parent.$rewriter)return _w.parent.$rewriter;}' +
     'catch(_e){}return null}()),' +
-    '$__crn_key__=window.$__crn_key__||0;';
+    '$__crn_key__=globalThis.$__crn_key__||0;';
 
 function withEvalPreamble(code: string): string {
     // Detect a leading strict-mode directive and insert preamble after it.
@@ -247,10 +254,26 @@ class JsRewriter {
             case "VariableDeclaration":
                 if (stmt.declarations) {
                     for (const d of stmt.declarations) {
+                        this.walkPattern((d as Loose).id);
                         if (d.init) d.init = this.rvalue(d.init);
                     }
                 }
                 break;
+            case "ClassDeclaration":
+                this.walkClass(stmt as Loose);
+                break;
+            case "WithStatement":
+                (stmt as Loose).object = this.rvalue((stmt as Loose).object);
+                (stmt as Loose).body = this.walkStmt((stmt as Loose).body);
+                break;
+            case "ExportNamedDeclaration":
+                if ((stmt as Loose).declaration) (stmt as Loose).declaration = this.walkStmt((stmt as Loose).declaration);
+                break;
+            case "ExportDefaultDeclaration": {
+                const d = (stmt as Loose).declaration;
+                if (d) (stmt as Loose).declaration = /Declaration$/.test(d.type) ? this.walkStmt(d) : this.rvalue(d);
+                break;
+            }
             case "IfStatement":
                 stmt.test = this.rvalue(stmt.test as ExpressionNode);
                 stmt.consequent = this.walkStmt(stmt.consequent as StatementNode);
@@ -270,7 +293,9 @@ class JsRewriter {
             case "ForOfStatement":
                 // LHS (left) is the iteration target — for `for (location in ...)`
                 // the server treats `location` as an lvalue (set_location wrap).
-                stmt.left = this.lvalue(stmt.left as ExpressionNode);
+                // A declared pattern on the left may hold defaults.
+                if ((stmt.left as Loose).type === "VariableDeclaration") this.walkStmt(stmt.left as unknown as StatementNode);
+                else stmt.left = this.lvalue(stmt.left as ExpressionNode);
                 stmt.right = this.rvalue(stmt.right as ExpressionNode);
                 stmt.body = this.walkStmt(stmt.body as StatementNode);
                 break;
@@ -299,7 +324,10 @@ class JsRewriter {
                 break;
             case "TryStatement":
                 if (stmt.block) this.walkBlock(stmt.block);
-                if (stmt.handler) this.walkBlock(stmt.handler.body);
+                if (stmt.handler) {
+                    this.walkPattern((stmt.handler as Loose).param);
+                    this.walkBlock(stmt.handler.body);
+                }
                 if (stmt.finalizer) this.walkBlock(stmt.finalizer);
                 break;
             case "LabeledStatement":
@@ -307,10 +335,53 @@ class JsRewriter {
                 break;
             case "FunctionDeclaration":
             case "FunctionExpression":
+                this.walkParams(stmt as Loose);
                 if (stmt.body) this.walkBlock(stmt.body as BlockStatement);
                 break;
         }
         return stmt;
+    }
+
+    /** A function's parameters: defaults and destructuring patterns. */
+    walkParams(fn: Loose): void {
+        for (const p of (fn.params ?? []) as Loose[]) this.walkPattern(p);
+    }
+
+    /** A binding pattern: default values and computed keys are expressions. */
+    walkPattern(p: Loose | null | undefined): void {
+        if (!p) return;
+        switch (p.type) {
+            case "AssignmentPattern":
+                p.right = this.rvalue(p.right);
+                this.walkPattern(p.left);
+                break;
+            case "ObjectPattern":
+                for (const prop of p.properties as Loose[]) {
+                    if (prop.type === "RestElement") { this.walkPattern(prop.argument); continue; }
+                    if (prop.computed) prop.key = this.rvalue(prop.key);
+                    this.walkPattern(prop.value);
+                }
+                break;
+            case "ArrayPattern":
+                for (const el of p.elements as Loose[]) this.walkPattern(el);
+                break;
+            case "RestElement":
+                this.walkPattern(p.argument);
+                break;
+        }
+    }
+
+    /** Everything a class holds: heritage, methods, fields, computed names, static blocks. */
+    walkClass(c: Loose): void {
+        if (c.superClass) c.superClass = this.rvalue(c.superClass);
+        for (const el of (c.body?.body ?? []) as Loose[]) {
+            if (el.type === "StaticBlock") {
+                for (let i = 0; i < el.body.length; i++) el.body[i] = this.walkStmt(el.body[i]);
+                continue;
+            }
+            if (el.computed) el.key = this.rvalue(el.key);
+            if (el.value) el.value = this.rvalue(el.value); // a method's function, or a field's initializer
+        }
     }
 
     /**
@@ -452,6 +523,7 @@ class JsRewriter {
             case "ObjectExpression": {
                 if (expr.properties) {
                     for (const p of expr.properties) {
+                        if (p.type === "Property" && (p as Loose).computed) (p as Loose).key = this.rvalue((p as Loose).key);
                         if (p.type === "Property" && p.value) {
                             p.value = this.rvalue(p.value);
                         } else if (p.type === "SpreadElement" && p.argument) {
@@ -484,8 +556,18 @@ class JsRewriter {
                 if (expr.argument) expr.argument = this.rvalue(expr.argument);
                 return expr;
             }
+            case "ClassExpression": {
+                this.walkClass(expr as Loose);
+                return expr;
+            }
+            case "ChainExpression": {
+                // Optional chaining: a?.b, a?.[x], a?.(x)
+                (expr as Loose).expression = this.rvalue((expr as Loose).expression);
+                return expr;
+            }
             case "ArrowFunctionExpression":
             case "FunctionExpression": {
+                this.walkParams(expr as Loose);
                 if (expr.body) {
                     if ((expr.body as Node).type === "BlockStatement") {
                         this.walkBlock(expr.body as BlockStatement);

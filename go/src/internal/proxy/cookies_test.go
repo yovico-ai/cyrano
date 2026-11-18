@@ -1,0 +1,158 @@
+package proxy
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/yovico/cyrano/internal/urlrewrite"
+)
+
+// Cookies end to end through the handler: what the browser is told to
+// store, and what the upstream receives (the rules themselves are checked
+// against the spec, and the spec against Chromium).
+
+func cookieUpstream(t *testing.T, setCookies ...string) (*httptest.Server, *capturedRequest) {
+	t.Helper()
+	captured := &capturedRequest{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured.headers = r.Header.Clone()
+		for _, c := range setCookies {
+			w.Header().Add("Set-Cookie", c)
+		}
+		w.WriteHeader(200)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, captured
+}
+
+func TestCookies_SetCookieRouting(t *testing.T) {
+	upstream, _ := cookieUpstream(t,
+		"visible=1; Path=/app; Max-Age=60",
+		"secret=2; HttpOnly",
+		"foreign=3; Domain=elsewhere.example", // a browser ignores it
+		"__Host-h=4; Path=/",                  // needs Secure: ignored
+	)
+	up, _ := url.Parse(upstream.URL)
+	jar := NewSessionJar()
+	h := New(Options{ProxyCfg: devProxyCfg(), CookieJar: jar, SessionCookieName: "crnsct"})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", cyranoPath(upstream.URL+"/app/page"), nil)
+	req.Host = "localhost:9081"
+	h.ServeHTTP(rec, req)
+
+	var session string
+	var toBrowser []string
+	for _, v := range rec.Header().Values("Set-Cookie") {
+		if strings.HasPrefix(v, "crnsct=") {
+			session = strings.TrimPrefix(strings.Split(v, ";")[0], "crnsct=")
+			continue
+		}
+		toBrowser = append(toBrowser, v)
+	}
+	host := up.Hostname()
+	want := []string{
+		"__crn!h!" + host + "!%2Fapp!visible=iu:1; Path=/; Max-Age=60",
+		"__crn!h!" + host + "!%2Fapp!secret=; Path=/; Max-Age=0", // any script-visible twin is replaced
+	}
+	if strings.Join(toBrowser, " | ") != strings.Join(want, " | ") {
+		t.Errorf("Set-Cookie to the browser:\n got  %q\n want %q", toBrowser, want)
+	}
+	if session == "" {
+		t.Fatal("no session cookie issued")
+	}
+	if got := jar.Cookies(session); len(got) != 1 || got[0].Name != "secret" || !got[0].HTTPOnly || got[0].Path != "/app" {
+		t.Errorf("server jar = %+v, want the HttpOnly cookie only", got)
+	}
+}
+
+func TestCookies_UpstreamGetsWhatABrowserWouldSend(t *testing.T) {
+	upstream, captured := cookieUpstream(t)
+	up, _ := url.Parse(upstream.URL)
+	host := up.Hostname()
+	jar := NewSessionJar()
+	h := New(Options{ProxyCfg: devProxyCfg(), CookieJar: jar, SessionCookieName: "crnsct"})
+	jar.Store("sess", urlrewrite.StoredCookie{HostOnly: true, Domain: host, Path: "/", Name: "secret", Value: "2", HTTPOnly: true, SameSite: 'u'}, time.Time{})
+
+	browserJar := strings.Join([]string{
+		"crnsct=sess",
+		"__crn!h!" + host + "!%2F!a=iu:1",
+		"__crn!h!" + host + "!%2Fapp!deep=iu:2",        // longer path: first
+		"__crn!h!" + host + "!%2Fother!elsewhere=iu:3", // path does not match
+		"__crn!h!other.example!%2F!foreign=iu:4",       // another site's
+		"__crn!h!" + host + "!%2F!strict=it:5",         // SameSite=Strict
+		"__crn!h!" + host + "!%2F!none=in:6",           // SameSite=None
+		"unrelated=7",
+	}, "; ")
+	send := func(hdr map[string]string) string {
+		req := httptest.NewRequest("GET", cyranoPath(upstream.URL+"/app/page"), nil)
+		req.Host = "localhost:9081"
+		req.Header.Set("Cookie", browserJar)
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		h.ServeHTTP(httptest.NewRecorder(), req)
+		return captured.headers.Get("Cookie")
+	}
+
+	if got, want := send(nil), "deep=2; a=1; strict=5; none=6; secret=2"; got != want {
+		t.Errorf("same-site request:\n got  %q\n want %q", got, want)
+	}
+	crossSite := map[string]string{
+		"Referer": urlrewrite.Rewrite("https://page.example/x", nil, devProxyCfg()), "Sec-Fetch-Dest": "image", "Sec-Fetch-Mode": "no-cors",
+	}
+	if got, want := send(crossSite), "none=6"; got != want {
+		t.Errorf("cross-site subresource request:\n got  %q\n want %q", got, want)
+	}
+	crossNav := map[string]string{
+		"Referer": urlrewrite.Rewrite("https://page.example/x", nil, devProxyCfg()), "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate",
+	}
+	if got, want := send(crossNav), "deep=2; a=1; none=6; secret=2"; got != want {
+		t.Errorf("cross-site top-level navigation (Lax allowed, Strict not):\n got  %q\n want %q", got, want)
+	}
+}
+
+func TestCookies_NoJar_HttpOnlyStaysOutOfScriptsReach(t *testing.T) {
+	upstream, _ := cookieUpstream(t, "secret=2; HttpOnly")
+	h := New(Options{ProxyCfg: devProxyCfg()})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", cyranoPath(upstream.URL+"/"), nil)
+	req.Host = "localhost:9081"
+	h.ServeHTTP(rec, req)
+	got := rec.Header().Values("Set-Cookie")
+	if len(got) != 1 || !strings.HasSuffix(got[0], "; HttpOnly") || !strings.Contains(got[0], "!secret=iu:2") {
+		t.Errorf("Set-Cookie = %q, want one real HttpOnly cookie under its wire name", got)
+	}
+}
+
+func TestCookieExpiry(t *testing.T) {
+	now := time.Now()
+	for _, c := range []struct {
+		set  string
+		gone bool
+		in   time.Duration // 0: a session cookie
+	}{
+		{"a=1", false, 0},
+		{"a=1; Max-Age=60", false, time.Minute},
+		{"a=1; Max-Age=0", true, 0},
+		{"a=1; Max-Age=-5", true, 0},
+		{"a=1; Max-Age=99999999999999999999", false, 400 * 24 * time.Hour},
+		{"a=1; Expires=Thu, 01 Jan 1970 00:00:00 GMT", true, 0},
+		{"a=1; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=60", false, time.Minute}, // Max-Age wins
+		{"a=1; Expires=nonsense", false, 0},
+	} {
+		sc, _ := urlrewrite.ParseSetCookie(c.set)
+		exp, gone := cookieExpiry(sc, now)
+		switch {
+		case gone != c.gone:
+			t.Errorf("%q: gone = %v", c.set, gone)
+		case c.in == 0 && !exp.IsZero() && !gone:
+			t.Errorf("%q: expires %v, want a session cookie", c.set, exp)
+		case c.in != 0 && exp.Sub(now) != c.in:
+			t.Errorf("%q: expires in %v, want %v", c.set, exp.Sub(now), c.in)
+		}
+	}
+}

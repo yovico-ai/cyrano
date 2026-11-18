@@ -152,7 +152,9 @@ func gotoURL(proxy *httptest.Server, target string) string {
 	if escapedPath == "" {
 		escapedPath = "/"
 	}
-	path := "/cyrano/" + u.Scheme + "/" + u.Host + escapedPath
+	// Every '%' of the target's path is %25 in a proxified path
+	// (spec/Containment.agda escapePct).
+	path := "/cyrano/" + u.Scheme + "/" + u.Host + strings.ReplaceAll(escapedPath, "%", "%25")
 	if u.RawQuery != "" {
 		path += "?" + u.RawQuery
 	}

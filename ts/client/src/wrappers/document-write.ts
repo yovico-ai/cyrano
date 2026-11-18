@@ -20,6 +20,7 @@
 // safe — doesn't depend on `instanceof Document` against this realm's class.
 
 import { rewriteHtmlString } from "../patches/html-rewriter";
+import { sinkText } from "../patches/dynamic-html";
 
 export interface DocumentWriteWrapper {
     write: (...args: unknown[]) => unknown;
@@ -83,7 +84,7 @@ export function wrapDocumentWrite(
         write: (...args: unknown[]): unknown => {
             if (!target || typeof target.write !== "function") return undefined;
             if (isDocumentLike(target) && allStrings(args)) {
-                const joined = (args as string[]).join("");
+                const joined = args.map((a) => sinkText(a) ?? "").join("");
                 let rewritten = rewriteHtmlString(joined, rewriteOne, proxyOrigin);
                 if (getBootstrapHtml) {
                     rewritten = maybeInjectBootstrap(target, joined, rewritten, getBootstrapHtml);
@@ -96,7 +97,7 @@ export function wrapDocumentWrite(
         writeln: (...args: unknown[]): unknown => {
             if (!target || typeof target.writeln !== "function") return undefined;
             if (isDocumentLike(target) && allStrings(args)) {
-                const joined = (args as string[]).join("");
+                const joined = args.map((a) => sinkText(a) ?? "").join("");
                 let rewritten = rewriteHtmlString(joined, rewriteOne, proxyOrigin);
                 if (getBootstrapHtml) {
                     rewritten = maybeInjectBootstrap(target, joined, rewritten, getBootstrapHtml);
@@ -108,9 +109,11 @@ export function wrapDocumentWrite(
     };
 }
 
+// Strings, or Trusted Types objects standing for them (patches/dynamic-html
+// sinkText).
 function allStrings(args: unknown[]): boolean {
     for (const a of args) {
-        if (typeof a !== "string") return false;
+        if (sinkText(a) === null) return false;
     }
     return true;
 }

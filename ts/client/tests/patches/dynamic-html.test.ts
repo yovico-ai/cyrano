@@ -160,12 +160,14 @@ describe("patchDynamicHtml — setAttribute", () => {
         expect(div.getAttribute("href")).toBe("/should-not-rewrite");
     });
 
-    it("passes non-string values through unchanged", () => {
+    it("stringifies a non-string value, as setAttribute does, before rewriting", () => {
         patchDynamicHtml(window, tag, (u) => u);
         const img = document.createElement("img");
-        // happy-dom coerces non-strings, but our rewriter must not run on them.
+        // Natively setAttribute("src", null) stores "null" — a relative URL,
+        // which must be proxified like any other (else it resolves against
+        // the proxy origin).
         img.setAttribute("src", null as unknown as string);
-        expect(img.getAttribute("src")).not.toContain("proxified=1");
+        expect(img.getAttribute("src")).toBe(tag("null"));
     });
 });
 
@@ -213,11 +215,14 @@ describe("patchDynamicHtml — integrity stripping", () => {
         div.remove();
     });
 
-    it(".integrity property setter is nooped (returns empty string from getter)", () => {
+    it(".integrity reads back what the page set, and is never applied", () => {
         patchDynamicHtml(window, tag, (u) => u);
         const script = document.createElement("script") as HTMLScriptElement;
         script.integrity = "sha384-shouldbedropped";
-        expect(script.integrity).toBe("");
+        // The page cannot tell: it reads back its own value…
+        expect(script.integrity).toBe("sha384-shouldbedropped");
+        // …but the element carries no SRI hash to check rewritten content against.
+        expect(script.hasAttribute("integrity")).toBe(false);
     });
 });
 

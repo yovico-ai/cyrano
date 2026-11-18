@@ -1,3 +1,4 @@
+
 // Wrapper for `*.postMessage` calls.
 //
 // The server's WRAP_POST_MESSAGE rule fires on ANY `obj.postMessage` member-
@@ -25,52 +26,22 @@ export interface PostMessageWrapper {
     postMessage: (...args: unknown[]) => unknown;
 }
 
-interface PostMessageCapable {
-    postMessage?: (...args: unknown[]) => unknown;
-    location?: unknown;
-}
-
+/**
+ * `obj.postMessage(...)` from rewritten code: the call goes to the
+ * recipient's postMessage — the native-surface wrapper
+ * (patches/post-message.ts), which finds this code's window on the call
+ * stack and sends as it. Anything that is not a window (MessagePort,
+ * Worker, BroadcastChannel, …) is called as written.
+ */
 export function wrapPostMessage(
     arg: { obj: unknown },
-    proxyOrigin: string,
+    _proxyOrigin: string,
+    _senderOrigin: () => string | null,
+    _unwrap: (href: string) => string,
 ): PostMessageWrapper {
-    const target = arg.obj as PostMessageCapable | null;
+    const target = arg.obj as { postMessage?: (...a: unknown[]) => unknown } | null;
     return {
-        postMessage: (...args: unknown[]): unknown => {
-            if (!target || typeof target.postMessage !== "function") return undefined;
-            return target.postMessage.apply(
-                target,
-                translateTargetOrigin(target, args, proxyOrigin) as Parameters<typeof target.postMessage>,
-            );
-        },
+        postMessage: (...args: unknown[]): unknown =>
+            (target?.postMessage as (...a: unknown[]) => unknown).apply(target, args),
     };
-}
-
-function translateTargetOrigin(
-    target: PostMessageCapable,
-    args: unknown[],
-    proxyOrigin: string,
-): unknown[] {
-    if (args.length < 2) return args;
-    const targetOrigin = args[1];
-    if (
-        typeof targetOrigin !== "string" ||
-        targetOrigin === "*" ||
-        targetOrigin === "/" ||
-        targetOrigin === proxyOrigin
-    ) return args;
-
-    try {
-        // Reading .location throws SecurityError for cross-origin windows.
-        // If it's accessible the recipient is same-origin = a proxied window.
-        const loc = target.location;
-        if (loc != null) {
-            const fixed = args.slice();
-            fixed[1] = proxyOrigin;
-            return fixed;
-        }
-    } catch {
-        // Cross-origin window or non-Window — leave targetOrigin unchanged.
-    }
-    return args;
 }

@@ -17,7 +17,7 @@ import type { ClientConfig } from "../config";
 
 // Schemes whose URLs we proxify. Anything else (data:, blob:, javascript:,
 // mailto:, tel:, about:, fragment-only, etc.) passes through unchanged.
-const PROXIFIABLE_SCHEMES = new Set(["http:", "https:", "ws:", "wss:"]);
+export const PROXIFIABLE_SCHEMES = new Set(["http:", "https:", "ws:", "wss:"]);
 
 // Schemes we must explicitly NOT touch — passed through verbatim. Listed for
 // clarity; the proxifiable check above already filters them out implicitly.
@@ -65,6 +65,68 @@ function isAlreadyProxified(url: URL, config: ClientConfig): boolean {
     return isProxyOrigin(url, config) && url.pathname.startsWith("/cyrano/");
 }
 
+/** WHATWG URL parser preprocessing (spec/Url.agda `preprocess`). */
+function browserPreprocess(s: string): string {
+    return s.replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, "").replace(/[\t\n\r]/g, "");
+}
+
+/**
+ * Userinfo as the browser serializes it in href: "user:pass@", "user@",
+ * ":pass@", or "" (URL.username/password are already percent-encoded).
+ */
+function userinfoText(u: URL): string {
+    if (u.username === "" && u.password === "") return "";
+    return `${u.username}${u.password === "" ? "" : `:${u.password}`}@`;
+}
+
+/**
+ * Everything href holds after the authority — path, query and fragment —
+ * exactly as serialized. Unlike `pathname + search + hash` it keeps a bare
+ * "?" or "#": URL.search and URL.hash are "" for those, but href, which
+ * page code reads, shows them.
+ */
+function afterAuthority(u: URL): string {
+    return u.href.slice(u.protocol.length + 2 + userinfoText(u).length + u.host.length);
+}
+
+/**
+ * An authority written as a path segment (spec/Containment.agda segmentOf).
+ * "." and ".." are valid hosts, but as segments the browser would remove
+ * them as dot segments; an empty port (".:"), which the URL parser reads
+ * as no port, keeps them plain.
+ */
+function segmentOf(auth: string): string {
+    return auth === "." || auth === ".." ? `${auth}:` : auth;
+}
+
+/**
+ * Every '%' of the target's text is written %25 in the proxified path
+ * (spec/Containment.agda escape), so the proxified path is always valid
+ * percent-encoding — the server rejects a path whose '%' is not an escape,
+ * while the origin would serve "/100%.jpg". Reading back is percent-decoding
+ * (`pctDecode`), which gives the target's text exactly ("%2F" stays "%2F").
+ */
+function escapePct(s: string): string {
+    return s.replace(/%/g, "%25");
+}
+
+/** WHATWG percent-decode (spec/Url.agda pctDecode): %XX → that byte; a stray '%' stays. */
+function pctDecode(s: string): string {
+    return s.replace(/%([0-9A-Fa-f]{2})/g, (_, h: string) => String.fromCharCode(parseInt(h, 16)));
+}
+
+/**
+ * Recognizes exactly what proxify produces: /cyrano/<http|https|ws|wss>/<host><rest>
+ * with a non-empty host (spec/Containment.agda `target`). The scheme segment
+ * matches lowercase only, as proxify writes it; the host is taken as written.
+ * Shared by remap and unwrap so the two can never disagree.
+ */
+function cyranoTarget(pathname: string): { scheme: string; host: string; rest: string } | null {
+    const m = /^\/cyrano\/(http|https|ws|wss)\/([^/]+)(.*)$/s.exec(pathname);
+    if (m === null) return null;
+    return { scheme: m[1]!, host: m[2]!, rest: m[3]! };
+}
+
 /**
  * Proxifies a URL: takes a raw URL (absolute or relative) and the page's
  * effective base URL, and returns the URL the browser should actually
@@ -83,7 +145,10 @@ export function rewriteUrl(
     config: ClientConfig,
 ): string {
     if (typeof rawUrl !== "string" || rawUrl.length === 0) return rawUrl;
-    if (rawUrl.startsWith("#")) return rawUrl;
+    // In-page anchor, judged after the browser's own preprocessing (leading
+    // and trailing C0/space stripped, tab/CR/LF removed) — " \x01#top" is
+    // still "#top" to the browser.
+    if (browserPreprocess(rawUrl).startsWith("#")) return rawUrl;
     for (const prefix of PASSTHROUGH_PREFIXES) {
         if (rawUrl.startsWith(prefix)) return rawUrl;
     }
@@ -106,6 +171,7 @@ export function rewriteUrl(
 
     if (!PROXIFIABLE_SCHEMES.has(absolute.protocol)) return rawUrl;
     if (isAlreadyProxified(absolute, config)) return rawUrl;
+    // A request to cyrano itself.
     if (isProxyOrigin(absolute, config)) return absolute.href;
 
     // Detect "virtual-origin + proxy-path" double-encoding: a script combined
@@ -113,15 +179,19 @@ export function rewriteUrl(
     // real proxy path that already carries "/cyrano/<scheme>/", producing a URL
     // like "https://www.google.com/cyrano/https/www.google.com/...".
     // Re-map to our proxy origin instead of proxifying a second time.
-    if (/^\/cyrano\/[a-z][a-z0-9+.-]*\//.test(absolute.pathname)) {
+    if (cyranoTarget(absolute.pathname) !== null) {
         const apiBase = proxyApiBase(config);
-        return `${apiBase}${absolute.pathname}${absolute.search}${absolute.hash}`;
+        return `${apiBase}${afterAuthority(absolute)}`;
     }
 
     const apiBase = proxyApiBase(config);
+    // The page cannot tell (REQUIREMENTS.md): everything href shows —
+    // userinfo, a bare "?" or "#" — is carried, so unwrap gives it back.
     const scheme = absolute.protocol.slice(0, -1); // strip trailing ':'
-    const cyranoPath = `/cyrano/${scheme}/${absolute.host}${absolute.pathname}`;
-    return `${apiBase}${cyranoPath}${absolute.search}${absolute.hash}`;
+    const rest = afterAuthority(absolute);
+    const tail = rest.slice(absolute.pathname.length); // ?query#fragment, exactly
+    const seg = escapePct(segmentOf(userinfoText(absolute) + absolute.host));
+    return `${apiBase}/cyrano/${scheme}/${seg}${escapePct(absolute.pathname)}${tail}`;
 }
 
 /**
@@ -130,7 +200,9 @@ export function rewriteUrl(
  * URLs back (e.g. `location.href`) and we want to hand it the URL it expects.
  *
  * Returns the input unchanged when the URL isn't on our proxy origin or
- * doesn't carry a /cyrano/ path.
+ * doesn't carry a /cyrano/ path. The rebuilt URL is read by the browser's
+ * own parser, so what page code sees is what the browser would show for
+ * the original (a hand-typed host segment "H.com:443" reads as "h.com").
  */
 export function unwrapProxiedUrl(
     proxiedHref: string,
@@ -144,25 +216,31 @@ export function unwrapProxiedUrl(
     }
     if (!isProxyOrigin(url, config)) return proxiedHref;
 
-    if (url.pathname.startsWith("/cyrano/")) {
-        const rest = url.pathname.slice("/cyrano/".length);
-        const schemeEnd = rest.indexOf("/");
-        if (schemeEnd >= 0) {
-            const scheme = rest.slice(0, schemeEnd);
-            const afterScheme = rest.slice(schemeEnd + 1);
-            const hostEnd = afterScheme.indexOf("/");
-            let host: string, path: string;
-            if (hostEnd < 0) {
-                host = afterScheme;
-                path = "/";
-            } else {
-                host = afterScheme.slice(0, hostEnd);
-                path = afterScheme.slice(hostEnd);
-            }
-            if (host && (scheme === "http" || scheme === "https" || scheme === "ws" || scheme === "wss")) {
-                return `${scheme}://${host}${path}${url.search}${url.hash}`;
-            }
-        }
+    const t = cyranoTarget(url.pathname);
+    if (t === null) return proxiedHref;
+    const tail = afterAuthority(url).slice(url.pathname.length);
+    // The host segment is read by the browser's own parser; the path is the
+    // target's text, decoded segment by segment as the spec does.
+    const seg = pctDecode(t.host);
+    // The whole segment must be the authority: "a%2Fb" is not a host.
+    if (/[/\\?#]/.test(seg)) return proxiedHref;
+    let origin: URL;
+    try {
+        origin = new URL(`${t.scheme}://${seg}/`);
+    } catch {
+        return proxiedHref; // the host segment is not a host
     }
-    return proxiedHref;
+    const path = t.rest === "" ? "/" : t.rest.split("/").map(pctDecode).join("/");
+    return `${t.scheme}://${userinfoText(origin)}${origin.host}${path}${tail}`;
+}
+
+/**
+ * Whether a module specifier names a URL (HTML, "resolve a module
+ * specifier"): it starts with "/", "./" or "../", or has a scheme. Anything
+ * else is a bare specifier ("react") — resolved by the page's import map or
+ * a TypeError, never a URL relative to the page — and is left as written.
+ * Mirrors Go urlrewrite.IsURLLikeSpecifier.
+ */
+export function isUrlLikeSpecifier(s: string): boolean {
+    return s.startsWith("/") || s.startsWith("./") || s.startsWith("../") || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(s);
 }

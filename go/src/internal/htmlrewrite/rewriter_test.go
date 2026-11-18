@@ -30,9 +30,10 @@ func rewrite(t *testing.T, in string, opts ...func(*Config)) string {
 	cfg := Config{
 		BaseURL:           mustURL(t, "https://example.com/"),
 		Proxy:             devProxy,
-		RewriterJSPath:      "/rewriter.js",
+		RewriterJSPath:    "/rewriter.js",
 		HeadInjectionPath: "/head-injection",
 		InjectBootstrap:   false,
+		NoOriginals:       true, // most tests compare the rewritten markup itself
 	}
 	for _, o := range opts {
 		o(&cfg)
@@ -213,43 +214,6 @@ func TestRewrite_IframeSandboxAlreadyHasAllowSameOrigin(t *testing.T) {
 	}
 }
 
-// ── HTML_PROCESS_SERVER_COOKIES / HTML_FETCH_COOKIES ─────────────────────────
-
-func TestRewrite_ScriptOnloadInjected(t *testing.T) {
-	got := rewrite(t, `<script src="/x.js"></script>`, withInject)
-	if !strings.Contains(got, `onload="$rewriter.process_server_cookies();"`) {
-		t.Errorf("script onload hook missing: %s", got)
-	}
-}
-
-func TestRewrite_IframeOnloadInjected(t *testing.T) {
-	got := rewrite(t, `<iframe src="/x"></iframe>`, withInject)
-	if !strings.Contains(got, `$rewriter.process_server_cookies();`) {
-		t.Errorf("iframe onload hook missing: %s", got)
-	}
-}
-
-func TestRewrite_ImgOnloadInjected(t *testing.T) {
-	got := rewrite(t, `<img src="/x.png" />`, withInject)
-	if !strings.Contains(got, `onload="$rewriter.fetch_cookies(this);"`) {
-		t.Errorf("img onload hook missing: %s", got)
-	}
-}
-
-func TestRewrite_ImgOnloadComposed(t *testing.T) {
-	got := rewrite(t, `<img src="/x.png" onload="userCode()" />`, withInject)
-	if !strings.Contains(got, "fetch_cookies") || !strings.Contains(got, "userCode()") {
-		t.Errorf("img onload should compose with existing handler: %s", got)
-	}
-}
-
-func TestRewrite_ScriptOnloadDoesNotDoubleInject(t *testing.T) {
-	got := rewrite(t, `<script src="/x.js" onload="$rewriter.process_server_cookies();"></script>`)
-	if strings.Count(got, "process_server_cookies") != 1 {
-		t.Errorf("onload double-injected: %s", got)
-	}
-}
-
 // ── HTML_BASETAG ─────────────────────────────────────────────────────────────
 
 func TestRewrite_BaseTagShiftsResolution(t *testing.T) {
@@ -328,42 +292,6 @@ func TestRewrite_BootstrapNotDoubleInjected_WithHeadAndBody(t *testing.T) {
 	count := strings.Count(got, "$rewriter_init")
 	if count != 1 {
 		t.Errorf("bootstrap injected %d times, want exactly 1: %s", count, got)
-	}
-}
-
-func TestRewrite_BootstrapSetCookiesInjected(t *testing.T) {
-	// PageCookies must be emitted as $rewriter.set_cookies([...]) in the
-	// inline bootstrap script, after set_location.
-	withCookies := func(cfg *Config) {
-		cfg.InjectBootstrap = true
-		cfg.PageCookies = []string{"session=tok123; Path=/", "pref=dark; Path=/"}
-	}
-	got := rewrite(t, `<html><head></head><body></body></html>`, withCookies)
-	if !strings.Contains(got, `$rewriter.set_cookies(`) {
-		t.Errorf("set_cookies call missing: %s", got)
-	}
-	if !strings.Contains(got, `session=tok123`) {
-		t.Errorf("session cookie missing in set_cookies: %s", got)
-	}
-	if !strings.Contains(got, `pref=dark`) {
-		t.Errorf("pref cookie missing in set_cookies: %s", got)
-	}
-	// set_cookies must come AFTER set_location.
-	idxLoc := strings.Index(got, "set_location")
-	idxCookies := strings.Index(got, "set_cookies")
-	if idxLoc < 0 || idxCookies < 0 {
-		t.Fatalf("set_location=%d set_cookies=%d", idxLoc, idxCookies)
-	}
-	if idxCookies < idxLoc {
-		t.Errorf("set_cookies emitted before set_location")
-	}
-}
-
-func TestRewrite_BootstrapSetCookiesOmittedWhenEmpty(t *testing.T) {
-	// No PageCookies → no set_cookies call (keeps bootstrap compact).
-	got := rewrite(t, `<html><head></head><body></body></html>`, withInject)
-	if strings.Contains(got, "set_cookies") {
-		t.Errorf("set_cookies should not appear when PageCookies is empty: %s", got)
 	}
 }
 
@@ -446,56 +374,6 @@ func TestRewriteSrcset_CloudflareCommasInURL(t *testing.T) {
 	}
 }
 
-// ── HTML_IFRAME_INJECTION ────────────────────────────────────────────────────
-
-func TestRewrite_IframeInjectionOnloadAppended(t *testing.T) {
-	got := rewrite(t, `<iframe src="/embed"></iframe>`, withInject)
-	if !strings.Contains(got, `$rewriter.append_rewrite_script_into_iframe(this)`) {
-		t.Errorf("iframe injection hook missing: %s", got)
-	}
-}
-
-func TestRewrite_IframeInjectionComposesWithCookieHook(t *testing.T) {
-	got := rewrite(t, `<iframe src="/embed"></iframe>`, withInject)
-	if !strings.Contains(got, `$rewriter.process_server_cookies()`) {
-		t.Errorf("cookie hook missing from iframe onload: %s", got)
-	}
-	if !strings.Contains(got, `$rewriter.append_rewrite_script_into_iframe(this)`) {
-		t.Errorf("injection hook missing from iframe onload: %s", got)
-	}
-	// cookie hook runs first so $rewriter state is ready before injection
-	cookieIdx := strings.Index(got, "process_server_cookies")
-	injectionIdx := strings.Index(got, "append_rewrite_script_into_iframe")
-	if cookieIdx > injectionIdx {
-		t.Errorf("cookie hook must appear before injection hook: %s", got)
-	}
-}
-
-func TestRewrite_IframeInjectionPreservesUserOnload(t *testing.T) {
-	got := rewrite(t, `<iframe src="/embed" onload="userHandler()"></iframe>`, withInject)
-	if !strings.Contains(got, "userHandler()") {
-		t.Errorf("user onload handler lost: %s", got)
-	}
-	if !strings.Contains(got, `$rewriter.append_rewrite_script_into_iframe(this)`) {
-		t.Errorf("injection hook missing when user onload present: %s", got)
-	}
-}
-
-func TestRewrite_IframeInjectionNoDoubleInject(t *testing.T) {
-	got := rewrite(t, `<iframe src="/embed" onload="$rewriter.append_rewrite_script_into_iframe(this);"></iframe>`)
-	if strings.Count(got, "append_rewrite_script_into_iframe") != 1 {
-		t.Errorf("injection hook double-injected: %s", got)
-	}
-}
-
-func TestRewrite_IframeInjectionNotAddedWithoutSrc(t *testing.T) {
-	// iframes without src= (e.g. srcdoc or JS-populated) — no onload injection
-	got := rewrite(t, `<iframe srcdoc="<p>hello</p>"></iframe>`)
-	if strings.Contains(got, "append_rewrite_script_into_iframe") {
-		t.Errorf("injection hook should not be added to iframe without src: %s", got)
-	}
-}
-
 // ── inline-script handoff to RewriteInlineJS ─────────────────────────────
 //
 // Regression: RewriteInlineJS receives a slice into the html tokenizer's
@@ -517,7 +395,7 @@ func TestRewrite_InlineScript_NoNULStompFromRewriter(t *testing.T) {
 		cfg.RewriteInlineJS = func(src []byte) []byte {
 			out := make([]byte, len(src)+1)
 			copy(out, src)
-			out[len(src)] = 0 // simulate the tdewolff NUL sentinel
+			out[len(src)] = 0     // simulate the tdewolff NUL sentinel
 			return out[:len(src)] // return only the original bytes
 		}
 	})
@@ -600,115 +478,6 @@ func TestRewrite_Noscript_StructurePreserved(t *testing.T) {
 	}
 }
 
-// ── ChallengePathPrefix injection ────────────────────────────────────────
-
-func TestRewrite_ChallengePathPrefix_InjectsScript(t *testing.T) {
-	// ChallengePathPrefix causes a tiny inline script to be injected right
-	// after <head> so challenge pages can load orchestrate scripts through
-	// the proxy without the full $rewriter bootstrap.
-	in := `<html><head><title>challenge</title></head><body></body></html>`
-	got := rewrite(t, in, func(cfg *Config) {
-		cfg.ChallengePathPrefix = "/cyrano/https/claude.ai"
-	})
-	if !strings.Contains(got, `HTMLScriptElement.prototype`) {
-		t.Errorf("challenge path fix script not injected: %s", got)
-	}
-	if !strings.Contains(got, `"/cyrano/https/claude.ai"`) {
-		t.Errorf("challenge path prefix not present in injected script: %s", got)
-	}
-}
-
-func TestRewrite_ChallengeShim_WrapsOriginProperties(t *testing.T) {
-	// window.origin/self.origin, document.domain and location.ancestorOrigins
-	// otherwise leak the proxy (localhost) origin. The challenge shim must wrap
-	// them to report the upstream origin/host. General origin-leak fix mirrored
-	// in the TS client (patches/location.ts + WrappedLocation.ancestorOrigins).
-	in := `<html><head><title>challenge</title></head><body></body></html>`
-	got := rewrite(t, in, func(cfg *Config) {
-		cfg.ChallengePathPrefix = "/cyrano/https/claude.ai"
-	})
-	for _, want := range []string{
-		`Object.defineProperty(window,'origin'`,
-		`Object.defineProperty(document,'domain'`,
-		`Object.defineProperty(_wl,'ancestorOrigins'`,
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("challenge shim missing origin-leak wrap %q in: %s", want, got)
-		}
-	}
-}
-
-func TestRewrite_ChallengePathPrefix_InjectedBeforePageContent(t *testing.T) {
-	// The script must appear before the page's own inline scripts so the
-	// src setter is patched before the challenge JS runs.
-	in := `<html><head><script>var x=1;</script></head><body></body></html>`
-	got := rewrite(t, in, func(cfg *Config) {
-		cfg.ChallengePathPrefix = "/cyrano/https/claude.ai"
-	})
-	fixIdx := strings.Index(got, "HTMLScriptElement.prototype")
-	pageIdx := strings.Index(got, "var x=1")
-	if fixIdx == -1 {
-		t.Fatalf("challenge fix script not found in output: %s", got)
-	}
-	if fixIdx > pageIdx {
-		t.Errorf("challenge fix script must appear before page inline scripts: fix@%d page@%d", fixIdx, pageIdx)
-	}
-}
-
-func TestRewrite_ChallengePathPrefix_NoBsotrapOnloadHooks(t *testing.T) {
-	// When only ChallengePathPrefix is set (no InjectBootstrap), $rewriter.*
-	// onload hooks must NOT be added — $rewriter is undefined on challenge pages.
-	in := `<html><head></head><body><script src="/x.js"></script><iframe src="/f"></iframe><img src="/i.png" /></body></html>`
-	got := rewrite(t, in, func(cfg *Config) {
-		cfg.ChallengePathPrefix = "/cyrano/https/claude.ai"
-	})
-	if strings.Contains(got, "$rewriter.process_server_cookies") {
-		t.Errorf("process_server_cookies hook must not be added without InjectBootstrap: %s", got)
-	}
-	if strings.Contains(got, "$rewriter.fetch_cookies") {
-		t.Errorf("fetch_cookies hook must not be added without InjectBootstrap: %s", got)
-	}
-	if strings.Contains(got, "$rewriter.append_rewrite_script_into_iframe") {
-		t.Errorf("iframe injection hook must not be added without InjectBootstrap: %s", got)
-	}
-}
-
-func TestRewrite_ChallengePathPrefix_WrapsWindowLocation(t *testing.T) {
-	// The injected script must define window.$rewriter with wrap_get_location
-	// returning a fake location (_wl) that exposes upstream hostname/href/etc.
-	// Location.prototype patching is not used — Location properties are
-	// non-configurable own getters on the instance and cannot be overridden at
-	// runtime. The JS AST rewriter transforms every location.* access into
-	// $rewriter.wrap_get_location(location).* so the shim's return value is
-	// the interception point.
-	in := `<html><head><title>cf challenge</title></head><body></body></html>`
-	got := rewrite(t, in, func(cfg *Config) {
-		cfg.ChallengePathPrefix = "/cyrano/https/claude.ai"
-	})
-	if !strings.Contains(got, `wrap_get_location`) {
-		t.Errorf("wrap_get_location not present in injected script: %s", got)
-	}
-	// wrap_location must return {location:_wl} so that the AST-rewritten form
-	// of `window.location.hostname` — which is
-	// `$rewriter.wrap_location({obj:window}).location.hostname` — resolves
-	// through _wl rather than through the real proxy location.
-	if !strings.Contains(got, `{location:_wl}`) {
-		t.Errorf("wrap_location must return {location:_wl}: %s", got)
-	}
-	if !strings.Contains(got, `window.$rewriter`) {
-		t.Errorf("$rewriter shim not defined in injected script: %s", got)
-	}
-	if !strings.Contains(got, `_hostname`) {
-		t.Errorf("upstream hostname not referenced in injected script: %s", got)
-	}
-	if !strings.Contains(got, `document,'URL'`) {
-		t.Errorf("document.URL patch not injected: %s", got)
-	}
-	if !strings.Contains(got, `document,'baseURI'`) {
-		t.Errorf("document.baseURI patch not injected: %s", got)
-	}
-}
-
 func TestRewrite_NoOnloadHooksWithoutBootstrap(t *testing.T) {
 	// Without InjectBootstrap, $rewriter.* onload hooks must not be emitted —
 	// they would throw ReferenceError on pages that have no $rewriter runtime.
@@ -719,61 +488,77 @@ func TestRewrite_NoOnloadHooksWithoutBootstrap(t *testing.T) {
 	}
 }
 
-func TestRewrite_ChallengePathPrefix_PatchesDocumentCookie(t *testing.T) {
-	// When ChallengeCookiePrefix is set the challenge shim must patch
-	// document.cookie: setter prepends the prefix so the Director's existing
-	// prefix-strip logic forwards the plain cookie name to the upstream; getter
-	// strips the prefix so page JS sees cookie names as they appear on the
-	// real site.
-	in := `<html><head></head><body></body></html>`
-	got := rewrite(t, in, func(cfg *Config) {
-		cfg.ChallengePathPrefix = "/cyrano/https/claude.ai"
-		cfg.ChallengeCookiePrefix = "__crn__claude_ai__"
-	})
-	if !strings.Contains(got, `"__crn__claude_ai__"`) {
-		t.Errorf("cookie prefix not embedded in injected script: %s", got)
+// ── No cyrano attributes in the page's markup ────────────────────────────
+
+func TestRewrite_NoCookieHooksInMarkup(t *testing.T) {
+	// Cookies live in the browser's own jar: no element gets a cyrano onload
+	// (page code would see it through getAttribute, outerHTML, el.onload).
+	in := `<html><head></head><body><script src="/x.js"></script><img src="/i.png" onload="userCode()" /></body></html>`
+	got := rewrite(t, in, withInject)
+	if strings.Contains(got, "process_server_cookies") || strings.Contains(got, "fetch_cookies") || strings.Contains(got, "set_cookies") {
+		t.Errorf("cookie hooks in markup: %s", got)
 	}
-	if !strings.Contains(got, `document,'cookie'`) {
-		t.Errorf("document.cookie patch not injected: %s", got)
-	}
-	// Getter must strip the prefix; setter must prepend it.
-	if !strings.Contains(got, `_cp+v`) {
-		t.Errorf("cookie setter must prepend prefix (_cp+v): %s", got)
-	}
-	if !strings.Contains(got, `t.slice(_cp.length)`) {
-		t.Errorf("cookie getter must strip prefix (t.slice(_cp.length)): %s", got)
+	if !strings.Contains(got, `onload="userCode()"`) {
+		t.Errorf("the page's own onload changed: %s", got)
 	}
 }
 
-func TestRewrite_ChallengePathPrefix_NoCookiePatchWithoutPrefix(t *testing.T) {
-	// When ChallengeCookiePrefix is empty, no document.cookie patch must be
-	// injected — patching with an empty prefix would corrupt all cookie names.
-	in := `<html><head></head><body></body></html>`
-	got := rewrite(t, in, func(cfg *Config) {
-		cfg.ChallengePathPrefix = "/cyrano/https/claude.ai"
-		// ChallengeCookiePrefix intentionally not set
-	})
-	if strings.Contains(got, `document,'cookie'`) {
-		t.Errorf("document.cookie patch must not be injected without ChallengeCookiePrefix: %s", got)
+func TestRewrite_BootstrapWithoutHeadOrBody(t *testing.T) {
+	// A fragment-like document (no <head>, no <body>): its scripts are
+	// rewritten to call $rewriter, so the bootstrap must come first.
+	got := rewrite(t, `<!doctype html><script>var a = 1;</script><div>x</div>`, withInject)
+	boot := strings.Index(got, "$rewriter_init")
+	page := strings.Index(got, "var a")
+	if boot < 0 || page < 0 || boot > page {
+		t.Errorf("bootstrap not before the page's first script: %s", got)
+	}
+	if strings.Count(got, "$rewriter_init") != 1 {
+		t.Errorf("bootstrap injected more than once: %s", got)
 	}
 }
 
-func TestRewrite_ChallengePathPrefix_FProxiesCrossOriginURL(t *testing.T) {
-	// _f must route any http/https URL through the proxy, not just same-upstream
-	// and absolute-path URLs. Turnstile api.js is loaded from
-	// challenges.cloudflare.com — a completely different origin than the page
-	// upstream. The shim must rewrite it to go through the proxy.
-	in := `<html><head></head><body></body></html>`
-	got := rewrite(t, in, func(cfg *Config) {
-		cfg.ChallengePathPrefix = "/cyrano/https/claude.ai"
-	})
-	// The _f function must contain the general http/https proxifier logic.
-	// Check for the host comparison guard that prevents double-proxying.
-	if !strings.Contains(got, `_fh!==_rl.host`) {
-		t.Errorf("_f missing cross-origin proxifier (_fh!==_rl.host guard): %s", got)
+func TestRewrite_MetaRefresh(t *testing.T) {
+	got := rewrite(t, `<html><head><meta http-equiv="refresh" content="0; url=/next"></head></html>`)
+	if !strings.Contains(got, `/cyrano/https/`) || strings.Contains(got, `content="0; url=/next"`) {
+		t.Errorf("meta refresh URL not proxified: %s", got)
 	}
-	// And the /cyrano/ path construction from _rl.origin.
-	if !strings.Contains(got, `_rl.origin+'/cyrano/'`) {
-		t.Errorf("_f missing cross-origin proxifier (_rl.origin+'/cyrano/'): %s", got)
+}
+
+// ── The page's own markup, kept ──────────────────────────────────────────
+
+func TestRewrite_OriginalsAttribute(t *testing.T) {
+	withOriginals := func(cfg *Config) { cfg.NoOriginals = false; cfg.InjectBootstrap = true }
+	in := `<html><head></head><body>` +
+		`<a class="k" href="../up?q=1">x</a>` + // changed: recorded
+		`<img alt="a" src="/i.png" srcset="a.png 1x, b.png 2x">` +
+		`<script src="/s.js" integrity="sha384-abc"></script>` + // integrity dropped: recorded
+		`<iframe src="/f"></iframe>` + // no cyrano onload hook is written any more
+		`<p id="p" title="plain">t</p>` + // untouched: nothing recorded
+		`</body></html>`
+	got := rewrite(t, in, withOriginals)
+	for _, want := range []string{
+		`crn-o="{&#34;href&#34;:&#34;../up?q=1&#34;}"`,
+		`&#34;src&#34;:&#34;/i.png&#34;`, `&#34;srcset&#34;:&#34;a.png 1x, b.png 2x&#34;`,
+		`&#34;integrity&#34;:&#34;sha384-abc&#34;`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %s in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "onload") {
+		t.Errorf("an onload attribute was written into the page's markup: %s", got)
+	}
+	if !strings.Contains(got, `<p id="p" title="plain">`) {
+		t.Errorf("an untouched element got an originals attribute: %s", got)
+	}
+}
+
+func TestRewrite_BootstrapCarriesThePagesNonce(t *testing.T) {
+	got := rewrite(t, `<html><head></head><body></body></html>`, func(cfg *Config) {
+		cfg.InjectBootstrap = true
+		cfg.ScriptNonce = `ab"c`
+	})
+	if strings.Count(got, `<script nonce="ab&#34;c"`) != 2 {
+		t.Errorf("both bootstrap scripts need the nonce (escaped): %s", got)
 	}
 }

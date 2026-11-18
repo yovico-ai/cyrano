@@ -18,15 +18,23 @@ export interface ClientConfig {
     /** Path to the server-side bundle that injected this client. */
     source: string;
 
-    /** Cookie name that carries the per-session secret used for AES-CTR cookie payloads. */
-    secretCookieName: string;
-
-    /** When true, cookie payloads from the server are AES-CTR-encrypted. */
-    userDataEncryption: boolean;
-
     /** Build version string — used in cache busting. */
     version: string;
 
     /** When true, rewrite URLs inside CSS selectors (e.g. `url(...)` background images). */
     rewrite_css_selectors: boolean;
+
+    /**
+     * document.referrer for this document: the Referer the server sent the
+     * upstream when it requested it (natively the same value). When absent,
+     * the browser's own referrer is unwrapped.
+     */
+    referrer?: string;
+
+    /**
+     * The nonce the page's CSP asks of scripts, when it asks for one: put
+     * on the bootstrap scripts the client writes itself (into
+     * document.write'd documents).
+     */
+    nonce?: string;
 }

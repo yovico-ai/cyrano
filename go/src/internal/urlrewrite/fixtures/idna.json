@@ -1,0 +1,198 @@
+{
+ "browser": "chromium 147.0.7727.15",
+ "node": "v22.12.0",
+ "cases": [
+  {
+   "input": "http://exämple.com/",
+   "href": "http://xn--exmple-cua.com/"
+  },
+  {
+   "input": "http://EXÄMPLE.com/",
+   "href": "http://xn--exmple-cua.com/"
+  },
+  {
+   "input": "http://%C3%A9.com/",
+   "href": "http://xn--9ca.com/"
+  },
+  {
+   "input": "http://xn--9ca.com/",
+   "href": "http://xn--9ca.com/"
+  },
+  {
+   "input": "http://xn--a.com/",
+   "href": "http://xn--a.com/",
+   "node": null
+  },
+  {
+   "input": "http://xn--/",
+   "href": "http://xn--/",
+   "node": null
+  },
+  {
+   "input": "http://xn--ab-.com/",
+   "href": "http://xn--ab-.com/"
+  },
+  {
+   "input": "http://ＥＸＡＭＰＬＥ.com/",
+   "href": "http://example.com/"
+  },
+  {
+   "input": "http://a­b.com/",
+   "href": "http://ab.com/"
+  },
+  {
+   "input": "http://faß.de/",
+   "href": "http://xn--fa-hia.de/"
+  },
+  {
+   "input": "http://ß.com/",
+   "href": "http://xn--zca.com/"
+  },
+  {
+   "input": "http://日本.jp/",
+   "href": "http://xn--wgv71a.jp/"
+  },
+  {
+   "input": "http://日本。jp/",
+   "href": "http://xn--wgv71a.jp/"
+  },
+  {
+   "input": "http://Ω.com/",
+   "href": "http://xn--bya.com/"
+  },
+  {
+   "input": "http://😀.com/",
+   "href": "http://xn--e28h.com/"
+  },
+  {
+   "input": "http://-a.com/",
+   "href": "http://-a.com/"
+  },
+  {
+   "input": "http://a-.com/",
+   "href": "http://a-.com/"
+  },
+  {
+   "input": "http://ab--c.com/",
+   "href": "http://ab--c.com/"
+  },
+  {
+   "input": "http://‍.com/",
+   "href": "http://xn--1ug.com/",
+   "node": null
+  },
+  {
+   "input": "http://a‌b.com/",
+   "href": "http://xn--ab-j1t.com/",
+   "node": null
+  },
+  {
+   "input": "http://١٢٣.com/",
+   "href": null,
+   "node": "http://xn--9hbcd.com/"
+  },
+  {
+   "input": "http://a.١٢٣/",
+   "href": null,
+   "node": "http://a.xn--9hbcd/"
+  },
+  {
+   "input": "http://‮.com/",
+   "href": null
+  },
+  {
+   "input": "http://%E2%80%8D.com/",
+   "href": "http://xn--1ug.com/",
+   "node": null
+  },
+  {
+   "input": "http://%FF.com/",
+   "href": null
+  },
+  {
+   "input": "http://%C3.com/",
+   "href": null
+  },
+  {
+   "input": "http://é.1/",
+   "href": null
+  },
+  {
+   "input": "http://é.0x1/",
+   "href": null
+  },
+  {
+   "input": "http://１.２.３.４/",
+   "href": "http://1.2.3.4/"
+  },
+  {
+   "input": "http://０ｘ７ｆ.１/",
+   "href": "http://127.0.0.1/"
+  },
+  {
+   "input": "http://ﬁ.com/",
+   "href": "http://fi.com/"
+  },
+  {
+   "input": "http://xn--zca.com/",
+   "href": "http://xn--zca.com/"
+  },
+  {
+   "input": "http://XN--ZCA.com/",
+   "href": "http://xn--zca.com/"
+  },
+  {
+   "input": "http://a.xn--zca/",
+   "href": "http://a.xn--zca/"
+  },
+  {
+   "input": "http://ⓐ.com/",
+   "href": "http://a.com/"
+  },
+  {
+   "input": "http://́a.com/",
+   "href": null
+  },
+  {
+   "input": "http://á.com/",
+   "href": "http://xn--1ca.com/"
+  },
+  {
+   "input": "http://�.com/",
+   "href": null
+  },
+  {
+   "input": "http://é:8080/",
+   "href": "http://xn--9ca:8080/"
+  },
+  {
+   "input": "http://u:p@é.com/",
+   "href": "http://u:p@xn--9ca.com/"
+  },
+  {
+   "input": "http://é.com./",
+   "href": "http://xn--9ca.com./"
+  },
+  {
+   "input": "http://é..com/",
+   "href": "http://xn--9ca..com/"
+  },
+  {
+   "input": "http://%20é.com/",
+   "href": "http://xn--%20-dma.com/",
+   "node": null
+  },
+  {
+   "input": "http://é%2F.com/",
+   "href": null
+  },
+  {
+   "input": "http://é|.com/",
+   "href": null
+  },
+  {
+   "input": "http://é^.com/",
+   "href": null
+  }
+ ]
+}

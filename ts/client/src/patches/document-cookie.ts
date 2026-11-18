@@ -1,31 +1,46 @@
-// Patch document.cookie to use the proxy's in-memory cookie store.
+// document.cookie, as page code sees it natively (spec/Cookies.agda: RFC
+// 6265bis with Chromium's choices).
 //
-// All upstream cookies are absorbed server-side into the session jar and
-// delivered to the page via the bootstrap script's $rewriter.set_cookies()
-// call, which populates the in-memory store. No cookies flow through
-// document.cookie in the browser sense — this patch makes document.cookie
-// read and write the in-memory store instead.
+// Every proxied site shares the proxy's origin, so the browser's own cookie
+// scoping cannot tell sites apart. A script-visible cookie lives in the
+// browser's own jar — a write is on the very next request, a response's
+// Set-Cookie shows here at once, tabs agree — under a wire name that carries
+// its scope (cookies/rfc.ts). Reading selects, from the jar, the cookies for
+// the page's original URL; writing reads the string as the browser would,
+// decides whether and under what scope it is stored, and writes the wire
+// form. Expiry attributes go to the browser as written: it applies its own
+// cookie-date and Max-Age rules, as natively.
 //
-// Getter: returns all non-expired cookies applicable to the current upstream
-//         pathname (RFC 6265 §5.1.4 path matching).
-// Setter: writes the cookie into the in-memory store (parse + upsert).
+// The accessor stays the native's (Document.prototype.cookie).
 
-import { getCookiesForPath, setCookie } from "../cookies/in-memory-store";
+import { getPublicSuffix } from "tldts";
+import { cookiesFor, parseSetCookie, storeCookie, wireName, wireValue } from "../cookies/rfc";
+import { wrapAccessor } from "../native/surface";
 
-export function patchDocumentCookie(
-    targetWindow: Window,
-    getCurrentPathname: () => string,
-): void {
-    const doc = targetWindow.document;
+/** d is itself a public suffix (ICANN and private registries, as Chromium). */
+export function isPublicSuffix(d: string): boolean {
+    if (d === "") return false;
+    return getPublicSuffix(d, { allowPrivateDomains: true }) === d;
+}
 
-    Object.defineProperty(doc, "cookie", {
-        get(): string {
-            return getCookiesForPath(getCurrentPathname());
+/** What a write of `value` at `url` stores in the browser's jar, or null. */
+export function nativeCookieWrite(value: string, url: URL): string | null {
+    const sc = parseSetCookie(value);
+    if (!sc) return null;
+    const c = storeCookie(true, sc.domain !== null && isPublicSuffix(sc.domain), url, sc);
+    if (!c) return null;
+    let out = `${wireName(c)}=${wireValue(c)}; Path=/`;
+    if (sc.expires !== null) out += `; Expires=${sc.expires}`;
+    if (sc.maxAge !== null) out += `; Max-Age=${sc.maxAge}`;
+    return out;
+}
+
+export function patchDocumentCookie(targetWindow: Window, baseUrl: () => URL): void {
+    wrapAccessor<string>(targetWindow.document, "cookie", {
+        get: (get, self) => cookiesFor(true, baseUrl(), get.call(self)),
+        set: (set, self, value) => {
+            const w = nativeCookieWrite(String(value), baseUrl());
+            if (w !== null) set.call(self, w);
         },
-        set(value: string): void {
-            setCookie(value as string);
-        },
-        configurable: true,
-        enumerable: true,
     });
 }

@@ -12,14 +12,11 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
 	"time"
-
-	"golang.org/x/net/publicsuffix"
 
 	"github.com/yovico/cyrano/internal/upstream"
 	"github.com/yovico/cyrano/internal/urlrewrite"
@@ -165,7 +162,7 @@ var dropOnRequest = []string{
 
 // ServeHTTP routes one proxified request.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	target, ok := urlrewrite.ParseCyranoPath(r.URL.Path, r.URL.RawQuery)
+	target, ok := urlrewrite.ParseCyranoURL(r.URL)
 	if !ok {
 		http.Error(w, "invalid /cyrano/ path", http.StatusBadRequest)
 		return
@@ -182,27 +179,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Translate any force_referer= proxy URL values back to original upstream URLs.
-	// Challenge flows (AWS WAF, Cloudflare) append force_referer= to the proxy URL;
-	// the upstream server expects the original page URL, not our proxy URL.
-	if h.opts.ProxyCfg.PublicURL != nil {
-		if q := target.Query(); q.Has("force_referer") {
-			changed := false
-			for i, v := range q["force_referer"] {
-				if u, err := url.Parse(v); err == nil &&
-					strings.EqualFold(u.Host, h.opts.ProxyCfg.PublicURL.Host) {
-					if orig, ok := urlrewrite.ParseCyranoPath(u.Path, u.RawQuery); ok {
-						q["force_referer"][i] = orig.String()
-						changed = true
-					}
-				}
-			}
-			if changed {
-				target.RawQuery = q.Encode()
-			}
-		}
-	}
-
+	// The proxy's own URLs never reach the upstream: a query value that is a
+	// proxified URL (code cyrano did not rewrite read the real location and
+	// passed it on) is replaced by the original. Every other byte of the
+	// query is left as the browser sent it.
+	target.RawQuery = urlrewrite.UnproxyQueryValues(target.RawQuery, h.opts.ProxyCfg)
 	h.serveTarget(w, r, target)
 }
 
@@ -257,6 +238,10 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		req.URL.Path = target.Path
 		req.URL.RawPath = target.RawPath
 		req.URL.RawQuery = target.RawQuery
+		req.URL.ForceQuery = target.ForceQuery
+		// RawPath holds the target's path byte for byte ("/100%.jpg"
+		// included); the upstream transport puts exactly that on the wire
+		// (upstream.RoundTripper), leaving req.URL itself an ordinary URL.
 		req.Host = target.Host
 
 		for _, h := range dropOnRequest {
@@ -280,46 +265,8 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 			*req = *req.WithContext(ctx)
 		}
 
-		// Forward only cookies that belong to this upstream. Cookies are stored
-		// under the proxy origin with a site-namespace prefix (see cookiePrefixFor
-		// and rewriteSetCookies). Filtering here prevents cross-site cookie
-		// contamination — e.g. cf_clearance from a Cloudflare-protected site
-		// leaking into a request to an Akamai-protected site where it looks
-		// suspicious. The prefix is stripped before forwarding so the upstream
-		// sees plain cookie names.
-		if cookieHeader := req.Header.Get("Cookie"); cookieHeader != "" {
-			prefix := CookiePrefixFor(target.Host)
-			var forwarded []string
-			for _, kv := range strings.Split(cookieHeader, ";") {
-				kv = strings.TrimSpace(kv)
-				if strings.HasPrefix(kv, prefix) {
-					forwarded = append(forwarded, kv[len(prefix):])
-				}
-			}
-			if len(forwarded) > 0 {
-				req.Header.Set("Cookie", strings.Join(forwarded, "; "))
-			} else {
-				req.Header.Del("Cookie")
-			}
-		}
-
-		// Inject server-side HttpOnly cookies from the jar. These were stored
-		// here on a previous response instead of being forwarded to the browser.
-		if h.opts.CookieJar != nil && sessionID != "" {
-			jarCookies := h.opts.CookieJar.RetrieveForRequest(sessionID, target.Host, target.Path)
-			if len(jarCookies) > 0 {
-				parts := make([]string, len(jarCookies))
-				for i, c := range jarCookies {
-					parts[i] = c.Name + "=" + c.Value
-				}
-				extra := strings.Join(parts, "; ")
-				if existing := req.Header.Get("Cookie"); existing != "" {
-					req.Header.Set("Cookie", existing+"; "+extra)
-				} else {
-					req.Header.Set("Cookie", extra)
-				}
-			}
-		}
+		// The cookies a direct browser would send this request (cookies.go).
+		h.upstreamCookies(req, target, sessionID)
 
 		// Advertise the same encodings a real browser sends. "gzip only" is a
 		// trivial bot fingerprint that WAFs (Akamai, Cloudflare, etc.) key on,
@@ -330,81 +277,15 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 			req.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
 		}
 
-		// Translate proxy Referer → original page URL so CDN hotlink
-		// protection sees the correct origin domain instead of localhost.
-		// The browser sends "Referer: http://proxy/cyrano/<scheme>/<host><path>"; we
-		// decode that back to the original page URL before forwarding.
-		var translatedRefOrigin string
-		if ref := req.Header.Get("Referer"); ref != "" {
-			if translated := h.translateReferer(ref); translated != "" {
-				req.Header.Set("Referer", translated)
-				if u, err := url.Parse(translated); err == nil {
-					translatedRefOrigin = u.Scheme + "://" + u.Host
-				}
-			} else if h.isProxyReferer(ref) {
-				// Referer is our proxy origin but has no /cyrano/ path
-				// (e.g. the landing page on first navigation). Strip it so
-				// the upstream doesn't see "Referer: http://localhost:9081/"
-				// and block the request as a known proxy.
-				req.Header.Del("Referer")
-			}
-		}
-
-		// Translate proxy Origin → original page origin. The browser sends
-		// "Origin: http://proxy" for cross-origin fetches made from our
-		// proxied pages (e.g. bot-challenge chal_report POSTs). The upstream
-		// server validates Origin and rejects requests with a wrong origin.
-		if origin := req.Header.Get("Origin"); origin != "" && h.isProxyOrigin(origin) {
-			if translatedRefOrigin != "" {
-				req.Header.Set("Origin", translatedRefOrigin)
-			} else {
-				// No Referer to derive the origin from — use the target's origin.
-				req.Header.Set("Origin", target.Scheme+"://"+target.Host)
-			}
-		}
-
-		// Recompute Sec-Fetch-Site against the REAL upstream origins. The browser
-		// only ever sees our single proxy origin, so it stamps every fetch
-		// same-origin (or "none" for a user-initiated top navigation). A request
-		// that is genuinely cross-site upstream — e.g. the claude.ai challenge
-		// page loading challenges.cloudflare.com's api.js or Turnstile iframe —
-		// would otherwise arrive with Sec-Fetch-Site: same-origin alongside a
-		// cross-site Origin/Referer, a combination no real browser produces and a
-		// clean proxy tell. Sec-Fetch-* are forbidden headers (JS can't set them),
-		// so the correction has to happen server-side. "none" is preserved (no
-		// initiator to compare against). Match what a direct browser would send.
-		if sfs := req.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "none" {
-			initiator := translatedRefOrigin
-			if initiator == "" {
-				if o := req.Header.Get("Origin"); o != "" && !h.isProxyOrigin(o) {
-					initiator = o
-				}
-			}
-			if site := secFetchSite(initiator, target); site != "" {
-				req.Header.Set("Sec-Fetch-Site", site)
-			}
-		}
-
-		// For Cloudflare's challenge flow specifically, re-apply the default
-		// Referrer-Policy (strict-origin-when-cross-origin) against the real
-		// upstream origins. The browser applied the policy relative to our single
-		// proxy origin — where everything is same-origin, so nothing was trimmed —
-		// so a cross-origin challenge load (claude.ai → challenges.cloudflare.com
-		// api.js / Turnstile iframe) would otherwise carry the full proxy-page URL,
-		// including the ?__cf_chl_rt_tk token, where a direct browser sends
-		// origin-only. Scoped to challenge hosts so the deliberate full-referer
-		// forwarding for CDN hotlink protection stays intact everywhere else.
-		if isCloudflareChallengeTarget(target) {
-			if ref := req.Header.Get("Referer"); ref != "" {
-				if v, keep := defaultPolicyReferer(ref, target); keep {
-					if v != ref {
-						req.Header.Set("Referer", v)
-					}
-				} else {
-					req.Header.Del("Referer")
-				}
-			}
-		}
+		// Referer, Origin and Sec-Fetch-Site as a direct browser would send
+		// them (spec/Referrer.agda). The browser computed its own against the
+		// proxy origin, where every page and resource is same-origin, so they
+		// are recomputed here from the original URLs and the referring page's
+		// own Referrer-Policy.
+		noDictionaryOffer(req)
+		h.filterClientHints(req, target, sessionID) // reads the proxied Referer: before it is replaced
+		h.directFetchHeaders(req, target)
+		ensurePriority(req, target, req.ProtoMajor < 2)
 
 		// User-Agent isn't auto-set if the request had none and the Director
 		// cleared it; keep whatever the client sent (or nothing).
@@ -418,113 +299,6 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		// to opt out.  A 127.0.0.1 XFF would expose the proxy to WAFs.
 		req.Header["X-Forwarded-For"] = nil
 	}
-}
-
-// isProxyReferer reports whether the Referer header value points at our own
-// proxy origin. Used to strip proxy-origin Referers that can't be translated
-// before they reach the upstream and expose the proxy.
-func (h *Handler) isProxyReferer(referer string) bool {
-	if h.opts.ProxyCfg.PublicURL == nil {
-		return false
-	}
-	u, err := url.Parse(referer)
-	if err != nil {
-		return false
-	}
-	return strings.EqualFold(u.Host, h.opts.ProxyCfg.PublicURL.Host)
-}
-
-// isProxyOrigin reports whether the given Origin header value is our own
-// proxy origin (scheme://host). Used to decide when to translate the Origin.
-func (h *Handler) isProxyOrigin(origin string) bool {
-	if h.opts.ProxyCfg.PublicURL == nil {
-		return false
-	}
-	u, err := url.Parse(origin)
-	if err != nil {
-		return false
-	}
-	return strings.EqualFold(u.Host, h.opts.ProxyCfg.PublicURL.Host)
-}
-
-// translateReferer decodes a proxy Referer header back to the original URL.
-// Returns "" when the Referer isn't a proxy URL or can't be decoded.
-func (h *Handler) translateReferer(referer string) string {
-	if h.opts.ProxyCfg.PublicURL == nil {
-		return ""
-	}
-	u, err := url.Parse(referer)
-	if err != nil || !strings.EqualFold(u.Host, h.opts.ProxyCfg.PublicURL.Host) {
-		return ""
-	}
-	target, ok := urlrewrite.ParseCyranoPath(u.Path, u.RawQuery)
-	if !ok {
-		return ""
-	}
-	return target.String()
-}
-
-// isCloudflareChallengeTarget reports whether target is part of Cloudflare's
-// challenge flow: the challenges.cloudflare.com widget host, or a
-// challenge-platform / turnstile path on the protected origin. Used to scope
-// challenge-specific header corrections without touching ordinary traffic.
-func isCloudflareChallengeTarget(target *url.URL) bool {
-	if strings.Contains(target.Host, "challenges.cloudflare.com") {
-		return true
-	}
-	return strings.Contains(target.Path, "/cdn-cgi/challenge-platform/") ||
-		strings.Contains(target.Path, "/turnstile/")
-}
-
-// defaultPolicyReferer re-applies the default Referrer-Policy
-// (strict-origin-when-cross-origin) to referer (an already-translated upstream
-// URL) against target, the URL the request is actually going to. Returns
-// (value, true) to send that Referer, or ("", false) to drop it entirely:
-//   - same-origin  → full URL, unchanged
-//   - cross-origin → origin only ("scheme://host/")
-//   - https→http downgrade → dropped
-//
-// The browser applied the page's policy against the single proxy origin (where
-// everything is same-origin, so nothing was trimmed); this restores what a
-// direct browser would send.
-func defaultPolicyReferer(referer string, target *url.URL) (string, bool) {
-	ru, err := url.Parse(referer)
-	if err != nil || ru.Host == "" {
-		return referer, true
-	}
-	if strings.EqualFold(ru.Scheme, target.Scheme) && strings.EqualFold(ru.Host, target.Host) {
-		return referer, true
-	}
-	if strings.EqualFold(ru.Scheme, "https") && strings.EqualFold(target.Scheme, "http") {
-		return "", false
-	}
-	return ru.Scheme + "://" + ru.Host + "/", true
-}
-
-// secFetchSite computes the Sec-Fetch-Site value a direct (un-proxied) browser
-// would send for a request from initiator (an upstream origin like
-// "https://claude.ai") to target (the upstream request URL). Returns "" when
-// the initiator can't be parsed, so the caller leaves the header untouched.
-//
-// Matches Chrome's "schemeful same-site": same-origin requires scheme+host+port
-// to match; same-site requires the same scheme and the same registrable domain
-// (eTLD+1); everything else is cross-site.
-func secFetchSite(initiator string, target *url.URL) string {
-	iu, err := url.Parse(initiator)
-	if err != nil || iu.Host == "" {
-		return ""
-	}
-	if strings.EqualFold(iu.Scheme, target.Scheme) && strings.EqualFold(iu.Host, target.Host) {
-		return "same-origin"
-	}
-	if strings.EqualFold(iu.Scheme, target.Scheme) {
-		iSite, e1 := publicsuffix.EffectiveTLDPlusOne(iu.Hostname())
-		tSite, e2 := publicsuffix.EffectiveTLDPlusOne(target.Hostname())
-		if e1 == nil && e2 == nil && strings.EqualFold(iSite, tSite) {
-			return "same-site"
-		}
-	}
-	return "cross-site"
 }
 
 // modifyResponse runs after the upstream response headers arrive and before
@@ -564,7 +338,24 @@ func (h *Handler) modifyResponse(resp *http.Response) error {
 	if h.opts.ProxyCfg.PublicURL != nil && resp.Request != nil && resp.Request.URL != nil {
 		rewriteRedirectHeader(resp, "Location", h.opts.ProxyCfg)
 		rewriteRedirectHeader(resp, "Content-Location", h.opts.ProxyCfg)
+		// Link (preload/modulepreload/prefetch hints) and Refresh carry URLs
+		// the browser fetches or navigates to on its own.
+		if vs := resp.Header.Values("Link"); len(vs) > 0 {
+			resp.Header.Del("Link")
+			for _, v := range vs {
+				resp.Header.Add("Link", urlrewrite.RewriteLinkHeader(v, resp.Request.URL, h.opts.ProxyCfg))
+			}
+		}
+		if v := resp.Header.Get("Refresh"); v != "" {
+			resp.Header.Set("Refresh", urlrewrite.RewriteRefresh(v, resp.Request.URL, h.opts.ProxyCfg))
+		}
 		h.routeSetCookies(resp)
+	}
+	if resp.Request != nil && resp.Request.URL != nil {
+		recordPagePolicy(resp, resp.Request.URL)
+		noDictionaryRegistration(resp)
+		sid, _ := resp.Request.Context().Value(SessionContextKey{}).(string)
+		recordAcceptCH(resp, resp.Request.URL, sid)
 	}
 	if h.opts.BodyRewriter != nil && resp.Request != nil && resp.Request.URL != nil {
 		// Director copied the upstream URL into resp.Request.URL — it's
@@ -574,72 +365,6 @@ func (h *Handler) modifyResponse(resp *http.Response) error {
 		}
 	}
 	return nil
-}
-
-// routeSetCookies splits upstream Set-Cookie headers between the server-side
-// session jar and the browser cookie store.
-//
-//   - HttpOnly cookies go into the session jar. They are invisible to page JS
-//     by definition, so keeping them server-side is safe and avoids polluting
-//     the browser store. The Director injects them back on outgoing requests.
-//
-//   - Non-HttpOnly cookies are prefixed (see rewriteOneCookie) and forwarded
-//     to the browser. Page JS (e.g. orchestrate.js) must be able to read these
-//     via document.cookie — if they were stored server-side JS would see empty
-//     values and construct incorrect challenge POST payloads.
-//
-// When CookieJar is nil, all cookies go through rewriteSetCookies (the
-// no-jar path that prefixes and forwards everything to the browser).
-// When a new session must be issued, a crnsct cookie is appended and the ID
-// is stashed into the request context for the body rewriter.
-func (h *Handler) routeSetCookies(resp *http.Response) {
-	if h.opts.CookieJar == nil {
-		rewriteSetCookies(resp, h.opts.ProxyCfg.PublicURL, resp.Request.URL.Host)
-		return
-	}
-
-	// Read the session ID that makeDirector stored in the request context.
-	sessionID, _ := resp.Request.Context().Value(SessionContextKey{}).(string)
-	newSession := sessionID == ""
-	if newSession {
-		sessionID = GenerateSessionID()
-		ctx := context.WithValue(resp.Request.Context(), SessionContextKey{}, sessionID)
-		resp.Request = resp.Request.WithContext(ctx)
-	}
-
-	isHTTPS := strings.EqualFold(h.opts.ProxyCfg.PublicURL.Scheme, "https")
-	prefix := CookiePrefixFor(resp.Request.URL.Host)
-
-	var forJar []*http.Cookie
-	var forBrowser []string
-	for _, raw := range resp.Header["Set-Cookie"] {
-		c := ParseSetCookieHeader(raw)
-		if c.HttpOnly {
-			forJar = append(forJar, c)
-		} else {
-			forBrowser = append(forBrowser, rewriteOneCookie(raw, isHTTPS, prefix))
-		}
-	}
-	if len(forJar) > 0 {
-		h.opts.CookieJar.StoreServerCookies(sessionID, resp.Request.URL.Host, forJar)
-	}
-	resp.Header.Del("Set-Cookie")
-	for _, raw := range forBrowser {
-		resp.Header.Add("Set-Cookie", raw)
-	}
-
-	// Issue the proxy session cookie on first contact.
-	if newSession {
-		sc := &http.Cookie{
-			Name:     h.opts.SessionCookieName,
-			Value:    sessionID,
-			Path:     "/",
-			HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
-			Secure:   isHTTPS,
-		}
-		resp.Header.Add("Set-Cookie", sc.String())
-	}
 }
 
 // rewriteRedirectHeader runs urlrewrite.Rewrite over the named header value,
@@ -654,87 +379,6 @@ func rewriteRedirectHeader(resp *http.Response, name string, cfg urlrewrite.Prox
 	if rewritten != v {
 		resp.Header.Set(name, rewritten)
 	}
-}
-
-// cookieSiteKey returns a short stable key for the eTLD+1 of host, used as
-// the cookie namespace prefix. e.g. "www.casio.com" → "casio_com".
-func cookieSiteKey(host string) string {
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-	if etld1, err := publicsuffix.EffectiveTLDPlusOne(host); err == nil {
-		return strings.ReplaceAll(etld1, ".", "_")
-	}
-	return strings.ReplaceAll(host, ".", "_")
-}
-
-// CookiePrefixFor returns the namespace prefix for cookies belonging to host.
-// Cookies are stored with this prefix in the browser so that the Director can
-// filter them back to only the originating site when forwarding requests,
-// preventing cross-site cookie contamination (e.g. cf_clearance from site A
-// being forwarded to site B's upstream).
-func CookiePrefixFor(host string) string {
-	return "__crn__" + cookieSiteKey(host) + "__"
-}
-
-// rewriteSetCookies rewrites all Set-Cookie response headers so the browser
-// accepts and stores them under the proxy origin instead of the upstream
-// domain. Specifically:
-//
-//   - Domain= is replaced with the proxy host (or removed, which defaults to
-//     the current host).
-//   - Secure is dropped when the proxy is serving plain HTTP.
-//   - SameSite=None is downgraded to SameSite=Lax when Secure is absent
-//     (browsers require Secure for SameSite=None).
-func rewriteSetCookies(resp *http.Response, publicURL *url.URL, upstreamHost string) {
-	cookies := resp.Header["Set-Cookie"]
-	if len(cookies) == 0 {
-		return
-	}
-	isHTTPS := strings.EqualFold(publicURL.Scheme, "https")
-	prefix := CookiePrefixFor(upstreamHost)
-	rewritten := make([]string, 0, len(cookies))
-	for _, raw := range cookies {
-		rewritten = append(rewritten, rewriteOneCookie(raw, isHTTPS, prefix))
-	}
-	resp.Header["Set-Cookie"] = rewritten
-}
-
-// rewriteOneCookie rewrites a single Set-Cookie header value, prefixing the
-// cookie name with namePrefix so the browser stores it namespaced to the
-// upstream site (see cookiePrefixFor). The Director strips the prefix when
-// forwarding cookies back to the same upstream on subsequent requests.
-func rewriteOneCookie(raw string, proxyIsHTTPS bool, namePrefix string) string {
-	// Split into name=value ; attr ; attr ... parts.
-	parts := strings.Split(raw, ";")
-	out := make([]string, 0, len(parts))
-	out = append(out, namePrefix+strings.TrimSpace(parts[0])) // prefix + name=value
-	hasSecure := false
-	for _, p := range parts[1:] {
-		attr := strings.TrimSpace(p)
-		lower := strings.ToLower(attr)
-		if strings.HasPrefix(lower, "domain=") {
-			// Drop the upstream domain — the browser will default to the
-			// current host (our proxy), which is what we want.
-			continue
-		}
-		if lower == "secure" {
-			if proxyIsHTTPS {
-				hasSecure = true
-				out = append(out, attr)
-			}
-			// Drop Secure on HTTP proxy — browser would reject it.
-			continue
-		}
-		if strings.HasPrefix(lower, "samesite=none") && !proxyIsHTTPS {
-			// SameSite=None requires Secure; downgrade to Lax.
-			out = append(out, "SameSite=Lax")
-			continue
-		}
-		out = append(out, attr)
-	}
-	_ = hasSecure
-	return strings.Join(out, "; ")
 }
 
 // errorHandler turns transport errors into a 502 with a useful body and

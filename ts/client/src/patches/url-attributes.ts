@@ -1,191 +1,113 @@
-// Patch the URL-bearing attribute setters on HTML element prototypes.
+// The URL-bearing IDL attributes of HTML elements (img.src, a.href,
+// form.action, …) and the URL parts anchors and areas reflect (a.host,
+// a.pathname, …), as page code sees them natively.
 //
-// The server-side HTML rewriter rewrites attributes in the *source* HTML, but
-// it can't catch later mutations made by JS:
-//   img.src = computeUrl();
-//   anchor.href = `/p/${slug}`;
-// Hooking into the prototype's setter for each known URL-bearing attribute
-// lets us intercept these dynamic assignments and rewrite the value before
-// it lands on the live DOM node.
+// Setting proxifies the value before it lands on the element (srcset: each
+// candidate's URL, the rest byte for byte — spec/Srcset.agda). Getting
+// returns the original URL: the element holds the proxified one, which is
+// unwrapped (srcset: each candidate's). Every accessor keeps its native
+// descriptor (native/surface.ts).
 //
-// Each entry below is `[ConstructorName, [attribute names...]]`. We probe
-// each constructor on globalThis at install time — missing ones (in headless
-// envs or older browsers) are silently skipped.
-//
-// patchAnchorUrlReflection (below) extends this to fix the reflected URL-part
-// properties (host, hostname, protocol, etc.) on anchor and area elements.
-// It MUST be called before patchUrlAttributes so it can capture the native
-// href getter/setter before we wrap them.
+// Known gap: natively these getters return the URL resolved against the
+// page; unwrapping gives exactly that for URLs the element resolved itself.
+// getAttribute and srcset return the text as the page *wrote* it (relative
+// URLs relative) — that needs the original text kept, a separate step.
 
 import { rewriteSrcsetAttribute } from "./srcset";
 import { URL_BEARING_ELEMENTS } from "./url-attribute-map";
+import { wrapAccessor } from "../native/surface";
+import { originalAttr, recordAttr } from "../native/originals";
 
 type ProtoLike = { prototype: object };
 
 export function patchUrlAttributes(
-    _targetWindow: Window,
+    targetWindow: Window,
     rewriteOne: (url: string) => string,
     unwrapOne: (url: string) => string = (u) => u,
 ): void {
-    const globals = globalThis as unknown as Record<string, ProtoLike | undefined>;
+    const globals = targetWindow as unknown as Record<string, ProtoLike | undefined>;
     for (const { ctorName, attrs, idlNames } of URL_BEARING_ELEMENTS) {
-        const Constructor = globals[ctorName];
-        if (!Constructor?.prototype) continue;
+        const proto = globals[ctorName]?.prototype;
+        if (!proto) continue;
         for (const attribute of attrs) {
-            // srcset is a multi-URL value; unwrapping each entry is complex
-            // and not needed for the publicPath-detection fix, so we only
-            // unwrap single-URL attributes.
-            patchAttribute(
-                Constructor.prototype,
-                attribute,
-                idlNames?.[attribute] ?? attribute,
-                rewriteOne,
-                attribute === "srcset" ? undefined : unwrapOne,
-            );
+            const srcset = attribute === "srcset";
+            wrapAccessor<unknown>(proto, idlNames?.[attribute] ?? attribute, {
+                get: (get, self) => {
+                    const v = get.call(self);
+                    if (typeof v !== "string") return v;
+                    // srcset reflects the attribute's text: the page's own.
+                    // The others are resolved URLs: the original's.
+                    if (srcset) return originalAttr(self, attribute)?.value ?? rewriteSrcsetAttribute(v, unwrapOne);
+                    return unwrapOne(v);
+                },
+                set: (set, self, value) => {
+                    // null/undefined keep their native meaning; Trusted Types
+                    // objects stringify to their URL.
+                    if (value == null) return set.call(self, value);
+                    const s = String(value);
+                    const now = srcset ? rewriteSrcsetAttribute(s, rewriteOne) : rewriteOne(s);
+                    set.call(self, now);
+                    recordAttr(self as Element, attribute, now, s);
+                },
+            });
         }
     }
 }
+
+// The URL parts anchors and areas reflect from their href.
+const PARTS_RW = ["protocol", "host", "hostname", "port", "pathname", "search", "hash", "username", "password"] as const;
+const PARTS_RO = ["origin"] as const;
 
 /**
- * Patches the reflected URL-part properties on HTMLAnchorElement and
- * HTMLAreaElement so they read and write values derived from the *upstream* URL
- * rather than the proxified URL our href setter stores.
- *
- * A common pattern for URL decomposition is:
- *   var a = document.createElement("a");
- *   a.href = someUrl;           // our setter runs, proxifies the value
- *   var host = a.host;          // without this patch: returns proxy host!
- *
- * We intercept each getter and setter, read the raw stored href via the native
- * getter (before our href-rewrite patch), unwrap it to the original URL, then
- * delegate to URL to extract or modify the requested component.
- *
- * MUST be called before patchUrlAttributes — it captures the native href
- * getter/setter; if patchUrlAttributes has already wrapped them, we'd be
- * operating on already-processed values.
+ * a.host, a.pathname, … read and write the parts of the original URL.
+ * Must run before patchUrlAttributes, so that it reaches the native href.
  */
 export function patchAnchorUrlReflection(
+    targetWindow: Window,
     unwrapOne: (url: string) => string,
     rewriteOne: (url: string) => string,
 ): void {
+    const globals = targetWindow as unknown as Record<string, ProtoLike | undefined>;
     for (const ctorName of ["HTMLAnchorElement", "HTMLAreaElement"]) {
-        const ctor = (globalThis as unknown as Record<string, { prototype: object } | undefined>)[ctorName];
-        if (!ctor?.prototype) continue;
-        patchReflectedUrlProps(ctor.prototype, unwrapOne, rewriteOne);
-    }
-}
-
-// Mutable URL-part properties that anchor/area elements reflect from their href.
-const REFLECTED_URL_PROPS_RW = [
-    "protocol", "host", "hostname", "port",
-    "pathname", "search", "hash", "username", "password",
-] as const;
-
-// origin is read-only on the URL interface — no setter to wrap.
-const REFLECTED_URL_PROPS_RO = ["origin"] as const;
-
-function patchReflectedUrlProps(
-    prototype: object,
-    unwrapOne: (url: string) => string,
-    rewriteOne: (url: string) => string,
-): void {
-    const hrefDesc = Object.getOwnPropertyDescriptor(prototype, "href");
-    if (!hrefDesc?.get || !hrefDesc?.set) return;
-    // Capture BEFORE patchUrlAttributes wraps them — we need the native
-    // getter/setter to read/write the raw proxified href on the DOM node.
-    const nativeHrefGet = hrefDesc.get;
-    const nativeHrefSet = hrefDesc.set;
-
-    const roSet = new Set<string>(REFLECTED_URL_PROPS_RO);
-    for (const prop of [...REFLECTED_URL_PROPS_RW, ...REFLECTED_URL_PROPS_RO]) {
-        const desc = Object.getOwnPropertyDescriptor(prototype, prop);
-        if (!desc?.get) continue;
-        const nativeGet = desc.get;
-        const nativeSet = desc.set;
-
-        const propDescriptor: PropertyDescriptor = {
-            configurable: true,
-            enumerable: desc.enumerable ?? false,
-            get(): unknown {
-                const rawHref = nativeHrefGet.call(this) as string;
-                if (!rawHref) return nativeGet.call(this);
-                const unwrapped = unwrapOne(rawHref);
-                // If unwrap was a no-op (URL isn't a proxy URL) fall through.
-                if (unwrapped === rawHref) return nativeGet.call(this);
-                try {
-                    return new URL(unwrapped)[prop] as unknown;
-                } catch {
-                    return nativeGet.call(this);
-                }
-            },
+        const proto = globals[ctorName]?.prototype;
+        if (!proto) continue;
+        const hrefDesc = findDescriptor(proto, "href");
+        if (!hrefDesc?.get || !hrefDesc.set) continue;
+        const hrefGet = hrefDesc.get;
+        const hrefSet = hrefDesc.set;
+        // The original URL behind this element's href, or null when its href
+        // is not a proxified URL (then the native part is the right answer).
+        const original = (self: unknown): URL | null => {
+            const raw = hrefGet.call(self) as string;
+            if (!raw) return null;
+            const o = unwrapOne(raw);
+            if (o === raw) return null;
+            try { return new URL(o); } catch { return null; }
         };
-
-        if (nativeSet && !roSet.has(prop)) {
-            // Setter: modify the upstream URL component, then re-proxify and
-            // write back via the native href setter.
-            propDescriptor.set = function(value: unknown): void {
-                const rawHref = nativeHrefGet.call(this) as string;
-                if (!rawHref) { nativeSet.call(this, value); return; }
-                const unwrapped = unwrapOne(rawHref);
-                if (unwrapped === rawHref) {
-                    // Not a proxified URL — delegate to native setter directly.
-                    nativeSet.call(this, value);
-                    return;
-                }
-                try {
-                    const u = new URL(unwrapped);
-                    (u as unknown as Record<string, unknown>)[prop] = value;
-                    nativeHrefSet.call(this, rewriteOne(u.href));
-                } catch {
-                    nativeSet.call(this, value);
-                }
-            };
-        } else if (nativeSet) {
-            propDescriptor.set = nativeSet;
+        for (const part of [...PARTS_RW, ...PARTS_RO]) {
+            const readOnly = (PARTS_RO as readonly string[]).includes(part);
+            wrapAccessor<string>(proto, part, {
+                get: (get, self) => {
+                    const u = original(self);
+                    return u ? (u[part] as string) : get.call(self);
+                },
+                ...(readOnly ? {} : {
+                    set: (set: (this: unknown, v: string) => void, self: unknown, value: string) => {
+                        const u = original(self);
+                        if (!u) return set.call(self, value);
+                        (u as unknown as Record<string, unknown>)[part] = value;
+                        hrefSet.call(self, rewriteOne(u.href));
+                    },
+                }),
+            });
         }
-
-        Object.defineProperty(prototype, prop, propDescriptor);
     }
 }
 
-function patchAttribute(
-    prototype: object,
-    attribute: string,
-    idlAttr: string,
-    rewriteOne: (url: string) => string,
-    unwrapOne: ((url: string) => string) | undefined,
-): void {
-    const descriptor = Object.getOwnPropertyDescriptor(prototype, idlAttr);
-    if (!descriptor?.set || !descriptor?.get) return;
-    const originalSet = descriptor.set;
-    const originalGet = descriptor.get;
-
-    Object.defineProperty(prototype, idlAttr, {
-        configurable: true,
-        enumerable: descriptor.enumerable ?? false,
-        get(): unknown {
-            const raw = originalGet.call(this) as unknown;
-            // Unwrap so page code (e.g. webpack reading document.currentScript.src
-            // to auto-detect publicPath) sees the original URL, not the proxy URL.
-            if (unwrapOne && typeof raw === "string") return unwrapOne(raw);
-            return raw;
-        },
-        set(value: unknown): void {
-            // null/undefined clear the attribute — pass through verbatim.
-            // TrustedTypes objects (TrustedScriptURL, TrustedHTML, etc.) coerce
-            // to their wrapped URL string via String(); pass them through the
-            // rewrite path so GTM/GTags can't escape URL containment by handing
-            // the setter a TrustedScriptURL instead of a plain string.
-            if (value == null) {
-                originalSet.call(this, value);
-                return;
-            }
-            const strValue = typeof value === "string" ? value : String(value);
-            if (attribute === "srcset") {
-                originalSet.call(this, rewriteSrcsetAttribute(strValue, rewriteOne));
-            } else {
-                originalSet.call(this, rewriteOne(strValue));
-            }
-        },
-    });
+function findDescriptor(o: object, key: string): PropertyDescriptor | undefined {
+    for (let p: object | null = o; p; p = Object.getPrototypeOf(p) as object | null) {
+        const d = Object.getOwnPropertyDescriptor(p, key);
+        if (d) return d;
+    }
+    return undefined;
 }

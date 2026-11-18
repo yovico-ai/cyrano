@@ -1,46 +1,23 @@
-// Patch `XMLHttpRequest.prototype.open` so XHR URL arguments get proxified,
-// and `responseURL` so page code sees the upstream URL after redirection.
-//
-// `xhr.open(method, url, async?, user?, password?)` — we only touch the URL
-// argument, all other arguments pass through with the original arity.
+// XMLHttpRequest.prototype.open and .responseURL, as page code sees them
+// natively. open(method, url, …): only the URL is proxified; the receiver
+// and the arity reach the native unchanged. responseURL reads back the
+// original URL.
 
-import { getGlobal } from "./globals";
+import { wrapAccessor, wrapMethod } from "../native/surface";
 
 export function patchXmlHttpRequest(
-    _targetWindow: Window,
+    targetWindow: Window,
     rewriteOne: (url: string) => string,
     unwrapOne: (url: string) => string,
 ): void {
-    const XHR = getGlobal<{ prototype: XMLHttpRequest }>("XMLHttpRequest");
+    const XHR = (targetWindow as unknown as { XMLHttpRequest?: { prototype: XMLHttpRequest } }).XMLHttpRequest;
     if (!XHR?.prototype) return;
-
     const proto = XHR.prototype;
-    const originalOpen = proto.open;
-
-    proto.open = function patchedOpen(
-        this: XMLHttpRequest,
-        method: string,
-        url: string | URL,
-        ...rest: unknown[]
-    ): void {
-        const rawUrl = typeof url === "string" ? url : String(url);
-        const proxified = rewriteOne(rawUrl);
-        return (originalOpen as (...args: unknown[]) => void).call(
-            this,
-            method,
-            proxified,
-            ...rest,
-        );
-    } as typeof proto.open;
-
-    const responseURLDesc = Object.getOwnPropertyDescriptor(proto, "responseURL");
-    if (responseURLDesc?.get) {
-        const nativeGet = responseURLDesc.get;
-        Object.defineProperty(proto, "responseURL", {
-            ...responseURLDesc,
-            get(): string {
-                return unwrapOne(nativeGet.call(this) as string);
-            },
-        });
-    }
+    wrapMethod<(...a: unknown[]) => void>(proto, "open", (native, self, args) => {
+        if (args.length < 2) return Reflect.apply(native, self, args) as void; // the native's own TypeError
+        const next = args.slice();
+        next[1] = rewriteOne(String(args[1]));
+        return Reflect.apply(native, self, next) as void;
+    });
+    wrapAccessor<string>(proto, "responseURL", { get: (get, self) => unwrapOne(get.call(self)) });
 }

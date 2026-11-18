@@ -1,75 +1,51 @@
-// Patches History.prototype.pushState and History.prototype.replaceState so
-// that URL arguments pointing at the upstream origin are rewritten to the
-// proxy form before being handed to the browser.
+// History.prototype.pushState / replaceState, as page code sees them
+// natively.
 //
-// Without this patch, code like:
-//   history.replaceState(null, '', 'https://original.com/page')
-// throws a SecurityError because the URL is cross-origin relative to the
-// proxy window (http://localhost:9081).
-//
-// The URL argument may be null/undefined (leave the address bar unchanged),
-// an absolute URL, or a relative path. Null/undefined is passed through
-// unchanged; everything else is rewritten.
+// The URL argument is resolved against the page's original URL and
+// proxified. Natively a URL of another origin throws a SecurityError; under
+// cyrano every proxified URL is on the proxy origin, so that check is made
+// here against the original origins, with Chromium's message. After the
+// native call the page's base URL follows the real location — for every
+// change, a "#fragment" one included.
+
+import { wrapMethod } from "../native/surface";
 
 export function patchHistory(
     targetWindow: Window,
     rewriteOne: (url: string) => string,
     setBaseUrl: (href: string) => void,
     unwrapOne: (proxied: string) => string,
+    baseUrl: () => URL,
 ): void {
-    const proto = targetWindow.history;
-    if (!proto) return;
-
-    // Capture the real Location object now, before patchWindowLocation later
-    // overrides window.location. The native Location.href is a live getter so
-    // realLocation.href always returns the actual browser URL even after the
-    // override — we rely on this in the popstate handler.
+    const H = (targetWindow as unknown as { History?: { prototype: History } }).History;
+    if (!H?.prototype) return;
     const realLocation = targetWindow.location;
-
-    const origPushState = History.prototype.pushState.bind(proto);
-    const origReplaceState = History.prototype.replaceState.bind(proto);
-
-    // Rewrite the URL arg and update baseUrlState so window.location.pathname
-    // reads back the correct upstream path after SPA navigation.
-    function rewriteAndUpdate(url: string | URL | null | undefined): string | null | undefined {
-        if (url == null) return url;
-        const raw = url instanceof URL ? url.href : String(url);
-        const proxified = rewriteOne(raw);
-        // Decode the proxified URL to recover the original upstream URL and
-        // store it in baseUrlState so subsequent window.location reads are
-        // correct.  If rewriteOne left the URL unchanged (fragment-only,
-        // non-proxifiable scheme, etc.) skip the update.
-        if (proxified !== raw) {
-            const original = unwrapOne(proxified);
-            if (original !== proxified) {
-                setBaseUrl(original);
+    const Dom = (targetWindow as unknown as { DOMException: typeof DOMException }).DOMException;
+    const follow = (): void => {
+        const original = unwrapOne(realLocation.href);
+        if (original !== realLocation.href) setBaseUrl(original);
+    };
+    for (const name of ["pushState", "replaceState"] as const) {
+        wrapMethod<(...a: unknown[]) => void>(H.prototype, name, (native, self, args) => {
+            if (args.length < 3 || args[2] == null) return Reflect.apply(native, self, args) as void;
+            const raw = String(args[2]);
+            const base = baseUrl();
+            let target: URL | null = null;
+            try { target = new URL(raw, base); } catch { /* the native's own error below */ }
+            // A URL already on the proxy is cyrano's own (read back from the
+            // real location by code cyrano did not rewrite): passed through.
+            if (target && target.origin !== base.origin && unwrapOne(target.href) === target.href) {
+                throw new Dom(
+                    `Failed to execute '${name}' on 'History': A history state object with URL '${target.href}' ` +
+                    `cannot be created in a document with origin '${base.origin}' and URL '${base.href}'.`,
+                    "SecurityError");
             }
-        }
-        return proxified;
+            const next = args.slice();
+            next[2] = target ? rewriteOne(raw) : raw;
+            Reflect.apply(native, self, next);
+            follow();
+        });
     }
-
-    History.prototype.pushState = function patchedPushState(
-        data: unknown,
-        unused: string,
-        url?: string | URL | null,
-    ): void {
-        origPushState(data, unused, rewriteAndUpdate(url));
-    };
-
-    History.prototype.replaceState = function patchedReplaceState(
-        data: unknown,
-        unused: string,
-        url?: string | URL | null,
-    ): void {
-        origReplaceState(data, unused, rewriteAndUpdate(url));
-    };
-
-    // Keep baseUrlState in sync when the user navigates back/forward.
-    targetWindow.addEventListener("popstate", () => {
-        const proxyHref = realLocation.href;
-        const original = unwrapOne(proxyHref);
-        if (original !== proxyHref) {
-            setBaseUrl(original);
-        }
-    });
+    targetWindow.addEventListener("popstate", follow);
+    targetWindow.addEventListener("hashchange", follow);
 }

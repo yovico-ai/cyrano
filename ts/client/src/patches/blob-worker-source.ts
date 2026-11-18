@@ -1,71 +1,85 @@
-// Patches the global `Blob` constructor to rewrite JS-typed content before
-// it can become a Worker's source.
+// Worker scripts built from Blobs get their own $rewriter — without
+// touching the page's Blob.
 //
 // Anti-bot challenge scripts (Cloudflare's included) commonly run their
 // fingerprinting logic in a Worker built like:
 //
 //   new Worker(URL.createObjectURL(new Blob([src], {type: "text/javascript"})))
 //
-// `patches/worker.ts` already proxifies the *URL argument* of `new Worker(...)`,
-// but that's a no-op for `blob:` URLs (they aren't proxy-routable — the
-// content is already in-memory) and doesn't help even for http(s) worker
-// URLs, because nothing installs `$rewriter` inside the *worker's own* global
-// scope: `window`-level prototype patches never apply there, a Worker is a
-// separate JS realm. Per spec, a `blob:` worker's relative-path fetch/XHR
-// calls resolve against the *creating page's origin* — the proxy's own
-// origin here — which is exactly why un-rewritten worker fetches show up as
-// bare, un-prefixed requests on the proxy's own listener instead of being
-// routed to the upstream.
+// A Worker is a separate realm: window-level patches never apply there, and
+// a blob: worker's relative fetch/XHR resolve against the proxy origin. Its
+// source must be rewritten and preceded by the worker runtime.
 //
-// The fix has to happen here, synchronously, at Blob-construction time:
-// `new Worker(url)` must return synchronously, so there's no window to do an
-// async fetch-then-rewrite-then-construct dance after the fact (and blob:
-// URLs can only be read back asynchronously anyway). The Blob constructor,
-// by contrast, receives the source as a plain string synchronously — so we
-// rewrite it right there, before it's ever wrapped in a URL.
+// The page cannot tell (REQUIREMENTS.md), so the page's own Blob stays
+// exactly as the page made it — its size, text() and any hash of it are
+// native. Instead:
+//   * the Blob constructor only records the source of a JS-typed Blob made
+//     of strings (the Blob returned is the native one);
+//   * URL.createObjectURL maps the object URL to that source;
+//     URL.revokeObjectURL forgets it;
+//   * new Worker(thatURL) is given a private object URL whose Blob holds the
+//     worker runtime preamble and the rewritten source (workerScriptFor).
 //
-// Non-string parts (ArrayBuffer, TypedArray, nested Blob) are left untouched
-// — we can't safely treat arbitrary binary content as JS source text.
+// Non-string parts (ArrayBuffer, TypedArray, nested Blob) are not recorded —
+// arbitrary binary content can't safely be treated as JS source text.
+//
+// Known gap: the object URL's origin is the proxy's (blob:http://proxy/…)
+// where natively it is the site's; translating blob: URLs is a follow-up.
 import type { ClientConfig } from "../config";
-import { getGlobal, setGlobal } from "./globals";
 import { rewriteJsSource, defaultJsRewriteOptions } from "../js/rewriter";
+import { wrapConstructor, wrapMethod } from "../native/surface";
 
-type BlobCtor = new (parts?: BlobPart[], options?: BlobPropertyBag) => Blob;
+export type WorkerScriptFor = (url: string, module: boolean) => string | undefined;
 
 export function patchBlobWorkerSource(
+    targetWindow: Window,
     config: ClientConfig,
     getCurrentBaseUrl: () => URL,
-): void {
-    const NativeBlob = getGlobal<BlobCtor>("Blob");
-    if (!NativeBlob) return;
-    const Native = NativeBlob;
-
-    function PatchedBlob(
-        this: unknown,
-        parts?: BlobPart[],
-        options?: BlobPropertyBag,
-    ): Blob {
-        if (isJsLikeType(options?.type) && parts && allStrings(parts)) {
-            const source = (parts as string[]).join("");
-            const rewritten = rewriteJsSource(source, defaultJsRewriteOptions());
-            const preamble = buildWorkerPreamble(config, getCurrentBaseUrl().href);
-            return new Native([preamble, rewritten], options);
+): WorkerScriptFor {
+    const w = targetWindow as unknown as { URL?: typeof URL; Blob?: typeof Blob };
+    const sources = new WeakMap<object, { source: string; type: string }>();
+    const byUrl = new Map<string, { source: string; type: string }>();
+    const privateUrl = new Map<string, string>();
+    const NativeBlob = wrapConstructor<typeof Blob>(targetWindow, "Blob", (Native, args, newTarget) => {
+        const blob = Reflect.construct(Native, args, newTarget as typeof Blob);
+        const [parts, options] = args as [unknown, BlobPropertyBag | undefined];
+        const type = options?.type;
+        if (isJsLikeType(type) && Array.isArray(parts) && parts.every((p) => typeof p === "string")) {
+            sources.set(blob, { source: (parts as string[]).join(""), type: type! });
         }
-        return new Native(parts, options);
-    }
-    PatchedBlob.prototype = Native.prototype;
-
-    setGlobal("Blob", PatchedBlob);
+        return blob;
+    });
+    const URLs = w.URL;
+    if (!NativeBlob || !URLs) return () => undefined;
+    const nativeCreate = wrapMethod<(o: object) => string>(URLs, "createObjectURL", (native, self, args) => {
+        const url = Reflect.apply(native, self, args) as string;
+        const src = sources.get(args[0]);
+        if (src) byUrl.set(url, src);
+        return url;
+    });
+    wrapMethod<(u: string) => void>(URLs, "revokeObjectURL", (native, self, args) => {
+        byUrl.delete(String(args[0]));
+        return Reflect.apply(native, self, args) as void;
+    });
+    return (url, module) => {
+        const src = byUrl.get(url);
+        if (!src || !nativeCreate) return undefined;
+        const key = `${module ? "m" : "c"} ${url}`;
+        let priv = privateUrl.get(key);
+        if (!priv) {
+            const body = buildWorkerPreamble(config, getCurrentBaseUrl().href, module) +
+                rewriteJsSource(src.source, defaultJsRewriteOptions());
+            priv = Reflect.apply(nativeCreate, URLs, [new NativeBlob([body], { type: src.type })]) as string;
+            privateUrl.set(key, priv);
+        }
+        return priv;
+    };
 }
 
 function isJsLikeType(type: string | undefined): boolean {
     if (!type) return false;
     const t = type.toLowerCase();
     return t.includes("javascript") || t.includes("ecmascript");
-}
-
-function allStrings(parts: BlobPart[]): parts is string[] {
-    return parts.every((p) => typeof p === "string");
 }
 
 /**
@@ -77,8 +91,14 @@ function allStrings(parts: BlobPart[]): parts is string[] {
  * it, which is a known limitation: a module-worker's own fetch/XHR calls
  * won't get proxified by this path.
  */
-function buildWorkerPreamble(config: ClientConfig, hrefAtCreation: string): string {
+function buildWorkerPreamble(config: ClientConfig, hrefAtCreation: string, module: boolean): string {
     const rewriterJsUrl = config.apiBaseURL + config.source;
+    // A module worker has no importScripts and evaluates its imports first:
+    // the server's init module (Go server.WorkerInitPath) runs the same
+    // preamble as its first import.
+    if (module) {
+        return `import ${JSON.stringify(`${config.apiBaseURL}/cyrano-worker-init.js?u=${encodeURIComponent(hrefAtCreation)}`)};\n`;
+    }
     return (
         `importScripts(${JSON.stringify(rewriterJsUrl)});` +
         `self.$rewriter=self.$rewriter_init_worker(${JSON.stringify(config)},${JSON.stringify(hrefAtCreation)});` +

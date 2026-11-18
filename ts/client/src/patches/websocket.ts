@@ -1,59 +1,53 @@
-// Patch the `WebSocket` constructor so dynamic WS connections go through the
-// proxy.
+// new WebSocket(url, protocols) and WebSocket.prototype.url, as page code
+// sees them natively: the constructor is the native's (statics, prototype,
+// "use the 'new' operator" TypeError, subclassing) with only the URL
+// proxified; url reads back the original.
 //
-// We can't subclass WebSocket — its constructor must be invoked with `new`
-// and produces native handles that browsers special-case. Instead we replace
-// the global with a function that delegates to the native ctor with a
-// rewritten URL, then preserve the prototype + static class constants.
+// A WebSocket handshake carries no Referer, so the server cannot know which
+// page opened the socket, and with it the Origin a direct browser would
+// send. The proxied URL therefore names the page's origin in a reserved
+// last query parameter (Go urlrewrite.WSOriginParam), which the server
+// strips before the upstream sees the URL and which url never shows.
 
-import { getGlobal, setGlobal } from "./globals";
+import { wrapAccessor, wrapConstructor } from "../native/surface";
 
-interface WebSocketConstants {
-    CONNECTING: number;
-    OPEN: number;
-    CLOSING: number;
-    CLOSED: number;
+export const WS_ORIGIN_PARAM = "__cyrano_ws_origin";
+
+/** Appends the origin marker to a proxied WebSocket URL. */
+export function withPageOrigin(proxied: string, pageOrigin: string): string {
+    if (proxied.includes("#")) return proxied; // the native rejects a fragment itself
+    const sep = proxied.includes("?") ? "&" : "?";
+    return `${proxied}${sep}${WS_ORIGIN_PARAM}=${encodeURIComponent(pageOrigin)}`;
 }
 
-type WebSocketCtor = new (
-    url: string | URL,
-    protocols?: string | string[],
-) => WebSocket;
+/** Removes the marker: exactly the inverse of withPageOrigin. */
+export function withoutPageOrigin(url: string): string {
+    const m = new RegExp(`([?&])${WS_ORIGIN_PARAM}=[^&#]*$`).exec(url);
+    return m ? url.slice(0, m.index) : url;
+}
 
 export function patchWebSocket(
-    _targetWindow: Window,
+    targetWindow: Window,
     rewriteOne: (url: string) => string,
     unwrapOne: (url: string) => string,
+    pageOrigin: () => string = () => "",
 ): void {
-    const NativeWebSocket = getGlobal<WebSocketCtor & WebSocketConstants>("WebSocket");
-    if (!NativeWebSocket) return;
-    const Native = NativeWebSocket;
-
-    function PatchedWebSocket(
-        this: unknown,
-        url: string | URL,
-        protocols?: string | string[],
-    ): WebSocket {
-        const rawUrl = typeof url === "string" ? url : String(url);
-        return new Native(rewriteOne(rawUrl), protocols);
-    }
-    PatchedWebSocket.prototype = Native.prototype;
-    Object.assign(PatchedWebSocket, {
-        CONNECTING: Native.CONNECTING,
-        OPEN: Native.OPEN,
-        CLOSING: Native.CLOSING,
-        CLOSED: Native.CLOSED,
+    const native = wrapConstructor<typeof WebSocket>(targetWindow, "WebSocket", (Native, args, newTarget) => {
+        if (!args.length) return Reflect.construct(Native, args, newTarget as typeof WebSocket);
+        const raw = String(args[0]);
+        const proxied = rewriteOne(raw);
+        const origin = pageOrigin();
+        const url = proxied !== raw && origin ? withPageOrigin(proxied, origin) : proxied;
+        return Reflect.construct(Native, [url, ...args.slice(1)], newTarget as typeof WebSocket);
     });
-
-    setGlobal("WebSocket", PatchedWebSocket);
-
-    const urlDesc = Object.getOwnPropertyDescriptor(Native.prototype, "url");
-    if (urlDesc?.get) {
-        const nativeGet = urlDesc.get;
-        Object.defineProperty(Native.prototype, "url", {
-            ...urlDesc,
-            get(): string {
-                return unwrapOne(nativeGet.call(this) as string);
+    if (native) {
+        wrapAccessor<string>(native.prototype, "url", {
+            get: (get, self) => {
+                const real = get.call(self);
+                const bare = withoutPageOrigin(real);
+                const original = unwrapOne(bare);
+                // Only a URL cyrano proxified carries cyrano's marker.
+                return original === bare ? real : original;
             },
         });
     }

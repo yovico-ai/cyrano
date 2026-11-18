@@ -37,16 +37,6 @@ var resolvableSchemes = map[string]bool{
 	"wss:":   true,
 }
 
-// passthroughPrefixes mirrors the JS rewriter's quick-bail list. Lowercased.
-var passthroughPrefixes = []string{
-	"javascript:",
-	"data:",
-	"blob:",
-	"mailto:",
-	"tel:",
-	"about:",
-}
-
 // APIBase returns the proxy origin (scheme://host[:port]) the page should hit.
 // This is just cfg.PublicURL serialized — there's exactly one proxy origin
 // regardless of the target's scheme.
@@ -57,191 +47,230 @@ func APIBase(cfg ProxyConfig) string {
 	return cfg.PublicURL.Scheme + "://" + cfg.PublicURL.Host
 }
 
-// IsProxyHost reports whether u points at our public origin (scheme + host
-// must both match). Default ports (80/443) are normalized so an explicit
-// port matches an implicit one.
+// OnProxy reports whether href, read as the browser reads it, is on the
+// proxy's public origin: same scheme, host and port (spec sameOrigin —
+// userinfo is not part of an origin, a default port is no port).
+func OnProxy(href string, cfg ProxyConfig) bool {
+	a, res := parseRef(nil, preprocess(href))
+	proxy, pres := parseRef(nil, APIBase(cfg))
+	return res == parsedURL && pres == parsedURL &&
+		a.scheme == proxy.scheme && hostPort(a.auth) == hostPort(proxy.auth)
+}
+
+// IsProxyHost is OnProxy for a parsed URL.
 func IsProxyHost(u *url.URL, cfg ProxyConfig) bool {
-	if u == nil || cfg.PublicURL == nil {
-		return false
-	}
-	if u.Scheme != cfg.PublicURL.Scheme {
-		return false
-	}
-	return effectiveHost(u) == effectiveHost(cfg.PublicURL)
+	return u != nil && cfg.PublicURL != nil && OnProxy(u.String(), cfg)
 }
 
-// effectiveHost returns host:port with default ports made explicit, so
-// `https://example.com` and `https://example.com:443` compare equal.
-func effectiveHost(u *url.URL) string {
-	host := u.Hostname()
-	port := u.Port()
-	if port == "" {
-		switch u.Scheme {
-		case "https":
-			port = "443"
-		case "http":
-			port = "80"
-		}
-	}
-	if port == "" {
-		return host
-	}
-	return host + ":" + port
-}
-
-// IsAlreadyProxified is true when u is on the proxy host AND the path starts
-// with /cyrano/ — i.e. some upstream step already rewrote it. Avoids the
-// catastrophic "double-rewrite" case.
+// IsAlreadyProxified is true when u is on the proxy under /cyrano/ — what
+// proxify produced (spec underCyrano). Avoids wrapping twice.
 func IsAlreadyProxified(u *url.URL, cfg ProxyConfig) bool {
 	if !IsProxyHost(u, cfg) {
 		return false
 	}
-	return strings.HasPrefix(u.Path, "/cyrano/")
+	a, res := parseRef(nil, preprocess(u.String()))
+	return res == parsedURL && len(a.path) >= 2 && a.path[0] == "cyrano"
 }
 
-// ParseCyranoPath parses a /cyrano/<scheme>/<host><path> URL path and raw
-// query string back into the original target URL. Returns (target, true) on
-// success, (nil, false) when the path is not a valid cyrano path.
-func ParseCyranoPath(urlPath, rawQuery string) (*url.URL, bool) {
+// ParseCyranoURL reads a request URL on the proxy — /cyrano/<scheme>/<host><path>
+// — back into the target it names. Returns (target, true) on success,
+// (nil, false) when it is not a cyrano path.
+//
+// The upstream gets the request the browser would have sent directly:
+//   - the path is the target's own text, so /a%2Fb stays /a%2Fb upstream
+//     (RawPath holds it exactly — see UpstreamPath — and Path its
+//     decoded form where there is one);
+//   - a bare "?" survives (ForceQuery);
+//   - the host segment is read as the browser reads an authority, the same
+//     reader Unwrap uses (H.com:443 is h.com, ".:" is "."). Userinfo goes to
+//     target.User, never into Host: it is part of the page's URL (relative
+//     URLs on the page inherit it) but the Director does not forward it.
+func ParseCyranoURL(u *url.URL) (*url.URL, bool) {
 	const prefix = "/cyrano/"
-	if !strings.HasPrefix(urlPath, prefix) {
+	// The decoded path is the target's text exactly: proxify writes every
+	// '%' of it as %25 (spec escape), so decoding gives back "%2F" as
+	// "%2F" and "/100%.jpg" as itself.
+	dec := u.Path
+	if !strings.HasPrefix(dec, prefix) {
 		return nil, false
 	}
-	rest := urlPath[len(prefix):]
-
-	// First segment: scheme (everything before first '/').
-	idx := strings.Index(rest, "/")
-	if idx < 0 {
+	scheme, rest, ok := strings.Cut(dec[len(prefix):], "/")
+	if !ok || scheme == "" {
 		return nil, false
 	}
-	scheme := rest[:idx]
-	rest = rest[idx+1:]
-
-	// Second segment: host (everything before next '/').
-	idx = strings.Index(rest, "/")
-	var host, path string
-	if idx < 0 {
-		host = rest
-		path = "/"
-	} else {
-		host = rest[:idx]
-		path = rest[idx:]
+	seg, path := rest, "/"
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		seg, path = rest[:i], rest[i:]
 	}
-	if host == "" || scheme == "" {
+	if seg == "" {
 		return nil, false
 	}
-	return &url.URL{
-		Scheme:   scheme,
-		Host:     host,
-		Path:     path,
-		RawQuery: rawQuery,
-	}, true
+	target := &url.URL{Scheme: scheme, RawQuery: u.RawQuery, ForceQuery: u.ForceQuery}
+	target.Path, target.RawPath = path, path
+	if p, err := url.PathUnescape(path); err == nil {
+		target.Path = p
+	}
+	if _, proxifiable := defaultPort[scheme]; !proxifiable {
+		return nil, false
+	}
+	auth, after, res := authority(scheme, []rune(seg))
+	if res != parsedURL || len(after) != 0 {
+		return nil, false
+	}
+	if at := strings.LastIndexByte(auth, '@'); at >= 0 {
+		ui := auth[:at]
+		auth = auth[at+1:]
+		name, pass, hasPass := strings.Cut(ui, ":")
+		name, _ = url.PathUnescape(name)
+		pass, _ = url.PathUnescape(pass)
+		if hasPass {
+			target.User = url.UserPassword(name, pass)
+		} else {
+			target.User = url.User(name)
+		}
+	}
+	target.Host = auth
+	return target, true
 }
 
-// Rewrite returns the proxified form of rawURL.
+// ParseCyranoPath is ParseCyranoURL for a decoded path and raw query
+// given apart.
+func ParseCyranoPath(urlPath, rawQuery string) (*url.URL, bool) {
+	return ParseCyranoURL(&url.URL{Path: urlPath, RawQuery: rawQuery})
+}
+
+// UpstreamPath is the path to put on the wire for a target from
+// ParseCyranoURL — its text exactly — or "" when net/url's own escaping
+// must serve (a path starting "//", which as URL.Opaque would be read as
+// an authority).
+func UpstreamPath(target *url.URL) string {
+	p := target.RawPath
+	if p == "" || strings.HasPrefix(p, "//") {
+		return ""
+	}
+	return p
+}
+
+// escapePct writes every '%' as %25 (spec/Containment.agda escapePct).
+func escapePct(s string) string { return strings.ReplaceAll(s, "%", "%25") }
+
+// ProxifiedPath is the /cyrano/… path for a target given as scheme, host
+// (with any userinfo, as written in a URL) and escaped path — the one
+// place outside Rewrite that may build a proxified path, so the %25 rule
+// (spec escapePct) and the ".:" host form (segmentOf) always hold.
+func ProxifiedPath(scheme, host, escapedPath string) string {
+	if escapedPath == "" {
+		escapedPath = "/"
+	}
+	return "/cyrano/" + scheme + "/" + escapePct(segmentOf(host)) + escapePct(escapedPath)
+}
+
+// EscapePct is escapePct, for code that appends a target path to an
+// already-built proxified prefix.
+func EscapePct(s string) string { return escapePct(s) }
+
+// Rewrite returns the proxified form of rawURL, as spec/Containment.agda
+// decides it (rewriteUrl).
 //
 // rawURL may be absolute, protocol-relative ("//host/..."), or relative; it's
 // resolved against baseURL the way a browser would. baseURL is the page's
 // original URL (the one the user is browsing on), not the proxy URL.
 //
-// Returns rawURL unchanged when:
-//   - rawURL starts with '#' (in-page anchor)
-//   - rawURL has a non-resolvable scheme (mailto:, data:, ...)
-//   - rawURL fails to parse against baseURL
-//   - the resolved URL is already on the proxy with a /cyrano/ path
-//
-// Returns the resolved absolute URL unchanged when it points directly at the
-// proxy host without a /cyrano/ path (already a same-origin request — leave
-// it alone).
+// Returns rawURL exactly as given (owner, 2026-11-17: "exact input") when
+// it is empty, an in-page anchor, of a scheme cyrano does not proxify
+// (mailto:, data:, ...), rejected by the browser's parser, or already
+// proxified. A URL on the proxy origin outside /cyrano/ is returned
+// resolved; a /cyrano/<scheme>/<host> path glued to another origin is moved
+// onto the proxy origin; anything else is proxified.
 func Rewrite(rawURL string, baseURL *url.URL, cfg ProxyConfig) string {
-	if rawURL == "" || strings.HasPrefix(rawURL, "#") {
+	if rawURL == "" {
 		return rawURL
 	}
-	// Strip ASCII whitespace that browsers silently remove from attribute
-	// values (tab, LF, CR). Go's url.Parse rejects these as invalid; leaving
-	// them in would cause every URL with a stray newline to pass through
-	// unproxified.
-	rawURL = strings.Map(func(r rune) rune {
-		if r == '\t' || r == '\n' || r == '\r' {
-			return -1
+	pre := preprocess(rawURL)
+	if strings.HasPrefix(pre, "#") {
+		return rawURL
+	}
+	proxy, pres := parseRef(nil, APIBase(cfg))
+	if pres != parsedURL {
+		return rawURL // no proxy origin configured
+	}
+	// The page's URL is always an http(s) URL cyrano fetched; should it
+	// not parse, read rawURL without a base (only absolute URLs resolve).
+	var basep *absURL
+	if baseURL != nil {
+		if b, bres := parseRef(nil, baseURL.String()); bres == parsedURL {
+			basep = &b
 		}
-		return r
-	}, rawURL)
-	lower := strings.ToLower(rawURL)
-	for _, p := range passthroughPrefixes {
-		if strings.HasPrefix(lower, p) {
+	}
+	a, res := parseRef(basep, pre)
+	if res != parsedURL {
+		return rawURL // another scheme, or rejected by the browser's parser
+	}
+	if a.scheme == proxy.scheme && hostPort(a.auth) == hostPort(proxy.auth) {
+		if len(a.path) >= 2 && a.path[0] == "cyrano" {
 			return rawURL
 		}
+		return a.href()
 	}
-
-	normalized := rawURL
-	if strings.HasPrefix(normalized, "//") {
-		normalized = baseURL.Scheme + ":" + normalized
+	if _, _, _, ok := cyranoTarget(a.path); ok {
+		return proxy.origin() + pathText(a.path) + queryText(a.query) + fragText(a.frag)
 	}
-
-	abs, err := baseURL.Parse(normalized)
-	if err != nil || abs == nil {
-		return rawURL
+	path := make([]string, len(a.path))
+	for i, s := range a.path {
+		path[i] = escapePct(s)
 	}
-
-	if !resolvableSchemes[abs.Scheme+":"] {
-		return rawURL
-	}
-	if IsAlreadyProxified(abs, cfg) {
-		return rawURL
-	}
-	if IsProxyHost(abs, cfg) {
-		return abs.String()
-	}
-
-	// Detect "virtual-origin + proxy-path" double-encoding: a script combined
-	// the virtual window.location.origin (e.g. "https://www.google.com") with a
-	// real proxy path that already contains "/cyrano/<scheme>/", producing a URL
-	// like "https://www.google.com/cyrano/https/www.google.com/...".
-	// Re-map to our proxy origin instead of proxifying a second time.
-	if _, ok := ParseCyranoPath(abs.Path, abs.RawQuery); ok {
-		out := APIBase(cfg) + abs.Path
-		if abs.RawQuery != "" {
-			out += "?" + abs.RawQuery
-		}
-		if abs.Fragment != "" {
-			out += "#" + abs.Fragment
-		}
-		return out
-	}
-
-	// Strip fragment from the "load" payload (matches the JS rewriter).
-	target := *abs
-	target.Fragment = ""
-
-	escapedPath := target.EscapedPath()
-	if escapedPath == "" {
-		escapedPath = "/"
-	}
-	out := APIBase(cfg) + "/cyrano/" + target.Scheme + "/" + target.Host + escapedPath
-	if target.RawQuery != "" {
-		out += "?" + target.RawQuery
-	}
-	if abs.Fragment != "" {
-		out += "#" + abs.Fragment
-	}
-	return out
+	return proxy.origin() + "/cyrano/" + a.scheme + "/" + escapePct(segmentOf(a.auth)) +
+		pathText(path) + queryText(a.query) + fragText(a.frag)
 }
 
-// Unwrap is Rewrite's inverse: given a proxified URL, recover the original.
-// Returns proxiedHref unchanged if it's not a proxified URL.
+// segmentOf writes an authority as a path segment (spec segmentOf). A
+// host of "." or ".." would be a dot segment the browser removes; an
+// empty port (".:"), which the authority parser reads as no port, keeps
+// it a plain segment.
+func segmentOf(auth string) string {
+	if isSingleDot(auth) || isDoubleDot(auth) {
+		return auth + ":"
+	}
+	return auth
+}
+
+// cyranoTarget recognizes what proxify itself produces:
+// /cyrano/<http|https|ws|wss>/<non-empty host><rest> (owner, 2026-11-17).
+func cyranoTarget(path []string) (scheme, host string, rest []string, ok bool) {
+	if len(path) < 3 || path[0] != "cyrano" || path[2] == "" {
+		return "", "", nil, false
+	}
+	if _, proxifiable := defaultPort[path[1]]; !proxifiable {
+		return "", "", nil, false
+	}
+	return path[1], path[2], path[3:], true
+}
+
+// Unwrap is Rewrite's inverse (spec/Containment.agda unwrap): given a
+// proxified URL, recover the original. Returns proxiedHref unchanged if
+// it's not a proxified URL.
 func Unwrap(proxiedHref string, cfg ProxyConfig) string {
-	u, err := url.Parse(proxiedHref)
-	if err != nil || !IsProxyHost(u, cfg) {
+	a, res := parseRef(nil, preprocess(proxiedHref))
+	proxy, pres := parseRef(nil, APIBase(cfg))
+	if res != parsedURL || pres != parsedURL || a.scheme != proxy.scheme || hostPort(a.auth) != hostPort(proxy.auth) {
 		return proxiedHref
 	}
-	target, ok := ParseCyranoPath(u.Path, u.RawQuery)
+	scheme, seg, rest, ok := cyranoTarget(a.path)
 	if !ok {
 		return proxiedHref
 	}
-	result := target.String()
-	if u.Fragment != "" {
-		result += "#" + u.Fragment
+	// Read the host segment as the browser reads an authority, so what
+	// page code sees is what the browser would show (H.com:443 is h.com).
+	auth, after, ares := authority(scheme, []rune(pctDecode(seg)))
+	if ares != parsedURL || len(after) != 0 {
+		return proxiedHref
 	}
-	return result
+	orig := make([]string, len(rest))
+	for i, s := range rest {
+		orig[i] = pctDecode(s)
+	}
+	if len(orig) == 0 {
+		orig = []string{""}
+	}
+	return scheme + "://" + auth + pathText(orig) + queryText(a.query) + fragText(a.frag)
 }

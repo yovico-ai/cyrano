@@ -24,3 +24,10 @@ ts/bug-miner/node_modules/
 # Claude Code project-local config
 .claude/
 .serena/
+
+# Agda spec / oracle build output
+spec/build/
+spec/_build/
+
+# rapid (Go property tests) failure replay files
+go/src/internal/*/testdata/rapid/

@@ -2,69 +2,63 @@ package htmlrewrite
 
 import "strings"
 
-// rewriteSrcset rewrites every URL in an HTML srcset attribute, leaving the
-// width/density descriptor (`1x`, `640w`, etc.) attached to its original URL.
+// rewriteSrcset rewrites every URL in an HTML srcset attribute, leaving each
+// candidate's descriptor (`1x`, `640w`, …) as written. A port of
+// spec/Srcset.agda, which is the authority; keep this in step with it and
+// with ts/client/src/patches/srcset.ts.
 //
 // Spec: https://html.spec.whatwg.org/multipage/images.html#parsing-a-srcset-attribute
 //
-// Per spec, URLs end at ASCII whitespace — commas are valid URL characters and
-// appear in Cloudflare Image Resizing paths like:
-//
-//	/cdn-cgi/image/width=640,quality=75,format=auto/https://origin.com/img.jpg
-//
-// Candidate separators are commas that appear AFTER a descriptor (or after the
-// URL token when no descriptor is present). We detect them by reading the URL
-// token up to the first whitespace, then reading the descriptor up to the next
-// comma.
+//   - A URL ends at ASCII whitespace (tab, LF, FF, CR, space). Commas inside
+//     it are part of it, as in Cloudflare Image Resizing paths like
+//     /cdn-cgi/image/width=640,quality=75,format=auto/https://origin.com/img.jpg
+//   - A URL that ends in commas ends its candidate: the commas separate it
+//     from the next candidate ("a.jpg, b.jpg 2x").
+//   - Otherwise the descriptor runs to the next comma outside parentheses.
 func rewriteSrcset(srcset string, rewriteURL func(string) string) string {
 	var out []string
-	s := srcset
-
-	for {
-		// Per spec step 4: skip leading whitespace and commas (separators from
-		// the previous candidate, or leading junk).
-		s = strings.TrimLeft(s, " \t\n\r\v,")
-		if s == "" {
-			break
-		}
-
-		// Per spec step 6: URL = chars until first ASCII whitespace.
-		wsIdx := strings.IndexAny(s, " \t\n\r\v")
-		var urlToken string
-		if wsIdx < 0 {
-			urlToken = s
-			s = ""
+	emit := func(u, desc string) {
+		if desc == "" {
+			out = append(out, rewriteURL(u))
 		} else {
-			urlToken = s[:wsIdx]
-			s = s[wsIdx:]
-		}
-
-		// Per spec step 8: trailing commas on the URL itself are separators.
-		urlToken = strings.TrimRight(urlToken, ",")
-		if urlToken == "" {
-			continue
-		}
-
-		// Skip whitespace between URL and optional descriptor.
-		s = strings.TrimLeft(s, " \t\n\r\v")
-
-		// Descriptor: chars until the next comma (the next candidate separator).
-		commaIdx := strings.Index(s, ",")
-		var descriptor string
-		if commaIdx < 0 {
-			descriptor = strings.TrimSpace(s)
-			s = ""
-		} else {
-			descriptor = strings.TrimSpace(s[:commaIdx])
-			s = s[commaIdx:] // leave the comma for the next iteration's TrimLeft
-		}
-
-		if descriptor != "" {
-			out = append(out, rewriteURL(urlToken)+" "+descriptor)
-		} else {
-			out = append(out, rewriteURL(urlToken))
+			out = append(out, rewriteURL(u)+" "+desc)
 		}
 	}
+	isWS := func(r rune) bool { return strings.ContainsRune("\t\n\f\r ", r) }
 
+	rs := []rune(srcset)
+	i := 0
+	for i < len(rs) {
+		// Between candidates: whitespace and commas.
+		if isWS(rs[i]) || rs[i] == ',' {
+			i++
+			continue
+		}
+		// The URL: up to whitespace.
+		start := i
+		for i < len(rs) && !isWS(rs[i]) {
+			i++
+		}
+		u := string(rs[start:i])
+		if strings.HasSuffix(u, ",") {
+			emit(strings.TrimRight(u, ","), "")
+			continue
+		}
+		// The descriptor: up to a comma outside parentheses.
+		for i < len(rs) && isWS(rs[i]) {
+			i++
+		}
+		start, paren := i, false
+		for i < len(rs) && (paren || rs[i] != ',') {
+			switch rs[i] {
+			case '(':
+				paren = true
+			case ')':
+				paren = false
+			}
+			i++
+		}
+		emit(u, strings.TrimRightFunc(string(rs[start:i]), isWS))
+	}
 	return strings.Join(out, ", ")
 }

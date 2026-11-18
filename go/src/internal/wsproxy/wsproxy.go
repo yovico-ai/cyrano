@@ -13,8 +13,8 @@ package wsproxy
 
 import (
 	"context"
-	"github.com/yovico/cyrano/internal/tlsdial"
 	"fmt"
+	"github.com/yovico/cyrano/internal/tlsdial"
 	"io"
 	"log/slog"
 	"net"
@@ -79,7 +79,7 @@ func IsWSUpgrade(r *http.Request) bool {
 
 // ServeHTTP handles one WebSocket upgrade.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	target, ok := urlrewrite.ParseCyranoPath(r.URL.Path, r.URL.RawQuery)
+	target, ok := urlrewrite.ParseCyranoURL(r.URL)
 	if !ok {
 		http.Error(w, "missing or invalid /cyrano/ path for ws upgrade", http.StatusBadRequest)
 		return
@@ -154,7 +154,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) dialUpstream(target *url.URL) (net.Conn, error) {
 	host := target.Host
-	if !strings.Contains(host, ":") {
+	if target.Port() == "" { // url.Port understands "[::1]"
 		if target.Scheme == "wss" {
 			host += ":443"
 		} else {
@@ -176,10 +176,18 @@ func (h *Handler) dialUpstream(target *url.URL) (net.Conn, error) {
 // (Sec-WebSocket-*) verbatim — those are end-to-end client⟷upstream.
 func buildUpstreamRequest(in *http.Request, target *url.URL) *http.Request {
 	out := in.Clone(in.Context())
+	// The query as the page wrote it; the client's origin marker removed.
+	query, pageOrigin, hadQuery := urlrewrite.SplitWSOrigin(target.RawQuery)
 	out.URL = &url.URL{
-		Path:     target.Path,
-		RawPath:  target.RawPath,
-		RawQuery: target.RawQuery,
+		Path:       target.Path,
+		RawPath:    target.RawPath,
+		RawQuery:   query,
+		ForceQuery: hadQuery && query == "" && target.RawQuery != "",
+	}
+	// The path byte for byte (see upstream.RoundTripper): Request.Write
+	// sends URL.Opaque as the request target.
+	if p := urlrewrite.UpstreamPath(target); p != "" {
+		out.URL.Opaque = p
 	}
 	if out.URL.Path == "" {
 		out.URL.Path = "/"
@@ -193,11 +201,18 @@ func buildUpstreamRequest(in *http.Request, target *url.URL) *http.Request {
 	out.Header.Del("X-Forwarded-Port")
 	out.Header.Del("X-Forwarded-Host")
 
-	// Rewrite Origin: the page running on our proxy origin can declare its
-	// real origin as the original site's; otherwise upstream's origin
-	// allowlist will reject.
-	if origin := target.Scheme + "://" + target.Host; out.Header.Get("Origin") != "" {
-		out.Header.Set("Origin", origin)
+	// Origin: a direct browser sends the origin of the page that opened
+	// the socket (always an http(s) origin). The client names it
+	// (urlrewrite.WSOriginParam); without it, the target's own origin.
+	if out.Header.Get("Origin") != "" {
+		if pageOrigin == "" {
+			scheme := "http"
+			if target.Scheme == "wss" {
+				scheme = "https"
+			}
+			pageOrigin = scheme + "://" + target.Host
+		}
+		out.Header.Set("Origin", pageOrigin)
 	}
 
 	// http.Request.Write needs RequestURI cleared (it constructs one).
@@ -224,4 +239,3 @@ func writeErrorResponse(c net.Conn, status int, msg string) {
 			"\r\n%s",
 		status, http.StatusText(status), len(body), body)
 }
-
