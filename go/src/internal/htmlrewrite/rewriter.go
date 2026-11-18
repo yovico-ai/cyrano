@@ -204,6 +204,15 @@ func applyAttrRules(tag string, attrs []html.Attribute, cfg *Config) []html.Attr
 				attrs = setAttr(attrs, "content", urlrewrite.RewriteCSP(v, cfg.Proxy.PublicURL.Scheme+"://"+cfg.Proxy.PublicURL.Host))
 			}
 		}
+		// <meta name="referrer">: the page's Referrer-Policy. As with the
+		// header (proxy.recordPagePolicy) the browser is told unsafe-url,
+		// so the proxy always learns the requesting page, and applies the
+		// page's own policy to what goes upstream.
+		if n, ok := getAttr(attrs, "name"); ok && strings.EqualFold(strings.TrimSpace(n), "referrer") {
+			if c, ok := getAttr(attrs, "content"); ok && cfg.OnReferrerPolicy != nil && cfg.OnReferrerPolicy(c) {
+				attrs = setAttr(attrs, "content", "unsafe-url")
+			}
+		}
 		// A declarative refresh navigates like a link: through the proxy.
 		if eq, ok := getAttr(attrs, "http-equiv"); ok && strings.EqualFold(strings.TrimSpace(eq), "refresh") {
 			if c, ok := getAttr(attrs, "content"); ok && cfg.BaseURL != nil {

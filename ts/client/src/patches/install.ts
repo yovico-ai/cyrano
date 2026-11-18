@@ -19,6 +19,7 @@ import { initCrossOrigin } from "../native/cross-origin";
 import { patchCrossOriginWindows } from "./cross-origin-windows";
 import { patchResponseHeaders } from "./response-headers";
 import { patchEmbeddedContext } from "./embedded";
+import { patchFedCM } from "./fedcm";
 import { patchStorageNames, patchWebStorage, storagePrefix } from "./storage";
 import { patchReflection } from "../native/hidden-globals";
 import { patchDocumentWrite } from "../wrappers/document-write";
@@ -85,7 +86,8 @@ export function installPatches(
     // and write raw proxified values on the DOM node.
     step("patchAnchorUrlReflection", () => patchAnchorUrlReflection(targetWindow, unwrapOne, rewriteOne));
     // Requests to other origins are under CORS (patches/cors.ts).
-    const cors = config.identity ? undefined : { origin: () => getCurrentBaseUrl().origin, href: () => getCurrentBaseUrl().href };
+    const cors = config.identity ? undefined
+        : { origin: () => getCurrentBaseUrl().origin, href: () => getCurrentBaseUrl().href, proxy: new URL(config.apiBaseURL).origin };
     step("patchFetch", () => patchFetch(targetWindow, rewriteOne, unwrapOne, getCurrentBaseUrl, cors));
     step("patchXmlHttpRequest", () => patchXmlHttpRequest(targetWindow, rewriteOne, unwrapOne, getCurrentBaseUrl, cors));
     step("patchWebSocket", () => patchWebSocket(targetWindow, rewriteOne, unwrapOne, () => getCurrentBaseUrl().origin));
@@ -119,6 +121,8 @@ export function installPatches(
     if (flattened) step("patchCrossOriginWindows", () => patchCrossOriginWindows(targetWindow, (frame) =>
         injectIntoIframe(frame as HTMLIFrameElement, targetWindow, config, getCurrentBaseUrl().href)));
     step("patchResponseHeaders", () => patchResponseHeaders(targetWindow));
+    // FedCM requests would leave the browser outside the proxy (patches/fedcm.ts).
+    step("patchFedCM", () => patchFedCM(targetWindow));
     // What a frame of another origin's page is denied (patches/embedded.ts).
     if (flattened) step("patchEmbeddedContext", () => patchEmbeddedContext(targetWindow, () => getCurrentBaseUrl().origin));
     // Storage of every kind is this origin's alone (patches/storage.ts).

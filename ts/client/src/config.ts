@@ -39,6 +39,12 @@ export interface ClientConfig {
     nonce?: string;
 
     /**
+     * The page's CSP lets no inline script run: a bootstrap the runtime
+     * writes itself (bootstrap-html.ts) must be external scripts only.
+     */
+    xb?: boolean;
+
+    /**
      * The name of the runtime's Trusted Types policy, which the proxy added
      * to the page's `trusted-types` directive (native/trusted.ts).
      */

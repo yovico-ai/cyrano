@@ -1,7 +1,11 @@
 package proxy
 
 import (
+	"context"
 	"github.com/yovico/cyrano/internal/urlrewrite"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -199,6 +203,63 @@ func TestScriptNonce(t *testing.T) {
 	} {
 		if got := ScriptNonce(c.policies); got != c.want {
 			t.Errorf("ScriptNonce(%q) = %q, want %q", c.policies, got, c.want)
+		}
+	}
+}
+
+// frame-ancestors is judged against the real embedder, and the browser is
+// told the verdict in the proxy's terms.
+func TestJudgeFraming(t *testing.T) {
+	mk := func(csp, xfo, parent string) *http.Response {
+		req := httptest.NewRequest("GET", "https://accounts.google.com/frame", nil)
+		if parent != "" {
+			p, _ := url.Parse(parent)
+			req = req.WithContext(context.WithValue(req.Context(), framedByKey{}, p))
+		}
+		h := http.Header{}
+		if csp != "" {
+			h.Set("Content-Security-Policy", csp)
+		}
+		if xfo != "" {
+			h.Set("X-Frame-Options", xfo)
+		}
+		return &http.Response{Header: h, Request: req}
+	}
+	target, _ := url.Parse("https://accounts.google.com/frame")
+	for _, c := range []struct{ csp, xfo, parent, wantCSP, wantXFO string }{
+		{"frame-ancestors https://accounts.google.com", "", "https://accounts.google.com/signin", "frame-ancestors 'self'", ""},
+		{"frame-ancestors https://accounts.google.com", "", "https://evil.example/", "frame-ancestors 'none'", ""},
+		{"script-src 'self'; frame-ancestors 'self' https://*.example.com", "", "https://a.example.com/x", "script-src 'self'; frame-ancestors 'self'", ""},
+		{"frame-ancestors 'none'", "", "https://accounts.google.com/", "frame-ancestors 'none'", ""},
+		{"", "SAMEORIGIN", "https://other.example/", "", "DENY"},
+		{"", "SAMEORIGIN", "https://accounts.google.com/a", "", "SAMEORIGIN"},
+		{"frame-ancestors *", "DENY", "https://other.example/", "frame-ancestors 'self'", "DENY"},
+		{"frame-ancestors https://x.example", "", "", "frame-ancestors https://x.example", ""}, // not framed: untouched
+	} {
+		resp := mk(c.csp, c.xfo, c.parent)
+		judgeFraming(resp, target)
+		if got := resp.Header.Get("Content-Security-Policy"); got != c.wantCSP {
+			t.Errorf("%q framed by %q: CSP %q, want %q", c.csp, c.parent, got, c.wantCSP)
+		}
+		if got := resp.Header.Get("X-Frame-Options"); got != c.wantXFO {
+			t.Errorf("%q framed by %q: XFO %q, want %q", c.xfo, c.parent, got, c.wantXFO)
+		}
+	}
+}
+
+func TestInlineScriptAllowed(t *testing.T) {
+	for policy, want := range map[string]bool{
+		"":                                  true,
+		"img-src 'self'":                    true,
+		"script-src 'self' https://a.test":  false, // appleid.apple.com, api.twitter.com
+		"default-src 'self'":                false,
+		"script-src 'self' 'unsafe-inline'": true,
+		"script-src 'nonce-abc'":            true,
+		"script-src 'sha256-xyz'":           true,
+		"default-src 'none'; script-src-elem 'unsafe-inline'": true,
+	} {
+		if got := urlrewrite.InlineScriptAllowed([]string{policy}); got != want {
+			t.Errorf("%q: %v, want %v", policy, got, want)
 		}
 	}
 }

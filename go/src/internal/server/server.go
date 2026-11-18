@@ -5,6 +5,7 @@ package server
 
 import (
 	"fmt"
+	"github.com/yovico/cyrano/internal/htmlrewrite"
 	"log/slog"
 	"net"
 	"net/http"
@@ -170,6 +171,9 @@ func (s *Server) Handler() http.Handler {
 			return
 		case vhost.RewriterJSPath:
 			sh.ServeHTTP(w, r)
+			return
+		case htmlrewrite.BootPath:
+			bootHandler().ServeHTTP(w, r)
 			return
 		case WorkerInitPath:
 			workerInitHandler(vhost, s.proxyEndpoints(vhost)).ServeHTTP(w, r)

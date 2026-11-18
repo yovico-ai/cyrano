@@ -332,6 +332,11 @@ func (h *Handler) translateResponse(resp *http.Response) error {
 	if h.opts.ProxyCfg.PublicURL != nil {
 		proxyOrigin = h.opts.ProxyCfg.PublicURL.Scheme + "://" + h.opts.ProxyCfg.PublicURL.Host
 	}
+	// Framing restrictions are judged here, against the real embedder
+	// (frame_ancestors.go), before the policy is translated.
+	if t := proxyTargetOf(resp); t != nil {
+		judgeFraming(resp, t)
+	}
 	for _, name := range []string{"Content-Security-Policy", "Content-Security-Policy-Report-Only"} {
 		vals := resp.Header.Values(name)
 		if len(vals) == 0 {
@@ -553,4 +558,12 @@ func hintNamesOf(h http.Header) string {
 	}
 	sort.Strings(out)
 	return strings.Join(out, ",")
+}
+
+// proxyTargetOf is the upstream URL a response answers.
+func proxyTargetOf(resp *http.Response) *url.URL {
+	if resp.Request == nil {
+		return nil
+	}
+	return resp.Request.URL
 }

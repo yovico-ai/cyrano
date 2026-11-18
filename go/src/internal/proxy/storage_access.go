@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"strings"
@@ -103,6 +104,11 @@ func (h *Handler) storageAccess(req *http.Request, target *url.URL, sessionID st
 
 	from := h.requestingDocument(req)
 	navigation := mode == "navigate"
+	// A framed document's embedder, for judging its frame-ancestors and
+	// X-Frame-Options against (frame_ancestors.go).
+	if navigation && dest != "document" && from != nil {
+		*req = *req.WithContext(context.WithValue(req.Context(), framedByKey{}, from))
+	}
 	var top string
 	switch {
 	case navigation && dest == "document":

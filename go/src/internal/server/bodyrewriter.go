@@ -126,6 +126,11 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				InjectBootstrap:   true,
 				ClientPassthrough: pageConfig(clientPassthrough, resp),
 				ScriptNonce:       proxy.ScriptNonce(resp.Header.Values("Content-Security-Policy")),
+				ExternalBootstrap: !urlrewrite.InlineScriptAllowed(originalPolicies(resp)),
+			}
+			cfg.OnReferrerPolicy = func(content string) bool { return proxy.RecordMetaPolicy(target, content) }
+			if cfg.ExternalBootstrap {
+				cfg.ClientPassthrough["xb"] = true // documents this page writes need the same
 			}
 			// Challenge pages are rewritten like any other. Their scripts check
 			// their own source, which reads back as the origin wrote it
@@ -573,6 +578,40 @@ func workerInitHandler(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig) htt
 		_, _ = w.Write([]byte("import " + string(src) + ";\n" +
 			"self.$rewriter=self.$rewriter_init_worker(" + string(cfg) + "," + string(href) + ");" +
 			"self.$__crn_key__=null;\n"))
+	})
+}
+
+// originalPolicies are the response's Content-Security-Policy values as the
+// origin sent them (the proxy's header pass has translated the header by
+// now and carries the origin's in proxy.OriginalHeadersName).
+func originalPolicies(resp *http.Response) []string {
+	var orig map[string][]string
+	if json.Unmarshal([]byte(resp.Header.Get("Crn-H")), &orig) == nil {
+		if v, ok := orig["content-security-policy"]; ok {
+			return v
+		}
+	}
+	return resp.Header.Values("Content-Security-Policy")
+}
+
+// bootHandler serves htmlrewrite.BootPath: the bootstrap's second script
+// for a page whose CSP forbids inline scripts.
+func bootHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cfg := r.URL.Query().Get("c")
+		// Only a JSON object, re-serialized: nothing else reaches the script.
+		var parsed map[string]any
+		if json.Unmarshal([]byte(cfg), &parsed) != nil {
+			http.Error(w, "bad config", http.StatusBadRequest)
+			return
+		}
+		clean, _ := json.Marshal(parsed)
+		href, _ := json.Marshal(r.URL.Query().Get("u"))
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write([]byte("window.$rewriter=window.$rewriter_init(window," + string(clean) + ").inject();" +
+			"$rewriter.set_location(" + string(href) + ");" +
+			`(function(s,p){p=s.previousElementSibling;if(p&&p.src&&p.tagName==="SCRIPT")p.remove();s.remove()})(document.currentScript);`))
 	})
 }
 

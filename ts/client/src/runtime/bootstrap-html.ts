@@ -14,6 +14,12 @@ export function buildBootstrapHtml(config: ClientConfig, href: string): string {
     const { referrer: _creatorsOwn, ...childConfig } = config;
     void _creatorsOwn;
     const nonce = config.nonce ? ` nonce="${config.nonce.replace(/[^A-Za-z0-9+/_=-]/g, "")}"` : "";
+    if (config.xb) {
+        // No inline script runs under the page's policy: the second step is
+        // served as a script too (Go: htmlrewrite.BootPath).
+        const boot = `${config.apiBaseURL}/cyrano-boot.js?c=${encodeURIComponent(JSON.stringify(childConfig))}&u=${encodeURIComponent(href)}`;
+        return `<script${nonce} src="${src}"></script><script${nonce} src="${boot.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}"></script>`;
+    }
     return (
         `<script${nonce} src="${src}"></script>` +
         `<script${nonce}>window.$rewriter=window.$rewriter_init(window,${htmlSafeJson(childConfig)}).inject();` +

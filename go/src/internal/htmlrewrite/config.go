@@ -60,6 +60,15 @@ type Config struct {
 	// page's CSP authorizes scripts by this nonce (proxy.ScriptNonce).
 	ScriptNonce string
 
+	// ExternalBootstrap makes the bootstrap's second script an external
+	// one (BootPath): the page's CSP lets no inline script run
+	// (urlrewrite.InlineScriptAllowed).
+	ExternalBootstrap bool
+
+	// OnReferrerPolicy is told the content of a <meta name="referrer"> and
+	// reports whether it is a policy (then the tag is given unsafe-url).
+	OnReferrerPolicy func(content string) bool
+
 	// NoOriginals suppresses the originals attribute (OriginalsAttr): for
 	// markup no runtime will read (a <noscript> body, re-parsed as text).
 	NoOriginals bool
@@ -75,9 +84,13 @@ type Config struct {
 // URL rewriting. Order within the inner slice doesn't matter — every attr
 // in the slice gets rewritten if present on the tag.
 var externalResourceAttrs = map[string][]string{
-	"a":      {"href", "ping"},
-	"area":   {"href"},
-	"audio":  {"src"},
+	"a":     {"href", "ping"},
+	"area":  {"href"},
+	"audio": {"src"},
+	// <base href> names the proxied directory: the browser then resolves
+	// the page's relative URLs under it, and a `base-uri 'self'` policy
+	// is met (accounts.google.com has both).
+	"base":   {"href"},
 	"body":   {"background"},
 	"button": {"formaction"},
 	"embed":  {"src"},
@@ -141,3 +154,8 @@ var htmlEventAttrs = map[string]bool{
 	"onpaste": true, "ontouchcancel": true, "ontouchend": true, "ontouchmove": true,
 	"ontouchstart": true, "ontransitionend": true, "onwheel": true,
 }
+
+// BootPath serves the bootstrap's second script as an external one, for
+// pages whose CSP forbids inline scripts: ?c= the client config (JSON),
+// ?u= the document's original URL.
+const BootPath = "/cyrano-boot.js"

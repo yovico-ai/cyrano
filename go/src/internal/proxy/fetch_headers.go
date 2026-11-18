@@ -264,3 +264,16 @@ func noDictionaryOffer(req *http.Request) {
 func noDictionaryRegistration(resp *http.Response) {
 	resp.Header.Del("Use-As-Dictionary")
 }
+
+// RecordMetaPolicy notes a page's Referrer-Policy as its
+// <meta name="referrer"> states it (the HTML rewriter gives the tag
+// unsafe-url, as recordPagePolicy does the header); false when content is
+// no policy.
+func RecordMetaPolicy(target *url.URL, content string) bool {
+	p := urlrewrite.HeaderPolicy(content)
+	if p == "" {
+		return false
+	}
+	pagePolicies.set(pageKey(target), p)
+	return true
+}

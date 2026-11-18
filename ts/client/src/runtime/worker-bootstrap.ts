@@ -162,7 +162,8 @@ function patchWorkerScope(
     // name its origin to the proxy (patches/cors.ts).
     let unreferred = false;
     try { unreferred = /^(blob|data):/i.test(String((scope as unknown as { location?: { href?: string } }).location?.href)); } catch { /* no location */ }
-    const cors = config.identity ? undefined : { origin: () => baseUrl.origin, href: () => baseUrl.href, always: unreferred };
+    const cors = config.identity ? undefined
+        : { origin: () => baseUrl.origin, href: () => baseUrl.href, always: unreferred, proxy: new URL(config.apiBaseURL).origin };
     patchFetch(realm, rewriteOne, unwrapOne, () => baseUrl, cors);
     patchXmlHttpRequest(realm, rewriteOne, unwrapOne, () => baseUrl, cors);
     try { patchResponseHeaders(realm); } catch { /* stays native */ }

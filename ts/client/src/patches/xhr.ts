@@ -25,7 +25,8 @@ export function patchXmlHttpRequest(
         // Opened: note whether it goes to another origin (cors.ts).
         if (cors && baseUrl && typeof self === "object" && self !== null) {
             const own = cors.origin();
-            const cross = isCrossOrigin(String(args[1]), baseUrl(), own);
+            const target = unwrapOne(String(next[1]));
+            const cross = isCrossOrigin(target, baseUrl(), own) && !(cors.proxy && target.startsWith(cors.proxy + "/"));
             if (cross) crossOriginXhr.set(self, own); else crossOriginXhr.delete(self);
             if (cross || cors.always) initiatorOfXhr.set(self, { href: initiatorValue(cors.href()), cross });
             else initiatorOfXhr.delete(self);

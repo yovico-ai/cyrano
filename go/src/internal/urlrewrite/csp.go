@@ -246,3 +246,133 @@ func ScriptNonce(policies []string) string {
 	}
 	return ""
 }
+
+// InlineScriptAllowed reports whether every one of these policies (as the
+// origin sent them) lets an inline <script> run once translated: the
+// bootstrap's own inline script must be an external one otherwise.
+// A policy governs scripts by script-src-elem, else script-src, else
+// default-src. A nonce there authorizes the bootstrap (it is given the
+// nonce); hashes are translated to 'unsafe-inline'; otherwise only
+// 'unsafe-inline' does — appleid.apple.com and api.twitter.com list hosts
+// alone.
+func InlineScriptAllowed(policies []string) bool {
+	for _, header := range policies {
+		for _, policy := range strings.Split(header, ",") {
+			dirs := map[string][]string{}
+			for _, d := range strings.Split(policy, ";") {
+				f := strings.Fields(d)
+				if len(f) > 0 {
+					if _, dup := dirs[strings.ToLower(f[0])]; !dup {
+						dirs[strings.ToLower(f[0])] = f[1:]
+					}
+				}
+			}
+			var src []string
+			found := false
+			for _, name := range []string{"script-src-elem", "script-src", "default-src"} {
+				if v, ok := dirs[name]; ok {
+					src, found = v, true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+			ok := false
+			for _, tok := range src {
+				l := strings.ToLower(tok)
+				if l == "'unsafe-inline'" || strings.HasPrefix(l, "'nonce-") || isHashSource(l) {
+					ok = true
+				}
+			}
+			if !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// FrameAncestors evaluates a policy's frame-ancestors directive (CSP3
+// §6.4.2, for one ancestor) for a document of origin self framed by a
+// document of origin ancestor ("scheme://host[:port]"): present reports
+// whether the policy has the directive, allowed whether it admits the
+// ancestor.
+func FrameAncestors(policy, ancestor, self string) (present, allowed bool) {
+	for _, d := range strings.Split(policy, ";") {
+		f := strings.Fields(d)
+		if len(f) == 0 || !strings.EqualFold(f[0], "frame-ancestors") {
+			continue
+		}
+		for _, src := range f[1:] {
+			if sourceMatchesOrigin(src, ancestor, self) {
+				return true, true
+			}
+		}
+		return true, false
+	}
+	return false, true
+}
+
+// sourceMatchesOrigin: a CSP source expression against an origin (no path
+// matching: frame-ancestors has none).
+func sourceMatchesOrigin(src, origin, self string) bool {
+	l := strings.ToLower(src)
+	scheme, hostport, ok := strings.Cut(strings.ToLower(origin), "://")
+	if !ok {
+		return false
+	}
+	host, port := hostport, ""
+	if i := strings.LastIndex(hostport, ":"); i >= 0 && !strings.HasSuffix(hostport, "]") {
+		host, port = hostport[:i], hostport[i+1:]
+	}
+	selfScheme, _, _ := strings.Cut(strings.ToLower(self), "://")
+	switch {
+	case l == "'none'":
+		return false
+	case l == "'self'":
+		return strings.EqualFold(origin, self)
+	case l == "*":
+		return scheme == "http" || scheme == "https" || scheme == selfScheme
+	case strings.HasSuffix(l, ":") && !strings.Contains(l, "/"):
+		return scheme == strings.TrimSuffix(l, ":") || (l == "http:" && scheme == "https")
+	}
+	wantScheme := ""
+	if a, b, ok := strings.Cut(l, "://"); ok {
+		wantScheme, l = a, b
+	}
+	if i := strings.Index(l, "/"); i >= 0 {
+		l = l[:i]
+	}
+	wantHost, wantPort := l, ""
+	if i := strings.LastIndex(l, ":"); i >= 0 && !strings.HasSuffix(l, "]") {
+		wantHost, wantPort = l[:i], l[i+1:]
+	}
+	if wantScheme == "" {
+		// A scheme-less host source matches the document's scheme (and its
+		// secure upgrade).
+		if scheme != selfScheme && !(selfScheme == "http" && scheme == "https") {
+			return false
+		}
+	} else if scheme != wantScheme && !(wantScheme == "http" && scheme == "https") {
+		return false
+	}
+	if strings.HasPrefix(wantHost, "*.") {
+		if !strings.HasSuffix(host, wantHost[1:]) {
+			return false
+		}
+	} else if host != wantHost {
+		return false
+	}
+	if wantPort == "*" {
+		return true
+	}
+	def := map[string]string{"http": "80", "https": "443"}[scheme]
+	if port == "" {
+		port = def
+	}
+	if wantPort == "" {
+		return port == def
+	}
+	return port == wantPort
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -59,6 +60,13 @@ func bootstrapScript(cfg *Config) string {
 		if b, err := os.ReadFile(path); err == nil {
 			after = `<script` + nonce + `>` + strings.ReplaceAll(string(b), "</script", `<\/script`) + `;document.currentScript.remove();</script>`
 		}
+	}
+	if cfg.ExternalBootstrap {
+		// No inline script runs under this page's policy: the same two
+		// steps as external scripts, the second parameterized by its URL.
+		boot := BootPath + "?c=" + url.QueryEscape(string(configJSON)) + "&u=" + url.QueryEscape(cfg.BaseURL.String())
+		return fmt.Sprintf(`<script`+nonce+` src="%s"></script><script`+nonce+` src="%s"></script>`,
+			cfg.RewriterJSPath, html.EscapeString(boot))
 	}
 	return debug + fmt.Sprintf(
 		`<script`+nonce+` src="%s"></script>`+

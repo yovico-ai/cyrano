@@ -180,6 +180,22 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
   Google search answers `/sorry` through the proxy. Akamai Bot Manager's
   sensor (ibm.com) runs clean. `run.sh` kills every running cyrano: start
   a second (TLS) instance after it.
+- **OAuth / social sign-in** (2026-11-18): from a relying site's "Sign in
+  with …" button, Google, Microsoft, Apple, GitHub, LinkedIn (popup) and
+  X reach their login forms through the proxy without errors (survey
+  harness: direct vs proxied, headed Chrome). What that took: a page whose
+  CSP lets no inline script run gets its bootstrap as external scripts
+  (`htmlrewrite.BootPath`; appleid.apple.com, api.twitter.com);
+  `<base href>` is rewritten; `frame-ancestors` / `X-Frame-Options` are
+  judged against the real embedder (`proxy/frame_ancestors.go`);
+  `<meta name="referrer">` is honoured (the proxy needs the full Referer);
+  `new Request(url)` is proxified; FedCM requests are refused as if the
+  user had turned third-party sign-in off (`patches/fedcm.ts` — the
+  browser would make them outside the proxy). **Not verified: the
+  credentialed half** (submitting a login, the redirect or popup back to
+  the relying site, token exchange) — it needs a person to sign in.
+  Cannot work by design: passkeys / WebAuthn (bound to the proxy's
+  origin), FedCM / One Tap.
 - **Measuring pages with many requests (ads): serve the proxy over TLS.**
   Over plain HTTP the browser keeps 6 connections to the proxy for every
   site's traffic and queues the rest; over TLS it multiplexes on HTTP/2.

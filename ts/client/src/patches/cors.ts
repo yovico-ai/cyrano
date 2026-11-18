@@ -71,6 +71,8 @@ export function isCrossOrigin(raw: string, base: URL, own: string): boolean {
 export interface CorsContext {
     /** The context's original origin. */
     origin: () => string;
+    /** The proxy's own origin: a URL still on it (not a proxied one) is the page's own, mis-resolved. */
+    proxy: string;
     /** The original URL of the context's document (a worker: of its creator). */
     href: () => string;
     /** The browser sends no Referer from this context: name the origin on every request. */

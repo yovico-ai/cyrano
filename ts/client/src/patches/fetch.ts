@@ -16,7 +16,7 @@
 // must pass the CORS check, shows only its exposed headers and has type
 // "cors".
 
-import { wrapAccessor, wrapMethod } from "../native/surface";
+import { wrapAccessor, wrapConstructor, wrapMethod } from "../native/surface";
 import { CREDENTIALS, INITIATOR, initiatorValue, corsAllows, exposedBy, isCrossOrigin, type CorsContext, type Exposed } from "./cors";
 import { headerViewsOf } from "./response-headers";
 
@@ -61,11 +61,17 @@ export function patchFetch(
         const rewritten = rewriteOne(original);
         const plain = (): Promise<Response> => {
             if (!viaRequest) return Reflect.apply(native, self, [rewritten, ...rest]) as Promise<Response>;
-            const Req = (input.constructor ?? Request) as typeof Request;
+            const Req = (NativeRequest ?? Request) as typeof Request; // the native: the URL is rewritten already
             return Reflect.apply(native, self, [new Req(rewritten, input), ...rest]) as Promise<Response>;
         };
         const own = cors?.origin();
-        const cross = own !== undefined && isCrossOrigin(original, baseUrl(), own);
+        // Judged by where the request really goes: the original of the URL
+        // sent. One left on the proxy's own origin is a page URL resolved
+        // against the proxy (the server routes it by its Referer): the
+        // page's own origin.
+        const target = unwrapOne(rewritten);
+        const cross = own !== undefined && isCrossOrigin(target, baseUrl(), own) &&
+            !(cors!.proxy && target.startsWith(cors!.proxy + "/"));
         if (own === undefined || (!cross && !cors?.always)) return plain();
 
         const init = (typeof rest[0] === "object" && rest[0] !== null ? rest[0] : undefined) as RequestInit | undefined;
@@ -80,7 +86,7 @@ export function patchFetch(
         // is left to the native to refuse.
         let sent: Promise<Response>;
         try {
-            const Req = ((viaRequest ? input.constructor : undefined) ?? NativeRequest ?? Request) as typeof Request;
+            const Req = (NativeRequest ?? Request) as typeof Request;
             let req = viaRequest ? new Req(rewritten, input) : new Req(rewritten, init);
             if (viaRequest && init) req = new Req(req, init);
             const from = initiatorValue(cors!.href());
@@ -125,6 +131,16 @@ export function patchFetch(
         });
     }
 
+    // new Request(url): the URL is proxified as fetch's is — left to the
+    // browser it resolves against the proxy's origin.
+    wrapConstructor<typeof Request>(targetWindow, "Request", (Native, args, newTarget) => {
+        const next = args.slice();
+        if (next.length && !isRequest(next[0])) {
+            const raw = String(next[0]);
+            if (!nativeRefuses(raw, baseUrl)) next[0] = rewriteOne(raw);
+        }
+        return Reflect.construct(Native, next, newTarget as typeof Request);
+    });
     for (const Ctor of [w.Request, w.Response]) {
         if (!Ctor?.prototype) continue;
         wrapAccessor<string>(Ctor.prototype, "url", { get: (get, self) => unwrapOne(get.call(self)) });
