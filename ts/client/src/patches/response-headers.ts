@@ -56,12 +56,16 @@ export function patchResponseHeaders(targetWindow: Window): void {
             let raw: string | null;
             try { raw = nativeGet.call(self, CARRIER); } catch { return null; } // not a Headers: the native throws
             const orig = parse(raw);
-            if (!orig && !allow) return null;
+            // The runtime's own request headers on a Request the page holds
+            // (cors.ts) are not the page's to see either.
+            let marked = false;
+            try { marked = nativeGet.call(self, "crn-i") !== null || nativeGet.call(self, "crn-c") !== null; } catch { marked = false; }
+            if (!orig && !allow && !marked) return null;
             const hit = cache.get(self as object);
-            if (hit && hit.raw === raw && hit.allow === allow) return hit.shown;
+            if (hit && hit.raw === raw && hit.allow === allow && !marked) return hit.shown;
             let pairs: Array<[string, string]> = [];
             nativeForEach.call(self, (value: string, name: string) => {
-                if (name !== CARRIER && !(orig && name in orig)) pairs.push([name, value]);
+                if (name !== CARRIER && name !== "crn-i" && name !== "crn-c" && !(orig && name in orig)) pairs.push([name, value]);
             });
             if (orig) for (const name of Object.keys(orig)) for (const v of orig[name] ?? []) pairs.push([name, v]);
             if (allow) pairs = pairs.filter(([name]) => allow(name.toLowerCase()));

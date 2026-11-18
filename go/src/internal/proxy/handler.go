@@ -276,6 +276,7 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		// own Referrer-Policy.
 		noDictionaryOffer(req)
 		h.filterClientHints(req, target, sessionID) // reads the proxied Referer: before it is replaced
+		noteCORS(req, target)                       // reads the runtime's headers: before they are consumed below
 		h.storageAccess(req, target, sessionID)     // reads the proxied Referer and the runtime's headers
 		h.directFetchHeaders(req, target)
 		ensurePriority(req, target, req.ProtoMajor < 2)
@@ -299,6 +300,11 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 // the browser into the original origin's security policies, then hand off
 // to the BodyRewriter (if configured) for content transformation.
 func (h *Handler) modifyResponse(resp *http.Response) error {
+	// A cross-origin request the origin does not allow fails, as natively (cors.go).
+	if corsFails(resp) {
+		_ = resp.Body.Close()
+		return errCORS
+	}
 	h.restartForCriticalCH(resp) // may replace resp with a second response
 	sessionID, _ := resp.Request.Context().Value(SessionContextKey{}).(string)
 	upgradeLoaded(resp, sessionID)
@@ -414,6 +420,10 @@ func (h *Handler) errorHandler(target *url.URL, inbound *http.Request) func(http
 			slog.String("target", target.String()),
 			slog.String("err", err.Error()),
 		)
+		if errors.Is(err, errCORS) {
+			// A network error, to page code what a CORS failure is.
+			panic(http.ErrAbortHandler)
+		}
 		var re rewriteError
 		if errors.As(err, &re) {
 			// The proxy's own failure: say so.

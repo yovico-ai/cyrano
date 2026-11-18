@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
+	"regexp"
 	"strings"
 
 	"github.com/andybalholm/brotli"
@@ -37,6 +39,13 @@ import (
 func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logger *slog.Logger, jar *proxy.SessionJar, sessName string, prettify bool) func(*http.Response, *url.URL) error {
 	clientPassthrough := buildClientPassthrough(vhost, proxyCfg)
 	jsOpts := jsrewrite.DefaultOptions()
+	// Development aid: CYRANO_DEBUG_JS_OFF lists rewrite rules (Options
+	// field names) to switch off, for finding which one a site minds.
+	for _, name := range strings.Split(os.Getenv("CYRANO_DEBUG_JS_OFF"), ",") {
+		if f := reflect.ValueOf(&jsOpts).Elem().FieldByName(strings.TrimSpace(name)); f.IsValid() && f.Kind() == reflect.Bool {
+			f.SetBool(false)
+		}
+	}
 	jsOpts.Logger = logger.With("component", "jsrewrite")
 	jsOpts.ProxifyURL = func(rawURL string, base *url.URL) string {
 		return urlrewrite.Rewrite(rawURL, base, proxyCfg)
@@ -49,8 +58,12 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 		// Development aid (CYRANO_DEBUG_NO_JS): scripts are served as the
 		// origin sent them — for telling whether a site notices the
 		// rewritten source or the runtime (cmd/mitmprobe, identity mode).
-		if os.Getenv("CYRANO_DEBUG_NO_JS") != "" {
-			return func(src []byte) []byte { return src }
+		// A value other than "1" is a regexp: only scripts whose URL
+		// matches it are left alone.
+		if v := os.Getenv("CYRANO_DEBUG_NO_JS"); v != "" {
+			if re, err := regexp.Compile(v); v == "1" || err != nil || (scriptURL != nil && re.MatchString(scriptURL.String())) {
+				return func(src []byte) []byte { return src }
+			}
 		}
 		return func(src []byte) []byte { return jsrewrite.Rewrite(src, opts) }
 	}

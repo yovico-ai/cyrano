@@ -26,7 +26,17 @@ func TestDirectFetchHeaders(t *testing.T) {
 		for k, v := range hdr {
 			req.Header.Set(k, v)
 		}
-		h.ServeHTTP(httptest.NewRecorder(), req)
+		func() {
+			// A cross-origin request this test upstream does not allow
+			// (no CORS headers) is aborted by the proxy (cors.go); what
+			// went upstream is captured all the same.
+			defer func() {
+				if r := recover(); r != nil && r != http.ErrAbortHandler {
+					panic(r)
+				}
+			}()
+			h.ServeHTTP(httptest.NewRecorder(), req)
+		}()
 		return captured.headers
 	}
 	up, _ := url.Parse(upstream.URL)

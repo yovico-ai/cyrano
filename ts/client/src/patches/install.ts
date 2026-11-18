@@ -20,6 +20,7 @@ import { patchCrossOriginWindows } from "./cross-origin-windows";
 import { patchResponseHeaders } from "./response-headers";
 import { patchEmbeddedContext } from "./embedded";
 import { patchFedCM } from "./fedcm";
+import { patchSelectors } from "./selectors";
 import { patchStorageNames, patchWebStorage, storagePrefix } from "./storage";
 import { patchReflection } from "../native/hidden-globals";
 import { patchDocumentWrite } from "../wrappers/document-write";
@@ -32,7 +33,7 @@ import { patchWebSocket } from "./websocket";
 import { patchEventSource } from "./event-source";
 import { patchWorker } from "./worker";
 import { patchBlobWorkerSource } from "./blob-worker-source";
-import { patchUrlAttributes, patchAnchorUrlReflection } from "./url-attributes";
+import { patchUrlAttributes, patchAnchorUrlReflection, patchAudioConstructor } from "./url-attributes";
 import { patchDynamicHtml } from "./dynamic-html";
 import { patchCssRules } from "./css-rules";
 import { patchCssStyleDeclaration } from "./css-style-declaration";
@@ -54,8 +55,24 @@ export function installPatches(
     internals: Internals,
 ): void {
 
+    // A URL a script hands over resolves against the document's base URL —
+    // a <base href> where the page has one (hackage's points at another
+    // host) — not the page's location. The browser keeps the base, held
+    // proxied; its original is the document's base. (Read with the native
+    // accessor, captured before location.ts wraps it.)
+    const nodeProto = (targetWindow as unknown as { Node?: { prototype: object } }).Node?.prototype;
+    const nativeBaseURI = nodeProto ? Object.getOwnPropertyDescriptor(nodeProto, "baseURI")?.get as ((this: unknown) => string) | undefined : undefined;
+    const documentBase = (): URL => {
+        try {
+            const doc = (targetWindow as unknown as { document?: Document }).document;
+            const raw = doc && nativeBaseURI ? nativeBaseURI.call(doc) : "";
+            const original = raw ? unwrapProxiedUrl(raw, config) : raw;
+            if (original && original !== raw) return new URL(original);
+        } catch { /* the page's location */ }
+        return getCurrentBaseUrl();
+    };
     const rewriteOne = (rawUrl: string): string =>
-        rewriteUrl(rawUrl, getCurrentBaseUrl(), config);
+        rewriteUrl(rawUrl, documentBase(), config);
     const unwrapOne = (proxiedUrl: string): string =>
         unwrapProxiedUrl(proxiedUrl, config);
 
@@ -102,6 +119,7 @@ export function installPatches(
     step("patchDocumentWrite", () => patchDocumentWrite(targetWindow, rewriteOne,
         () => buildBootstrapHtml(config, getCurrentBaseUrl().href), new URL(config.apiBaseURL).origin));
     step("patchUrlAttributes", () => patchUrlAttributes(targetWindow, rewriteOne, unwrapOne));
+    step("patchAudioConstructor", () => patchAudioConstructor(targetWindow, rewriteOne));
     step("patchCssRules", () => patchCssRules(targetWindow, rewriteOne));
     step("patchCssStyleDeclaration", () => patchCssStyleDeclaration(targetWindow, rewriteOne));
     step("patchFunctionConstructor", () => patchFunctionConstructor(targetWindow));
@@ -120,6 +138,8 @@ export function installPatches(
     // it (it may do so in the same breath as creating it).
     if (flattened) step("patchCrossOriginWindows", () => patchCrossOriginWindows(targetWindow, (frame) =>
         injectIntoIframe(frame as HTMLIFrameElement, targetWindow, config, getCurrentBaseUrl().href)));
+    // Selectors on URL attributes find elements by their original URLs (patches/selectors.ts).
+    step("patchSelectors", () => patchSelectors(targetWindow, rewriteOne, config.apiBaseURL));
     step("patchResponseHeaders", () => patchResponseHeaders(targetWindow));
     // FedCM requests would leave the browser outside the proxy (patches/fedcm.ts).
     step("patchFedCM", () => patchFedCM(targetWindow));
@@ -129,7 +149,9 @@ export function installPatches(
     const prefix = storagePrefix(targetWindow, () => getCurrentBaseUrl().origin);
     step("patchWebStorage", () => patchWebStorage(targetWindow, prefix, unwrapOne));
     step("patchStorageNames", () => patchStorageNames(targetWindow, prefix));
-    step("patchDocumentCookie", () => patchDocumentCookie(targetWindow, getCurrentBaseUrl));
+    // (config.skip "cookieGet" / "cookieSet": one half only — development aid.)
+    step("patchDocumentCookie", () => patchDocumentCookie(targetWindow, getCurrentBaseUrl,
+        skip.has("cookieGet") ? "set" : skip.has("cookieSet") ? "get" : undefined));
     // Last: the patches above (and html-rewriter's captured natives) read
     // what elements really hold; from here on, page code reads what it wrote.
     // Every iframe gets the runtime when it loads, if its document did not

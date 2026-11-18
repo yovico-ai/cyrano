@@ -8,6 +8,7 @@
 // origin is the proxy's, so the comparison is made between the windows'
 // original origins, and a delivery goes to the native with the proxy origin.
 
+import { realWindow } from "../native/cross-origin";
 import { rawStackUrls } from "../native/error-stack";
 
 import { internalsOf, registeredWindows, type Internals } from "../native/internals";
@@ -85,8 +86,77 @@ export function nativeOf(win: unknown): ((...a: unknown[]) => unknown) | undefin
 
 /** Sends `args` to `recipient` as `sender` (falls back to the native from here). */
 export function sendAs(sender: unknown, recipient: unknown, args: unknown[], fallback: () => unknown): unknown {
+    const n = nativeOf(recipient);
+    if (n) {
+        const sent = callInRealmOf(sender, n, recipient, args);
+        if (sent !== NOT_SENT) return sent;
+    }
     const send = internalsOf(sender)?.send;
     return send ? send(recipient, args) : fallback();
+}
+
+/**
+ * The browser takes a message's source and origin from the realm of the
+ * calling function (the incumbent realm), not from the window the runtime
+ * acts for. Under the proxy a frame's runtime may be its creator's: a blank
+ * frame the creator injected and that then navigated keeps its Window
+ * object (every document is same-origin to the browser), and with it the
+ * creator's copy of the runtime. The native postMessage is therefore called
+ * from a function compiled in the sender's own realm.
+ */
+const trampolines = new WeakMap<object, (f: unknown, self: unknown, args: unknown[]) => unknown>();
+export const NOT_SENT = Symbol("not sent");
+export function callInRealmOf(sender: unknown, fn: unknown, self: unknown, args: unknown[]): unknown {
+    if (typeof sender !== "object" || sender === null) return NOT_SENT;
+    let t = trampolines.get(sender);
+    if (!t) {
+        try {
+            const F = nativeFunctionOf(sender);
+            if (!F) return NOT_SENT;
+            t = Reflect.construct(F, ["f", "t", "a", "return Reflect.apply(f, t, a)"]) as (f: unknown, self: unknown, args: unknown[]) => unknown;
+            trampolines.set(sender, t);
+        } catch {
+            return NOT_SENT; // really cross-origin, or a realm that refuses
+        }
+    }
+    return t(fn, self, args);
+}
+
+/** A window's native Function constructor (the runtime's stand-in compiles through it too). */
+function nativeFunctionOf(win: object): FunctionConstructor | undefined {
+    try {
+        const fp = Object.getPrototypeOf((win as { Object: { prototype: object } }).Object.prototype.constructor) as { constructor?: FunctionConstructor } | null;
+        const F = fp?.constructor;
+        return typeof F === "function" ? F : (win as { Function?: FunctionConstructor }).Function;
+    } catch {
+        return undefined;
+    }
+}
+
+// ── The sender, told by the calling window's own runtime ────────────────
+
+/**
+ * Rewritten page code reads `x.postMessage` through its own window's
+ * runtime ($rewriter.wrap_postMessage / wrap_member_expression): that
+ * runtime's window is the sender of the call that follows. It is noted on
+ * the recipient, for the recipient's postMessage wrapper. The stack-based
+ * guess (callingWindow) cannot tell two windows apart that run the same
+ * script URL (PayPal's SDK runs in the page and in its button frame).
+ */
+export function markSender(recipient: unknown, sender: Window): void {
+    let i: Internals | undefined;
+    try { i = internalsOf(realWindow(recipient)); } catch { i = undefined; }
+    if (!i) return;
+    i.pendingSender = sender;
+    const mark = i;
+    try { queueMicrotask(() => { if (mark.pendingSender === sender) mark.pendingSender = undefined; }); } catch { /* cleared on use */ }
+}
+
+/** The sender noted for this window's next postMessage, once. */
+export function takeSender(internals: Internals): Window | undefined {
+    const s = internals.pendingSender;
+    internals.pendingSender = undefined;
+    return s;
 }
 
 // ── Finding the calling window ─────────────────────────────────────────

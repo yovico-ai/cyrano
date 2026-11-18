@@ -233,7 +233,7 @@ function identHelper(name: string, o: JsRewriteOptions): string | null {
     return null;
 }
 
-/** R3: `X.name` → the helper X goes through. write/writeln only where called. */
+/** R3: `X.name` → the helper X goes through. write/writeln/postMessage only where called. */
 function memberHelper(name: string, called: boolean, o: JsRewriteOptions): string | null {
     switch (name) {
         case "location": return o.wrapLocation ? "wrap_location" : null;
@@ -241,6 +241,9 @@ function memberHelper(name: string, called: boolean, o: JsRewriteOptions): strin
         case "parent": return o.wrapParentWindow ? "wrap_parent_window" : null;
         case "write":
         case "writeln": return called && o.wrapDocumentWrite ? "wrap_document_write" : null;
+        // The calling window's runtime learns that it is the sender
+        // (messaging/target-origin.ts markSender).
+        case "postMessage": return called && o.wrapPostMessage ? "wrap_postMessage" : null;
     }
     return null;
 }
@@ -254,7 +257,7 @@ function memberHelper(name: string, called: boolean, o: JsRewriteOptions): strin
  *      a compound-assignment or ++/-- target, a declaration, a label, a key.
  *  R2  `location` assigned with `=` (or as a for-in/of target)
  *        →  $rewriter.wrap_set_location(location, function(v){location=v;}).value
- *  R3  X.location / X.top / X.parent, and X.write / X.writeln where called
+ *  R3  X.location / X.top / X.parent, and X.write / X.writeln / X.postMessage where called
  *        →  $rewriter.<h>({obj:X}).name
  *      in an optional chain →  $rewriter.<h>({obj:X,opt:1})?.name
  *      (also X["location"] and the like: a constant key is a name)

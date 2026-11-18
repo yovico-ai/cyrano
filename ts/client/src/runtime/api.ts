@@ -6,6 +6,8 @@
 // stay narrow. Adding a new wrapper means: write the module, import it here,
 // expose it on the returned RewriterApi.
 
+import { crossOriginView } from "../native/cross-origin";
+import { markSender } from "../messaging/target-origin";
 import { isView } from "../native/cross-origin";
 import { buildBootstrapHtml } from "./bootstrap-html";
 import { honourOptionalChains } from "./optional";
@@ -29,6 +31,29 @@ import {
 } from "../wrappers/eval";
 import { injectIntoIframe } from "./iframe-injection";
 
+
+/**
+ * `win[i]` as page code would see it: a holder whose `i` is the
+ * cross-origin view of a child frame of another origin; `win` itself in
+ * every other case. Only frame indices: the value is read through its own
+ * property descriptor, so no getter a page defined on the window ever runs
+ * here (it would run twice, and its own rewritten code would overwrite the
+ * `$__crn_key__` temporary of the access in progress — Ad-Shield's traps).
+ */
+function frameHolder(win: Window, prop: string | number): unknown {
+    if (!(typeof prop === "number" ? Number.isInteger(prop) && prop >= 0 : /^(0|[1-9]\d*)$/.test(prop))) return win;
+    let value: unknown;
+    try {
+        const d = Object.getOwnPropertyDescriptor(win, prop);
+        if (!d || !("value" in d)) return win;
+        value = d.value;
+    } catch {
+        return win;
+    }
+    if (typeof value !== "object" || value === null || value === win) return win;
+    const view = crossOriginView(value, null, win);
+    return view === value ? win : { [prop]: view };
+}
 
 export function createRewriterApi(
     targetWindow: Window,
@@ -106,7 +131,15 @@ export function createRewriterApi(
             // declare the page's effective original URL — same intent as
             // set_base_url. Actually navigating here would create a redirect
             // loop, so we just update the base URL.
-            baseUrlState.setFromHref(href);
+            // A fragment never reaches the server: the URL it declares has
+            // none, and the document's fragment is the one the browser
+            // holds (Stripe passes its frames' parameters there).
+            let full = href;
+            try {
+                const frag = (targetWindow as unknown as { location: Location }).location.hash;
+                if (frag && typeof href === "string" && href.indexOf("#") < 0) full = href + frag;
+            } catch { /* no location */ }
+            baseUrlState.setFromHref(full);
         },
 
         // ── Location proxy ─────────────────────────────────────────────────
@@ -135,7 +168,11 @@ export function createRewriterApi(
 
         // ── Document.write / postMessage / eval / member expression ────────
         wrap_document_write: (arg) => wrapDocumentWrite(arg, rewriteOne, buildBootstrap, initialBaseUrl.origin),
-        wrap_postMessage: (arg) => wrapPostMessage(arg, initialBaseUrl.origin, () => baseUrlState.get().origin, (h) => unwrapProxiedUrl(h, config)),
+        // Reading `x.postMessage` here: this window is the sender of the call that follows.
+        wrap_postMessage: (arg) => {
+            markSender(arg.obj, targetWindow);
+            return wrapPostMessage(arg, initialBaseUrl.origin, () => baseUrlState.get().origin, (h) => unwrapProxiedUrl(h, config));
+        },
         // Computed member access obj[expr] — mirror what the static-access
         // wrappers return so that obj["location"], obj["write"], etc. go
         // through the same interceptors as obj.location, obj.write, etc.
@@ -151,9 +188,17 @@ export function createRewriterApi(
                 case "writeln":
                     return wrapDocumentWrite({ obj }, rewriteOne, buildBootstrap, initialBaseUrl.origin);
                 case "postMessage":
+                    markSender(obj, targetWindow);
                     return wrapPostMessage({ obj }, initialBaseUrl.origin, () => baseUrlState.get().origin, (h) => unwrapProxiedUrl(h, config));
                 case "eval":
                     return wrapEvalMemexp(obj);
+            }
+            // window[i]: a child frame of another origin is
+            // the same object page code gets from the iframe's contentWindow
+            // or a message's source — natively one WindowProxy (PayPal finds
+            // the window a callback came from by enumerating frames).
+            if (obj === targetWindow && (typeof prop === "number" || typeof prop === "string")) {
+                return frameHolder(obj as Window, prop);
             }
             return obj;
         },

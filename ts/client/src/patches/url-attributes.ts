@@ -16,7 +16,7 @@
 import { isTrustedValue, trusted } from "../native/trusted";
 import { rewriteSrcsetAttribute } from "./srcset";
 import { URL_BEARING_ELEMENTS, isSrcsetAttr } from "./url-attribute-map";
-import { wrapAccessor } from "../native/surface";
+import { wrapConstructor, wrapAccessor } from "../native/surface";
 import { originalAttr, recordAttr } from "../native/originals";
 
 type ProtoLike = { prototype: object };
@@ -54,6 +54,22 @@ export function patchUrlAttributes(
             });
         }
     }
+}
+
+/**
+ * new Audio(url): the element is made with its src set by the browser
+ * itself, past the src setter. The URL is proxified, and the page reads
+ * back the one it gave (originals).
+ */
+export function patchAudioConstructor(targetWindow: Window, rewriteOne: (url: string) => string): void {
+    wrapConstructor<typeof Audio>(targetWindow, "Audio", (Native, args, newTarget) => {
+        if (!args.length || args[0] === undefined) return Reflect.construct(Native, args, newTarget as typeof Audio);
+        const given = String(args[0]);
+        const now = rewriteOne(given);
+        const el = Reflect.construct(Native, [now, ...args.slice(1)], newTarget as typeof Audio) as HTMLAudioElement;
+        if (now !== given) recordAttr(el, "src", now, given);
+        return el;
+    });
 }
 
 // The URL parts anchors and areas reflect from their href.

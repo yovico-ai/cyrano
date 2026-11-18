@@ -256,7 +256,7 @@ func (p *parser) identHelper(id uint8) string {
 	return ""
 }
 
-// memberHelper is R3's helper for X.name; write/writeln only where called.
+// memberHelper is R3's helper for X.name; write/writeln/postMessage only where called.
 func (p *parser) memberHelper(name string, called bool) string {
 	switch name {
 	case "location":
@@ -274,6 +274,11 @@ func (p *parser) memberHelper(name string, called bool) string {
 	case "write", "writeln":
 		if called && p.o.WrapDocumentWrite {
 			return "wrap_document_write"
+		}
+	case "postMessage":
+		// The calling window's runtime learns that it is the sender.
+		if called && p.o.WrapPostMessage {
+			return "wrap_postMessage"
 		}
 	}
 	return ""

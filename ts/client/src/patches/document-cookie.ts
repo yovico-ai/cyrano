@@ -35,12 +35,14 @@ export function nativeCookieWrite(value: string, url: URL): string | null {
     return out;
 }
 
-export function patchDocumentCookie(targetWindow: Window, baseUrl: () => URL): void {
+export function patchDocumentCookie(targetWindow: Window, baseUrl: () => URL, only?: "get" | "set"): void {
     wrapAccessor<string>(targetWindow.document, "cookie", {
-        get: (get, self) => cookiesFor(true, baseUrl(), get.call(self)),
-        set: (set, self, value) => {
-            const w = nativeCookieWrite(String(value), baseUrl());
-            if (w !== null) set.call(self, w);
-        },
+        ...(only !== "set" ? { get: (get: (this: unknown) => string, self: unknown) => cookiesFor(true, baseUrl(), get.call(self)) } : {}),
+        ...(only !== "get" ? {
+            set: (set: (this: unknown, v: string) => void, self: unknown, value: string) => {
+                const w = nativeCookieWrite(String(value), baseUrl());
+                if (w !== null) set.call(self, w);
+            },
+        } : {}),
     });
 }

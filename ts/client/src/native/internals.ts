@@ -28,6 +28,12 @@ export interface Internals {
      * one), so the frame tree alone does not reach every window.
      */
     windows?: Set<Ref<Window>>;
+    /**
+     * The window whose rewritten code just read this window's `postMessage`
+     * (messaging/target-origin.ts markSender): the sender of the call that
+     * follows. Cleared once used, and at the end of the turn.
+     */
+    pendingSender?: Window | undefined;
     /** The runtime bootstrap as HTML, for documents this window creates from markup. */
     bootstrapHtml?: () => string;
 }

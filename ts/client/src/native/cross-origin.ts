@@ -32,6 +32,8 @@ interface Viewer {
     navigate: (url: string) => string;
     opener: ((this: Window) => unknown) | undefined;
     views: WeakMap<object, object>;
+    /** Windows page code of this realm already holds as themselves. */
+    handedOut: WeakSet<object>;
 }
 const viewers = new WeakMap<object, Viewer>();
 let nativeContentWindow: ((this: unknown) => Window | null) | undefined;
@@ -41,7 +43,7 @@ const reals = new WeakMap<object, Window>();
 /** Sets up `win`'s views: its original origin, and how it proxifies a URL it navigates to. */
 export function initCrossOrigin(win: Window, origin: () => string, rewriteOne: (url: string) => string): void {
     viewers.set(win, {
-        win, origin, navigate: rewriteOne, views: new WeakMap(),
+        win, origin, navigate: rewriteOne, views: new WeakMap(), handedOut: new WeakSet(),
         opener: Object.getOwnPropertyDescriptor(win, "opener")?.get as Viewer["opener"],
     });
     if (!nativeContentWindow) {
@@ -102,7 +104,14 @@ export function crossOriginView<T>(target: T, pendingOrigin: string | null = nul
     const mine = v.origin();
     const theirs = originalOriginOf(target);
     const cross = pendingOrigin !== null ? pendingOrigin !== mine : theirs !== null && theirs !== mine;
-    if (!cross) return target;
+    // A browser has one WindowProxy for a frame through all its
+    // navigations: page code that took it while the frame was still its own
+    // origin's (a blank frame a script writes into, then navigates) keeps
+    // getting that object, however the frame's origin changes — PayPal
+    // stores callbacks keyed by it and looks them up by a message's source.
+    // (Its cross-origin restrictions are then not enforced for that page.)
+    if (!cross) { v.handedOut.add(target as unknown as object); return target; }
+    if (v.handedOut.has(target as unknown as object)) return target;
     let view = v.views.get(target);
     if (!view) {
         view = makeView(target as unknown as Window, v);

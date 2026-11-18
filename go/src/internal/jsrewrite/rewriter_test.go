@@ -153,10 +153,17 @@ func TestWrapDocumentWrite_NestedObjectWrite_NotWrapped(t *testing.T) {
 // obj.postMessage is the object's own: a window's is wrapped at its surface
 // by the client (patches/post-message.ts), anything else's is called as
 // written. The source is not touched.
-func TestPostMessage_LeftAsWritten(t *testing.T) {
-	for _, src := range []string{`window.postMessage(msg, origin);`, `iframe.contentWindow.postMessage(msg, origin);`} {
-		if got := rewrite(t, src); got != src {
-			t.Errorf("got: %s", got)
+// A called X.postMessage goes through the calling window's runtime, which
+// then knows it is the sender (ts/client messaging markSender); the
+// object itself is returned, so the call is the page's own.
+func TestPostMessage_CalledThroughRuntime(t *testing.T) {
+	for src, want := range map[string]string{
+		`window.postMessage(msg, origin);`:               `$rewriter.wrap_postMessage({obj:window}).postMessage(msg, origin);`,
+		`iframe.contentWindow.postMessage(msg, origin);`: `$rewriter.wrap_postMessage({obj:iframe.contentWindow}).postMessage(msg, origin);`,
+		`var f = w.postMessage;`:                         `var f = w.postMessage;`,
+	} {
+		if got := rewrite(t, src); got != want {
+			t.Errorf("%s\n got: %s\nwant: %s", src, got, want)
 		}
 	}
 }

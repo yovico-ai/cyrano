@@ -32,6 +32,9 @@ async function visit(browser, url, viaProxy) {
     const resp = await page.goto(viaProxy ? prox(url) : url, { waitUntil: "load", timeout: 45000 });
     status = resp ? resp.status() : 0;
     await page.waitForTimeout(2500);
+    // A challenge page: give it time to pass and reload.
+    for (let i = 0; i < 24 && /just a moment|attention required/i.test(await page.title().catch(() => "")); i++) await page.waitForTimeout(500);
+    if (process.env.HEADED === "1") await page.waitForTimeout(1500);
   } catch (e) { navErr = String(e.message).split("\n")[0].slice(0, 160); }
   let p = null;
   try { p = await page.evaluate(probe); } catch (e) { navErr += " | probe: " + String(e.message).slice(0, 120); }
@@ -40,7 +43,12 @@ async function visit(browser, url, viaProxy) {
 }
 
 (async () => {
-  const browser = await chromium.launch();
+  // HEADED=1: real Chrome with a window — sites behind an anti-bot challenge
+  // refuse a headless browser even direct, so there is nothing to compare.
+  const headed = process.env.HEADED === "1";
+  const browser = await chromium.launch(headed
+    ? { channel: "chrome", headless: false, args: ["--disable-blink-features=AutomationControlled"] }
+    : {});
   for (const url of sites) {
     const [d, v] = [await visit(browser, url, false), await visit(browser, url, true)];
     const out = [`\n=== ${url}`, `  status: direct ${d.status}${d.navErr ? " (" + d.navErr + ")" : ""} | cyrano ${v.status}${v.navErr ? " (" + v.navErr + ")" : ""}`];

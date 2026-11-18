@@ -36,7 +36,8 @@ const URL_FUNCTION_RE = /url\(\s*(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|([^)
 // already matched by URL_FUNCTION_RE in the first pass).
 //
 // Captures: [1] double-quoted, [2] single-quoted.
-const IMPORT_STRING_RE = /@import\s+(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)')/g;
+// (No whitespace is needed before the string: minifiers write `@import"…"`.)
+const IMPORT_STRING_RE = /@import\s*(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)')/gi;
 
 /**
  * Rewrites every URL embedded in a CSS source string. Returns the input

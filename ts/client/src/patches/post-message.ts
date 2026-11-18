@@ -13,7 +13,7 @@
 import type { ClientConfig } from "../config";
 import { wrapMethod } from "../native/surface";
 import type { Internals } from "../native/internals";
-import { callingWindow, delivery, installSender, originalOrigin, sendAs } from "../messaging/target-origin";
+import { NOT_SENT, callInRealmOf, callingWindow, delivery, installSender, originalOrigin, sendAs, takeSender } from "../messaging/target-origin";
 
 export function patchPostMessage(
     targetWindow: Window,
@@ -29,12 +29,19 @@ export function patchPostMessage(
     const native = wrapMethod<(...a: unknown[]) => void>(targetWindow, "postMessage", (nativeFn, receiver, args) => {
         // A bare `postMessage(...)` call has no receiver: the global object, as for any Window operation.
         const self = receiver === undefined || receiver === null ? targetWindow : receiver;
-        const sender = callingWindow(targetWindow, runtimeUrl, nameOf, unwrap) ?? targetWindow;
+        const marked = self === targetWindow ? takeSender(internals) : undefined;
+        // A bare `postMessage(…)` names the calling code's own global: this
+        // window is the sender (reCAPTCHA's anchor frame runs the same
+        // script URL as its page, so the stack cannot tell them apart).
+        const bare = receiver === undefined || receiver === null;
+        const sender = marked ?? (bare ? targetWindow : (callingWindow(targetWindow, runtimeUrl, nameOf, unwrap) ?? targetWindow));
         const d = delivery(self, args[1], originalOrigin(sender, unwrap), proxyOrigin, unwrap);
         if (d.kind === "drop") return;
         const next = d.kind === "send" ? [args[0], d.origin, ...args.slice(2)] : args;
         if (sender === self || sender === targetWindow && self === targetWindow) {
-            return Reflect.apply(nativeFn, self, next) as void;
+            // From a function of the sender's own realm (target-origin.ts callInRealmOf).
+            const sent = callInRealmOf(sender, nativeFn, self, next);
+            return (sent === NOT_SENT ? Reflect.apply(nativeFn, self, next) : sent) as void;
         }
         return sendAs(sender, self, next, () => Reflect.apply(nativeFn, self, next)) as void;
     });

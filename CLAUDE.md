@@ -173,7 +173,7 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
   Chrome speaks h3, `featurePolicy.getAllowlistForFeature` naming the proxy
   origin; a stand-in's `.caller` throws (strict function) and V8's own
   messages print its source (`Reflect.construct(Object, [], fetch)`).
-  CORS gaps: no preflight, no opaque responses, XHR never fails the check.
+  CORS gaps: no preflight, no opaque responses.
   Trusted Types gaps: a page's *default* policy is handed the rewritten
   text; `setTimeout(string)` and `javascript:` URLs are not sinks the
   runtime handles.
@@ -196,6 +196,26 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
   the relying site, token exchange) — it needs a person to sign in.
   Cannot work by design: passkeys / WebAuthn (bound to the proxy's
   origin), FedCM / One Tap.
+- **Random-site testing** (2026-11-18; Google 3 random words, compare
+  direct vs proxied with `ts/e2e/tools/live-compare.cjs`, `HEADED=1` on a
+  virtual display — never open windows on the owner's desktop, see memory).
+  Fixed from it: selectors on URL attributes match the original URL
+  (`patches/selectors.ts`; Squarespace ran its scripts twice); the page's
+  own Request goes to fetch as is (a rebuilt one has a stream body HTTP/1.1
+  cannot send); minified `@import"…"` (both runtimes); `fetchLater`,
+  `new Audio(url)`; the CORS check is enforced by the proxy for scripts'
+  cross-origin requests (`proxy/cors.go`: the connection is broken, a
+  network error to page code); script URLs resolve against `<base href>`;
+  the location view keeps the browser's fragment (Stripe); postMessage:
+  a called `X.postMessage` goes through the calling window's runtime (R3,
+  marks the sender), a bare `postMessage()` is its own window's, and the
+  native is called from a trampoline compiled in the sender's realm — a
+  blank frame the creator injected keeps its Window (and the creator's
+  runtime) when it navigates, and the browser takes `event.source` from
+  the calling function's realm (reCAPTCHA, PayPal); a frame handed out as
+  itself stays itself after it becomes cross-origin (one WindowProxy).
+  Not ours: sites whose own server fails (Cloudflare 525 on fpi-inc).
+  Known: blob: URLs carry the proxy's origin.
 - **Measuring pages with many requests (ads): serve the proxy over TLS.**
   Over plain HTTP the browser keeps 6 connections to the proxy for every
   site's traffic and queues the rest; over TLS it multiplexes on HTTP/2.

@@ -44,6 +44,14 @@ export function patchFetch(
         Request?: typeof Request; Response?: typeof Response; Promise?: PromiseConstructor; TypeError?: TypeErrorConstructor;
     };
     const NativeRequest = w.Request;
+    // (Before the accessor is wrapped below: the URL the Request really holds.)
+    const nativeUrl = NativeRequest?.prototype
+        ? Object.getOwnPropertyDescriptor(NativeRequest.prototype, "url")?.get as ((this: unknown) => string) | undefined
+        : undefined;
+    const sameUrl = (a: string, b: string): boolean => {
+        if (a === b) return true;
+        try { return new URL(a).href === new URL(b, a).href; } catch { return false; }
+    };
     const then = (w.Promise ?? Promise).prototype.then;
     const TypeErr = w.TypeError ?? TypeError;
     const headersOf = w.Response?.prototype
@@ -59,8 +67,14 @@ export function patchFetch(
         const original = viaRequest ? input.url : String(input);
         if (nativeRefuses(original, baseUrl)) return Reflect.apply(native, self, args) as Promise<Response>;
         const rewritten = rewriteOne(original);
+        // The page's own Request goes to the native as it is wherever it
+        // already names the proxied URL (the Request constructor below
+        // proxifies it): a Request rebuilt from another has that one's body
+        // as a stream, which no HTTP/1.1 connection can send.
+        const asIs = viaRequest && nativeUrl !== undefined && sameUrl(nativeUrl.call(input), rewritten);
         const plain = (): Promise<Response> => {
             if (!viaRequest) return Reflect.apply(native, self, [rewritten, ...rest]) as Promise<Response>;
+            if (asIs) return Reflect.apply(native, self, args) as Promise<Response>;
             const Req = (NativeRequest ?? Request) as typeof Request; // the native: the URL is rewritten already
             return Reflect.apply(native, self, [new Req(rewritten, input), ...rest]) as Promise<Response>;
         };
@@ -81,20 +95,34 @@ export function patchFetch(
         // The browser refuses this before any request: let it, on the original URL.
         if (cross && mode === "same-origin") return Reflect.apply(native, self, args) as Promise<Response>;
 
-        // Name the requesting origin to the proxy. fetch(input, init) is
-        // fetch(new Request(input, init)); a Request the constructor refuses
-        // is left to the native to refuse.
+        // Name the requesting context to the proxy, in two request headers
+        // (cors.ts) — set where the request's headers are taken from: the
+        // init's when it has any (they replace a Request's), else the
+        // page's Request itself, else a new init. Never by rebuilding the
+        // request (see asIs above).
         let sent: Promise<Response>;
         try {
-            const Req = (NativeRequest ?? Request) as typeof Request;
-            let req = viaRequest ? new Req(rewritten, input) : new Req(rewritten, init);
-            if (viaRequest && init) req = new Req(req, init);
             const from = initiatorValue(cors!.href());
-            if (from) {
-                req.headers.set(INITIATOR, from);
-                req.headers.set(CREDENTIALS, credentialed || (credentials === "same-origin" && !cross) ? "include" : "omit");
+            if (!from) {
+                sent = plain();
+            } else {
+                const mark = (h: Headers): Headers => {
+                    h.set(INITIATOR, from);
+                    h.set(CREDENTIALS, credentialed || (credentials === "same-origin" && !cross) ? "include" : "omit");
+                    return h;
+                };
+                const H = (w as unknown as { Headers: typeof Headers }).Headers;
+                if (init && init.headers !== undefined) {
+                    const first = viaRequest ? (asIs ? input : new (NativeRequest ?? Request)(rewritten, input)) : rewritten;
+                    sent = Reflect.apply(native, self, [first, { ...init, headers: mark(new H(init.headers)) }]) as Promise<Response>;
+                } else if (viaRequest) {
+                    const req = asIs ? input : new (NativeRequest ?? Request)(rewritten, input);
+                    mark(req.headers);
+                    sent = Reflect.apply(native, self, [req, ...rest]) as Promise<Response>;
+                } else {
+                    sent = Reflect.apply(native, self, [rewritten, { ...(init ?? {}), headers: mark(new H()) }]) as Promise<Response>;
+                }
             }
-            sent = Reflect.apply(native, self, [req]) as Promise<Response>;
         } catch {
             sent = plain();
         }
@@ -110,6 +138,15 @@ export function patchFetch(
             corsResponses.set(resp, allow);
             return resp;
         }]) as Promise<Response>;
+    });
+
+    // fetchLater(input, init): a request the browser sends when the page
+    // goes away (ad measurement uses it). The URL is proxified as fetch's.
+    wrapMethod<(...a: unknown[]) => unknown>(targetWindow, "fetchLater", (native, self, args) => {
+        if (!args.length || isRequest(args[0])) return Reflect.apply(native, self, args);
+        const raw = String(args[0]);
+        if (nativeRefuses(raw, baseUrl)) return Reflect.apply(native, self, args);
+        return Reflect.apply(native, self, [rewriteOne(raw), ...args.slice(1)]);
     });
 
     const R = w.Response?.prototype;
