@@ -37,4 +37,22 @@ export interface ClientConfig {
      * document.write'd documents).
      */
     nonce?: string;
+
+    /**
+     * The name of the runtime's Trusted Types policy, which the proxy added
+     * to the page's `trusted-types` directive (native/trusted.ts).
+     */
+    tt?: string;
+
+    /**
+     * Development aid (go/src/cmd/mitmprobe): the page is on its own
+     * origins — URLs are left as they are and the patches that make up for
+     * every page sharing the proxy's origin are not installed. Everything
+     * else (the wrappers, the rewritten scripts) is as under the proxy, so
+     * a site that tells this from a native page tells by those.
+     */
+    identity?: boolean;
+
+    /** Development aid: names of patches (install.ts steps) not to install; "*" for all. */
+    skip?: string[];
 }

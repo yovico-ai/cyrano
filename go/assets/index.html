@@ -110,9 +110,11 @@
     <script>
         function loadProxied(url) {
             if (!url) return;
-            // Prepend scheme if the user typed a bare hostname
+            // A bare hostname goes as Chrome's address bar sends it: http,
+            // which the proxy tries over https first (HTTPS-Upgrades) and
+            // keeps on http only when https fails.
             if (!/^[a-z][a-z0-9+\-.]*:\/\//i.test(url)) {
-                url = 'https://' + url;
+                url = 'http://' + url;
             }
             try {
                 var u = new URL(url);

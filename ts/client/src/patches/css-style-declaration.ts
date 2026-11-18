@@ -64,22 +64,40 @@ function camelToKebab(s: string): string {
     return s.replace(/([A-Z])/g, "-$1").toLowerCase();
 }
 
-let patched = false;
+// Prototypes already patched, per realm (see css-rules.ts).
+const done = new WeakSet<object>();
 
 export function patchCssStyleDeclaration(
-    _targetWindow: Window,
+    targetWindow: Window,
     rewriteOne: (url: string) => string,
 ): void {
-    if (patched) return;
+    const ctor = (targetWindow as unknown as { CSSStyleDeclaration?: { prototype: object } }).CSSStyleDeclaration;
+    let proto: object | null = null;
+    for (let p: object | null = ctor?.prototype ?? null; p; p = Object.getPrototypeOf(p) as object | null) {
+        const d = Object.getOwnPropertyDescriptor(p, "setProperty");
+        if (d && typeof d.value === "function") { proto = p; break; }
+    }
+    if (!proto && !ctor) proto = findCssStyleDeclarationPrototype();
+    if (!proto || done.has(proto)) return;
+    done.add(proto);
 
-    const proto = findCssStyleDeclarationPrototype();
-    if (!proto) return;
-
+    // First: every member of the declaration's prototype accepts a view as
+    // `this` (the URL patches below wrap these).
+    acceptViews(proto);
     patchSetProperty(proto, rewriteOne);
     patchCssTextSetter(proto, rewriteOne);
-    patchNamedSetters(proto, rewriteOne);
+    patchStyleViews(targetWindow, rewriteOne);
+    // The named properties (backgroundImage …) are defined on the
+    // declaration's most-derived prototype — in current Chrome a subclass
+    // (CSSStyleProperties), not CSSStyleDeclaration — so they are looked up
+    // from a real declaration of this realm.
+    let named: object = proto;
+    try {
+        const style = targetWindow.document.createElement("div").style as object;
+        named = Object.getPrototypeOf(style) as object;
+    } catch { /* keep proto */ }
+    patchNamedSetters(named, rewriteOne);
 
-    patched = true;
 }
 
 /**
@@ -143,6 +161,89 @@ function patchNamedSetters(
     for (const propName of URL_BEARING_CAMEL) {
         wrapAccessor<unknown>(proto, propName, {
             set: (set, self, value) => set.call(self, typeof value === "string" ? rewriteCssText(value, rewriteOne) : value),
+        });
+    }
+}
+
+// ── Named properties: a view of each declaration ─────────────────────────
+//
+// In current Chrome a declaration's named properties (backgroundImage,
+// background-image …) are not prototype accessors: they are the object's
+// own properties, and assigning one goes to the engine's named-property
+// setter, which no accessor can intercept. So page code is given, for each
+// declaration, a view: a Proxy whose target is the declaration itself —
+// same prototype, same own properties, same descriptors — that rewrites the
+// value of a URL-bearing property on assignment. One view per declaration
+// (`el.style === el.style`), handed out by every getter that returns one:
+// `style` of elements and of rules. Native methods called on a view get the
+// declaration itself as `this` (acceptViews).
+//
+// Known gap: the property reads back proxified (as setProperty's always
+// has); the element's style attribute reads back as written.
+
+const views = new WeakMap<object, object>(); // declaration → view
+const reals = new WeakMap<object, object>(); // view → declaration
+
+/** The declaration behind a view, or the value itself. */
+const unview = (x: unknown): unknown => (typeof x === "object" && x !== null && reals.get(x)) || x;
+
+function isUrlBearing(name: string): boolean {
+    return URL_BEARING_KEBAB_SET.has(name) || URL_BEARING_KEBAB_SET.has(camelToKebab(name));
+}
+
+function viewOf(decl: unknown, rewriteOne: (url: string) => string): unknown {
+    if (typeof decl !== "object" || decl === null || reals.has(decl)) return decl;
+    let v = views.get(decl);
+    if (!v) {
+        v = new Proxy(decl, {
+            set: (target, p, value, receiver) => {
+                if (typeof p === "string" && typeof value === "string" && isUrlBearing(p)) value = rewriteCssText(value, rewriteOne);
+                // Assignments land on the declaration itself (the engine's setter).
+                return Reflect.set(target, p, value, receiver === v ? target : receiver);
+            },
+            get: (target, p, receiver) => Reflect.get(target, p, receiver === v ? target : receiver),
+            defineProperty: (target, p, d) => {
+                if (typeof p === "string" && "value" in d && typeof d.value === "string" && isUrlBearing(p)) {
+                    d = { ...d, value: rewriteCssText(d.value, rewriteOne) };
+                }
+                return Reflect.defineProperty(target, p, d);
+            },
+        });
+        views.set(decl, v);
+        reals.set(v, decl);
+    }
+    return v;
+}
+
+/** Every method and accessor of `proto` called on a view acts on the declaration. */
+function acceptViews(proto: object): void {
+    for (const key of Reflect.ownKeys(proto)) {
+        if (key === "constructor") continue;
+        const d = Object.getOwnPropertyDescriptor(proto, key);
+        if (!d || !d.configurable) continue;
+        if (typeof d.value === "function") {
+            wrapMethod<(...a: unknown[]) => unknown>(proto, key, (native, self, args) => Reflect.apply(native, unview(self), args));
+        } else if (d.get || d.set) {
+            wrapAccessor<unknown>(proto, key, {
+                ...(d.get ? { get: (get: (this: unknown) => unknown, self: unknown) => get.call(unview(self)) } : {}),
+                ...(d.set ? { set: (set: (this: unknown, v: unknown) => void, self: unknown, value: unknown) => set.call(unview(self), value) } : {}),
+            });
+        }
+    }
+}
+
+/** `style` getters hand out views; the `style` setter (cssText) is rewritten. */
+function patchStyleViews(targetWindow: Window, rewriteOne: (url: string) => string): void {
+    const g = targetWindow as unknown as Record<string, { prototype: object } | undefined>;
+    for (const name of ["HTMLElement", "SVGElement", "MathMLElement", "CSSStyleRule", "CSSPageRule", "CSSFontFaceRule", "CSSKeyframeRule", "CSSNestedDeclarations"]) {
+        const proto = g[name]?.prototype;
+        if (!proto || !Object.prototype.hasOwnProperty.call(proto, "style")) continue;
+        const d = Object.getOwnPropertyDescriptor(proto, "style");
+        if (!d?.get) continue;
+        wrapAccessor<unknown>(proto, "style", {
+            get: (get, self) => viewOf(get.call(self), rewriteOne),
+            ...(d.set ? { set: (set: (this: unknown, v: unknown) => void, self: unknown, value: unknown) =>
+                set.call(self, typeof value === "string" ? rewriteCssText(value, rewriteOne) : value) } : {}),
         });
     }
 }

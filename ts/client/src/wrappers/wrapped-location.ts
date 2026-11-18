@@ -20,7 +20,7 @@
 
 import type { ClientConfig } from "../config";
 import { rewriteUrl, unwrapProxiedUrl } from "../url/containment";
-import { maskAs } from "../native/surface";
+import { maskAs, standIn } from "../native/surface";
 import { originalOrigin } from "../messaging/target-origin";
 
 export type WrappedLocation = Location;
@@ -53,23 +53,27 @@ export function makeLocationView(real: Location, o: LocationViewOptions): Locati
         navigate("assign", next.href);
     };
     const own = (o2: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o2, k);
+    // An about:blank or about:srcdoc document's URL is its own: only its
+    // base URL (and its origin) come from the document that created it.
+    // `location.href` there is "about:blank" and `location.origin` "null".
+    const local = (): boolean => { try { return real.protocol === "about:"; } catch { return false; } };
     const getters: Record<string, () => unknown> = {
-        href: () => o.base().href,
-        origin: () => o.base().origin,
+        href: () => (local() ? real.href : o.base().href),
+        origin: () => (local() ? "null" : o.base().origin),
         ancestorOrigins: () => ancestorOriginsView(real, o),
     };
     const setters: Record<string, (v: string) => void> = {
         href: (v) => navigate("assign", v),
     };
     for (const part of PARTS) {
-        getters[part] = () => o.base()[part];
+        getters[part] = () => (local() ? real[part] : o.base()[part]);
         setters[part] = (v) => setPart(part, v);
     }
     const methods: Record<string, (...a: unknown[]) => unknown> = {
         assign: (u) => navigate("assign", String(u)),
         replace: (u) => navigate("replace", String(u)),
         reload: () => real.reload(),
-        toString: () => o.base().href,
+        toString: () => (local() ? real.href : o.base().href),
     };
 
     const view = Object.create(Object.getPrototypeOf(real) as object) as Record<PropertyKey, unknown>;
@@ -85,24 +89,24 @@ export function makeLocationView(real: Location, o: LocationViewOptions): Locati
         if (own(getters, name) || own(setters, name)) {
             const g = getters[name];
             const s = setters[name];
-            if (g) next.get = d?.get ? maskAs(new Proxy(d.get, { apply: () => g() }), d.get) : g;
-            if (s) next.set = d?.set ? maskAs(new Proxy(d.set, { apply: (_t, _self, a: unknown[]) => s(a[0] as string) }), d.set) : s;
+            if (g) next.get = d?.get ? maskAs(standIn(d.get, { apply: () => g() }), d.get) : g;
+            if (s) next.set = d?.set ? maskAs(standIn(d.set, { apply: (_t, _self, a: unknown[]) => s(a[0] as string) }), d.set) : s;
         } else if (own(methods, name)) {
             const m = methods[name]!;
             const native = d?.value as ((...a: unknown[]) => unknown) | undefined;
-            next.value = typeof native === "function" ? maskAs(new Proxy(native, { apply: (_t, _self, a: unknown[]) => m(...a) }), native) : m;
+            next.value = typeof native === "function" ? maskAs(standIn(native, { apply: (_t, _self, a: unknown[]) => m(...a) }), native) : m;
             next.writable = d ? d.writable === true : false;
         } else if (d) {
             // Anything else (valueOf, Symbol.toPrimitive, …): the real member,
             // its functions acting on the real object.
             if ("value" in d) {
                 next.value = typeof d.value === "function" && k !== "valueOf"
-                    ? maskAs(new Proxy(d.value as (...a: unknown[]) => unknown, { apply: (t, _self, a: unknown[]) => Reflect.apply(t, real, a) }), d.value as object)
+                    ? maskAs(standIn(d.value as (...a: unknown[]) => unknown, { apply: (t, _self, a: unknown[]) => Reflect.apply(t, real, a) }), d.value as object)
                     : d.value;
                 next.writable = d.writable === true;
             } else {
-                if (d.get) next.get = maskAs(new Proxy(d.get, { apply: (t) => Reflect.apply(t, real, []) }), d.get);
-                if (d.set) next.set = maskAs(new Proxy(d.set, { apply: (t, _self, a: unknown[]) => Reflect.apply(t, real, a) }), d.set);
+                if (d.get) next.get = maskAs(standIn(d.get, { apply: (t) => Reflect.apply(t, real, []) }), d.get);
+                if (d.set) next.set = maskAs(standIn(d.set, { apply: (t, _self, a: unknown[]) => Reflect.apply(t, real, a) }), d.set);
             }
         } else {
             continue;
@@ -170,9 +174,9 @@ function ancestorOriginsView(real: Location, o: LocationViewOptions): unknown {
             if (k === "length") return list.length;
             const i = index(k);
             if (i !== null) return list[i];
-            if (k === "item" && item) return maskAs(new Proxy(item as (...a: unknown[]) => unknown, { apply: (_t, _s, a: unknown[]) => list[Number(a[0])] ?? null }), item);
-            if (k === "contains" && contains) return maskAs(new Proxy(contains as (...a: unknown[]) => unknown, { apply: (_t, _s, a: unknown[]) => list.includes(String(a[0])) }), contains);
-            if (k === Symbol.iterator && iter) return maskAs(new Proxy(iter as (...a: unknown[]) => unknown, { apply: () => list[Symbol.iterator]() }), iter);
+            if (k === "item" && item) return maskAs(standIn(item as (...a: unknown[]) => unknown, { apply: (_t, _s, a: unknown[]) => list[Number(a[0])] ?? null }), item);
+            if (k === "contains" && contains) return maskAs(standIn(contains as (...a: unknown[]) => unknown, { apply: (_t, _s, a: unknown[]) => list.includes(String(a[0])) }), contains);
+            if (k === Symbol.iterator && iter) return maskAs(standIn(iter as (...a: unknown[]) => unknown, { apply: () => list[Symbol.iterator]() }), iter);
             return Reflect.get(t, k, t);
         },
         has(t, k) {

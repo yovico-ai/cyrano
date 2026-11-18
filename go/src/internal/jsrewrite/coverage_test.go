@@ -49,3 +49,20 @@ func TestRewrite_ReachesEveryExpressionPosition(t *testing.T) {
 		}
 	}
 }
+
+// A wrapped member in an optional chain must still short-circuit on a
+// nullish object (ibm.com: digitalData?.user?.location?.country): the
+// helper is passed opt and the access after it is optional.
+func TestRewrite_OptionalChainKeepsShortCircuit(t *testing.T) {
+	for src, want := range map[string]string{
+		`x = d?.user?.location?.country;`: `$rewriter.wrap_location({obj:d?.user,opt:1})?.location?.country`,
+		`x = d?.user.location.country;`:   `$rewriter.wrap_location({obj:d?.user,opt:1})?.location.country`,
+		`x = d?.w?.top?.y;`:               `$rewriter.wrap_top_window({obj:d?.w,opt:1})?.top?.y`,
+		`x = d.user.location.country;`:    `$rewriter.wrap_location({obj:d.user}).location.country`,
+	} {
+		out := string(Unmarked(Rewrite([]byte(src), DefaultOptions())))
+		if !bytes.Contains([]byte(out), []byte(want)) {
+			t.Errorf("in:  %s\n out: %s\n want it to contain: %s", src, out, want)
+		}
+	}
+}

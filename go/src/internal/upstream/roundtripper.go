@@ -16,6 +16,8 @@
 package upstream
 
 import (
+	"github.com/bogdanfinn/fhttp/httptrace"
+	"github.com/yovico/cyrano/internal/dnscache"
 	"github.com/yovico/cyrano/internal/headerorder"
 	"net"
 	"net/http"
@@ -74,7 +76,8 @@ type RoundTripper struct {
 // NewRoundTripper returns a RoundTripper. skipVerify disables upstream TLS
 // certificate verification (dev-only; wired from the --insecure flag).
 func NewRoundTripper(skipVerify bool) *RoundTripper {
-	tcpDialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	// Names resolve through the shared host cache (dnscache), as a browser's do.
+	tcpDialer := &dnscache.Dialer{Dialer: net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}}
 	return &RoundTripper{
 		skipVerify: skipVerify,
 		plain: &http.Transport{
@@ -91,6 +94,16 @@ func NewRoundTripper(skipVerify bool) *RoundTripper {
 
 // RoundTrip dispatches req to the browser-impersonating client (https) or the
 // stdlib transport (everything else).
+// ConnInfo, put in a request's context under ConnInfoKey, is filled with
+// the connection that carried the request.
+type ConnInfo struct {
+	Local, Remote string
+	Reused        bool
+}
+
+// ConnInfoKey is the context key of a *ConnInfo.
+type ConnInfoKey struct{}
+
 func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.URL.Scheme != "https" {
 		if p := exactPath(req.URL); p != "" {
@@ -112,13 +125,31 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	// within a session reuse/multiplex while sessions stay isolated from one
 	// another. Session-less requests (pre-login navigations, static probes)
 	// share the "" bucket; they carry no session credentials.
+	//
+	// And per host: the impersonation client holds one lock across the whole
+	// first dial (DNS, TCP, TLS handshake) to any new host, so one client per
+	// session made a page's hundreds of hosts connect one after another —
+	// seconds, by which time header-bidding auctions had given up. Its
+	// connection pool is per host anyway; per-host clients only stop the
+	// hosts from waiting for each other.
 	sessionID, _ := req.Context().Value(SessionKey{}).(string)
-	client, err := rt.clientFor(sessionID+"\x00"+profileKey, profile)
+	client, err := rt.clientFor(sessionID+"\x00"+profileKey+"\x00"+strings.ToLower(req.URL.Host), profile)
 	if err != nil {
 		return nil, err
 	}
 
-	fReq, err := fhttp.NewRequestWithContext(req.Context(), req.Method, req.URL.String(), req.Body)
+	// Which connection carries the request (debug: a challenge's clearance
+	// is bound to the client address; see ConnInfo).
+	ctx := req.Context()
+	if info, ok := ctx.Value(ConnInfoKey{}).(*ConnInfo); ok {
+		ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(g httptrace.GotConnInfo) {
+			info.Reused = g.Reused
+			if g.Conn != nil {
+				info.Local, info.Remote = g.Conn.LocalAddr().String(), g.Conn.RemoteAddr().String()
+			}
+		}})
+	}
+	fReq, err := fhttp.NewRequestWithContext(ctx, req.Method, req.URL.String(), req.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +260,7 @@ func (rt *RoundTripper) clientFor(key string, profile profiles.ClientProfile) (t
 		// H3 only kicks in after Alt-Svc; a real Chrome's first contact is h2.
 		// Keeping to h2/h1 makes the outbound path predictable.
 		tls_client.WithDisableHttp3(),
-		tls_client.WithDialer(net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}),
+		tls_client.WithDialContext((&dnscache.Dialer{Dialer: net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}}).DialContext),
 		tls_client.WithTransportOptions(&tls_client.TransportOptions{
 			MaxIdleConns:        100,
 			MaxIdleConnsPerHost: 8,

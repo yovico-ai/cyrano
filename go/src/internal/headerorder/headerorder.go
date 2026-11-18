@@ -312,12 +312,12 @@ func ChromeDefault(have []string, navigation bool) []string {
 	nav := []string{
 		"content-length", "cache-control", "pragma", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "origin", "content-type",
 		"upgrade-insecure-requests", "user-agent", "accept", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-user", "sec-fetch-dest",
-		"referer", "accept-encoding", "accept-language", "cookie", "priority",
+		"sec-fetch-storage-access", "referer", "accept-encoding", "accept-language", "cookie", "priority",
 	}
 	other := []string{
 		"content-length", "pragma", "cache-control", "sec-ch-ua-platform", "authorization", "user-agent", "sec-ch-ua", "content-type",
 		"\x00custom", "dnt", "sec-ch-ua-mobile", "accept", "range", "origin", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest",
-		"referer", "accept-encoding", "accept-language", "if-none-match", "if-modified-since", "cookie", "priority",
+		"sec-fetch-storage-access", "referer", "accept-encoding", "accept-language", "if-none-match", "if-modified-since", "cookie", "priority",
 	}
 	tmpl := other
 	if navigation {

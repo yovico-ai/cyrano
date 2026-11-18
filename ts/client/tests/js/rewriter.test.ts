@@ -1,243 +1,86 @@
-// @vitest-environment node
-//
-// JS rewriter parity tests. Mirrors go/src/internal/jsrewrite/rewriter_test.go
-// — the same input must produce semantically equivalent output (the wrapped
-// runtime call shapes the server emits).
-//
-// Note: astring's serialization differs from tdewolff's in cosmetic ways
-// (whitespace, line breaks around object literals, parens). Tests assert on
-// pattern presence rather than exact bytes — what matters is that the right
-// wrap_* calls appear in the right positions, not the formatting.
+// The JS rewriting rules (R1…R11 in src/js/rewriter.ts), as edits spliced
+// into the page's own text. For each case: the code that runs (markers
+// removed), and three invariants — the original comes back byte for byte,
+// the output parses, and no line is added.
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { defaultJsRewriteOptions, rewriteJsSource } from "../../src/js/rewriter";
+import { original, unmarked } from "../../src/js/marks";
 
 const all = defaultJsRewriteOptions();
 
-/** Collapse all whitespace runs to a single space, for format-tolerant comparison. */
-function squash(s: string): string {
-    return s.replace(/\s+/g, " ").trim();
+/** The rewritten code as it runs, without the preamble. */
+function code(out: string): string {
+    return unmarked(out).replace(/var \$rewriter=globalThis.*?\$__crn_key__\|\|0;/, "");
 }
 
-describe("rewriteJsSource — already-rewritten input is left alone", () => {
-    it("does not double-wrap input containing $rewriter.wrap_", () => {
-        const src = "$rewriter.wrap_get_location(location);";
-        const got = rewriteJsSource(src, all);
-        // The preamble is prepended for eval-context accessibility, but the
-        // original $rewriter.wrap_get_location call must appear unchanged.
-        expect(got).toContain(src);
-        expect(got).not.toContain("$rewriter.wrap_get_location($rewriter"); // no double-wrap
+// The cases are shared with the Go rewriter (spec/js-rewrite/cases.json):
+// [rule, source, the code that must run].
+const cases = JSON.parse(readFileSync(resolve(__dirname, "../../../../spec/js-rewrite/cases.json"), "utf8")) as Array<[string, string, string]>;
+
+
+describe("JS rewriting rules", () => {
+    it.each(cases)("%s: %s", (_rule, src, want) => {
+        const out = rewriteJsSource(src, all);
+        expect(code(out)).toBe(want);
+        expect(original(out)).toBe(src);
+        expect(out.split("\n").length).toBe(src.split("\n").length);
+        expect(() => new Function(out.replace(/\bimport\(/g, "imp("))).not.toThrow();
     });
 
-    it("skips input containing $rewriter_init(", () => {
-        const src = "$rewriter_init(window, cfg);";
-        expect(rewriteJsSource(src, all)).toBe(src);
-    });
-});
-
-describe("rewriteJsSource — fail-open on parse error", () => {
-    it("returns the source unchanged when parsing fails", () => {
-        const src = "this is not (valid (((";
-        expect(rewriteJsSource(src, all)).toBe(src);
+    it("keeps the page's own formatting and comments, byte for byte", () => {
+        const src = "function f ( a,b ){\n  // a comment\n  return a  +  b /* odd   spacing */ ;\n}\nx = f(1,2) , location.href";
+        const out = rewriteJsSource(src, all);
+        expect(original(out)).toBe(src);
+        expect(code(out)).toBe(src.replace("location", "$rewriter.wrap_get_location(location)"));
     });
 
-    it("empty input passes through", () => {
+    it("the preamble goes after a leading use-strict directive, and adds no line", () => {
+        const out = rewriteJsSource('"use strict";\nx = top;', all);
+        expect(unmarked(out)).toMatch(/^"use strict";var \$rewriter=/);
+        expect(out.split("\n").length).toBe(2);
+        expect(original(out)).toBe('"use strict";\nx = top;');
+    });
+
+    it("module specifiers and import.meta.url, with the script's URL", () => {
+        const o = { ...all, baseUrl: "https://cdn.example/app/main.js", proxify: (s: string, b: string) => (/^\.{0,2}\//.test(s) ? "P:" + new URL(s, b).href : s) };
+        const src = 'import a from "./a.js"; import "react"; export * from "../b.js"; x = import.meta.url; import("./c.js"); import(v);';
+        const out = rewriteJsSource(src, o);
+        expect(code(out)).toBe('import a from "P:https://cdn.example/app/a.js"; import "react"; export * from "P:https://cdn.example/b.js"; ' +
+            'x = "https://cdn.example/app/main.js"; import("P:https://cdn.example/app/c.js"); import($rewriter.wrap_import_arg(v,"https://cdn.example/app/main.js"));');
+        expect(original(out)).toBe(src);
+    });
+
+    it("a function's own source is recoverable from what the engine reports", () => {
+        const src = "function f(a) { return a[location.hash] }";
+        const out = rewriteJsSource(src, all);
+        const f = new Function(out + "; return f;")() as () => unknown;
+        expect(original(Function.prototype.toString.call(f))).toBe(src);
+        // An arrow function's expression body: the closing marker falls outside its source.
+        const arrow = new Function("return " + rewriteJsSource("x => x[top]", all).replace(/^.*?\|\|0;\/\*\x7f\*\//, ""))() as () => unknown;
+        expect(original(Function.prototype.toString.call(arrow))).toBe("x => x[top]");
+    });
+
+    it("leaves alone what does not parse, what is already rewritten, and what is empty", () => {
+        expect(rewriteJsSource("this is not js (", all)).toBe("this is not js (");
+        const already = "var x = $rewriter.wrap_get_location(location);";
+        expect(unmarked(rewriteJsSource(already, all))).toContain(already);
         expect(rewriteJsSource("", all)).toBe("");
-    });
-});
-
-describe("rewriteJsSource — bare identifiers (rvalue)", () => {
-    it("wraps `location` rvalue in wrap_get_location", () => {
-        const got = rewriteJsSource("var x = location;", all);
-        expect(got).toContain("$rewriter.wrap_get_location(location)");
+        expect(rewriteJsSource("var a = 1;", all)).toBe("var a = 1;");
     });
 
-    it("wraps `top` rvalue in wrap_get_top_window", () => {
-        const got = rewriteJsSource("var t = top;", all);
-        expect(got).toContain("$rewriter.wrap_get_top_window(top)");
+    it("the marker character alone in a script's own strings does not prevent marking", () => {
+        const src = "var s = 'a\x7fb*\x7f'; function f(o, k) { return o[k] + top }";
+        expect(original(rewriteJsSource(src, all))).toBe(src);
     });
 
-    it("wraps `parent` rvalue in wrap_get_top_window (v1 reuses the same helper)", () => {
-        const got = rewriteJsSource("var p = parent;", all);
-        expect(got).toContain("$rewriter.wrap_get_top_window(parent)");
-    });
-
-    it("wraps `eval` rvalue in wrap_eval", () => {
-        const got = rewriteJsSource("var f = eval;", all);
-        expect(got).toContain("$rewriter.wrap_eval(eval)");
-    });
-});
-
-describe("rewriteJsSource — `location = X` (set_location)", () => {
-    it("rewrites bare assignment to location", () => {
-        const got = rewriteJsSource("location = 'http://x';", all);
-        expect(got).toContain("$rewriter.wrap_set_location(location");
-        expect(got).toMatch(/\.value\s*=\s*['"]http:\/\/x['"]/);
-    });
-
-    it("`location = location` rewrites both sides — set on LHS, get on RHS", () => {
-        const got = rewriteJsSource("location = location;", all);
-        expect(got).toContain("$rewriter.wrap_set_location");
-        expect(got).toContain("$rewriter.wrap_get_location(location)");
-    });
-});
-
-describe("rewriteJsSource — `obj.X` member-access wrapping", () => {
-    it("wraps obj.location with wrap_location", () => {
-        const got = squash(rewriteJsSource("var x = window.location;", all));
-        expect(got).toContain("$rewriter.wrap_location({ obj: window }).location");
-    });
-
-    it("wraps obj.top with wrap_top_window", () => {
-        const got = squash(rewriteJsSource("var t = window.top;", all));
-        expect(got).toContain("$rewriter.wrap_top_window({ obj: window }).top");
-    });
-
-    it("wraps obj.parent with wrap_parent_window", () => {
-        const got = squash(rewriteJsSource("var p = window.parent;", all));
-        expect(got).toContain("$rewriter.wrap_parent_window({ obj: window }).parent");
-    });
-
-    it("wraps doc.write with wrap_document_write", () => {
-        const got = squash(rewriteJsSource("document.write('<p>x</p>');", all));
-        expect(got).toContain("$rewriter.wrap_document_write({ obj: document }).write(");
-    });
-
-    it("wraps doc.writeln with wrap_document_write", () => {
-        const got = squash(rewriteJsSource("document.writeln('x');", all));
-        expect(got).toContain("$rewriter.wrap_document_write({ obj: document }).writeln(");
-    });
-
-    it("wraps obj.postMessage with wrap_postMessage", () => {
-        const got = squash(rewriteJsSource("window.postMessage(msg, '*');", all));
-        expect(got).toContain("$rewriter.wrap_postMessage({ obj: window }).postMessage(");
-    });
-
-    it("wraps obj.eval with wrap_eval_memexp", () => {
-        const got = squash(rewriteJsSource("window.eval('1+1');", all));
-        expect(got).toContain("$rewriter.wrap_eval_memexp(window).eval(");
-    });
-});
-
-describe("rewriteJsSource — eval call argument wrapping", () => {
-    it("wraps the first argument of bare eval(...)", () => {
-        const got = rewriteJsSource("eval('var x = 1;');", all);
-        expect(got).toContain("$rewriter.wrap_eval_arg(eval, 'var x = 1;')");
-        // Must NOT also wrap eval as a value (would produce
-        // $rewriter.wrap_eval_arg($rewriter.wrap_eval(eval), ...)).
-        expect(got).not.toContain("wrap_eval_arg($rewriter.wrap_eval");
-    });
-
-    it("preserves trailing args in eval(arg, ...)", () => {
-        const got = rewriteJsSource("eval('x', 'y', 'z');", all);
-        expect(got).toContain("$rewriter.wrap_eval_arg(eval, 'x')");
-        expect(got).toContain("'y'");
-        expect(got).toContain("'z'");
-    });
-});
-
-describe("rewriteJsSource — computed member expressions", () => {
-    it("wraps obj[expr] with wrap_member_expression using $__crn_key__", () => {
-        const got = rewriteJsSource("var x = obj['locat' + 'ion'];", all);
-        expect(got).toContain("$rewriter.wrap_member_expression(obj");
-        expect(got).toContain("$__crn_key__");
-    });
-});
-
-describe("rewriteJsSource — recursive descent", () => {
-    it("rewrites inside if/else", () => {
-        const got = rewriteJsSource("if (location) { var x = top; }", all);
-        expect(got).toContain("$rewriter.wrap_get_location(location)");
-        expect(got).toContain("$rewriter.wrap_get_top_window(top)");
-    });
-
-    it("rewrites inside function body", () => {
-        const got = rewriteJsSource("function f() { return location; }", all);
-        expect(got).toContain("$rewriter.wrap_get_location(location)");
-    });
-
-    it("rewrites inside arrow function body", () => {
-        const got = rewriteJsSource("var f = () => location;", all);
-        expect(got).toContain("$rewriter.wrap_get_location(location)");
-    });
-
-    it("rewrites inside template literal expressions", () => {
-        const got = rewriteJsSource("`prefix-${location}-suffix`;", all);
-        expect(got).toContain("$rewriter.wrap_get_location(location)");
-    });
-
-    it("rewrites inside conditional / ternary", () => {
-        const got = rewriteJsSource("var x = a ? location : top;", all);
-        expect(got).toContain("$rewriter.wrap_get_location(location)");
-        expect(got).toContain("$rewriter.wrap_get_top_window(top)");
-    });
-
-    it("rewrites inside try/catch", () => {
-        const got = rewriteJsSource("try { var x = location; } catch(e) {}", all);
-        expect(got).toContain("$rewriter.wrap_get_location(location)");
-    });
-
-    it("rewrites inside for loops", () => {
-        const got = rewriteJsSource("for (var i = 0; i < 1; i++) { var x = location; }", all);
-        expect(got).toContain("$rewriter.wrap_get_location(location)");
-    });
-});
-
-describe("rewriteJsSource — selective rule disabling", () => {
-    it("only the enabled rules fire", () => {
-        const opts = { ...defaultJsRewriteOptions(), wrapLocation: false };
-        const got = rewriteJsSource("var x = window.location;", opts);
-        // wrap_location disabled → should NOT wrap
-        expect(got).not.toContain("$rewriter.wrap_location");
-        // window.location is still in the source unchanged
-        expect(got).toContain("window.location");
-    });
-
-    it("a rule turned off mid-set leaves matching nodes untouched", () => {
-        const opts = { ...defaultJsRewriteOptions(), wrapGetLocation: false };
-        const got = rewriteJsSource("var x = location;", opts);
-        expect(got).not.toContain("wrap_get_location");
-        expect(got).toContain("location");
-    });
-});
-
-describe("rewriteJsSource — eval preamble frame-walk fallback", () => {
-    it("preamble includes parent-frame walk for $rewriter in contexts without bootstrap", () => {
-        // Any rewrite that produces $rewriter.* calls gets the preamble.
-        // The preamble must not just read window.$rewriter — it must walk up
-        // the frame tree so ad iframes (no bootstrap) can borrow it from the
-        // parent. Verify the frame-walk is present in the emitted code.
-        const got = rewriteJsSource("var x = location;", all);
-        expect(got).toContain("globalThis.$rewriter");
-        expect(got).toContain("_w.parent.$rewriter"); // frame-walk fallback
-    });
-
-    it("preamble runs where there is no window (workers)", () => {
-        const got = rewriteJsSource("var x = location;", all);
-        const preamble = got.slice(0, got.indexOf("\n"));
-        // Evaluated with no `window` in scope and no `parent`: must not throw.
-        const run = new Function("globalThis", `"use strict"; ${preamble.replace(/^var /, "let ")}; return $rewriter;`);
-        expect(run({ $rewriter: "R" })).toBe("R");
-        expect(run({})).toBe(null);
-    });
-
-    it("preamble does not appear for code with no $rewriter references", () => {
-        const got = rewriteJsSource("var x = a + b;", all);
-        expect(got).not.toContain("_w.parent.$rewriter");
-    });
-});
-
-describe("rewriteJsSource — non-rewrite cases", () => {
-    it("local `var location = ...` is still rewritten on the rvalue side", () => {
-        // Note: server rewriter doesn't track scopes either. Bare `location`
-        // name matches always. Documented behavior, parity with server.
-        const got = rewriteJsSource("var location = 1;", all);
-        // Init expression `1` doesn't reference location, so no wrap fires.
-        expect(got).toContain("var location = 1");
-    });
-
-    it("plain code without any hooked identifiers passes through unchanged-ish", () => {
-        const got = rewriteJsSource("var x = a + b;", all);
-        expect(got).not.toContain("wrap_");
+    it("a script holding what reads as a marker is rewritten without markers", () => {
+        const src = "x = '/*\x7f'; y = top;";
+        expect(rewriteJsSource(src, all)).toContain("y = $rewriter.wrap_get_top_window(top);");
+        // … and then nothing separates an insertion from a keyword before it.
+        expect(rewriteJsSource("x = '/*\x7f'; function f(a, k) { return[a][k] }", all))
+            .toContain("return $rewriter.wrap_member_expression([a],$__crn_key__=(k))[$__crn_key__]");
     });
 });

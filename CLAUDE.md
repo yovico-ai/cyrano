@@ -31,6 +31,11 @@ same fix and vice versa. The two runtimes must stay byte-compatible: server
 rewrites static HTML; the client rewrites dynamically-set attributes. A bug
 fixed in only one runtime will still show up for the other's code paths.
 
+**JS rewriting rules live in one place** — `ts/client/src/js/rewriter.ts`
+(R1…R12) with shared cases in `spec/js-rewrite/cases.json`. A rule change
+goes into the TS reference, the Go recognizer and the cases file together,
+then the corpus comparison is rerun (`spec/js-rewrite/README.md`).
+
 **URL containment and srcset have an executable spec** in `spec/` (Agda;
 see `spec/README.md`). For those rules, change the spec first, then both
 runtimes, then run `env -u LD_LIBRARY_PATH nix develop --command make
@@ -87,7 +92,9 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
 ## Library choices
 
 - `golang.org/x/net/html` — token-stream HTML parser (no full DOM).
-- `github.com/tdewolff/parse/v2/js` — JS lexer + parser + AST (~50 MB/s).
+- JS: our own recognizer (`go/src/internal/jsrewrite/recognizer.go`,
+  ~60 MB/s, no tree); TS uses acorn as the reference implementation.
+  `tdewolff/parse/v2/js` remains only for the `--prettify` debug formatter.
 - `github.com/tdewolff/parse/v2/css` — CSS lexer (token-based).
 - Stdlib `net/http/httputil.ReverseProxy` with Director + ModifyResponse.
 - Stdlib `http.Hijacker` + raw TCP for WebSocket — no third-party WS lib.
@@ -95,17 +102,24 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
 
 ## Known gaps
 
-- **Reading markup back** is done for attributes, script/style text set
-  by scripts, and serialization (`native/originals.ts`,
-  `patches/read-back.ts`; the server carries originals in the `crn-o`
-  attribute, consumed before page scripts run). Still open: `attributes` /
-  `getAttributeNames` list what the element holds (a dropped `integrity` is
-  missing from the list); an inline script rewritten by the server or inside
-  an HTML string reads back rewritten; CSS attribute selectors match the
-  rewritten values; `crossOrigin` reads the forced value.
-- **JS source is visible**: a rewritten function's `toString()` shows the
-  rewritten source (and `--prettify` reformats it).
-- **CSP** is weakened, not translated (`proxy/csp.go`, `html-rewriter.ts`);
+- **Reading markup back** is done for attributes, script/style text
+  (set by scripts, or rewritten by the server: the marked edits are taken
+  out), an ancestor's `textContent`, a script's text node, and
+  serialization (`native/originals.ts`, `patches/read-back.ts`; the server
+  carries originals in the `crn-o` attribute, consumed before page scripts
+  run). Still open: `attributes` / `getAttributeNames` list what the
+  element holds (a dropped `integrity` is missing from the list); a
+  `<meta http-equiv=content-security-policy>` reads its rewritten
+  `content`; CSS attribute selectors match the rewritten values;
+  `crossOrigin` reads the forced value.
+- **JS source**: scripts are not re-printed; edits are spliced in and
+  marked, and taken out again for `toString()` and script text
+  (`spec/js-rewrite/README.md`). Open: stack-trace columns are the
+  rewritten text's; a server-rewritten inline script's text is restored
+  only through the read-back paths (not CSS attribute selectors etc.).
+- **CSP** is weakened, not translated (`urlrewrite/csp.go`,
+  `html-rewriter.ts`) — source lists gain the proxy origin; Trusted Types
+  directives are kept and enforced;
   a faithful translation (host-sources → proxied path prefixes, rehashed
   inline scripts) is not done. CSS `url()` handling still differs between
   Go (lexer) and TS (regex).
@@ -120,16 +134,92 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
   there: delegation, `<meta>` Accept-CH, the first cross-site navigation).
   Compression dictionaries are never registered. TLS never resumes a
   session (no `pre_shared_key`), as a first connection.
-- **Cloudflare**: x.com, claude.ai, nowsecure.nl pass in real Chrome. A
-  managed challenge (scrapingcourse.com/cloudflare-challenge) runs fully
-  but ends at the interactive checkbox where direct passes silently —
-  cause not yet found (suspects: Private Access Token 401, remaining
-  runtime tells). Google search answers `/sorry` through the proxy.
+- **Cloudflare**: x.com, claude.ai, nowsecure.nl pass in real Chrome; the
+  managed challenge at scrapingcourse.com/cloudflare-challenge passes
+  silently through the proxy (2026-11-18), as direct. Its root cause was
+  the CSP translation dropping the page's Trusted Types directives: the
+  challenge frame asks for `require-trusted-types-for 'script'` and tells
+  when it is not enforced. They stay now, with a policy of the runtime's
+  own admitted (`urlrewrite.RewriteCSP`, `TrustedTypesPolicy`;
+  `native/trusted.ts` — every sink the runtime writes into gets a trusted
+  value where the page gave one).
+  **How it was found — use this before guessing again:** `go/src/cmd/mitmprobe`
+  is a forward proxy for a *native* page (Chrome `--proxy-server`,
+  `--ignore-certificate-errors`): plain, it sends the browser's traffic
+  through cyrano's upstream transport untouched (passes ⇒ the network leg
+  is clean); `-csp`, `-shift`, `-decode` apply one of cyrano's changes to
+  an otherwise native page; `-via <cyrano>` runs cyrano's rewriting and
+  runtime on native origins (`config.identity`, `config.skip`,
+  `CYRANO_DEBUG_NO_JS`). One change at a time against a passing baseline
+  finds the cause in minutes; diffing what scripts read did not. Headed
+  Chrome via Playwright passes the challenge direct (headless does not).
+  What the challenge's scripts check is public:
+  github.com/bisqet/turnstile-deobfuscated.
+  Other tells fixed on the way (none of them the decider): function
+  stand-ins are real functions, never Proxies (`native/surface.ts` standIn:
+  `Object.setPrototypeOf(f, f)` and V8's frame naming tell a Proxy), so are
+  `eval`/`Function`/`Error`; CORS for cross-origin fetch/XHR
+  (`patches/cors.ts`: exposed headers, the check, `Crn-I`/`Crn-C` request
+  headers naming the context and credentials mode to the proxy);
+  `Sec-Fetch-Storage-Access` for third-party frames
+  (`proxy/storage_access.go`); original body sizes in performance entries
+  (Server-Timing metric `crnb`); read-back of script text through
+  ancestors' `textContent`, text nodes and `XMLSerializer`;
+  `Notification.permission` in a third-party frame (`patches/embedded.ts`).
+  Still different in a third-party frame: Permissions Policy (features with
+  a 'self' default stay on: `document.featurePolicy`, `permissions.query`,
+  `screen.isExtended`), the parent's timing entry for the frame (natively
+  zeroed without Timing-Allow-Origin), `nextHopProtocol` h2 where a direct
+  Chrome speaks h3, `featurePolicy.getAllowlistForFeature` naming the proxy
+  origin; a stand-in's `.caller` throws (strict function) and V8's own
+  messages print its source (`Reflect.construct(Object, [], fetch)`).
+  CORS gaps: no preflight, no opaque responses, XHR never fails the check.
+  Trusted Types gaps: a page's *default* policy is handed the rewritten
+  text; `setTimeout(string)` and `javascript:` URLs are not sinks the
+  runtime handles.
+  Google search answers `/sorry` through the proxy. Akamai Bot Manager's
+  sensor (ibm.com) runs clean. `run.sh` kills every running cyrano: start
+  a second (TLS) instance after it.
+- **Measuring pages with many requests (ads): serve the proxy over TLS.**
+  Over plain HTTP the browser keeps 6 connections to the proxy for every
+  site's traffic and queues the rest; over TLS it multiplexes on HTTP/2.
+  Second instance: `CYRANO_PUBLIC_URL=https://localhost:9443 CYRANO_PORT=9443
+  CYRANO_HTTPS_ENABLED=true CYRANO_SSL_CERT=… CYRANO_SSL_KEY=… go/assets/cyrano
+  --assets go/assets` (self-signed cert; Playwright `ignoreHTTPSErrors`).
+  Header order is then Chrome's template, not the browser's own
+  (`internal/headerorder` reads HTTP/1.x only).
+- **HTTPS-Upgrades** as Chrome's (`proxy/https_upgrades.go`): a main-frame
+  http navigation is sent to https first and falls back to http when https
+  fails (times.com: certificate for nytimes.com). The landing page sends a
+  bare host as http. A navigation that cannot reach its origin gets an error
+  page (subresources: connection closed). Check ads in a Chrome profile
+  without an ad blocker: through the proxy its network rules still match
+  ad paths but its per-site rules (hiding anti-adblock walls) do not.
+- **Upstream connections**: one impersonation client per (session, host) —
+  tls-client holds a client-wide lock across every first dial, and one
+  client per session made a page's hundreds of hosts connect one by one
+  (header-bidding auctions timed out). Names resolve through
+  `internal/dnscache` (browser-like host cache, joined + hedged lookups).
+  `CYRANO_PPROF=127.0.0.1:6060` serves pprof for such hunts.
+- **Publisher harness**: direct vs proxied (TLS instance) per site — ad
+  requests, filled ad frames, escapes, page errors; ad auctions vary run to
+  run, so compare over several runs.
+- **Frames are tested as ads use them** (`tests/native/frames-vs-chromium`):
+  empty frames written into, nested empty frames, srcdoc, a `write` taken off
+  the document. Runtime state is per window, never module-wide: empty frames
+  get the runtime from their creator's copy of the module.
+- **Site-run leftovers** (45 premium sites, 2026-11-17): `frame-ancestors`
+  / `X-Frame-Options` judged against the proxy origin (Stripe, Zoom, Cisco,
+  NIST); image requests escaping on Figma, Atlassian, Workday, HubSpot;
+  Dropbox renders ~400 fewer elements; Notion API call gets an HTML error;
+  Slack never fires `load`; publishers that block headless Chromium not
+  yet checked in real Chrome.
 - **Browser-level requests** the page cannot intercept escape the proxy
   (FedCM `navigator.credentials.get`, seen on theguardian.com).
 - **Not wrapped yet**: `AsyncFunction`/`GeneratorFunction` constructors,
-  the Navigation API (`navigation.currentEntry.url`), DOM insertion via
-  `replaceChild`/`before`/`after`/`replaceWith`/`insertAdjacentElement`.
+  the Navigation API (`navigation.currentEntry.url`). DOM insertion by any
+  method gives inserted empty frames the runtime (`dynamic-iframe.ts`); the
+  URL fix-up before insert is still only appendChild/insertBefore/replaceChild.
 - Live check: `ts/e2e/tools/live-compare.cjs` (direct vs proxied, same
   browser). Last run clean: example.com, news.ycombinator.com,
   en.wikipedia.org, developer.mozilla.org, github.com, stackoverflow.com,

@@ -77,6 +77,27 @@ func (h *Handler) originalReferrer(referer string) *url.URL {
 	return t
 }
 
+// InitiatorHeader is a request header the runtime adds where the browser
+// sends no Referer to tell the requesting context by: a fetch or XHR from
+// a worker made of a blob: or data: URL — and on every fetch or XHR to
+// another origin. Its value is the original URL of that context's document
+// (a worker: of its creator). It never goes upstream.
+// TS: ts/client/src/patches/cors.ts.
+const InitiatorHeader = "Crn-I"
+
+// initiatorOrigin is the origin an InitiatorHeader value names
+// ("https://host[:port]"), or "" when it is not an http(s) origin.
+func initiatorOrigin(v string) string {
+	if v == "" {
+		return ""
+	}
+	u, err := url.Parse(v)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
+
 // directFetchHeaders sets Referer, Origin and Sec-Fetch-Site on the
 // outgoing request to what a direct browser would send to target
 // (spec/Referrer.agda; urlrewrite.Referrer, OriginHeader, SecFetchSite).
@@ -90,7 +111,27 @@ func (h *Handler) directFetchHeaders(req *http.Request, target *url.URL) {
 	to := pageKey(target)
 	referer := req.Header.Get("Referer")
 	from := h.originalReferrer(referer)
+	initiator := initiatorOrigin(req.Header.Get(InitiatorHeader))
+	req.Header.Del(InitiatorHeader)
 
+	if from == nil && initiator != "" {
+		// A context with no referrer (a blob: worker): no Referer, and
+		// Origin and Sec-Fetch-Site by the origin the runtime named.
+		req.Header.Del("Referer")
+		mode := strings.ToLower(req.Header.Get("Sec-Fetch-Mode"))
+		safe := req.Method == http.MethodGet || req.Method == http.MethodHead
+		if v, ok := urlrewrite.OriginHeader(mode, safe, urlrewrite.DefaultPolicy, initiator+"/", to); ok {
+			req.Header.Set("Origin", v)
+		} else {
+			req.Header.Del("Origin")
+		}
+		if sfs := req.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "none" {
+			if site := urlrewrite.SecFetchSite(initiator+"/", to); site != "" {
+				req.Header.Set("Sec-Fetch-Site", site)
+			}
+		}
+		return
+	}
 	if from == nil {
 		// No page of ours behind it: never show the proxy to the upstream.
 		if referer != "" && urlrewrite.OnProxy(referer, h.opts.ProxyCfg) {

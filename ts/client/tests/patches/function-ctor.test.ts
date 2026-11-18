@@ -5,6 +5,7 @@
 // the patch once and asserts behavior. Other test files that don't use
 // `Function` are unaffected.
 
+import { unmarked } from "../../src/js/marks";
 import { describe, expect, it } from "vitest";
 import { patchFunctionConstructor } from "../../src/patches/function-ctor";
 
@@ -15,14 +16,14 @@ describe("patchFunctionConstructor", () => {
         const fn = new Function("var x = location; return x;") as Function;
         // Reading fn.toString() lets us see what the engine compiled. The
         // body should now contain wrap_get_location.
-        expect(fn.toString()).toContain("$rewriter.wrap_get_location(location)");
+        expect(unmarked(String(fn.toString()))).toContain("$rewriter.wrap_get_location(location)");
     });
 
     it("rewrites only the LAST string argument (preceding args are param names)", () => {
         patchFunctionConstructor(globalThis as unknown as Window);
         const fn = new Function("a", "b", "return location;") as Function;
         const src = fn.toString();
-        expect(src).toContain("$rewriter.wrap_get_location(location)");
+        expect(unmarked(String(src))).toContain("$rewriter.wrap_get_location(location)");
         // Param names are unchanged. Format varies by engine
         // (`(a, b)` vs `(a,b)`); assert by collapsing whitespace.
         expect(src.replace(/\s+/g, "")).toContain("(a,b)");
@@ -34,7 +35,7 @@ describe("patchFunctionConstructor", () => {
         const fn = (Function as unknown as (body: string) => Function)(
             "var x = location;",
         );
-        expect(fn.toString()).toContain("$rewriter.wrap_get_location(location)");
+        expect(unmarked(String(fn.toString()))).toContain("$rewriter.wrap_get_location(location)");
     });
 
     it("non-string body passes through (engine throws or ignores natively)", () => {

@@ -16,6 +16,7 @@
 // rather than assuming `window`, and it's a no-op if it can't find a place to
 // attach (should never happen in a real browser or worker).
 
+import { defineHidden } from "./native/hidden-globals";
 import { init } from "./runtime/bootstrap";
 import { initWorker } from "./runtime/worker-bootstrap";
 
@@ -26,8 +27,8 @@ declare global {
     }
 }
 
-(globalThis as unknown as Window).$rewriter_init = init;
-(globalThis as unknown as Window).$rewriter_init_worker = initWorker;
+defineHidden(globalThis, "$rewriter_init", init);
+defineHidden(globalThis, "$rewriter_init_worker", initWorker);
 
 // Remove our own injected <script> element from the DOM once it has executed.
 // Everything it defines ($rewriter_init/_worker) lives on globalThis, so

@@ -22,6 +22,9 @@
 // at the microtask checkpoint the parser performs before running each
 // script, so no page script sees the attribute.
 
+import { trusted } from "./trusted";
+import { MARK, original } from "../js/marks";
+
 export const ORIGINALS_ATTR = "crn-o";
 
 interface Entry { now: string | null; was: string | null }
@@ -38,6 +41,9 @@ interface Natives {
     setAttribute(this: Element, n: string, v: string): void;
     removeAttribute(this: Element, n: string): void;
     cloneNode(this: Node, deep?: boolean): Node;
+    importNode: ((this: Document, n: Node, deep?: boolean) => Node) | undefined;
+    /** A document with no browsing context: what is cloned into it loads nothing. */
+    inert: () => Document | null;
     textGet(this: Node): string | null;
     textSet(this: Node, v: string): void;
 }
@@ -59,7 +65,17 @@ export function initOriginals(targetWindow: Window): void {
     // The element prototype's own textContent where a test DOM defines one.
     const text = accessor(E as object | undefined, "textContent") ?? accessor(N as object | undefined, "textContent");
     if (!E || !N || !text?.get || !text.set) return;
+    const D = g["Document"]?.prototype;
+    const doc = (targetWindow as unknown as { document?: Document }).document;
+    let inertDoc: Document | null | undefined;
     nat = {
+        importNode: D?.["importNode"] as Natives["importNode"],
+        inert: () => {
+            if (inertDoc === undefined) {
+                try { inertDoc = doc ? doc.implementation.createHTMLDocument("") : null; } catch { inertDoc = null; }
+            }
+            return inertDoc;
+        },
         getAttribute: E["getAttribute"] as Natives["getAttribute"],
         setAttribute: E["setAttribute"] as Natives["setAttribute"],
         removeAttribute: E["removeAttribute"] as Natives["removeAttribute"],
@@ -107,9 +123,16 @@ export function recordText(el: Element, now: string, was: string): void {
 
 /** A script's or style's text as the page wrote it, or undefined to read natively. */
 export function originalText(el: unknown): string | undefined {
-    if (!any || !nat || typeof el !== "object" || el === null) return undefined;
+    if (!nat || typeof el !== "object" || el === null) return undefined;
     const t = textStore.get(el);
-    if (!t) return undefined;
+    if (!t) {
+        // A script as the server (or an HTML sink) rewrote it carries its
+        // own original: the edits are marked in its text (js/marks.ts).
+        if ((el as Element).tagName !== "SCRIPT") return undefined;
+        let now: string | null;
+        try { now = nat.textGet.call(el as Node); } catch { return undefined; }
+        return now !== null && now.includes(MARK) ? original(now) : undefined;
+    }
     let current: string | null;
     try { current = nat.textGet.call(el as Node); } catch { return undefined; }
     return current === t.now ? t.was : undefined;
@@ -169,13 +192,21 @@ export function copyOriginals(source: Node, copy: Node, deep: boolean): void {
 /**
  * A deep clone of `node` holding what the page wrote: each changed
  * attribute and each rewritten script/style text restored. For serializing.
- * Returns `node` itself when nothing was ever recorded.
+ * (Callers skip it when there is nothing to restore: mayDiffer.)
  */
 export function asWritten<T extends Node>(node: T): T {
-    if (!any || !nat) return node;
+    if (!nat) return node;
     let clone: T;
     try {
-        clone = nat.cloneNode.call(node, true) as T;
+        // Into a document with no browsing context: in the page's own, a
+        // cloned <img> or <link> would start loading the original URLs it
+        // is given below (and a custom element's constructor would run).
+        // (A Document cannot be imported; its clone is a document of its
+        // own, with no browsing context either.)
+        const inert = node.nodeType === 9 ? null : nat.inert();
+        clone = (inert && nat.importNode
+            ? nat.importNode.call(inert, node, true)
+            : nat.cloneNode.call(node, true)) as T;
     } catch {
         return node; // not clonable (a ShadowRoot)
     }
@@ -190,11 +221,92 @@ export function asWritten<T extends Node>(node: T): T {
             for (const [name, e] of m) {
                 if (nat.getAttribute.call(src, name) !== e.now) continue; // changed behind the store's back
                 if (e.was === null) nat.removeAttribute.call(dst, name);
-                else nat.setAttribute.call(dst, name, e.was);
+                // (Trusted values: the clone's attributes and script text
+                // are sinks too under Trusted Types — native/trusted.ts.)
+                else nat.setAttribute.call(dst, name, trustedForAttr(dst, name, e.was));
             }
         }
         const t = originalText(src);
-        if (t !== undefined) nat.textSet.call(dst, t);
+        if (t !== undefined) nat.textSet.call(dst, (dst.tagName === "SCRIPT" ? trusted(globalThis, "Script", t) : t) as string);
     }
     return clone;
+}
+
+/**
+ * `node` serialized as the page wrote it: `serialize` applied to its
+ * as-written clone.
+ *
+ * The clone lives in a document without scripting, and the HTML serializer
+ * escapes the text of a <noscript> there ("&lt;div&gt;…") where the page's
+ * own document, with scripting, gives it raw. Each such text is replaced by
+ * a token for the serialization and put back, raw, in the result.
+ */
+export function serializedAsWritten(node: Node, serialize: (n: Node) => string): string {
+    const clone = asWritten(node);
+    if (clone === node) return serialize(node);
+    const held: string[] = [];
+    try {
+        const root = clone as unknown as Element;
+        const list: Element[] = [];
+        if (root.nodeType === 1 && root.tagName === "NOSCRIPT") list.push(root);
+        if (typeof root.querySelectorAll === "function") root.querySelectorAll("noscript").forEach((e) => list.push(e));
+        for (const ns of list) {
+            for (let c = ns.firstChild; c; c = c.nextSibling) {
+                if (c.nodeType !== 3) continue;
+                const text = c as Text;
+                if (!/[&<>\u00a0]/.test(text.data)) continue;
+                held.push(text.data);
+                text.data = `${MARK}ns${held.length - 1}${MARK}`;
+            }
+        }
+    } catch { /* serialized as it is */ }
+    const out = serialize(clone);
+    return held.length ? out.replace(new RegExp(`${MARK}ns(\\d+)${MARK}`, "g"), (m, i: string) => held[Number(i)] ?? m) : out;
+}
+
+/**
+ * The text of `node` — a text node, or what textContent gathers from an
+ * element's or fragment's descendants — as the page wrote it, given the
+ * text `raw` it holds now. A rewritten script's text is the only text that
+ * differs: by its marked edits (js/marks.ts), or by the store.
+ */
+export function textAsWritten(node: unknown, raw: string): string {
+    if (!nat || typeof node !== "object" || node === null) return raw;
+    const n = node as Node;
+    try {
+        if (n.nodeType === 3 || n.nodeType === 4) {
+            const parent = n.parentNode as Element | null;
+            if (!parent || parent.nodeType !== 1 || (parent.tagName !== "SCRIPT" && parent.tagName !== "STYLE")) return raw;
+            if (!n.previousSibling && !n.nextSibling) return originalText(parent) ?? raw;
+            return raw.includes(MARK) ? original(raw) : raw;
+        }
+        if (raw.includes(MARK) && !any) return original(raw);
+        if (!any && !raw.includes(MARK)) return raw;
+        // Texts kept in the store: read them off the as-written clone.
+        const el = n as Element;
+        if (typeof el.querySelector !== "function" || !el.querySelector("script,style")) return raw;
+        const clone = asWritten(n);
+        const text = clone === n ? raw : nat.textGet.call(clone);
+        return text === null ? raw : (text.includes(MARK) ? original(text) : text);
+    } catch {
+        return raw;
+    }
+}
+
+/** The inert document asWritten clones into (null when there is none). */
+export function inertDocument(): Document | null {
+    return nat ? nat.inert() : null;
+}
+
+/** Whether `serialized` (native markup or text) may differ from what the page wrote. */
+export function mayDiffer(serialized: unknown): boolean {
+    return any || (typeof serialized === "string" && serialized.includes(MARK));
+}
+
+/** `value` for attribute `name` of `el`, trusted where the attribute is a Trusted Types sink. */
+function trustedForAttr(el: Element, name: string, value: string): string {
+    const n = name.toLowerCase();
+    const kind = n === "srcdoc" ? "HTML" : n.startsWith("on") ? "Script"
+        : (n === "src" && (el.tagName === "SCRIPT" || el.tagName === "EMBED")) || ((n === "data" || n === "codebase") && el.tagName === "OBJECT") ? "ScriptURL" : null;
+    return (kind ? trusted(globalThis, kind, value) : value) as string;
 }

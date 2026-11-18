@@ -20,8 +20,11 @@
 //   * new Worker(thatURL) is given a private object URL whose Blob holds the
 //     worker runtime preamble and the rewritten source (workerScriptFor).
 //
-// Non-string parts (ArrayBuffer, TypedArray, nested Blob) are not recorded —
-// arbitrary binary content can't safely be treated as JS source text.
+// Any other worker script the page hands over as a blob: or data: URL — a
+// Blob without a type (Permutive: `new Blob([code])`), one from a Response
+// or binary parts, a data:application/javascript URL — is read back when
+// the Worker is made (a synchronous read of the page's own URL, which is
+// still valid then) and treated the same way.
 //
 // Known gap: the object URL's origin is the proxy's (blob:http://proxy/…)
 // where natively it is the site's; translating blob: URLs is a follow-up.
@@ -62,7 +65,7 @@ export function patchBlobWorkerSource(
         return Reflect.apply(native, self, args) as void;
     });
     return (url, module) => {
-        const src = byUrl.get(url);
+        const src = byUrl.get(url) ?? readScript(targetWindow, url);
         if (!src || !nativeCreate) return undefined;
         const key = `${module ? "m" : "c"} ${url}`;
         let priv = privateUrl.get(key);
@@ -74,6 +77,27 @@ export function patchBlobWorkerSource(
         }
         return priv;
     };
+}
+
+/**
+ * The text behind a blob: or data: worker URL, read synchronously (the
+ * Worker constructor is synchronous, and the page may revoke the URL right
+ * after it). Undefined for any other URL or when it cannot be read.
+ */
+function readScript(targetWindow: Window, url: string): { source: string; type: string } | undefined {
+    if (!/^(blob|data):/i.test(url)) return undefined;
+    const XHR = (targetWindow as unknown as { XMLHttpRequest?: typeof XMLHttpRequest }).XMLHttpRequest;
+    if (!XHR) return undefined;
+    try {
+        const x = new XHR();
+        x.open("GET", url, false);
+        x.overrideMimeType("text/javascript; charset=utf-8");
+        x.send();
+        if (x.status !== 200 && x.status !== 0) return undefined;
+        return { source: x.responseText, type: "text/javascript" };
+    } catch {
+        return undefined;
+    }
 }
 
 function isJsLikeType(type: string | undefined): boolean {
@@ -99,9 +123,15 @@ function buildWorkerPreamble(config: ClientConfig, hrefAtCreation: string, modul
     if (module) {
         return `import ${JSON.stringify(`${config.apiBaseURL}/cyrano-worker-init.js?u=${encodeURIComponent(hrefAtCreation)}`)};\n`;
     }
+    // Under Trusted Types (a blob worker has its creator's policy)
+    // importScripts takes a TrustedScriptURL: made by the runtime's policy,
+    // which the runtime is then handed (Go: server.workerPreamble).
+    const url = JSON.stringify(rewriterJsUrl);
     return (
-        `importScripts(${JSON.stringify(rewriterJsUrl)});` +
-        `self.$rewriter=self.$rewriter_init_worker(${JSON.stringify(config)},${JSON.stringify(hrefAtCreation)});` +
-        `self.$__crn_key__=null;\n`
+        `(function(p,i){try{p=self.trustedTypes.createPolicy(${JSON.stringify(config.tt ?? "")},` +
+        `{createHTML:i,createScript:i,createScriptURL:i})}catch(e){p=null}` +
+        `importScripts(p?p.createScriptURL(${url}):${url});` +
+        `self.$rewriter=self.$rewriter_init_worker(${JSON.stringify(config)},${JSON.stringify(hrefAtCreation)},p);` +
+        `self.$__crn_key__=null})(null,function(s){return s});\n`
     );
 }

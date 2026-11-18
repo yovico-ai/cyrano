@@ -2,9 +2,9 @@ package jsrewrite
 
 import (
 	"fmt"
-	"testing"
 	"github.com/tdewolff/parse/v2"
 	"github.com/tdewolff/parse/v2/js"
+	"testing"
 )
 
 func TestCommaExpr(t *testing.T) {
@@ -13,7 +13,7 @@ func TestCommaExpr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
-	// Walk the first statement to see if it's a CommaExpr  
+	// Walk the first statement to see if it's a CommaExpr
 	stmt := ast.BlockStmt.List[0]
 	fmt.Printf("Top stmt type: %T\n", stmt)
 	if es, ok := stmt.(*js.ExprStmt); ok {

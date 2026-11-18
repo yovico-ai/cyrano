@@ -34,7 +34,7 @@ export const URL_BEARING_ELEMENTS: ReadonlyArray<UrlBearingElement> = [
     { tagName: "VIDEO",  ctorName: "HTMLVideoElement",  attrs: ["src", "poster"] },
     { tagName: "TRACK",  ctorName: "HTMLTrackElement",  attrs: ["src"] },
     { tagName: "BASE",   ctorName: "HTMLBaseElement",   attrs: ["href"] },
-    { tagName: "LINK",   ctorName: "HTMLLinkElement",   attrs: ["href"] },
+    { tagName: "LINK",   ctorName: "HTMLLinkElement",   attrs: ["href", "imagesrcset"], idlNames: { imagesrcset: "imageSrcset" } },
     { tagName: "A",      ctorName: "HTMLAnchorElement", attrs: ["href"] },
     { tagName: "AREA",   ctorName: "HTMLAreaElement",   attrs: ["href"] },
     { tagName: "FORM",   ctorName: "HTMLFormElement",   attrs: ["action"] },
@@ -54,4 +54,9 @@ const byTagName: Record<string, readonly string[]> = (() => {
 /** Returns the URL-bearing attribute list for a given tag name (uppercase). */
 export function urlAttrsForTagName(tagName: string): readonly string[] | undefined {
     return byTagName[tagName];
+}
+
+/** Attributes whose value is a srcset (candidate URLs with descriptors), not one URL. */
+export function isSrcsetAttr(name: string): boolean {
+    return name === "srcset" || name === "imagesrcset";
 }

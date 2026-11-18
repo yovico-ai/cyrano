@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"os"
+	"strings"
 )
 
 // bootstrapScript returns the literal HTML to splice in just after <head>.
@@ -42,15 +44,33 @@ func bootstrapScript(cfg *Config) string {
 	if cfg.ScriptNonce != "" {
 		nonce = ` nonce="` + html.EscapeString(cfg.ScriptNonce) + `"`
 	}
-	return fmt.Sprintf(
+	// Development aid: CYRANO_DEBUG_SCRIPT names a file whose contents run
+	// in every page before the runtime (so it sees pristine natives).
+	debug := ""
+	if path := os.Getenv("CYRANO_DEBUG_SCRIPT"); path != "" {
+		if b, err := os.ReadFile(path); err == nil {
+			debug = `<script` + nonce + `>` + strings.ReplaceAll(string(b), "</script", `<\/script`) + `</script>`
+		}
+	}
+	// CYRANO_DEBUG_SCRIPT_AFTER: the same, but after the runtime is in
+	// place — it sees what page code sees.
+	after := ""
+	if path := os.Getenv("CYRANO_DEBUG_SCRIPT_AFTER"); path != "" {
+		if b, err := os.ReadFile(path); err == nil {
+			after = `<script` + nonce + `>` + strings.ReplaceAll(string(b), "</script", `<\/script`) + `;document.currentScript.remove();</script>`
+		}
+	}
+	return debug + fmt.Sprintf(
 		`<script`+nonce+` src="%s"></script>`+
 			`<script`+nonce+`>window.$rewriter=window.$rewriter_init(window,%s).inject();`+
 			`$rewriter.set_location(%s);`+
-			`document.currentScript.remove();</script>`,
+			// Both bootstrap scripts leave the document once they have run:
+			// the page must not find elements it did not write.
+			`(function(s,p){p=s.previousElementSibling;if(p&&p.src&&p.tagName==="SCRIPT")p.remove();s.remove()})(document.currentScript);</script>`,
 		cfg.RewriterJSPath,
 		string(configJSON),
 		string(originalURLLit),
-	)
+	) + after
 }
 
 // jsStringLiteral renders s as a double-quoted JS string with the minimum

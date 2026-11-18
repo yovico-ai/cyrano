@@ -4,6 +4,7 @@
 // client-side JS rewriter. The previous version of these tests pinned
 // passthrough semantics; the changes here document the contract switch.
 
+import { unmarked } from "../../src/js/marks";
 import { describe, expect, it } from "vitest";
 import {
     wrapEval,
@@ -16,14 +17,14 @@ describe("wrapEvalArg — rewrites JS source", () => {
         const src = "var x = location;";
         // eslint-disable-next-line no-eval
         const got = wrapEvalArg(eval, src) as string;
-        expect(got).toContain("$rewriter.wrap_get_location(location)");
+        expect(unmarked(String(got))).toContain("$rewriter.wrap_get_location(location)");
     });
 
     it("injects wrap_set_location around `location = X`", () => {
         const src = "location = 'http://x';";
         // eslint-disable-next-line no-eval
         const got = wrapEvalArg(eval, src) as string;
-        expect(got).toContain("$rewriter.wrap_set_location");
+        expect(unmarked(String(got))).toContain("$rewriter.wrap_set_location");
     });
 
     it("non-string argument passes through unchanged", () => {
@@ -39,7 +40,7 @@ describe("wrapEvalArg — rewrites JS source", () => {
         // The preamble is prepended for eval-context accessibility but the
         // original call must appear unchanged (no double-wrapping).
         expect(got).toContain(src);
-        expect(got).not.toContain("$rewriter.wrap_get_location($rewriter");
+        expect(unmarked(String(got))).not.toContain("$rewriter.wrap_get_location($rewriter");
     });
 });
 
@@ -51,7 +52,7 @@ describe("wrapEval — returns a wrapping eval-like function", () => {
         const fakeEval = ((src: unknown) => src) as typeof eval;
         const wrapped = wrapEval(fakeEval);
         const result = wrapped("var x = location;") as string;
-        expect(result).toContain("$rewriter.wrap_get_location(location)");
+        expect(unmarked(String(result))).toContain("$rewriter.wrap_get_location(location)");
     });
 
     it("non-string source passes through to native eval verbatim", () => {
@@ -69,14 +70,13 @@ describe("wrapEvalMemexp — proxy that intercepts .eval", () => {
         expect(wrapped.bar).toBe("hello");
     });
 
-    it("rewrites the first string arg of .eval before delegating", () => {
-        let received: string | undefined;
-        const obj = {
-            eval: function(src: unknown) { received = src as string; return src; },
-        };
+    it("an eval the page put on the global is called with the source as written", () => {
+        let received: unknown;
+        const obj: Record<string, unknown> = { eval: (s: unknown) => { received = s; } };
+        obj["window"] = obj;
         const wrapped = wrapEvalMemexp(obj) as { eval: (s: string) => unknown };
         wrapped.eval("var x = location;");
-        expect(received).toContain("$rewriter.wrap_get_location(location)");
+        expect(received).toBe("var x = location;");
     });
 
     it("preserves trailing args and `this` semantics for .eval", () => {
@@ -117,5 +117,45 @@ describe("wrapEvalMemexp — proxy that intercepts .eval", () => {
         const obj = { eval: "not a function" };
         const wrapped = wrapEvalMemexp(obj) as { eval: string };
         expect(wrapped.eval).toBe("not a function");
+    });
+
+    it("an ordinary object's eval property is its own: the object itself comes back", () => {
+        const obj = { eval: 1 };
+        expect(wrapEvalMemexp(obj)).toBe(obj);
+    });
+});
+
+// The page cannot tell: a challenge script reads `eval` and lists what it is.
+describe("the eval stand-in reads as the native", () => {
+    it("is one function, named eval, without a prototype, with the native's keys", () => {
+        // eslint-disable-next-line no-eval
+        const native = eval;
+        const w = wrapEval(native);
+        expect(wrapEval(native)).toBe(w);
+        expect(wrapEval(w)).toBe(w);
+        expect(typeof w).toBe("function");
+        expect(w.name).toBe("eval");
+        expect(w.length).toBe(1);
+        expect(Object.getOwnPropertyNames(w).sort()).toEqual(Object.getOwnPropertyNames(native).sort());
+        expect(Object.prototype.hasOwnProperty.call(w, "prototype")).toBe(false);
+        expect(Object.getPrototypeOf(w)).toBe(Function.prototype);
+    });
+
+    it("window.eval is that same function, and runs rewritten source", () => {
+        // eslint-disable-next-line no-eval
+        const native = eval;
+        const g: Record<string, unknown> = { eval: native };
+        g["window"] = g;
+        const viaMember = (wrapEvalMemexp(g) as { eval: typeof eval }).eval;
+        expect(viaMember).toBe(wrapEval(native));
+        expect(viaMember("1 + 1")).toBe(2);
+    });
+
+    it("an eval the page assigned is the page's own", () => {
+        const own = function (): number { return 7; }; // has a prototype, no native source
+        Object.defineProperty(own, "name", { value: "eval" });
+        const g: Record<string, unknown> = { eval: own };
+        g["window"] = g;
+        expect((wrapEvalMemexp(g) as { eval: unknown }).eval).toBe(own);
     });
 });

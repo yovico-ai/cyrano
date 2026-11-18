@@ -2,6 +2,7 @@
 // Asserts the $rewriter object the server-rewritten code calls into is wired
 // up correctly: base-URL state, location wrapper, the various wrap_* helpers.
 
+import { unmarked } from "../../src/js/marks";
 import { describe, expect, it } from "vitest";
 import type { ClientConfig } from "../../src/config";
 import { createRewriterApi } from "../../src/runtime/api";
@@ -103,7 +104,7 @@ describe("createRewriterApi — wrap_* surface", () => {
         // wrap_eval_arg rewrites JS source.
         // eslint-disable-next-line no-eval
         const rewritten = api.wrap_eval_arg(eval, "var x = location;");
-        expect(rewritten).toContain("$rewriter.wrap_get_location(location)");
+        expect(unmarked(String(rewritten))).toContain("$rewriter.wrap_get_location(location)");
     });
 });
 

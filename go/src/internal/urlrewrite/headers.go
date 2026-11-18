@@ -40,6 +40,37 @@ func RewriteLinkHeader(v string, base *url.URL, cfg ProxyConfig) string {
 				continue
 			}
 		}
+		// A preload's imagesrcset parameter holds URLs too (srcset syntax).
+		if c == ';' && !inQuotes {
+			rest := v[i+1:]
+			trimmed := strings.TrimLeft(rest, " \t")
+			if len(trimmed) >= 12 && strings.EqualFold(trimmed[:12], "imagesrcset=") {
+				skip := len(rest) - len(trimmed) + 12
+				b.WriteByte(';')
+				b.WriteString(rest[:skip])
+				val := rest[skip:]
+				rewriteOne := func(u string) string { return Rewrite(u, base, cfg) }
+				if strings.HasPrefix(val, "\"") {
+					if end := strings.IndexByte(val[1:], '"'); end >= 0 {
+						b.WriteByte('"')
+						b.WriteString(RewriteSrcset(val[1:1+end], rewriteOne))
+						b.WriteByte('"')
+						i += 1 + skip + end + 2 - 1
+						atValueStart = false
+						continue
+					}
+				} else {
+					end := strings.IndexAny(val, ";,")
+					if end < 0 {
+						end = len(val)
+					}
+					b.WriteString(RewriteSrcset(val[:end], rewriteOne))
+					i += skip + end
+					atValueStart = false
+					continue
+				}
+			}
+		}
 		if c != ' ' && c != '\t' {
 			atValueStart = false
 		}

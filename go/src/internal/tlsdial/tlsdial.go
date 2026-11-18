@@ -13,6 +13,7 @@ package tlsdial
 
 import (
 	"context"
+	"github.com/yovico/cyrano/internal/dnscache"
 	"net"
 	"time"
 
@@ -54,7 +55,7 @@ func DialTLS(ctx context.Context, network, addr string, skipVerify bool) (net.Co
 	if err != nil {
 		return nil, err
 	}
-	rawConn, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+	rawConn, err := (&dnscache.Dialer{}).DialContext(ctx, network, addr)
 	if err != nil {
 		return nil, err
 	}

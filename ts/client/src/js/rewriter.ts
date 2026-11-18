@@ -1,116 +1,25 @@
-// Client-side JavaScript rewriter — applies the same JS_WRAP_* AST
-// transformations the server-side rewriter applies, but on JS source the
-// server can't see (eval, new Function bodies, inline <script> content
-// inside dynamically inserted HTML).
+// Client-side JavaScript rewriter — the same rules the server applies
+// (go/src/internal/jsrewrite), on source the server never sees: eval, new
+// Function bodies, scripts inserted as markup, Blob workers.
 //
-// Mirrors go/src/internal/jsrewrite/rewriter.go rule-for-rule. The output
-// must be functionally identical: bare `location` reads route through
-// `$rewriter.wrap_get_location(location)`, `obj.location` becomes
-// `$rewriter.wrap_location({obj: obj}).location`, and so on. That ensures
-// dynamic JS sees the same wrapped runtime as server-rewritten JS.
+// The script is not re-printed. Each rule is a small edit at a position
+// acorn gives, spliced into the page's own text and marked so it can be
+// taken out again (js/marks.ts): outside the edits every byte is the
+// page's, and `original()` of the result is the source as written.
 //
-// Uses acorn for parsing + astring for source serialization. Both ship in
-// the bundle; their combined unminified weight (~120 KB) is the price of
-// faithful AST-level rewriting on the client. A regex-based shortcut would
-// be smaller but would miss every dynamically-constructed URL access.
+// The rules (R1…R10 below, in `Splicer`) are the contract shared with the
+// Go rewriter; the two are compared edit for edit on a corpus of real
+// scripts (tests/js/splice-corpus, go …/splice_conformance_test.go).
 //
-// Failure policy: matches the server. Parse failures → return source
-// unchanged (never break a page we can't safely transform). Already-rewritten
-// input (carrying `$rewriter.wrap_` or `$rewriter_init(`) → return
-// unchanged.
+// Failure policy: a script that does not parse is returned unchanged, as
+// is one already rewritten (it carries `$rewriter.wrap_`).
 
-import { Parser, type Node } from "acorn";
-import { generate } from "astring";
+import { Parser } from "acorn";
+import { isUrlLikeSpecifier } from "../url/containment";
+import { canMark, fragment } from "./marks";
 
-// A node whose shape is read dynamically (patterns, classes, chains).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Loose = Record<string, any>;
-
-// ESTree node types we touch. We use loose interface declarations rather
-// than @types/estree to keep the dependency surface minimal — acorn's runtime
-// shapes match these.
-interface ProgramNode extends Node {
-    type: "Program";
-    body: StatementNode[];
-}
-
-type StatementNode = Node & {
-    type: string;
-    body?: StatementNode | StatementNode[] | BlockStatement;
-    declarations?: VariableDeclarator[];
-    expression?: ExpressionNode;
-    test?: ExpressionNode | null;
-    consequent?: StatementNode | StatementNode[];
-    alternate?: StatementNode | null;
-    update?: ExpressionNode | null;
-    init?: ExpressionNode | StatementNode | null;
-    argument?: ExpressionNode | null;
-    cases?: SwitchCase[];
-    discriminant?: ExpressionNode;
-    block?: BlockStatement;
-    handler?: { body: BlockStatement } | null;
-    finalizer?: BlockStatement | null;
-    label?: { name: string };
-    params?: PatternNode[];
-    id?: { name: string } | null;
-    left?: ExpressionNode | PatternNode;
-    right?: ExpressionNode;
-};
-
-interface BlockStatement extends Node {
-    type: "BlockStatement";
-    body: StatementNode[];
-}
-
-interface SwitchCase extends Node {
-    type: "SwitchCase";
-    test: ExpressionNode | null;
-    consequent: StatementNode[];
-}
-
-interface VariableDeclarator extends Node {
-    type: "VariableDeclarator";
-    id: PatternNode;
-    init: ExpressionNode | null;
-}
-
-interface PatternNode extends Node {
-    type: string;
-}
-
-type ExpressionNode = Node & {
-    type: string;
-    name?: string;
-    value?: unknown;
-    object?: ExpressionNode;
-    property?: ExpressionNode;
-    computed?: boolean;
-    callee?: ExpressionNode;
-    arguments?: ExpressionNode[];
-    operator?: string;
-    left?: ExpressionNode;
-    right?: ExpressionNode;
-    expressions?: ExpressionNode[];
-    quasis?: unknown[];
-    elements?: (ExpressionNode | null)[];
-    properties?: ObjectProperty[];
-    test?: ExpressionNode;
-    consequent?: ExpressionNode;
-    alternate?: ExpressionNode;
-    body?: BlockStatement | ExpressionNode;
-    params?: PatternNode[];
-    argument?: ExpressionNode | null;
-};
-
-interface ObjectProperty extends Node {
-    type: "Property" | "SpreadElement";
-    key?: ExpressionNode;
-    value?: ExpressionNode;
-    computed?: boolean;
-    shorthand?: boolean;
-    kind?: string;
-    argument?: ExpressionNode;
-}
+type N = { type: string; start: number; end: number } & Record<string, any>;
 
 export interface JsRewriteOptions {
     wrapGetLocation: boolean;
@@ -126,6 +35,18 @@ export interface JsRewriteOptions {
     wrapEvalArg: boolean;
     wrapEvalMemexp: boolean;
     wrapMemberExpression: boolean;
+    wrapImportArg: boolean;
+    wrapNewWorker: boolean;
+    /** R12: `debugger` statements become empty statements. */
+    stripDebugger: boolean;
+    /** With `proxify`: import/export specifiers and literal import() are proxified in place. */
+    wrapStaticImport: boolean;
+    /** With `baseUrl`: import.meta.url becomes that URL as a string literal. */
+    wrapImportMetaUrl: boolean;
+    /** The script's own URL (module specifiers resolve against it). */
+    baseUrl?: string;
+    /** Proxifies a module specifier; returns it unchanged to leave it (a bare specifier). */
+    proxify?: (specifier: string, baseUrl: string) => string;
 }
 
 /** Mirrors the server's DefaultOptions — every rule we kept after cleanup. */
@@ -144,6 +65,11 @@ export function defaultJsRewriteOptions(): JsRewriteOptions {
         wrapEvalArg: true,
         wrapEvalMemexp: true,
         wrapMemberExpression: true,
+        wrapImportArg: true,
+        wrapNewWorker: true,
+        stripDebugger: true,
+        wrapStaticImport: true,
+        wrapImportMetaUrl: true,
     };
 }
 
@@ -174,13 +100,16 @@ const EVAL_PREAMBLE =
     'catch(_e){}return null}()),' +
     '$__crn_key__=globalThis.$__crn_key__||0;';
 
+/** Where the preamble goes: after a leading "use strict" directive, which must stay first. */
+function preambleOffset(code: string): number {
+    const m = /^\s*(['"])use strict\1[ \t]*;?/.exec(code);
+    return m ? m[0].length : 0;
+}
+
+/** The preamble as a marked insertion: it adds no line, and `original` removes it. */
 function withEvalPreamble(code: string): string {
-    // Detect a leading strict-mode directive and insert preamble after it.
-    const m = /^(['"])use strict\1\s*;?\n?/.exec(code);
-    if (m) {
-        return code.slice(0, m[0].length) + EVAL_PREAMBLE + "\n" + code.slice(m[0].length);
-    }
-    return EVAL_PREAMBLE + "\n" + code;
+    const at = preambleOffset(code);
+    return code.slice(0, at) + fragment(EVAL_PREAMBLE, "") + code.slice(at);
 }
 
 /**
@@ -200,555 +129,484 @@ export function rewriteJsSource(src: string, opts: JsRewriteOptions): string {
     if (alreadyRewritten(src)) {
         result = src; // don't double-rewrite
     } else {
-        let ast: ProgramNode;
-        try {
-            ast = Parser.parse(src, {
-                ecmaVersion: "latest",
-                sourceType: "script",
-                allowReturnOutsideFunction: true,
-                allowAwaitOutsideFunction: true,
-                allowImportExportEverywhere: true,
-            }) as unknown as ProgramNode;
-        } catch {
-            return src;
-        }
-
-        const rewriter = new JsRewriter(opts);
-        rewriter.walkProgram(ast);
-
-        try {
-            result = generate(ast);
-        } catch {
-            return src;
-        }
+        const edits = jsEdits(src, opts);
+        if (edits === null) return src; // does not parse
+        result = applyEdits(src, edits);
     }
 
-    // Inject the preamble whenever the code references our runtime — this
-    // covers both freshly-rewritten code and already-server-rewritten fragments.
+    // The preamble goes wherever the code references our runtime — freshly
+    // rewritten or already rewritten by the server.
     if (result.includes("$rewriter.") || result.includes("$__crn_key__")) {
         return withEvalPreamble(result);
     }
     return result;
 }
 
-class JsRewriter {
-    constructor(private readonly opts: JsRewriteOptions) {}
+// ── Edits ────────────────────────────────────────────────────────────────
 
-    walkProgram(program: ProgramNode): void {
-        for (let i = 0; i < program.body.length; i++) {
-            program.body[i] = this.walkStmt(program.body[i] as StatementNode);
+/** Where an edit sits among others at the same offset: closers, then openers, then replacements. */
+const enum Kind { Close = 0, Open = 1, Replace = 2 }
+
+export interface Edit {
+    /** Offset in the source (UTF-16 code units here; bytes in Go — compared after conversion). */
+    pos: number;
+    /** Length of source text replaced (0: an insertion). */
+    del: number;
+    ins: string;
+    kind: Kind;
+    seq: number;
+}
+
+/** The edits for `src`, in application order, or null when it does not parse. */
+export function jsEdits(src: string, opts: JsRewriteOptions): Edit[] | null {
+    let ast: N;
+    try {
+        ast = Parser.parse(src, {
+            ecmaVersion: "latest",
+            sourceType: "script",
+            allowReturnOutsideFunction: true,
+            allowAwaitOutsideFunction: true,
+            allowImportExportEverywhere: true,
+            allowSuperOutsideMethod: true,
+            allowHashBang: true,
+            // Parentheses are part of an operand's extent: `(a, b).top` wraps `(a, b)`.
+            preserveParens: true,
+        }) as unknown as N;
+    } catch {
+        return null;
+    }
+    const s = new Splicer(src, opts);
+    s.visit(ast, "expr", false);
+    // At one offset: inner closers first (in the order made), then openers
+    // outermost first (the reverse of the order made), then replacements.
+    return s.edits.sort((a, b) =>
+        a.pos - b.pos || a.kind - b.kind || (a.kind === Kind.Open ? b.seq - a.seq : a.seq - b.seq));
+}
+
+const IDENT_PART = /^[A-Za-z0-9_$\u0080-\uffff]$/;
+
+/** `src` with `edits` (sorted) spliced in, each as a marked fragment. */
+export function applyEdits(src: string, edits: Edit[]): string {
+    if (edits.length === 0) return src;
+    const marked = canMark(src);
+    let out = "";
+    let at = 0;
+    for (let i = 0; i < edits.length; ) {
+        const e = edits[i]!;
+        // Insertions at one offset go into one fragment.
+        let ins = e.ins;
+        let j = i + 1;
+        if (e.del === 0) {
+            while (j < edits.length && edits[j]!.pos === e.pos && edits[j]!.del === 0) ins += edits[j++]!.ins;
         }
+        out += src.slice(at, e.pos);
+        if (marked) {
+            out += fragment(ins, src.slice(e.pos, e.pos + e.del), e.pos > at && src.charCodeAt(e.pos - 1) === 0x2f);
+        } else {
+            // No marker comment to separate tokens: `return[a][k]` must not
+            // become `return$rewriter…`.
+            if (IDENT_PART.test(out.slice(-1)) && IDENT_PART.test(ins.charAt(0))) out += " ";
+            out += ins;
+        }
+        at = e.pos + e.del;
+        i = j;
+    }
+    return out + src.slice(at);
+}
+
+type Ctx =
+    | "expr"      // read
+    | "target"    // assigned with `=`, or a for-in/of target
+    | "modify"    // compound assignment, ++/--, typeof, delete: left as written
+    | "binding";  // a declaration
+
+const SET_LOCATION = "$rewriter.wrap_set_location(location, function(v){location=v;}).value";
+
+/** R1: a bare identifier read → the helper its value goes through. */
+function identHelper(name: string, o: JsRewriteOptions): string | null {
+    switch (name) {
+        case "location": return o.wrapGetLocation ? "wrap_get_location" : null;
+        case "top": return o.wrapGetTopWindow ? "wrap_get_top_window" : null;
+        case "parent": return o.wrapGetParentWindow ? "wrap_get_top_window" : null;
+        case "eval": return o.wrapEval ? "wrap_eval" : null;
+    }
+    return null;
+}
+
+/** R3: `X.name` → the helper X goes through. write/writeln only where called. */
+function memberHelper(name: string, called: boolean, o: JsRewriteOptions): string | null {
+    switch (name) {
+        case "location": return o.wrapLocation ? "wrap_location" : null;
+        case "top": return o.wrapTopWindow ? "wrap_top_window" : null;
+        case "parent": return o.wrapParentWindow ? "wrap_parent_window" : null;
+        case "write":
+        case "writeln": return called && o.wrapDocumentWrite ? "wrap_document_write" : null;
+    }
+    return null;
+}
+
+/**
+ * Walks the tree once and records the edits. The rules:
+ *
+ *  R1  a bare `location` / `top` / `parent` / `eval` that is read
+ *        →  $rewriter.<h>(<id>)            (shorthand {id} → {id:$rewriter.<h>(id)})
+ *      not: the callee of a direct eval call, an operand of typeof/delete,
+ *      a compound-assignment or ++/-- target, a declaration, a label, a key.
+ *  R2  `location` assigned with `=` (or as a for-in/of target)
+ *        →  $rewriter.wrap_set_location(location, function(v){location=v;}).value
+ *  R3  X.location / X.top / X.parent, and X.write / X.writeln where called
+ *        →  $rewriter.<h>({obj:X}).name
+ *      in an optional chain →  $rewriter.<h>({obj:X,opt:1})?.name
+ *      (also X["location"] and the like: a constant key is a name)
+ *  R4  X.eval  →  $rewriter.wrap_eval_memexp(X).eval          (not in an optional chain)
+ *  R5  X[k], k not a constant, not in an optional chain
+ *        →  $rewriter.wrap_member_expression(X,$__crn_key__=(k))[$__crn_key__]
+ *  R6  eval(a, …) called directly  →  eval($rewriter.wrap_eval_arg(eval,a), …)
+ *  R7  import(s)  →  import($rewriter.wrap_import_arg(s,"<script URL>"))
+ *      (a literal s, when it can be proxified now, is replaced instead)
+ *  R8  import … from "s" / export … from "s"  →  the specifier proxified
+ *  R9  import.meta.url  →  "<script URL>"
+ *  R10 new Worker(u) / new SharedWorker(u)  →  new Worker($rewriter.wrap_worker_url(u))
+ *  R11 new C…, where C now starts with a call  →  new (C)…
+ *  R12 debugger;  →  ;     (a no-op unless DevTools is open, where scripts
+ *      use it to detect and stall an inspector)
+ *
+ * `super` is never wrapped. Nothing else in the script changes.
+ */
+class Splicer {
+    readonly edits: Edit[] = [];
+    private seq = 0;
+    /** Nodes an edit now wraps in a call (for R11). */
+    private readonly wrapped = new WeakSet<object>();
+
+    constructor(private readonly src: string, private readonly o: JsRewriteOptions) {}
+
+    private open(pos: number, ins: string): void { this.edits.push({ pos, del: 0, ins, kind: Kind.Open, seq: this.seq++ }); }
+    private close(pos: number, ins: string): void { this.edits.push({ pos, del: 0, ins, kind: Kind.Close, seq: this.seq++ }); }
+    private replace(pos: number, del: number, ins: string): void { this.edits.push({ pos, del, ins, kind: Kind.Replace, seq: this.seq++ }); }
+
+    private all(nodes: Array<N | null> | undefined, ctx: Ctx): void {
+        if (nodes) for (const n of nodes) if (n) this.visit(n, ctx, false);
     }
 
-    walkBlock(block: BlockStatement): void {
-        for (let i = 0; i < block.body.length; i++) {
-            block.body[i] = this.walkStmt(block.body[i]!);
-        }
-    }
-
-    walkStmt(stmt: StatementNode): StatementNode {
-        switch (stmt.type) {
-            case "ExpressionStatement":
-                stmt.expression = this.rvalue(stmt.expression!);
-                break;
-            case "VariableDeclaration":
-                if (stmt.declarations) {
-                    for (const d of stmt.declarations) {
-                        this.walkPattern((d as Loose).id);
-                        if (d.init) d.init = this.rvalue(d.init);
-                    }
+    visit(n: N | null | undefined, ctx: Ctx, called: boolean): void {
+        if (!n || typeof n.type !== "string") return;
+        switch (n.type) {
+            case "Identifier":
+                if (ctx === "expr") {
+                    const h = identHelper(n["name"], this.o);
+                    if (h) this.wrapCall(n, h);
+                } else if (ctx === "target" && n["name"] === "location" && this.o.wrapSetLocation) {
+                    this.replace(n.start, n.end - n.start, SET_LOCATION);
                 }
-                break;
-            case "ClassDeclaration":
-                this.walkClass(stmt as Loose);
-                break;
-            case "WithStatement":
-                (stmt as Loose).object = this.rvalue((stmt as Loose).object);
-                (stmt as Loose).body = this.walkStmt((stmt as Loose).body);
-                break;
-            case "ExportNamedDeclaration":
-                if ((stmt as Loose).declaration) (stmt as Loose).declaration = this.walkStmt((stmt as Loose).declaration);
-                break;
-            case "ExportDefaultDeclaration": {
-                const d = (stmt as Loose).declaration;
-                if (d) (stmt as Loose).declaration = /Declaration$/.test(d.type) ? this.walkStmt(d) : this.rvalue(d);
-                break;
+                return;
+
+            case "MemberExpression":
+                this.member(n, called);
+                return;
+
+            case "ChainExpression":
+            case "ParenthesizedExpression":
+                this.visit(n["expression"], ctx, called && n.type === "ChainExpression");
+                return;
+
+            case "CallExpression": {
+                const callee = n["callee"] as N;
+                const args = n["arguments"] as N[];
+                const a0 = args[0];
+                if (this.o.wrapEvalArg && callee.type === "Identifier" && callee["name"] === "eval" &&
+                    !n["optional"] && a0 && a0.type !== "SpreadElement") {
+                    this.visit(a0, "expr", false); // R6
+                    this.open(a0.start, "$rewriter.wrap_eval_arg(eval,");
+                    this.close(a0.end, ")");
+                    this.all(args.slice(1), "expr");
+                    return;
+                }
+                if (callee.type !== "Super") this.visit(callee, "expr", true);
+                this.all(args, "expr");
+                return;
             }
-            case "IfStatement":
-                stmt.test = this.rvalue(stmt.test as ExpressionNode);
-                stmt.consequent = this.walkStmt(stmt.consequent as StatementNode);
-                if (stmt.alternate) stmt.alternate = this.walkStmt(stmt.alternate);
-                break;
-            case "ForStatement":
-                if (stmt.init) {
-                    stmt.init = (stmt.init as StatementNode).type === "VariableDeclaration"
-                        ? this.walkStmt(stmt.init as StatementNode)
-                        : this.rvalue(stmt.init as ExpressionNode);
+
+            case "NewExpression": {
+                const callee = n["callee"] as N;
+                const args = n["arguments"] as N[];
+                this.visit(callee, "expr", false);
+                if (this.startsWithCall(callee)) { // R11
+                    this.open(callee.start, "(");
+                    this.close(callee.end, ")");
                 }
-                if (stmt.test) stmt.test = this.rvalue(stmt.test);
-                if (stmt.update) stmt.update = this.rvalue(stmt.update);
-                stmt.body = this.walkStmt(stmt.body as StatementNode);
-                break;
-            case "ForInStatement":
-            case "ForOfStatement":
-                // LHS (left) is the iteration target — for `for (location in ...)`
-                // the server treats `location` as an lvalue (set_location wrap).
-                // A declared pattern on the left may hold defaults.
-                if ((stmt.left as Loose).type === "VariableDeclaration") this.walkStmt(stmt.left as unknown as StatementNode);
-                else stmt.left = this.lvalue(stmt.left as ExpressionNode);
-                stmt.right = this.rvalue(stmt.right as ExpressionNode);
-                stmt.body = this.walkStmt(stmt.body as StatementNode);
-                break;
-            case "WhileStatement":
-            case "DoWhileStatement":
-                stmt.test = this.rvalue(stmt.test as ExpressionNode);
-                stmt.body = this.walkStmt(stmt.body as StatementNode);
-                break;
-            case "ReturnStatement":
-            case "ThrowStatement":
-                if (stmt.argument) stmt.argument = this.rvalue(stmt.argument);
-                break;
-            case "BlockStatement":
-                this.walkBlock(stmt as unknown as BlockStatement);
-                break;
-            case "SwitchStatement":
-                stmt.discriminant = this.rvalue(stmt.discriminant!);
-                if (stmt.cases) {
-                    for (const c of stmt.cases) {
-                        if (c.test) c.test = this.rvalue(c.test);
-                        for (let i = 0; i < c.consequent.length; i++) {
-                            c.consequent[i] = this.walkStmt(c.consequent[i]!);
-                        }
-                    }
+                const a0 = args[0];
+                if (this.o.wrapNewWorker && callee.type === "Identifier" && a0 && a0.type !== "SpreadElement" &&
+                    (callee["name"] === "Worker" || callee["name"] === "SharedWorker")) {
+                    this.visit(a0, "expr", false); // R10
+                    this.open(a0.start, "$rewriter.wrap_worker_url(");
+                    this.close(a0.end, ")");
+                    this.all(args.slice(1), "expr");
+                    return;
                 }
-                break;
-            case "TryStatement":
-                if (stmt.block) this.walkBlock(stmt.block);
-                if (stmt.handler) {
-                    this.walkPattern((stmt.handler as Loose).param);
-                    this.walkBlock(stmt.handler.body);
+                this.all(args, "expr");
+                return;
+            }
+
+            case "ImportExpression": { // R7
+                const s = n["source"] as N;
+                // A literal bare specifier ("react") is the import map's: left as written.
+                const bare = s.type === "Literal" && typeof s["value"] === "string" && !isUrlLikeSpecifier(s["value"]);
+                if (!bare && !(this.o.wrapStaticImport && this.specifier(s)) && this.o.wrapImportArg) {
+                    this.visit(s, "expr", false);
+                    this.open(s.start, "$rewriter.wrap_import_arg(");
+                    this.close(s.end, this.o.baseUrl ? "," + JSON.stringify(this.o.baseUrl) + ")" : ")");
                 }
-                if (stmt.finalizer) this.walkBlock(stmt.finalizer);
-                break;
-            case "LabeledStatement":
-                stmt.body = this.walkStmt(stmt.body as StatementNode);
-                break;
+                this.visit(n["options"], "expr", false);
+                return;
+            }
+
+            case "ImportDeclaration":
+            case "ExportAllDeclaration":
+            case "ExportNamedDeclaration": // R8
+                if (n["source"] && this.o.wrapStaticImport) this.specifier(n["source"]);
+                this.visit(n["declaration"], "expr", false);
+                return; // specifiers name bindings and exports: not reads
+
+            case "AssignmentExpression":
+                this.visit(n["left"], n["operator"] === "=" ? "target" : "modify", false);
+                this.visit(n["right"], "expr", false);
+                return;
+
+            case "UpdateExpression":
+                this.visit(n["argument"], "modify", false);
+                return;
+
+            case "UnaryExpression":
+                this.visit(n["argument"], n["operator"] === "typeof" || n["operator"] === "delete" ? "modify" : "expr", false);
+                return;
+
+            case "VariableDeclarator":
+                this.visit(n["id"], "binding", false);
+                this.visit(n["init"], "expr", false);
+                return;
+
             case "FunctionDeclaration":
             case "FunctionExpression":
-                this.walkParams(stmt as Loose);
-                if (stmt.body) this.walkBlock(stmt.body as BlockStatement);
-                break;
-        }
-        return stmt;
-    }
-
-    /** A function's parameters: defaults and destructuring patterns. */
-    walkParams(fn: Loose): void {
-        for (const p of (fn.params ?? []) as Loose[]) this.walkPattern(p);
-    }
-
-    /** A binding pattern: default values and computed keys are expressions. */
-    walkPattern(p: Loose | null | undefined): void {
-        if (!p) return;
-        switch (p.type) {
-            case "AssignmentPattern":
-                p.right = this.rvalue(p.right);
-                this.walkPattern(p.left);
-                break;
-            case "ObjectPattern":
-                for (const prop of p.properties as Loose[]) {
-                    if (prop.type === "RestElement") { this.walkPattern(prop.argument); continue; }
-                    if (prop.computed) prop.key = this.rvalue(prop.key);
-                    this.walkPattern(prop.value);
-                }
-                break;
-            case "ArrayPattern":
-                for (const el of p.elements as Loose[]) this.walkPattern(el);
-                break;
-            case "RestElement":
-                this.walkPattern(p.argument);
-                break;
-        }
-    }
-
-    /** Everything a class holds: heritage, methods, fields, computed names, static blocks. */
-    walkClass(c: Loose): void {
-        if (c.superClass) c.superClass = this.rvalue(c.superClass);
-        for (const el of (c.body?.body ?? []) as Loose[]) {
-            if (el.type === "StaticBlock") {
-                for (let i = 0; i < el.body.length; i++) el.body[i] = this.walkStmt(el.body[i]);
-                continue;
-            }
-            if (el.computed) el.key = this.rvalue(el.key);
-            if (el.value) el.value = this.rvalue(el.value); // a method's function, or a field's initializer
-        }
-    }
-
-    /**
-     * rvalue: rewrites an expression in a value-read context. Recurses into
-     * children first (post-order), then applies wrap rules at this node.
-     */
-    rvalue(expr: ExpressionNode): ExpressionNode {
-        if (!expr) return expr;
-        switch (expr.type) {
-            case "AssignmentExpression": {
-                if (expr.operator === "=") {
-                    expr.left = this.lvalue(expr.left as ExpressionNode);
-                } else {
-                    expr.left = this.rvalue(expr.left as ExpressionNode);
-                }
-                expr.right = this.rvalue(expr.right as ExpressionNode);
-                return expr;
-            }
-            case "BinaryExpression":
-            case "LogicalExpression": {
-                expr.left = this.rvalue(expr.left as ExpressionNode);
-                expr.right = this.rvalue(expr.right as ExpressionNode);
-                return expr;
-            }
-            case "ConditionalExpression": {
-                expr.test = this.rvalue(expr.test!);
-                expr.consequent = this.rvalue(expr.consequent!);
-                expr.alternate = this.rvalue(expr.alternate!);
-                return expr;
-            }
-            case "UnaryExpression":
-            case "UpdateExpression":
-            case "AwaitExpression":
-            case "YieldExpression": {
-                if (expr.argument) expr.argument = this.rvalue(expr.argument);
-                return expr;
-            }
-            case "SequenceExpression": {
-                if (expr.expressions) {
-                    for (let i = 0; i < expr.expressions.length; i++) {
-                        expr.expressions[i] = this.rvalue(expr.expressions[i]!);
-                    }
-                }
-                return expr;
-            }
-            case "CallExpression": {
-                // Detect `eval(arg, ...)` BEFORE recursing into the callee so
-                // we don't trigger WRAP_EVAL on the bare `eval` identifier
-                // (which would result in $rewriter.wrap_eval_arg($rewriter.wrap_eval(eval),...)).
-                const isBareEvalCall = this.opts.wrapEvalArg &&
-                    isIdentifier(expr.callee!, "eval") &&
-                    (expr.arguments?.length ?? 0) > 0;
-                if (isBareEvalCall) {
-                    expr.arguments![0] = this.wrapEvalArg(this.rvalue(expr.arguments![0]!));
-                } else {
-                    expr.callee = this.rvalue(expr.callee!);
-                }
-                if (expr.arguments) {
-                    for (let i = 0; i < expr.arguments.length; i++) {
-                        if (isBareEvalCall && i === 0) continue;
-                        expr.arguments[i] = this.rvalue(expr.arguments[i]!);
-                    }
-                }
-                return expr;
-            }
-            case "NewExpression": {
-                expr.callee = this.rvalue(expr.callee!);
-                if (expr.arguments) {
-                    for (let i = 0; i < expr.arguments.length; i++) {
-                        expr.arguments[i] = this.rvalue(expr.arguments[i]!);
-                    }
-                }
-                return expr;
-            }
-            case "MemberExpression": {
-                expr.object = this.rvalue(expr.object!);
-                if (expr.computed) {
-                    // obj[expr] — WRAP_MEMBER_EXPRESSION
-                    expr.property = this.rvalue(expr.property!);
-                    if (this.opts.wrapMemberExpression) {
-                        return this.wrapMemberExpression(expr);
-                    }
-                    return expr;
-                }
-                // obj.X — non-computed; check property name
-                const propName = expr.property?.type === "Identifier"
-                    ? expr.property.name
-                    : undefined;
-                switch (propName) {
-                    case "location":
-                        if (this.opts.wrapLocation) return this.wrapDotObj(expr, "wrap_location");
-                        break;
-                    case "top":
-                        if (this.opts.wrapTopWindow) return this.wrapDotObj(expr, "wrap_top_window");
-                        break;
-                    case "parent":
-                        if (this.opts.wrapParentWindow) return this.wrapDotObj(expr, "wrap_parent_window");
-                        break;
-                    case "write":
-                    case "writeln":
-                        if (this.opts.wrapDocumentWrite) return this.wrapDotObj(expr, "wrap_document_write");
-                        break;
-                    case "postMessage":
-                        if (this.opts.wrapPostMessage) return this.wrapDotObj(expr, "wrap_postMessage");
-                        break;
-                    case "eval":
-                        if (this.opts.wrapEvalMemexp) return this.wrapEvalMemexp(expr);
-                        break;
-                }
-                return expr;
-            }
-            case "Identifier": {
-                switch (expr.name) {
-                    case "location":
-                        if (this.opts.wrapGetLocation) return this.wrapCall("wrap_get_location", expr);
-                        break;
-                    case "top":
-                        if (this.opts.wrapGetTopWindow) return this.wrapCall("wrap_get_top_window", expr);
-                        break;
-                    case "parent":
-                        // v1 reuses get_top_window for both top and parent rvalues.
-                        if (this.opts.wrapGetParentWindow) return this.wrapCall("wrap_get_top_window", expr);
-                        break;
-                    case "eval":
-                        if (this.opts.wrapEval) return this.wrapCall("wrap_eval", expr);
-                        break;
-                }
-                return expr;
-            }
-            case "ArrayExpression": {
-                if (expr.elements) {
-                    for (let i = 0; i < expr.elements.length; i++) {
-                        const el = expr.elements[i];
-                        if (el) expr.elements[i] = this.rvalue(el);
-                    }
-                }
-                return expr;
-            }
-            case "ObjectExpression": {
-                if (expr.properties) {
-                    for (const p of expr.properties) {
-                        if (p.type === "Property" && (p as Loose).computed) (p as Loose).key = this.rvalue((p as Loose).key);
-                        if (p.type === "Property" && p.value) {
-                            p.value = this.rvalue(p.value);
-                        } else if (p.type === "SpreadElement" && p.argument) {
-                            p.argument = this.rvalue(p.argument);
-                        }
-                    }
-                }
-                return expr;
-            }
-            case "TemplateLiteral": {
-                if (expr.expressions) {
-                    for (let i = 0; i < expr.expressions.length; i++) {
-                        expr.expressions[i] = this.rvalue(expr.expressions[i]!);
-                    }
-                }
-                return expr;
-            }
-            case "TaggedTemplateExpression": {
-                if ((expr as ExpressionNode & { tag?: ExpressionNode }).tag) {
-                    (expr as ExpressionNode & { tag: ExpressionNode }).tag =
-                        this.rvalue((expr as ExpressionNode & { tag: ExpressionNode }).tag);
-                }
-                if ((expr as ExpressionNode & { quasi?: ExpressionNode }).quasi) {
-                    (expr as ExpressionNode & { quasi: ExpressionNode }).quasi =
-                        this.rvalue((expr as ExpressionNode & { quasi: ExpressionNode }).quasi);
-                }
-                return expr;
-            }
-            case "SpreadElement": {
-                if (expr.argument) expr.argument = this.rvalue(expr.argument);
-                return expr;
-            }
-            case "ClassExpression": {
-                this.walkClass(expr as Loose);
-                return expr;
-            }
-            case "ChainExpression": {
-                // Optional chaining: a?.b, a?.[x], a?.(x)
-                (expr as Loose).expression = this.rvalue((expr as Loose).expression);
-                return expr;
-            }
             case "ArrowFunctionExpression":
-            case "FunctionExpression": {
-                this.walkParams(expr as Loose);
-                if (expr.body) {
-                    if ((expr.body as Node).type === "BlockStatement") {
-                        this.walkBlock(expr.body as BlockStatement);
-                    } else {
-                        // Concise arrow body: `() => expr`
-                        (expr as ExpressionNode & { body: ExpressionNode }).body =
-                            this.rvalue(expr.body as ExpressionNode);
+                this.all(n["params"], "binding"); // the name (id) is not a read
+                this.visit(n["body"], "expr", false);
+                return;
+
+            case "ClassDeclaration":
+            case "ClassExpression":
+                this.visit(n["superClass"], "expr", false);
+                this.all((n["body"] as N)["body"], "expr");
+                return;
+
+            case "MethodDefinition":
+            case "PropertyDefinition":
+            case "AccessorProperty":
+                if (n["computed"]) this.visit(n["key"], "expr", false);
+                this.visit(n["value"], "expr", false);
+                return;
+
+            case "Property": {
+                const value = n["value"] as N;
+                if (n["shorthand"]) {
+                    // {id}: the key stays, the value goes through the helper.
+                    const id = value.type === "AssignmentPattern" ? (value["left"] as N) : value;
+                    const name = id["name"] as string;
+                    if (ctx === "expr") {
+                        const h = identHelper(name, this.o);
+                        if (h) {
+                            this.open(id.start, name + ":$rewriter." + h + "(");
+                            this.close(id.end, ")");
+                        }
+                    } else if (ctx === "target" && name === "location" && this.o.wrapSetLocation) {
+                        this.replace(id.start, id.end - id.start, "location:" + SET_LOCATION);
                     }
+                    if (value.type === "AssignmentPattern") this.visit(value["right"], "expr", false);
+                    return;
                 }
-                return expr;
+                if (n["computed"]) this.visit(n["key"], "expr", false);
+                this.visit(value, ctx, false);
+                return;
             }
+
+            case "ObjectPattern":
+                this.all(n["properties"], ctx);
+                return;
+            case "ArrayPattern":
+                this.all(n["elements"], ctx);
+                return;
+            case "RestElement":
+                this.visit(n["argument"], ctx, false);
+                return;
+            case "AssignmentPattern":
+                this.visit(n["left"], ctx, false);
+                this.visit(n["right"], "expr", false);
+                return;
+
+            case "ForInStatement":
+            case "ForOfStatement": {
+                const left = n["left"] as N;
+                this.visit(left, left.type === "VariableDeclaration" ? "expr" : "target", false);
+                this.visit(n["right"], "expr", false);
+                this.visit(n["body"], "expr", false);
+                return;
+            }
+
+            case "CatchClause":
+                this.visit(n["param"], "binding", false);
+                this.visit(n["body"], "expr", false);
+                return;
+
+            case "LabeledStatement":
+                this.visit(n["body"], "expr", false);
+                return;
+
+            case "TaggedTemplateExpression":
+                this.visit(n["tag"], "expr", false);
+                this.visit(n["quasi"], "expr", false);
+                return;
+
+            // Leaves, and names that are not reads.
+            case "BreakStatement":
+            case "ContinueStatement":
+            case "MetaProperty":
+            case "Super":
+            case "ThisExpression":
+            case "Literal":
+            case "TemplateElement":
+            case "PrivateIdentifier":
+            case "EmptyStatement":
+                return;
+
+            case "DebuggerStatement": // R12
+                if (this.o.stripDebugger) this.replace(n.start, n.end - n.start, ";");
+                return;
         }
-        return expr;
-    }
-
-    /**
-     * lvalue: rewrites the LHS of an assignment.
-     *   - Bare `location` → set_location wrapper
-     *   - Member access (obj.X / obj[expr]) → delegate to rvalue (the same
-     *     rules apply on lvalue side).
-     */
-    lvalue(expr: ExpressionNode): ExpressionNode {
-        if (expr.type === "Identifier" && expr.name === "location" && this.opts.wrapSetLocation) {
-            return this.wrapSetLocation();
+        // Everything else holds only statements and expressions that are read.
+        for (const key in n) {
+            if (key === "type" || key === "start" || key === "end") continue;
+            const v = n[key] as unknown;
+            if (Array.isArray(v)) this.all(v as N[], "expr");
+            else if (v && typeof v === "object" && typeof (v as N).type === "string") this.visit(v as N, "expr", false);
         }
-        if (expr.type === "MemberExpression") {
-            return this.rvalue(expr);
+    }
+
+    /** R1: `$rewriter.<h>(` id `)`. */
+    private wrapCall(id: N, helper: string): void {
+        this.open(id.start, "$rewriter." + helper + "(");
+        this.close(id.end, ")");
+        this.wrapped.add(id);
+    }
+
+    /** R8 / literal R7: a string-literal specifier proxified in place. False when left alone. */
+    private specifier(s: N): boolean {
+        const { baseUrl, proxify } = this.o;
+        if (!baseUrl || !proxify || s.type !== "Literal" || typeof s["value"] !== "string" || !isUrlLikeSpecifier(s["value"])) return false;
+        const to = proxify(s["value"], baseUrl);
+        if (to === s["value"]) return false;
+        this.replace(s.start, s.end - s.start, JSON.stringify(to));
+        return true;
+    }
+
+    private member(m: N, called: boolean): void {
+        const obj = m["object"] as N;
+        const prop = m["property"] as N;
+        const computed = m["computed"] as boolean;
+        if (obj.type === "Super") {
+            if (computed) this.visit(prop, "expr", false);
+            return;
         }
-        return expr;
+        // R9
+        if (!computed && obj.type === "MetaProperty" && prop["name"] === "url" && this.o.wrapImportMetaUrl && this.o.baseUrl &&
+            (obj["meta"] as N)["name"] === "import") {
+            this.replace(m.start, m.end - m.start, JSON.stringify(this.o.baseUrl));
+            return;
+        }
+        this.visit(obj, "expr", false);
+        if (computed) this.visit(prop, "expr", false);
+
+        // A constant key is a name; `undefined` here means the key is computed at run time.
+        let name: string | undefined;
+        if (!computed) name = prop.type === "Identifier" ? (prop["name"] as string) : "#";
+        else if (prop.type === "Literal") name = typeof prop["value"] === "string" ? (prop["value"] as string) : "#";
+        else if (prop.type === "TemplateLiteral" && (prop["expressions"] as N[]).length === 0) {
+            name = ((prop["quasis"] as N[])[0]!["value"] as { cooked?: string }).cooked ?? "#";
+        }
+        const inChain = Boolean(m["optional"]) || optionalBelow(obj);
+
+        const helper = name === undefined ? null : memberHelper(name, called, this.o);
+        if (helper) { // R3
+            this.open(obj.start, "$rewriter." + helper + "({obj:");
+            this.close(obj.end, inChain ? ",opt:1})" : "})");
+            if (inChain && !m["optional"]) {
+                // `?.` must be one token: the `.` is replaced, not prefixed.
+                const at = skipTrivia(this.src, obj.end);
+                if (computed) this.replace(at, 0, "?.");
+                else this.replace(at, 1, "?.");
+            }
+            this.wrapped.add(m);
+            return;
+        }
+        if (name === "eval" && this.o.wrapEvalMemexp && !inChain) { // R4
+            this.open(obj.start, "$rewriter.wrap_eval_memexp(");
+            this.close(obj.end, ")");
+            this.wrapped.add(m);
+            return;
+        }
+        if (name === undefined && !inChain && this.o.wrapMemberExpression) { // R5
+            const lb = skipTrivia(this.src, obj.end);
+            const rb = m.end - 1;
+            if (this.src[lb] !== "[" || this.src[rb] !== "]") return;
+            this.open(obj.start, "$rewriter.wrap_member_expression(");
+            this.replace(lb, 1, ",$__crn_key__=(");
+            this.replace(rb, 1, "))[$__crn_key__]");
+            this.wrapped.add(m);
+        }
     }
 
-    // ── helpers ──────────────────────────────────────────────────────────
-
-    /** Builds `$rewriter.<helper>(<arg>)`. */
-    wrapCall(helper: string, arg: ExpressionNode): ExpressionNode {
-        return {
-            type: "CallExpression",
-            callee: makeMemberDot(makeIdentifier("$rewriter"), helper),
-            arguments: [arg],
-            optional: false,
-        } as unknown as ExpressionNode;
-    }
-
-    /** Rewrites `obj.X` to `$rewriter.<helper>({obj: <X>}).X`. */
-    wrapDotObj(member: ExpressionNode, helper: string): ExpressionNode {
-        const wrapped: ExpressionNode = {
-            type: "CallExpression",
-            callee: makeMemberDot(makeIdentifier("$rewriter"), helper),
-            arguments: [makeObjectExpression([
-                makeProperty("obj", member.object!),
-            ])],
-            optional: false,
-        } as unknown as ExpressionNode;
-        member.object = wrapped;
-        return member;
-    }
-
-    /** Rewrites `eval(src, ...)` first arg → `$rewriter.wrap_eval_arg(eval, src)`. */
-    wrapEvalArg(arg: ExpressionNode): ExpressionNode {
-        return {
-            type: "CallExpression",
-            callee: makeMemberDot(makeIdentifier("$rewriter"), "wrap_eval_arg"),
-            arguments: [makeIdentifier("eval"), arg],
-            optional: false,
-        } as unknown as ExpressionNode;
-    }
-
-    /** Rewrites `obj.eval` → `$rewriter.wrap_eval_memexp(obj).eval`. */
-    wrapEvalMemexp(member: ExpressionNode): ExpressionNode {
-        const wrapped: ExpressionNode = {
-            type: "CallExpression",
-            callee: makeMemberDot(makeIdentifier("$rewriter"), "wrap_eval_memexp"),
-            arguments: [member.object!],
-            optional: false,
-        } as unknown as ExpressionNode;
-        member.object = wrapped;
-        return member;
-    }
-
-    /**
-     * Rewrites `obj[expr]` to:
-     *   $rewriter.wrap_member_expression(obj, ($__crn_key__ = expr))[$__crn_key__]
-     *
-     * The sequence-style `($__crn_key__ = expr)` keeps the original `expr` evaluating
-     * exactly once while letting the bracket access pick up the resolved name.
-     */
-    wrapMemberExpression(member: ExpressionNode): ExpressionNode {
-        const apMeAssign: ExpressionNode = {
-            type: "AssignmentExpression",
-            operator: "=",
-            left: makeIdentifier("$__crn_key__"),
-            right: member.property!,
-        } as unknown as ExpressionNode;
-
-        const wrapperCall: ExpressionNode = {
-            type: "CallExpression",
-            callee: makeMemberDot(makeIdentifier("$rewriter"), "wrap_member_expression"),
-            arguments: [member.object!, apMeAssign],
-            optional: false,
-        } as unknown as ExpressionNode;
-
-        return {
-            type: "MemberExpression",
-            object: wrapperCall,
-            property: makeIdentifier("$__crn_key__"),
-            computed: true,
-            optional: false,
-        } as unknown as ExpressionNode;
-    }
-
-    /**
-     * Builds the LHS of a set-location assignment:
-     *   $rewriter.wrap_set_location(location, function(v){location=v;}).value
-     */
-    wrapSetLocation(): ExpressionNode {
-        const setterFn: ExpressionNode = {
-            type: "FunctionExpression",
-            id: null,
-            params: [makeIdentifier("v")],
-            body: {
-                type: "BlockStatement",
-                body: [{
-                    type: "ExpressionStatement",
-                    expression: {
-                        type: "AssignmentExpression",
-                        operator: "=",
-                        left: makeIdentifier("location"),
-                        right: makeIdentifier("v"),
-                    },
-                }],
-            },
-            async: false,
-            generator: false,
-        } as unknown as ExpressionNode;
-
-        const callExpr: ExpressionNode = {
-            type: "CallExpression",
-            callee: makeMemberDot(makeIdentifier("$rewriter"), "wrap_set_location"),
-            arguments: [makeIdentifier("location"), setterFn],
-            optional: false,
-        } as unknown as ExpressionNode;
-
-        return makeMemberDot(callExpr, "value");
+    /** Whether `callee`, as now written, starts with a call (so `new` would bind to that call). */
+    private startsWithCall(callee: N): boolean {
+        for (let n: N | undefined = callee; n; ) {
+            if (this.wrapped.has(n)) return true;
+            if (n.type === "MemberExpression") n = n["object"] as N;
+            else if (n.type === "TaggedTemplateExpression") n = n["tag"] as N;
+            else return false;
+        }
+        return false;
     }
 }
 
-// ── ESTree node builders (acorn / astring compatible) ─────────────────────
-
-function isIdentifier(expr: ExpressionNode, name: string): boolean {
-    return expr.type === "Identifier" && expr.name === name;
+/** Whether `e` is part of an optional chain that can short-circuit (`a?.b.c`: for `.c`, yes). */
+function optionalBelow(e: N | null | undefined): boolean {
+    for (let n = e; n; ) {
+        if (n.type === "MemberExpression") {
+            if (n["optional"]) return true;
+            n = n["object"] as N;
+        } else if (n.type === "CallExpression") {
+            if (n["optional"]) return true;
+            n = n["callee"] as N;
+        } else {
+            return false;
+        }
+    }
+    return false;
 }
 
-function makeIdentifier(name: string): ExpressionNode {
-    return { type: "Identifier", name } as unknown as ExpressionNode;
-}
-
-function makeMemberDot(object: ExpressionNode, propertyName: string): ExpressionNode {
-    return {
-        type: "MemberExpression",
-        object,
-        property: makeIdentifier(propertyName),
-        computed: false,
-        optional: false,
-    } as unknown as ExpressionNode;
-}
-
-function makeProperty(keyName: string, value: ExpressionNode): ObjectProperty {
-    return {
-        type: "Property",
-        key: makeIdentifier(keyName),
-        value,
-        kind: "init",
-        method: false,
-        shorthand: false,
-        computed: false,
-    } as unknown as ObjectProperty;
-}
-
-function makeObjectExpression(properties: ObjectProperty[]): ExpressionNode {
-    return {
-        type: "ObjectExpression",
-        properties,
-    } as unknown as ExpressionNode;
+/** The offset of the first token at or after `i`: past whitespace and comments. */
+function skipTrivia(src: string, i: number): number {
+    for (;;) {
+        const c = src.charCodeAt(i);
+        if (c === 0x2f && src.charCodeAt(i + 1) === 0x2f) { // //
+            while (i < src.length && src.charCodeAt(i) !== 0x0a && src.charCodeAt(i) !== 0x0d &&
+                   src.charCodeAt(i) !== 0x2028 && src.charCodeAt(i) !== 0x2029) i++;
+        } else if (c === 0x2f && src.charCodeAt(i + 1) === 0x2a) { // /*
+            const e = src.indexOf("*/", i + 2);
+            i = e < 0 ? src.length : e + 2;
+        } else if (c === 0x20 || (c >= 0x09 && c <= 0x0d) || c === 0xa0 || c === 0xfeff || c === 0x2028 || c === 0x2029 ||
+                   c === 0x1680 || (c >= 0x2000 && c <= 0x200a) || c === 0x202f || c === 0x205f || c === 0x3000) {
+            i++;
+        } else {
+            return i;
+        }
+    }
 }

@@ -79,11 +79,6 @@ export function patchDynamicIframeAppend(
 
     savedByWindow.set(targetWindow, { proto, origAppendChild, origInsertBefore });
 
-    // Guard against double-injection when insertBefore(node, null) internally
-    // delegates to appendChild — both patched handlers would fire for the same
-    // iframe instance without this.
-    const injected = new WeakSet<HTMLIFrameElement>();
-
     // Rewrite URL-bearing attributes on node BEFORE it is inserted into the DOM,
     // so the browser fetches the proxied URL immediately on append.
     function rewriteUrlBeforeInsert(node: Node): void {
@@ -108,8 +103,8 @@ export function patchDynamicIframeAppend(
     function maybeInjectIframe(node: Node): void {
         if (!(node instanceof IFrameCtor)) return;
         const iframe = node as HTMLIFrameElement;
-        if (injected.has(iframe)) return;
-        injected.add(iframe);
+        // A frame inserted again has a new window: no memo by element
+        // (injectIntoIframe leaves a window that has the runtime alone).
 
         // If the iframe already has a proxied src, the server will inject the
         // bootstrap when that page loads. Injecting now would stamp PATCHED_FLAG
@@ -126,20 +121,75 @@ export function patchDynamicIframeAppend(
         injectIntoIframe(iframe, targetWindow, config, getBaseHref());
     }
 
-    // Known gap: append, prepend, replaceChild, before/after/replaceWith and
-    // insertAdjacentElement insert nodes too and are not covered yet.
-    for (const key of ["appendChild", "insertBefore"] as const) {
+    // Every frame in what was inserted gets the runtime as it is connected:
+    // page code may reach its document straight away, by any route
+    // (window.frames[name] included, which no getter sees).
+    const framesIn = (node: unknown): Node[] => {
+        if (!(node instanceof Object)) return [];
+        const n = node as Node & { querySelectorAll?: (s: string) => ArrayLike<Node> };
+        const out: Node[] = n instanceof IFrameCtor ? [n] : [];
+        if (typeof n.querySelectorAll === "function" && n.firstChild) {
+            const inner = n.querySelectorAll("iframe");
+            for (let i = 0; i < inner.length; i++) out.push(inner[i]!);
+        }
+        return out;
+    };
+    const injectAll = (frames: Node[]): void => {
+        for (const f of frames) if ((f as Node).isConnected) maybeInjectIframe(f);
+    };
+    // One insertion may run through another (insertBefore(n, null) as
+    // appendChild in some DOMs): the outermost call injects.
+    let depth = 0;
+    const inserting = <T>(frames: Node[], run: () => T): T => {
+        depth++;
+        let result: T;
+        try { result = run(); } finally { depth--; }
+        if (depth === 0) injectAll(frames);
+        return result;
+    };
+    frameInjectors.set(targetWindow, (root) => injectAll(framesIn(root)));
+
+    for (const key of ["appendChild", "insertBefore", "replaceChild"] as const) {
         wrapMethod<(...a: unknown[]) => Node>(proto, key, (native, self, args) => {
             const node = args[0];
             // A text node headed into a <script> or <style>: its JS or CSS.
             const parent = self as Element | null;
-            if (parent && (parent.tagName === "SCRIPT" || parent.tagName === "STYLE")) rewriteTextNode(parent, node, rewriteOne);
+            if (key !== "replaceChild" && parent && (parent.tagName === "SCRIPT" || parent.tagName === "STYLE")) rewriteTextNode(parent, node, rewriteOne);
             if (node instanceof Object) rewriteUrlBeforeInsert(node as Node);
-            const result = Reflect.apply(native, self, args) as Node;
-            if (node instanceof Object) maybeInjectIframe(node as Node);
-            return result;
+            // A fragment is empty once inserted: its frames are found first.
+            return inserting(framesIn(node), () => Reflect.apply(native, self, args) as Node);
         });
     }
+    // The ParentNode / ChildNode methods and insertAdjacentElement insert
+    // nodes too: their frames get the runtime the same way.
+    const nodeArgs: Record<string, (args: unknown[]) => unknown[]> = {
+        append: (a) => a, prepend: (a) => a, before: (a) => a, after: (a) => a,
+        replaceWith: (a) => a, replaceChildren: (a) => a, insertAdjacentElement: (a) => [a[1]],
+        moveBefore: (a) => [a[0]],
+    };
+    for (const holderName of ["Element", "Document", "DocumentFragment", "CharacterData", "DocumentType"]) {
+        const holder = globals[holderName]?.prototype as object | undefined;
+        if (!holder) continue;
+        for (const [key, nodesOf] of Object.entries(nodeArgs)) {
+            if (!Object.prototype.hasOwnProperty.call(holder, key)) continue;
+            wrapMethod<(...a: unknown[]) => unknown>(holder, key, (native, self, args) => {
+                const frames: Node[] = [];
+                for (const n of nodesOf(args)) frames.push(...framesIn(n));
+                return inserting(frames, () => Reflect.apply(native, self, args));
+            });
+        }
+    }
+}
+
+const frameInjectors = new WeakMap<object, (root: unknown) => void>();
+
+/**
+ * Gives the runtime to the empty frames in `root`, which markup was just
+ * parsed into (innerHTML, insertAdjacentHTML, document.write, …), with the
+ * runtime of `targetWindow` — the window whose patch did the parsing.
+ */
+export function injectFramesIn(targetWindow: Window, root: unknown): void {
+    try { frameInjectors.get(targetWindow)?.(root); } catch { /* the page's call must not fail for it */ }
 }
 
 /** Test-only: undo the patches for a given window. */

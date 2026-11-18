@@ -145,6 +145,7 @@ export function rewriteUrl(
     config: ClientConfig,
 ): string {
     if (typeof rawUrl !== "string" || rawUrl.length === 0) return rawUrl;
+    if (config.identity) return rawUrl;
     // In-page anchor, judged after the browser's own preprocessing (leading
     // and trailing C0/space stripped, tab/CR/LF removed) — " \x01#top" is
     // still "#top" to the browser.
@@ -208,6 +209,7 @@ export function unwrapProxiedUrl(
     proxiedHref: string,
     config: ClientConfig,
 ): string {
+    if (config.identity) return proxiedHref;
     let url: URL;
     try {
         url = new URL(proxiedHref);

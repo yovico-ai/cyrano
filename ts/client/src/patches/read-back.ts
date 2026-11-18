@@ -9,13 +9,13 @@
 //
 // Known gaps: `attributes` / getAttributeNames still list what the element
 // holds (an attribute cyrano dropped — integrity — is missing from the
-// list, though getAttribute returns it); a rewritten inline script in
-// server HTML or in an HTML string reads back rewritten (only script text
-// set through textContent / text / innerHTML is kept); CSS attribute
-// selectors match the rewritten values.
+// list, though getAttribute returns it); CSS attribute selectors match the
+// rewritten values; a script's text read in pieces (substringData, a Range
+// over it) is the text it holds.
 
 import {
-    ORIGINALS_ATTR, asWritten, consume, copyOriginals, forgetAttr, hasOriginals, originalAttr, originalText,
+    ORIGINALS_ATTR, asWritten, consume, inertDocument, copyOriginals, forgetAttr, mayDiffer, originalAttr, originalText,
+    serializedAsWritten, textAsWritten,
 } from "../native/originals";
 import { wrapAccessor, wrapConstructor, wrapMethod } from "../native/surface";
 
@@ -63,9 +63,37 @@ export function patchReadBack(targetWindow: Window, onElement: (el: Element) => 
         const proto = g[protoName]?.prototype;
         if (!proto || !Object.prototype.hasOwnProperty.call(proto, key)) return;
         wrapAccessor<unknown>(proto, key, {
-            get: (get, self) => (isRawText(self) ? originalText(self) : undefined) ?? get.call(self),
+            get: (get, self) => {
+                if (isRawText(self)) return originalText(self) ?? get.call(self);
+                // An ancestor's text gathers its scripts' text; a text node
+                // inside a script is that script's text.
+                const raw = get.call(self);
+                return typeof raw === "string" && key === "textContent" && mayDiffer(raw) ? textAsWritten(self, raw) : raw;
+            },
         });
     };
+    // A script's text read off its text node.
+    const C = g["CharacterData"]?.prototype;
+    for (const [proto, key] of [[C, "data"], [N, "nodeValue"], [g["Text"]?.prototype, "wholeText"]] as const) {
+        if (!proto || !Object.prototype.hasOwnProperty.call(proto, key)) continue;
+        wrapAccessor<unknown>(proto, key, {
+            get: (get, self) => {
+                const raw = get.call(self);
+                return typeof raw === "string" && mayDiffer(raw) && typeof self === "object" && self !== null &&
+                    ((self as Node).nodeType === 3 || (self as Node).nodeType === 4) ? textAsWritten(self, raw) : raw;
+            },
+        });
+    }
+    if (C && Object.prototype.hasOwnProperty.call(C, "length")) {
+        const dataGet = Object.getOwnPropertyDescriptor(C, "data")?.get as ((this: unknown) => string) | undefined; // wrapped above
+        wrapAccessor<number>(C, "length", {
+            get: (get, self) => {
+                const n = get.call(self);
+                if (!dataGet || n === 0) return n;
+                try { const d = dataGet.call(self); return typeof d === "string" ? d.length : n; } catch { return n; }
+            },
+        });
+    }
     for (const p of ["Node", "Element", "HTMLElement", "HTMLScriptElement", "HTMLStyleElement"]) {
         textGetter(p, "textContent");
         textGetter(p, "innerText");
@@ -76,17 +104,24 @@ export function patchReadBack(targetWindow: Window, onElement: (el: Element) => 
     const innerGet = Object.getOwnPropertyDescriptor(E, "innerHTML")?.get as ((this: unknown) => string) | undefined;
     wrapAccessor<unknown>(E, "innerHTML", {
         get: (get, self) => {
-            if (!hasOriginals()) return get.call(self);
-            if (isRawText(self)) return originalText(self) ?? get.call(self);
-            return get.call(asWritten(self as Node));
+            const raw = get.call(self);
+            if (!mayDiffer(raw)) return raw;
+            if (isRawText(self)) return originalText(self) ?? raw;
+            return serializedAsWritten(self as Node, (n) => get.call(n) as string);
         },
     });
     wrapAccessor<unknown>(E, "outerHTML", {
-        get: (get, self) => (hasOriginals() ? get.call(asWritten(self as Node)) : get.call(self)),
+        get: (get, self) => {
+            const raw = get.call(self);
+            return mayDiffer(raw) ? serializedAsWritten(self as Node, (n) => get.call(n) as string) : raw;
+        },
     });
     if ("getHTML" in E) {
         wrapMethod<(...a: unknown[]) => string>(E, "getHTML", (native, self, args) =>
-            Reflect.apply(native, hasOriginals() ? asWritten(self as Node) : self, args) as string);
+        {
+            const raw = Reflect.apply(native, self, args) as string;
+            return mayDiffer(raw) ? serializedAsWritten(self as Node, (n) => Reflect.apply(native, n, args) as string) : raw;
+        });
     }
     const SR = g["ShadowRoot"]?.prototype;
     if (SR && Object.prototype.hasOwnProperty.call(SR, "innerHTML")) {
@@ -94,13 +129,15 @@ export function patchReadBack(targetWindow: Window, onElement: (el: Element) => 
         // element, whose innerHTML is the same serialization.
         wrapAccessor<unknown>(SR, "innerHTML", {
             get: (get, self) => {
-                if (!hasOriginals() || !innerGet) return get.call(self);
+                const raw = get.call(self);
+                if (!mayDiffer(raw) || !innerGet) return raw;
                 try {
                     const root = self as ShadowRoot;
-                    const box = root.ownerDocument.createElement("div");
+                    // Built where nothing loads (originals.ts asWritten).
+                    const box = (inertDocument() ?? root.ownerDocument).createElement("div");
                     for (let c = root.firstChild; c; c = c.nextSibling) {
                         const w = asWritten(c);
-                        box.appendChild(w === c ? c.cloneNode(true) : w); // never move the real child
+                        box.appendChild(w === c ? box.ownerDocument.importNode(c, true) : w); // never move the real child
                     }
                     return innerGet.call(box);
                 } catch {
@@ -111,9 +148,11 @@ export function patchReadBack(targetWindow: Window, onElement: (el: Element) => 
     }
     const XS = g["XMLSerializer"]?.prototype;
     if (XS) {
-        wrapMethod<(...a: unknown[]) => string>(XS, "serializeToString", (native, self, args) =>
-            Reflect.apply(native, self, args.length && hasOriginals() && typeof args[0] === "object" && args[0] !== null
-                ? [asWritten(args[0] as Node), ...args.slice(1)] : args) as string);
+        wrapMethod<(...a: unknown[]) => string>(XS, "serializeToString", (native, self, args) => {
+            const raw = Reflect.apply(native, self, args) as string;
+            return args.length && mayDiffer(raw) && typeof args[0] === "object" && args[0] !== null
+                ? (Reflect.apply(native, self, [asWritten(args[0] as Node), ...args.slice(1)]) as string) : raw;
+        });
     }
 
     // ── clones keep their originals ─────────────────────────────────────

@@ -1,6 +1,7 @@
 // Runs under happy-dom — patches the global Blob constructor, then restores
 // it so other test files see the native Blob again.
 
+import { unmarked } from "../../src/js/marks";
 import { describe, expect, it } from "vitest";
 import type { ClientConfig } from "../../src/config";
 import { patchBlobWorkerSource } from "../../src/patches/blob-worker-source";
@@ -48,11 +49,12 @@ describe("patchBlobWorkerSource", () => {
     it("gives the Worker a private script: worker runtime + rewritten source", async () => {
         const scriptFor = setUp();
         const text = await workerText(scriptFor, new win.Blob(["location.href"], { type: "text/javascript" }));
-        expect(text).toContain('importScripts("http://localhost:9081/rewriter.js")');
-        expect(text).toContain("self.$rewriter=self.$rewriter_init_worker(");
+        // (Loaded as a TrustedScriptURL where Trusted Types are enforced.)
+        expect(text).toContain('importScripts(p?p.createScriptURL("http://localhost:9081/rewriter.js"):"http://localhost:9081/rewriter.js")');
+        expect(unmarked(String(text))).toContain("self.$rewriter=self.$rewriter_init_worker(");
         expect(text).toContain('"https://claude.ai/cdn-cgi/challenge-platform/x"');
-        expect(text).toContain("self.$__crn_key__=null;");
-        expect(text).toContain("$rewriter.wrap_get_location(location)");
+        expect(text).toContain("self.$__crn_key__=null");
+        expect(unmarked(String(text))).toContain("$rewriter.wrap_get_location(location)");
     });
 
     it("matches on javascript-like types with parameters (e.g. charset)", async () => {
@@ -72,6 +74,6 @@ describe("patchBlobWorkerSource", () => {
     it("joins multiple string parts before rewriting", async () => {
         const scriptFor = setUp();
         const text = await workerText(scriptFor, new win.Blob(["location", ".href"], { type: "text/javascript" }));
-        expect(text).toContain("$rewriter.wrap_get_location(location)");
+        expect(unmarked(String(text))).toContain("$rewriter.wrap_get_location(location)");
     });
 });

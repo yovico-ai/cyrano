@@ -13,8 +13,9 @@
 // getAttribute and srcset return the text as the page *wrote* it (relative
 // URLs relative) — that needs the original text kept, a separate step.
 
+import { isTrustedValue, trusted } from "../native/trusted";
 import { rewriteSrcsetAttribute } from "./srcset";
-import { URL_BEARING_ELEMENTS } from "./url-attribute-map";
+import { URL_BEARING_ELEMENTS, isSrcsetAttr } from "./url-attribute-map";
 import { wrapAccessor } from "../native/surface";
 import { originalAttr, recordAttr } from "../native/originals";
 
@@ -30,7 +31,7 @@ export function patchUrlAttributes(
         const proto = globals[ctorName]?.prototype;
         if (!proto) continue;
         for (const attribute of attrs) {
-            const srcset = attribute === "srcset";
+            const srcset = isSrcsetAttr(attribute);
             wrapAccessor<unknown>(proto, idlNames?.[attribute] ?? attribute, {
                 get: (get, self) => {
                     const v = get.call(self);
@@ -46,7 +47,8 @@ export function patchUrlAttributes(
                     if (value == null) return set.call(self, value);
                     const s = String(value);
                     const now = srcset ? rewriteSrcsetAttribute(s, rewriteOne) : rewriteOne(s);
-                    set.call(self, now);
+                    // A TrustedScriptURL (script.src under Trusted Types) stays trusted.
+                    set.call(self, isTrustedValue(value) ? trusted(targetWindow, "ScriptURL", now) : now);
                     recordAttr(self as Element, attribute, now, s);
                 },
             });

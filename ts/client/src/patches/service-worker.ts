@@ -6,7 +6,12 @@
 import { wrapMethod } from "../native/surface";
 
 export function patchServiceWorker(targetWindow: Window): void {
-    const sw = targetWindow.navigator?.serviceWorker;
+    let sw: ServiceWorkerContainer | undefined;
+    try {
+        sw = targetWindow.navigator?.serviceWorker;
+    } catch {
+        return; // a sandboxed frame: the getter throws, and so it does for the page
+    }
     if (!sw) return;
     sw.getRegistrations().then((regs) => {
         for (const reg of regs) void reg.unregister();

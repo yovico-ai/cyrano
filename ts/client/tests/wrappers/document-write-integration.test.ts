@@ -5,6 +5,7 @@
 // other side with `$rewriter.wrap_*` calls already injected — same as if the
 // HTML had been rewritten server-side.
 
+import { unmarked } from "../../src/js/marks";
 import { describe, expect, it, vi } from "vitest";
 import { wrapDocumentWrite } from "../../src/wrappers/document-write";
 
@@ -34,7 +35,7 @@ describe("document.write end-to-end — inline script rewriting", () => {
         const written = doc.write.mock.calls[0]?.[0] as string;
         // URL attributes were already rewritten on the script tag itself if any;
         // and inline body got the JS rewriter pass.
-        expect(written).toContain("$rewriter.wrap_get_location(location)");
+        expect(unmarked(String(written))).toContain("$rewriter.wrap_get_location(location)");
     });
 
     it("rewrites both URL attributes AND inline script content in one payload", () => {
@@ -51,7 +52,7 @@ describe("document.write end-to-end — inline script rewriting", () => {
         expect(written).toContain('src="/img.png?proxified=1"');
         expect(written).toContain('href="/x?proxified=1"');
         // Inline script rewriting:
-        expect(written).toContain("$rewriter.wrap_document_write");
+        expect(unmarked(String(written))).toContain("$rewriter.wrap_document_write");
     });
 
     it("rewrites inline <style> CSS content in the document.write payload", () => {
@@ -87,6 +88,6 @@ describe("document.write end-to-end — inline script rewriting", () => {
         expect(written).toContain("/style.css?proxified=1");
         expect(written).toContain("a.png?proxified=1");
         expect(written).toContain("d.png?proxified=1");
-        expect(written).toContain("$rewriter.wrap_get_location(location)");
+        expect(unmarked(String(written))).toContain("$rewriter.wrap_get_location(location)");
     });
 });

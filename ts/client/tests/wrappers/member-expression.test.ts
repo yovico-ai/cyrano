@@ -69,11 +69,27 @@ describe("wrap_member_expression", () => {
         expect("parent" in result).toBe(true);
     });
 
-    it("obj['postMessage'] returns a postMessage wrapper", () => {
+    it("obj['postMessage'] is the object's own (the window's is wrapped at its surface)", () => {
         const win = makeWindow();
         const api = createRewriterApi(win, cfg);
-        const result = api.wrap_member_expression(win, "postMessage") as { postMessage: unknown };
-        expect(typeof result.postMessage).toBe("function");
+        expect(api.wrap_member_expression(win, "postMessage")).toBe(win);
+    });
+
+    // ibm.com (Akamai's sensor script keeps data under arbitrary computed
+    // keys): reads returned a function that is not there, assignments were lost.
+    it("write / postMessage / eval / top on an ordinary object: read, assign and typeof as written", () => {
+        const api = createRewriterApi(makeWindow(), cfg);
+        for (const key of ["write", "writeln", "postMessage", "eval", "top", "parent"]) {
+            const obj: Record<string, unknown> = {};
+            const holder = api.wrap_member_expression(obj, key) as Record<string, unknown>;
+            expect(typeof holder[key], key).toBe("undefined");
+            holder[key] = 7;
+            expect(obj[key], key).toBe(7);
+            expect((api.wrap_member_expression(obj, key) as Record<string, unknown>)[key], key).toBe(7);
+        }
+        const loc: Record<string, unknown> = {};
+        (api.wrap_member_expression(loc, "location") as Record<string, unknown>)["location"] = "x";
+        expect(loc["location"]).toBe("x");
     });
 
     it("unrelated prop is a passthrough", () => {

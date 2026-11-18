@@ -19,8 +19,11 @@
 // check (`nodeType === 9`, the spec value for DOCUMENT_NODE). Cross-realm
 // safe — doesn't depend on `instanceof Document` against this realm's class.
 
+import { isTrustedValue, trusted } from "../native/trusted";
 import { rewriteHtmlString } from "../patches/html-rewriter";
 import { sinkText } from "../patches/dynamic-html";
+import { injectFramesIn } from "../patches/dynamic-iframe";
+import { wrapMethod } from "../native/surface";
 
 export interface DocumentWriteWrapper {
     write: (...args: unknown[]) => unknown;
@@ -72,48 +75,110 @@ function maybeInjectBootstrap(
     return rewrittenHtml;
 }
 
+// One pair of writers per document: `document.write === document.write`.
+const writers = new WeakMap<object, DocumentWriteWrapper>();
+// Documents whose write / writeln the page replaced (through the setter below).
+const replaced = new WeakMap<object, Set<string>>();
+
+/** Whether `target[name]` is still the browser's own method. */
+function isNativeMethod(target: WriteCapable, name: "write" | "writeln"): boolean {
+    return typeof target[name] === "function" && !replaced.get(target)?.has(name);
+}
+
+function allStrings(args: unknown[]): boolean {
+    for (const a of args) {
+        if (sinkText(a) === null) return false;
+    }
+    return true;
+}
+
+/**
+ * What `obj.write` / `obj.writeln` (and `obj["write"]`) go through in
+ * rewritten code. Anything that is not a Document is returned as it is:
+ * the access then reads, calls or assigns the object's own property,
+ * exactly as written. For a Document the result stands in for it: reading
+ * `write` gives the rewriting writer while the document still has the
+ * native method (otherwise whatever the page put there), and assigning
+ * `write` assigns on the document.
+ */
 export function wrapDocumentWrite(
     arg: { obj: unknown },
     rewriteOne: (url: string) => string,
     getBootstrapHtml: (() => string) | null = null,
     proxyOrigin: string = "",
 ): DocumentWriteWrapper {
-    const target = arg.obj as WriteCapable | null;
-
+    if (!isDocumentLike(arg.obj)) return arg.obj as DocumentWriteWrapper;
+    // The native is wrapped where it lives: the document itself does it.
+    if (wrappedAtPrototype(arg.obj)) return arg.obj as DocumentWriteWrapper;
+    const target = arg.obj;
+    let w = writers.get(target);
+    if (!w) {
+        const make = (name: "write" | "writeln") => (...args: unknown[]): unknown => {
+            const native = target[name] as (...a: unknown[]) => unknown;
+            if (!allStrings(args)) return native.apply(target, args);
+            const joined = args.map((a) => sinkText(a) ?? "").join("");
+            let rewritten = rewriteHtmlString(joined, rewriteOne, proxyOrigin);
+            if (getBootstrapHtml) rewritten = maybeInjectBootstrap(target, joined, rewritten, getBootstrapHtml);
+            return native.call(target, args.some(isTrustedValue) ? trusted(globalThis, "HTML", rewritten) : rewritten);
+        };
+        w = { write: make("write"), writeln: make("writeln") };
+        writers.set(target, w);
+    }
+    const writer = w;
     return {
-        write: (...args: unknown[]): unknown => {
-            if (!target || typeof target.write !== "function") return undefined;
-            if (isDocumentLike(target) && allStrings(args)) {
-                const joined = args.map((a) => sinkText(a) ?? "").join("");
-                let rewritten = rewriteHtmlString(joined, rewriteOne, proxyOrigin);
-                if (getBootstrapHtml) {
-                    rewritten = maybeInjectBootstrap(target, joined, rewritten, getBootstrapHtml);
-                }
-                return target.write(rewritten);
-            }
-            // Not a document, or not all-string args — forward verbatim.
-            return target.write(...args);
-        },
-        writeln: (...args: unknown[]): unknown => {
-            if (!target || typeof target.writeln !== "function") return undefined;
-            if (isDocumentLike(target) && allStrings(args)) {
-                const joined = args.map((a) => sinkText(a) ?? "").join("");
-                let rewritten = rewriteHtmlString(joined, rewriteOne, proxyOrigin);
-                if (getBootstrapHtml) {
-                    rewritten = maybeInjectBootstrap(target, joined, rewritten, getBootstrapHtml);
-                }
-                return target.writeln(rewritten);
-            }
-            return target.writeln(...args);
-        },
+        get write() { return isNativeMethod(target, "write") ? writer.write : target.write!; },
+        set write(v) { markReplaced(target, "write"); target.write = v; },
+        get writeln() { return isNativeMethod(target, "writeln") ? writer.writeln : target.writeln!; },
+        set writeln(v) { markReplaced(target, "writeln"); target.writeln = v; },
     };
 }
 
-// Strings, or Trusted Types objects standing for them (patches/dynamic-html
-// sinkText).
-function allStrings(args: unknown[]): boolean {
-    for (const a of args) {
-        if (sinkText(a) === null) return false;
+function markReplaced(target: object, name: string): void {
+    let names = replaced.get(target);
+    if (!names) replaced.set(target, (names = new Set()));
+    names.add(name);
+}
+
+// ── The native, at the prototype ────────────────────────────────────────
+//
+// Rewritten code is not the only caller: `var w = document.write;
+// w.call(document, html)` (Google's SafeFrame does exactly this), code that
+// arrives unrewritten, and other realms' references all reach
+// Document.prototype.write. So it is wrapped there, on the native surface,
+// and the source-level helper above passes such calls straight through.
+
+const nativelyWrapped = new WeakSet<object>();
+
+/** Whether `doc`'s write is the wrapped native (its realm has the runtime). */
+function wrappedAtPrototype(doc: object): boolean {
+    for (let p: object | null = Object.getPrototypeOf(doc) as object | null; p; p = Object.getPrototypeOf(p) as object | null) {
+        if (Object.prototype.hasOwnProperty.call(p, "write")) return nativelyWrapped.has(p);
     }
-    return true;
+    return false;
+}
+
+export function patchDocumentWrite(
+    targetWindow: Window,
+    rewriteOne: (url: string) => string,
+    bootstrap: () => string,
+    proxyOrigin: string,
+): void {
+    const D = (targetWindow as unknown as { Document?: { prototype: object } }).Document?.prototype;
+    if (!D) return;
+    let holder: object | null = D;
+    while (holder && !Object.prototype.hasOwnProperty.call(holder, "write")) holder = Object.getPrototypeOf(holder) as object | null;
+    if (!holder || nativelyWrapped.has(holder)) return;
+    for (const key of ["write", "writeln"]) {
+        wrapMethod<(...a: unknown[]) => unknown>(holder, key, (native, self, args) => {
+            if (!isDocumentLike(self) || !allStrings(args)) return Reflect.apply(native, self, args);
+            const joined = args.map((a) => sinkText(a) ?? "").join("");
+            let rewritten = rewriteHtmlString(joined, rewriteOne, proxyOrigin, bootstrap);
+            rewritten = maybeInjectBootstrap(self, joined, rewritten, bootstrap);
+            const out = Reflect.apply(native, self, [args.some(isTrustedValue) ? trusted(targetWindow, "HTML", rewritten) : rewritten]);
+            // Frames the written markup made: the page may write into them next.
+            if (/<iframe/i.test(joined)) injectFramesIn(targetWindow, self);
+            return out;
+        });
+    }
+    nativelyWrapped.add(holder);
 }

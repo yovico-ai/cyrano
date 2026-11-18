@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/andybalholm/brotli"
@@ -45,6 +46,12 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 	rewriteJSFor := func(scriptURL *url.URL) func([]byte) []byte {
 		opts := jsOpts
 		opts.BaseURL = scriptURL
+		// Development aid (CYRANO_DEBUG_NO_JS): scripts are served as the
+		// origin sent them — for telling whether a site notices the
+		// rewritten source or the runtime (cmd/mitmprobe, identity mode).
+		if os.Getenv("CYRANO_DEBUG_NO_JS") != "" {
+			return func(src []byte) []byte { return src }
+		}
 		return func(src []byte) []byte { return jsrewrite.Rewrite(src, opts) }
 	}
 
@@ -60,8 +67,15 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 	return func(resp *http.Response, target *url.URL) error {
 		fixContentType(resp, target)
 		ct := resp.Header.Get("Content-Type")
+		sniffed := sniffedHTML(resp)
 
 		switch {
+		case fetchedAsData(resp) && !isHTML(resp):
+			// CSS or JS read by a script through fetch()/XHR is data to the
+			// page: it must get the bytes the origin sent (ns1p.net slices
+			// a JSONP reply by position; reformatted, its JSON.parse threw).
+			// If the page then runs it — eval, new Function, a script's
+			// text, a blob worker — the client runtime rewrites it there.
 		case isCSS(resp):
 			body, err := readDecompressedBody(resp)
 			if err != nil {
@@ -78,7 +92,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				"target", target.String(), "in", len(body), "out", len(rewritten))
 			replaceBody(resp, rewritten)
 
-		case isHTML(resp):
+		case isHTML(resp) || sniffed:
 			// Only rewrite HTML that will actually be rendered by a browser.
 			// Responses to fetch/XHR (Sec-Fetch-Dest: empty) carry text/html
 			// content consumed programmatically — e.g. Cloudflare's challenge
@@ -108,18 +122,19 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				// Every page gets the one runtime. Its patches keep the native
 				// surface (ts/client/src/native/surface.ts), so a challenge's
 				// integrity and fingerprint checks see native APIs; a challenge
-				// page's own scripts are not rewritten (below).
+				// page's own scripts are rewritten like any other (below).
 				InjectBootstrap:   true,
 				ClientPassthrough: pageConfig(clientPassthrough, resp),
 				ScriptNonce:       proxy.ScriptNonce(resp.Header.Values("Content-Security-Policy")),
 			}
-			if !isChallenge {
-				cfg.RewriteInlineJS = rewriteJSFor(target)
-				cfg.RewriteInlineCSS = rewriteCSS(target)
-			} else {
-				// A challenge page's own scripts are integrity-checked: left as
-				// written, intercepted only through the runtime's native-surface
-				// patches.
+			// Challenge pages are rewritten like any other. Their scripts check
+			// their own source, which reads back as the origin wrote it
+			// (jsrewrite: marked, invertible edits); left unrewritten, they
+			// read `location` natively and report the proxy's URL (Turnstile
+			// then fails with 600010).
+			cfg.RewriteInlineJS = rewriteJSFor(target)
+			cfg.RewriteInlineCSS = rewriteCSS(target)
+			if isChallenge {
 				// Record this session's challenge origin so bare-path /cdn-cgi/
 				// requests from blob workers (which have no Referer) can be routed
 				// to the correct upstream without needing a /cyrano/ URL prefix.
@@ -128,7 +143,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 						jar.StoreChallengeOrigin(sessID, target.Scheme, target.Host)
 					}
 				}
-				logger.Debug("rewriter: challenge page (scripts left unrewritten)", "target", target.String())
+				logger.Debug("rewriter: challenge page", "target", target.String())
 			}
 			if err := htmlrewrite.Rewrite(&out, bytes.NewReader(body), cfg); err != nil {
 				logger.Warn("rewriter: html rewrite failed",
@@ -140,25 +155,9 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			replaceBody(resp, out.Bytes())
 
 		case isJS(resp):
-			// EXPERIMENT: rewrite Turnstile's api.js even though it lives on the
-			// challenge host. api.js assembles the extraParams fingerprint and
-			// reads the host page's location.href directly (leaking the proxy URL
-			// as the "url"/"lH" fields → 600010). Rewriting routes those reads
-			// through $rewriter.wrap_get_location so they report the upstream URL.
-			isApiJS := strings.Contains(target.Path, "/turnstile/") && strings.HasSuffix(target.Path, "/api.js")
-			// Skip rewriting challenge scripts, Cloudflare's jsd bot-detection
-			// telemetry, and any content from challenge hosts. jsd is heavily
-			// obfuscated and self-integrity-checked: JS-rewriting it changes its
-			// source, its check fails, and function Z spins in a tight loop that
-			// pegs the main thread and freezes the whole page (94% of CPU, proven
-			// via CPU profile). Serve it unmodified — it's passive bot telemetry
-			// the app doesn't need to render.
-			if !isApiJS && (isChallengeScript(target) || isJSDScript(target) || isChallengeHost(target.Hostname())) {
-				// Passed through means byte for byte: these scripts check their
-				// own source, so not even the debug formatter may touch them.
-				logger.Debug("rewriter: js passthrough (challenge script)", "target", target.String())
-				break
-			}
+			// Challenge and bot-detection scripts (Cloudflare's orchestrate,
+			// jsd and Turnstile, Akamai's sensor) are rewritten like any
+			// other: their self-checks see their original source.
 			body, err := readDecompressedBody(resp)
 			if err != nil {
 				logger.Warn("rewriter: read upstream JS body failed",
@@ -214,6 +213,35 @@ func replaceBody(resp *http.Response, body []byte) {
 	resp.ContentLength = int64(len(body))
 	resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
 	resp.Header.Del("Transfer-Encoding")
+}
+
+// sniffedHTML reports whether a document with no Content-Type at all is
+// one the browser renders as HTML: it sniffs the type from the first bytes
+// (WHATWG MIME Sniffing, "identifying an unknown MIME type"; Go's
+// http.DetectContentType is that algorithm). measureadv.com's sync frame is
+// such a page; unrewritten, its pixels went straight to the origins. The
+// body is read (decompressed) to look at it and put back; the response
+// keeps having no Content-Type, as it has for the page.
+func sniffedHTML(resp *http.Response) bool {
+	if len(resp.Header.Values("Content-Type")) != 0 || resp.Request == nil {
+		return false
+	}
+	switch strings.ToLower(resp.Request.Header.Get("Sec-Fetch-Dest")) {
+	case "document", "iframe", "frame", "embed", "object":
+	default:
+		return false
+	}
+	body, err := readDecompressedBody(resp)
+	if err != nil {
+		replaceBody(resp, nil)
+		return false
+	}
+	replaceBody(resp, body)
+	head := body
+	if len(head) > 512 {
+		head = head[:512]
+	}
+	return strings.HasPrefix(http.DetectContentType(head), "text/html")
 }
 
 // isHTML reports whether the response Content-Type is rewritable HTML.
@@ -371,11 +399,55 @@ func fixContentType(resp *http.Response, target *url.URL) {
 // we substitute back is treated as plain text by the browser. zstd is included
 // because a real Chrome advertises it in Accept-Encoding (see the Director);
 // advertising an encoding we can't decode would corrupt rewritten responses.
+// OriginalSizesMetric is the Server-Timing metric that carries, for the
+// client runtime, the size of a body as the origin sent it — encoded (on
+// the wire) and decoded — where the proxy changed the body: a script reads
+// both from the response's performance entry (encodedBodySize,
+// decodedBodySize, transferSize), and an origin that knows what it served
+// can tell a rewritten body by them (Cloudflare's challenge reports the
+// sizes of its own frame and scripts). Server-Timing rides with the entry
+// itself, for documents and subresources alike; the runtime answers the
+// size getters from it and hides the metric
+// (ts/client/src/patches/install.ts, patchPerformanceEntryNames).
+const OriginalSizesMetric = "crnb"
+
+// countingReader counts the bytes read through it.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// readDecompressedBody reads the whole body, decoded, and notes its
+// original sizes on the response (OriginalSizesMetric) the first time.
 func readDecompressedBody(resp *http.Response) ([]byte, error) {
+	raw := &countingReader{r: resp.Body}
+	body, err := readDecoded(resp, raw)
+	if err != nil {
+		return nil, err
+	}
+	noted := false
+	for _, v := range resp.Header.Values("Server-Timing") {
+		if strings.HasPrefix(v, OriginalSizesMetric+";") {
+			noted = true
+		}
+	}
+	if !noted {
+		resp.Header.Add("Server-Timing", fmt.Sprintf(`%s;desc="%d-%d"`, OriginalSizesMetric, raw.n, len(body)))
+	}
+	return body, nil
+}
+
+func readDecoded(resp *http.Response, raw io.Reader) ([]byte, error) {
 	defer resp.Body.Close()
 	switch strings.ToLower(resp.Header.Get("Content-Encoding")) {
 	case "gzip":
-		gz, err := gzip.NewReader(resp.Body)
+		gz, err := gzip.NewReader(raw)
 		if err != nil {
 			return nil, err
 		}
@@ -387,14 +459,14 @@ func readDecompressedBody(resp *http.Response) ([]byte, error) {
 		resp.Header.Del("Content-Encoding")
 		return body, nil
 	case "br":
-		body, err := io.ReadAll(brotli.NewReader(resp.Body))
+		body, err := io.ReadAll(brotli.NewReader(raw))
 		if err != nil {
 			return nil, err
 		}
 		resp.Header.Del("Content-Encoding")
 		return body, nil
 	case "zstd":
-		zr, err := zstd.NewReader(resp.Body)
+		zr, err := zstd.NewReader(raw)
 		if err != nil {
 			return nil, err
 		}
@@ -406,7 +478,7 @@ func readDecompressedBody(resp *http.Response) ([]byte, error) {
 		resp.Header.Del("Content-Encoding")
 		return body, nil
 	default:
-		return io.ReadAll(resp.Body)
+		return io.ReadAll(raw)
 	}
 }
 
@@ -432,9 +504,15 @@ func workerPreamble(proxyBase, rewriterPath string, config map[string]any, worke
 	}
 	src, _ := json.Marshal(proxyBase + rewriterPath)
 	href, _ := json.Marshal(workerURL)
-	return []byte("importScripts(" + string(src) + ");" +
-		"self.$rewriter=self.$rewriter_init_worker(" + string(cfg) + "," + string(href) + ");" +
-		"self.$__crn_key__=null;\n")
+	// Under Trusted Types (a worker has its creator's or its own policy)
+	// importScripts takes a TrustedScriptURL: made by the runtime's policy,
+	// which the runtime is then handed (a policy name can be used once).
+	tt, _ := json.Marshal(urlrewrite.TrustedTypesPolicy)
+	return []byte("(function(p,i){try{p=self.trustedTypes.createPolicy(" + string(tt) +
+		",{createHTML:i,createScript:i,createScriptURL:i})}catch(e){p=null}" +
+		"importScripts(p?p.createScriptURL(" + string(src) + "):" + string(src) + ");" +
+		"self.$rewriter=self.$rewriter_init_worker(" + string(cfg) + "," + string(href) + ",p);" +
+		"self.$__crn_key__=null})(null,function(s){return s});\n")
 }
 
 // buildClientPassthrough returns the JSON-serializable subset of vhost
@@ -451,6 +529,8 @@ func buildClientPassthrough(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig
 		"source":                vhost.RewriterJSPath,
 		"version":               vhost.Version,
 		"rewrite_css_selectors": false,
+		// The runtime's Trusted Types policy (urlrewrite.RewriteCSP admits it).
+		"tt": urlrewrite.TrustedTypesPolicy,
 	}
 }
 
@@ -494,4 +574,11 @@ func workerInitHandler(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig) htt
 			"self.$rewriter=self.$rewriter_init_worker(" + string(cfg) + "," + string(href) + ");" +
 			"self.$__crn_key__=null;\n"))
 	})
+}
+
+// fetchedAsData: the response answers fetch() or XHR (Sec-Fetch-Dest:
+// empty), so a script reads its body; nothing parses it as a document,
+// stylesheet or script.
+func fetchedAsData(resp *http.Response) bool {
+	return resp.Request != nil && strings.EqualFold(resp.Request.Header.Get("Sec-Fetch-Dest"), "empty")
 }

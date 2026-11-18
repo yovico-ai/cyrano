@@ -25,6 +25,12 @@ import (
 // (the incoming Cookie header) and the session jar, the cookies that match
 // target — domain, path, Secure, SameSite — longer paths first.
 func (h *Handler) upstreamCookies(req *http.Request, target *url.URL, sessionID string) {
+	// A request the page made without credentials (fetch's "omit", or its
+	// default to another origin) carries no cookies.
+	if strings.EqualFold(req.Header.Get(CredentialsHeader), "omit") {
+		req.Header.Del("Cookie")
+		return
+	}
 	cookies := urlrewrite.JarCookies(strings.Join(req.Header.Values("Cookie"), "; "))
 	if h.opts.CookieJar != nil {
 		cookies = append(cookies, h.opts.CookieJar.Cookies(sessionID)...)

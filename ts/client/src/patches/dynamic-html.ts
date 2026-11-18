@@ -33,12 +33,25 @@
 
 import { rewriteCssText } from "../css/rewriter";
 import { defaultJsRewriteOptions, rewriteJsSource } from "../js/rewriter";
-import { captureNativeElementOps, rewriteHtmlString } from "./html-rewriter";
+import { captureNativeElementOps, rewriteHtmlString, rewriteSrcdoc } from "./html-rewriter";
+import { internalsOf } from "../native/internals";
+
+/** The bootstrap builder of the window `node` belongs to (each window has its own base URL). */
+export function bootstrapOf(node: unknown): (() => string) | undefined {
+    try {
+        const doc = (node as Node).ownerDocument ?? (node as Document);
+        return internalsOf(doc.defaultView)?.bootstrapHtml;
+    } catch {
+        return undefined;
+    }
+}
 import { rewriteSrcsetAttribute } from "./srcset";
-import { urlAttrsForTagName } from "./url-attribute-map";
+import { urlAttrsForTagName, isSrcsetAttr } from "./url-attribute-map";
 import { wrapAccessor, wrapMethod } from "../native/surface";
+import { injectFramesIn } from "./dynamic-iframe";
 import { isUrlLikeSpecifier } from "../url/containment";
 import { consume, recordAttr, recordText } from "../native/originals";
+import { trustedLike } from "../native/trusted";
 
 /**
  * The text of a value headed for an HTML or script sink: a string, or a
@@ -55,8 +68,19 @@ export function sinkText(v: unknown): string | null {
     return null;
 }
 
+/** The Trusted Types sink an attribute is, if any: what kind of value it takes under enforcement. */
+function sinkKind(el: Element, name: string): "HTML" | "Script" | "ScriptURL" | null {
+    const n = name.toLowerCase();
+    if (n === "srcdoc" && el.tagName === "IFRAME") return "HTML";
+    if (n.startsWith("on")) return "Script";
+    if (n === "src" && (el.tagName === "SCRIPT" || el.tagName === "EMBED")) return "ScriptURL";
+    if ((n === "data" || n === "codebase") && el.tagName === "OBJECT") return "ScriptURL";
+    return null;
+}
+
 // Natives replaced here, for unpatchDynamicHtml (tests).
 let saved: Array<[object, PropertyKey, PropertyDescriptor]> | null = null;
+let patchedRealms = new WeakSet<object>();
 
 function save(holderOwner: object, key: PropertyKey): void {
     for (let o: object | null = holderOwner; o; o = Object.getPrototypeOf(o) as object | null) {
@@ -78,11 +102,14 @@ export function patchDynamicHtml(
     rewriteOne: (url: string) => string,
     _unwrapOne: (url: string) => string,
 ): void {
-    if (saved) return;
     const E = (targetWindow as unknown as { Element?: { prototype: Element } }).Element;
     if (!E?.prototype) return;
     const proto = E.prototype;
-    saved = [];
+    // Once per realm: the runtime module is shared by a page and the empty
+    // frames it initializes, each with prototypes of its own.
+    if (patchedRealms.has(proto)) return;
+    patchedRealms.add(proto);
+    saved ??= [];
     captureNativeElementOps();
 
     save(proto, "innerHTML");
@@ -92,9 +119,13 @@ export function patchDynamicHtml(
             if (text === null) return set.call(self, value);
             // A script's or style's content is raw text — JS or CSS — not markup.
             const raw = rawText(self as Element, text, rewriteOne);
-            set.call(self, raw ?? rewriteHtmlString(text, rewriteOne));
+            // (Under Trusted Types the sink takes a trusted value where the
+            // page gave one — native/trusted.ts.)
+            set.call(self, raw !== null
+                ? trustedLike(targetWindow, (self as Element).tagName === "SCRIPT" ? "Script" : "HTML", value, raw)
+                : trustedLike(targetWindow, "HTML", value, rewriteHtmlString(text, rewriteOne)));
             if (raw !== null) recordText(self as Element, raw, text);
-            else consume(self);
+            else { consume(self); injectFramesIn(targetWindow, self); }
         },
     });
     save(proto, "outerHTML");
@@ -102,8 +133,9 @@ export function patchDynamicHtml(
         set: (set, self, value) => {
             const text = sinkText(value);
             const parent = (self as Node).parentNode;
-            set.call(self, text === null ? value : rewriteHtmlString(text, rewriteOne));
+            set.call(self, text === null ? value : trustedLike(targetWindow, "HTML", value, rewriteHtmlString(text, rewriteOne)));
             consume(parent);
+            injectFramesIn(targetWindow, parent);
         },
     });
     patchRawText(targetWindow, rewriteOne);
@@ -112,9 +144,10 @@ export function patchDynamicHtml(
     wrapMethod<(...a: unknown[]) => void>(proto, "insertAdjacentHTML", (native, self, args) => {
         const next = args.slice();
         const text = sinkText(next[1]);
-        if (text !== null) next[1] = rewriteHtmlString(text, rewriteOne);
+        if (text !== null) next[1] = trustedLike(targetWindow, "HTML", args[1], rewriteHtmlString(text, rewriteOne));
         Reflect.apply(native, self, next);
         consume((self as Node).parentNode ?? self);
+        injectFramesIn(targetWindow, (self as Node).parentNode ?? self);
         return;
     });
     save(proto, "setAttribute");
@@ -131,11 +164,13 @@ export function patchDynamicHtml(
             recordAttr(self as Element, args[0], null, given); // not applied; the page reads it back
             return;
         }
-        Reflect.apply(native, self, [args[0], v]);
+        const kind = sinkKind(self as Element, args[0]);
+        Reflect.apply(native, self, [args[0], kind ? trustedLike(targetWindow, kind, args[1], v) : v]);
         recordAttr(self as Element, args[0], v, given);
         return;
     });
     patchIntegrityProperty(targetWindow);
+    patchSrcdocProperty(targetWindow);
 }
 
 /**
@@ -149,7 +184,7 @@ function patchHtmlParsers(targetWindow: Window, rewriteOne: (url: string) => str
     const g = targetWindow as unknown as Record<string, ({ prototype: object } & Record<string, unknown>) | undefined>;
     const html = (v: unknown): unknown => {
         const text = sinkText(v);
-        return text === null ? v : rewriteHtmlString(text, rewriteOne);
+        return text === null ? v : trustedLike(targetWindow, "HTML", v, rewriteHtmlString(text, rewriteOne));
     };
     const firstArg = (proto: object | undefined, key: string, when: (args: unknown[]) => boolean = () => true): void => {
         if (!proto || !(key in proto)) return;
@@ -159,6 +194,7 @@ function patchHtmlParsers(targetWindow: Window, rewriteOne: (url: string) => str
             // What was parsed: the returned document or fragment, or the
             // element / shadow root written into.
             consume(typeof out === "object" && out !== null ? out : self);
+            injectFramesIn(targetWindow, self);
             return out;
         });
     };
@@ -170,7 +206,7 @@ function patchHtmlParsers(targetWindow: Window, rewriteOne: (url: string) => str
     const SR = g["ShadowRoot"]?.prototype;
     if (SR && Object.prototype.hasOwnProperty.call(SR, "innerHTML")) {
         save(SR, "innerHTML");
-        wrapAccessor<unknown>(SR, "innerHTML", { set: (set, self, value) => { set.call(self, html(value)); consume(self); } });
+        wrapAccessor<unknown>(SR, "innerHTML", { set: (set, self, value) => { set.call(self, html(value)); consume(self); injectFramesIn(targetWindow, self); } });
     }
 }
 
@@ -234,7 +270,8 @@ function patchRawText(targetWindow: Window, rewriteOne: (url: string) => string)
             set: (set, self, value) => {
                 const text = sinkText(value);
                 const raw = text !== null && isEl(self) ? rawText(self, text, rewriteOne) : null;
-                set.call(self, raw ?? value);
+                set.call(self, raw === null ? value
+                    : trustedLike(targetWindow, (self as Element).tagName === "SCRIPT" ? "Script" : "HTML", value, raw));
                 if (raw !== null && text !== null) recordText(self as Element, raw, text);
             },
         });
@@ -277,6 +314,7 @@ export function unpatchDynamicHtml(): void {
     if (!saved) return;
     for (const [holder, key, d] of saved) Object.defineProperty(holder, key, d);
     saved = null;
+    patchedRealms = new WeakSet<object>();
 }
 
 /**
@@ -298,9 +336,10 @@ function attributeValue(el: Element, name: string, value: string, rewriteOne: (u
         return isFontPreload ? value : "use-credentials";
     }
     if (lowerName === "style") return rewriteCssText(value, rewriteOne);
+    if (lowerName === "srcdoc" && el.tagName === "IFRAME") return rewriteSrcdoc(value, rewriteOne, "", bootstrapOf(el));
     const attrs = urlAttrsForTagName(el.tagName);
     if (!attrs || !attrs.includes(lowerName)) return value;
-    return lowerName === "srcset" ? rewriteSrcsetAttribute(value, rewriteOne) : rewriteOne(value);
+    return isSrcsetAttr(lowerName) ? rewriteSrcsetAttribute(value, rewriteOne) : rewriteOne(value);
 }
 
 // The integrity the page set on each element (never applied).
@@ -310,6 +349,22 @@ const pageIntegrity = new WeakMap<object, string>();
  * script.integrity / link.integrity: the page reads back what it set;
  * nothing reaches the element (the hash could not match rewritten content).
  */
+/**
+ * iframe.srcdoc reflects the attribute: setting it goes the attribute's way
+ * (rewritten, with the runtime; the original kept), reading it gives what
+ * the page set.
+ */
+function patchSrcdocProperty(targetWindow: Window): void {
+    const proto = (targetWindow as unknown as { HTMLIFrameElement?: { prototype: object } }).HTMLIFrameElement?.prototype;
+    if (!proto || !Object.getOwnPropertyDescriptor(proto, "srcdoc")) return;
+    save(proto, "srcdoc");
+    wrapAccessor<unknown>(proto, "srcdoc", {
+        get: (_get, self) => (self as Element).getAttribute("srcdoc") ?? "",
+        // (The value as given: a TrustedHTML stays one — setAttribute above.)
+        set: (_set, self, v) => { (self as Element).setAttribute("srcdoc", (sinkText(v) === null ? String(v) : v) as string); },
+    });
+}
+
 function patchIntegrityProperty(targetWindow: Window): void {
     const g = targetWindow as unknown as Record<string, { prototype: object } | undefined>;
     for (const ctorKey of ["HTMLScriptElement", "HTMLLinkElement"]) {

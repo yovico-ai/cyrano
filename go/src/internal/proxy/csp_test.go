@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"github.com/yovico/cyrano/internal/urlrewrite"
 	"strings"
 	"testing"
 )
@@ -125,20 +126,27 @@ func TestRewriteCSP(t *testing.T) {
 		},
 
 		// ── Trusted Types stripping ─────────────────────────────────────────
+		// Trusted Types stay enforced; the runtime's own policy is admitted
+		// (Cloudflare's challenge fails when its frame's policy is dropped).
 		{
-			name: "require-trusted-types-for stripped",
+			name: "require-trusted-types-for stays",
 			in:   "script-src 'self'; require-trusted-types-for 'script'",
-			want: "script-src 'self'",
+			want: "script-src 'self'; require-trusted-types-for 'script'",
 		},
 		{
-			name: "trusted-types directive stripped",
+			name: "trusted-types admits the runtime's policy too",
 			in:   "script-src 'self'; trusted-types default dompurify",
-			want: "script-src 'self'",
+			want: "script-src 'self'; trusted-types default dompurify " + urlrewrite.TrustedTypesPolicy,
 		},
 		{
-			name: "both trusted-types directives stripped together",
+			name: "trusted-types 'none' admits only the runtime's policy",
+			in:   "trusted-types 'none'; require-trusted-types-for 'script'",
+			want: "trusted-types " + urlrewrite.TrustedTypesPolicy + "; require-trusted-types-for 'script'",
+		},
+		{
+			name: "both directives together",
 			in:   "default-src 'self'; trusted-types default; require-trusted-types-for 'script'; script-src 'nonce-abc'",
-			want: "default-src 'self'; script-src 'nonce-abc'",
+			want: "default-src 'self'; trusted-types default " + urlrewrite.TrustedTypesPolicy + "; require-trusted-types-for 'script'; script-src 'nonce-abc'",
 		},
 	}
 

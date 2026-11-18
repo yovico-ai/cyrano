@@ -22,7 +22,11 @@ export function patchWindowLocation(
     wrappedLocation: WrappedLocation,
     unwrapOne: (url: string) => string,
     referrer?: string,
+    base?: () => URL,
 ): void {
+    // An about:blank / about:srcdoc document: its URL is its own (the
+    // location view says so), its origin and domain its creator's.
+    const baseOf = (): { origin: string; hostname: string } => base?.() ?? wrappedLocation;
     // Wrapped where each lives, found from the document itself
     // (Document.prototype in a browser).
     const doc = targetWindow.document;
@@ -35,7 +39,7 @@ export function patchWindowLocation(
         // The setter is kept a no-op only in effect: domain relaxation is
         // meaningless when every frame already shares the proxy origin.
         wrapAccessor<string>(doc, "domain", {
-            get: () => wrappedLocation.hostname,
+            get: () => baseOf().hostname,
             set: () => { /* see above */ },
         });
     }
@@ -47,5 +51,5 @@ export function patchWindowLocation(
             get: (get, self) => unwrapOne(get.call(self)),
         });
     }
-    wrapAccessor<string>(targetWindow, "origin", { get: () => wrappedLocation.origin });
+    wrapAccessor<string>(targetWindow, "origin", { get: () => baseOf().origin });
 }

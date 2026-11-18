@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"sort"
@@ -114,12 +115,88 @@ func (h *Handler) filterClientHints(req *http.Request, target *url.URL, sessionI
 	if strings.EqualFold(target.Scheme, "https") && (dest == "document" || sameOrigin) {
 		allowed = acceptedHints.get(hintKey(sessionID, target))
 	}
-	for name := range req.Header {
+	withheld := http.Header{}
+	for name, vs := range req.Header {
 		l := strings.ToLower(name)
 		if isHint(l) && !lowEntropy[l] && !allowed[l] {
+			withheld[name] = vs
 			delete(req.Header, name)
 		}
 	}
+	if len(withheld) > 0 {
+		// Kept for a Critical-CH restart (restartForCriticalCH).
+		*req = *req.WithContext(context.WithValue(req.Context(), withheldHintsKey{}, withheld))
+	}
+}
+
+type withheldHintsKey struct{}
+
+// restartForCriticalCH re-enacts what Chrome does when a navigation's
+// response names, in Critical-CH, hints the request did not carry: it
+// discards the response and sends the request again with them (Client Hint
+// Reliability). The browser cannot do it here — it already sent those hints
+// to the proxy's origin, where the proxy withheld them because this origin
+// had not asked yet — so the proxy does: the origin then sees the same two
+// requests it would see from a direct Chrome, and the page is the one built
+// for the second.
+//
+// Cookies set by the discarded response are kept, as Chrome keeps them:
+// sent on the second request and set again with its response.
+func (h *Handler) restartForCriticalCH(resp *http.Response) {
+	req := resp.Request
+	if req == nil || req.URL == nil || (req.Method != http.MethodGet && req.Method != http.MethodHead) ||
+		!strings.EqualFold(req.Header.Get("Sec-Fetch-Dest"), "document") || !strings.EqualFold(req.URL.Scheme, "https") {
+		return
+	}
+	withheld, _ := req.Context().Value(withheldHintsKey{}).(http.Header)
+	critical := parseAcceptCH(resp.Header.Values("Critical-CH"))
+	asked := parseAcceptCH(resp.Header.Values("Accept-CH"))
+	if len(withheld) == 0 || len(critical) == 0 {
+		return
+	}
+	again := req.Clone(context.WithValue(req.Context(), withheldHintsKey{}, http.Header(nil)))
+	missing := false
+	for name, vs := range withheld {
+		l := strings.ToLower(name)
+		if asked[l] {
+			again.Header[name] = vs
+			missing = missing || critical[l]
+		}
+	}
+	if !missing {
+		return
+	}
+	first := resp.Header.Values("Set-Cookie")
+	for _, sc := range first {
+		pair, _, _ := strings.Cut(sc, ";")
+		if name, _, ok := strings.Cut(strings.TrimSpace(pair), "="); ok {
+			again.Header.Set("Cookie", withCookie(again.Header.Get("Cookie"), name, strings.TrimSpace(pair)))
+		}
+	}
+	second, err := h.transport.RoundTrip(again)
+	if err != nil {
+		return // keep the first response
+	}
+	resp.Body.Close()
+	header := second.Header
+	if len(first) > 0 {
+		header["Set-Cookie"] = append(append([]string(nil), first...), header.Values("Set-Cookie")...)
+	}
+	*resp = *second
+	resp.Header = header
+	resp.Request = again
+}
+
+// withCookie is the Cookie header value with name's pair set to pair.
+func withCookie(cookie, name, pair string) string {
+	var out []string
+	for _, c := range strings.Split(cookie, ";") {
+		c = strings.TrimSpace(c)
+		if n, _, _ := strings.Cut(c, "="); c != "" && n != name {
+			out = append(out, c)
+		}
+	}
+	return strings.Join(append(out, pair), "; ")
 }
 
 // recordAcceptCH notes what a top-level document's origin asks for (as

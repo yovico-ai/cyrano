@@ -16,6 +16,9 @@
 // (WorkerLocation has no assign/replace/reload) and the fetch/XHR/
 // importScripts patching are worker-specific.
 
+import { patchReflection } from "../native/hidden-globals";
+import { patchStorageNames } from "../patches/storage";
+import { honourOptionalChains } from "./optional";
 import type { ClientConfig } from "../config";
 import { isUrlLikeSpecifier, rewriteUrl, unwrapProxiedUrl } from "../url/containment";
 import { WorkerWrappedLocation } from "../wrappers/worker-location";
@@ -30,6 +33,8 @@ import { wrapEval, wrapEvalArg, wrapEvalMemexp } from "../wrappers/eval";
 import { installToStringMask, wrapAccessor, wrapMethod } from "../native/surface";
 import { patchErrorStacks } from "../native/error-stack";
 import { patchFetch } from "../patches/fetch";
+import { initTrusted, isTrustedValue, trusted } from "../native/trusted";
+import { patchResponseHeaders } from "../patches/response-headers";
 import { patchXmlHttpRequest } from "../patches/xhr";
 import { patchWebSocket } from "../patches/websocket";
 import { patchEventSource } from "../patches/event-source";
@@ -65,8 +70,12 @@ interface PatchableWorkerScope {
 export function initWorker(
     config: ClientConfig,
     hrefAtCreation: string,
+    policy?: unknown,
     scope: PatchableWorkerScope = globalThis as unknown as PatchableWorkerScope,
 ): WorkerRewriterApi {
+    // The runtime's Trusted Types policy: the preamble made it to load the
+    // runtime with (native/trusted.ts).
+    initTrusted(scope, config.tt, policy);
     const baseUrl = new URL(hrefAtCreation);
     const wrappedLocation = new WorkerWrappedLocation(hrefAtCreation);
     const rewriteOne = (rawUrl: string): string => rewriteUrl(rawUrl, baseUrl, config);
@@ -129,7 +138,7 @@ export function initWorker(
             return urlStr ? rewriteOne(urlStr) : url;
         },
     };
-    return api;
+    return honourOptionalChains(api);
 }
 
 /**
@@ -147,17 +156,29 @@ function patchWorkerScope(
 ): void {
     const realm = scope as unknown as Window;
     installToStringMask(scope as unknown as typeof globalThis);
+    try { patchReflection(scope as object); } catch { /* stays native */ }
     patchErrorStacks(realm, config.apiBaseURL + config.source, unwrapOne);
-    patchFetch(realm, rewriteOne, unwrapOne, () => baseUrl);
-    patchXmlHttpRequest(realm, rewriteOne, unwrapOne);
+    // A worker made of a blob: or data: URL sends no Referer: its requests
+    // name its origin to the proxy (patches/cors.ts).
+    let unreferred = false;
+    try { unreferred = /^(blob|data):/i.test(String((scope as unknown as { location?: { href?: string } }).location?.href)); } catch { /* no location */ }
+    const cors = config.identity ? undefined : { origin: () => baseUrl.origin, href: () => baseUrl.href, always: unreferred };
+    patchFetch(realm, rewriteOne, unwrapOne, () => baseUrl, cors);
+    patchXmlHttpRequest(realm, rewriteOne, unwrapOne, () => baseUrl, cors);
+    try { patchResponseHeaders(realm); } catch { /* stays native */ }
     patchWebSocket(realm, rewriteOne, unwrapOne, () => baseUrl.origin);
+    // IndexedDB, caches and broadcast channels are this origin's alone
+    // (patches/storage.ts). A worker does not know its top document: its
+    // names are its origin's, unpartitioned.
+    try { patchStorageNames(scope as object, () => "crn\u001f" + baseUrl.origin + "\u001f"); } catch { /* stays native */ }
     patchEventSource(realm, rewriteOne, unwrapOne);
     patchWorker(realm, rewriteOne);
     patchFunctionConstructor(realm);
     // importScripts is classic-worker-only and synchronous.
     if (typeof scope.importScripts === "function") {
         wrapMethod<(...a: unknown[]) => void>(scope, "importScripts", (native, self, args) =>
-            Reflect.apply(native, self, args.map((u) => rewriteOne(String(u)))) as void);
+            Reflect.apply(native, self, args.map((u) =>
+                (isTrustedValue(u) ? trusted(scope, "ScriptURL", rewriteOne(String(u))) : rewriteOne(String(u))))) as void);
     }
     // self.location is a WorkerLocation; its accessors report the worker's
     // original URL (natively the worker script's own URL).

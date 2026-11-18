@@ -8,6 +8,8 @@ package main
 import (
 	"flag"
 	"log/slog"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +27,12 @@ func main() {
 
 	level := parseLogLevel(*logLevel)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+
+	// Profiling, on a separate listener only when asked for (debug):
+	// CYRANO_PPROF=127.0.0.1:6060.
+	if addr := os.Getenv("CYRANO_PPROF"); addr != "" {
+		go func() { logger.Info("pprof", "err", http.ListenAndServe(addr, nil)) }()
+	}
 
 	var cfg *config.File
 	var err error

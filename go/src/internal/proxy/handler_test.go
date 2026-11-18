@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -84,7 +85,9 @@ func TestProxy_ForwardsRequest(t *testing.T) {
 	}
 }
 
-func TestProxy_StripsProxyIncompatibleHeaders(t *testing.T) {
+// No header is dropped: HSTS passes (a browser ignores it over plain HTTP).
+// (Alt-Svc and the carried originals: TestServeHTTPWithTarget_HeaderReconstitution.)
+func TestProxy_NoHeaderIsDropped(t *testing.T) {
 	upstream, _ := startUpstream(t)
 	h := New(Options{})
 
@@ -94,14 +97,8 @@ func TestProxy_StripsProxyIncompatibleHeaders(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
-	// These cannot be reconstituted for the proxy context and must be stripped.
-	for _, name := range []string{
-		"Strict-Transport-Security",
-		"Alt-Svc",
-	} {
-		if v := rec.Header().Get(name); v != "" {
-			t.Errorf("%s should be stripped from response, got %q", name, v)
-		}
+	if v := rec.Header().Get("Strict-Transport-Security"); v == "" {
+		t.Errorf("Strict-Transport-Security should pass through")
 	}
 }
 
@@ -136,15 +133,18 @@ func TestProxy_WebSocketSchemeNotImplemented(t *testing.T) {
 	}
 }
 
-func TestProxy_BadGatewayOnUpstreamFailure(t *testing.T) {
-	// Point at a definitely-closed port to force a connection refused.
+// An origin that cannot be reached gives the browser no response at all, as
+// it would get going there directly (fetch rejects; a 502 would resolve).
+// Over a real connection: it is closed without a status line.
+func TestProxy_UnreachableOriginGivesNoResponse(t *testing.T) {
 	h := New(Options{})
-	req := httptest.NewRequest("GET", "/cyrano/http/127.0.0.1:1/", nil)
-	req.Host = "localhost:9081"
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadGateway {
-		t.Errorf("upstream connect refused: status %d, want 502", rec.Code)
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	req, _ := http.NewRequest("GET", srv.URL+"/cyrano/http/127.0.0.1:1/", nil)
+	resp, err := http.DefaultTransport.RoundTrip(req)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatalf("got a response (%d); want the connection closed without one", resp.StatusCode)
 	}
 }
 
@@ -339,26 +339,36 @@ func TestServeHTTPWithTarget_HeaderReconstitution(t *testing.T) {
 	h.ServeHTTPWithTarget(rec, req, target)
 
 	// Must be stripped — cannot be reconstituted for proxy context.
-	if v := rec.Header().Get("Strict-Transport-Security"); v != "" {
-		t.Errorf("HSTS should be stripped, got %q", v)
+	// Nothing is dropped. What the browser must not act on is changed…
+	if v := rec.Header().Get("Alt-Svc"); v != "clear" {
+		t.Errorf("Alt-Svc should be neutralized to clear, got %q", v)
 	}
-	if v := rec.Header().Get("Alt-Svc"); v != "" {
-		t.Errorf("Alt-Svc should be stripped, got %q", v)
+	if v := rec.Header().Get("Permissions-Policy"); v != "ch-dpr=(self), ch-viewport-width=(self)" {
+		t.Errorf("Permissions-Policy should be translated to the proxy, got %q", v)
 	}
-	if v := rec.Header().Get("Permissions-Policy"); v != "" {
-		t.Errorf("Permissions-Policy should be stripped, got %q", v)
+	if v := rec.Header().Get("Feature-Policy"); v != "dpr 'self'" {
+		t.Errorf("Feature-Policy should be translated to the proxy, got %q", v)
 	}
-	if v := rec.Header().Get("Feature-Policy"); v != "" {
-		t.Errorf("Feature-Policy should be stripped, got %q", v)
+	// … and the rest passes as the origin sent it.
+	if v := rec.Header().Get("Strict-Transport-Security"); v == "" {
+		t.Errorf("HSTS should pass through")
 	}
-
-	// Must be stripped — break cross-origin subresource loading or window
-	// isolation in ways that are harmful under the proxy's single-origin model.
-	if v := rec.Header().Get("Cross-Origin-Embedder-Policy"); v != "" {
-		t.Errorf("COEP should be stripped, got %q", v)
+	if v := rec.Header().Get("Cross-Origin-Embedder-Policy"); v != "require-corp" {
+		t.Errorf("COEP should pass through, got %q", v)
 	}
-	if v := rec.Header().Get("Cross-Origin-Opener-Policy"); v != "" {
-		t.Errorf("COOP should be stripped, got %q", v)
+	if v := rec.Header().Get("Cross-Origin-Opener-Policy"); v != "same-origin" {
+		t.Errorf("COOP should pass through, got %q", v)
+	}
+	// Scripts read the origin's values for everything that was changed.
+	var orig map[string][]string
+	if err := json.Unmarshal([]byte(rec.Header().Get(OriginalHeadersName)), &orig); err != nil {
+		t.Fatalf("%s: %v (%q)", OriginalHeadersName, err, rec.Header().Get(OriginalHeadersName))
+	}
+	if got := orig["permissions-policy"]; len(got) != 1 || got[0] != "ch-dpr=(i.dell.com), ch-viewport-width=(i.dell.com)" {
+		t.Errorf("original Permissions-Policy not carried: %v", orig)
+	}
+	if _, ok := orig["alt-svc"]; !ok {
+		t.Errorf("original Alt-Svc not carried: %v", orig)
 	}
 
 	// Must pass through — these use 'self' which the browser evaluates

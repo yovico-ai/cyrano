@@ -29,18 +29,34 @@
 import { rewriteCssText } from "../css/rewriter";
 import { wrapMethod } from "../native/surface";
 
-let patched = false;
+// Prototypes already patched. Per realm: the runtime module is shared by a
+// page and the empty frames it initializes, each with its own prototypes.
+const done = new WeakSet<object>();
+
+/** Where `key` is defined on `proto`'s chain. */
+function holderOf(proto: object | undefined, key: string): object | null {
+    for (let p: object | null = proto ?? null; p; p = Object.getPrototypeOf(p) as object | null) {
+        if (Object.prototype.hasOwnProperty.call(p, key)) return p;
+    }
+    return null;
+}
 
 export function patchCssRules(
-    _targetWindow: Window,
+    targetWindow: Window,
     rewriteOne: (url: string) => string,
 ): void {
-    if (patched) return;
-
-    patchInsertRuleOn(findInsertRulePrototype("style"), rewriteOne);
-    patchInsertRuleOn(findGroupingRuleInsertRulePrototype(), rewriteOne);
-
-    patched = true;
+    const g = targetWindow as unknown as Record<string, { prototype: object } | undefined>;
+    // The window's own constructors; probing instances only where it has
+    // none of them (test DOMs), in the runtime's own realm.
+    const own = g["CSSStyleSheet"] !== undefined;
+    const sheet = own ? holderOf(g["CSSStyleSheet"]?.prototype, "insertRule") : findInsertRulePrototype("style");
+    const grouping = own ? holderOf(g["CSSGroupingRule"]?.prototype, "insertRule") : findGroupingRuleInsertRulePrototype();
+    for (const proto of [sheet, grouping]) {
+        if (proto && !done.has(proto)) {
+            done.add(proto);
+            patchInsertRuleOn(proto, rewriteOne);
+        }
+    }
 }
 
 /**

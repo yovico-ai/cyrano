@@ -10,11 +10,15 @@ package proxy
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -113,42 +117,23 @@ var hopByHopHeaders = []string{
 	"Te", "Trailer", "Transfer-Encoding", "Upgrade",
 }
 
-// stripResponseHeaders are headers that cannot be reconstituted for the proxy
-// context and must be stripped entirely:
-//   - HSTS: proxy may serve HTTP; leaving this would force the browser to
-//     require HTTPS for future connections to the proxy host.
-//   - Public-Key-Pins: pinned cert is the origin's cert, not the proxy's.
-//   - Alt-Svc: would route future requests over QUIC/H3 directly to the
-//     origin, bypassing the proxy entirely.
-//   - Permissions-Policy / Feature-Policy: allowlists name upstream origins
-//     (e.g. "i.dell.com"), which the browser evaluates against the proxy
-//     origin — making them a no-op at best and console-error noise at worst.
-//     Many sites send pre-spec syntax with unquoted origins that browsers now
-//     reject with warnings. There is no safe way to rewrite these for the
-//     proxy context, so we drop them.
-//   - Cross-Origin-Embedder-Policy: COEP "require-corp" requires every
-//     cross-origin subresource to carry a Cross-Origin-Resource-Policy header.
-//     Third-party CDN scripts (e.g. Cloudflare challenge, ad networks) rarely
-//     do, so the browser blocks them with net::ERR_BLOCKED_BY_RESPONSE. All
-//     proxied frames already share the proxy origin, so cross-origin isolation
-//     via COEP provides no additional safety benefit here.
-//   - Cross-Origin-Opener-Policy: COOP "same-origin" severs window.opener
-//     references across origins, which breaks OAuth pop-ups and payment flows
-//     that rely on postMessage back to the opener. Proxied sites sit on the
-//     same proxy origin anyway, so COOP isolation is redundant and harmful.
+// No response header is dropped: a page's scripts read them (fetch, XHR),
+// and a missing header is a difference they can see. Headers the browser
+// must not act on as the origin wrote them are changed, and the origin's
+// value is carried alongside for scripts (original_headers.go):
 //
-// CSP and X-Frame-Options are NOT stripped — they use the `'self'` keyword
-// which the browser evaluates against the proxy origin, and our rewriter.js
-// is served at /rewriter.js on that origin so it is always covered.
-var stripResponseHeaders = []string{
-	"Strict-Transport-Security",
-	"Public-Key-Pins",
-	"Alt-Svc",
-	"Permissions-Policy",
-	"Feature-Policy",
-	"Cross-Origin-Embedder-Policy",
-	"Cross-Origin-Opener-Policy",
-}
+//   - Alt-Svc would send the browser to another endpoint for the *proxy's*
+//     origin: it is told "clear".
+//   - Content-Security-Policy, Referrer-Policy, Accept-CH,
+//     Permissions-Policy, Location, Link, Refresh: translated elsewhere.
+//
+// Passed through as they are: Strict-Transport-Security (ignored over
+// plain HTTP; behind TLS it concerns the proxy's own host),
+// Public-Key-Pins (no browser acts on it), Cross-Origin-Opener-Policy and
+// Cross-Origin-Embedder-Policy (together they make the page cross-origin
+// isolated, which its scripts can see — Cloudflare sets both on challenge
+// pages; on the proxy every proxied resource is same-origin, so COEP is
+// satisfied by anything proxied).
 
 // dropOnRequest are headers we never forward upstream — they leak the proxy
 // origin or carry session-scoped data we manage ourselves.
@@ -184,6 +169,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// passed it on) is replaced by the original. Every other byte of the
 	// query is left as the browser sent it.
 	target.RawQuery = urlrewrite.UnproxyQueryValues(target.RawQuery, h.opts.ProxyCfg)
+	if target.Scheme == "http" && h.upgradeNavigation(w, r, target.Host) {
+		return // tried over https first, as Chrome does (https_upgrades.go)
+	}
 	h.serveTarget(w, r, target)
 }
 
@@ -211,7 +199,7 @@ func (h *Handler) serveTarget(w http.ResponseWriter, r *http.Request, target *ur
 		Director:       h.makeDirector(target),
 		ModifyResponse: h.modifyResponse,
 		Transport:      h.transport,
-		ErrorHandler:   h.errorHandler(target),
+		ErrorHandler:   h.errorHandler(target, r),
 		// Flush every write straight to the client. cyrano serves the browser
 		// over HTTP/1.1 (plain localhost), so the browser has only ~6 connections
 		// per origin. A streaming or long-lived upstream response (SSE, a
@@ -265,6 +253,10 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 			*req = *req.WithContext(ctx)
 		}
 
+		if h.opts.Logger.Enabled(req.Context(), slog.LevelDebug) {
+			*req = *req.WithContext(context.WithValue(req.Context(), upstream.ConnInfoKey{}, &upstream.ConnInfo{}))
+		}
+
 		// The cookies a direct browser would send this request (cookies.go).
 		h.upstreamCookies(req, target, sessionID)
 
@@ -284,6 +276,7 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		// own Referrer-Policy.
 		noDictionaryOffer(req)
 		h.filterClientHints(req, target, sessionID) // reads the proxied Referer: before it is replaced
+		h.storageAccess(req, target, sessionID)     // reads the proxied Referer and the runtime's headers
 		h.directFetchHeaders(req, target)
 		ensurePriority(req, target, req.ProtoMajor < 2)
 
@@ -306,8 +299,28 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 // the browser into the original origin's security policies, then hand off
 // to the BodyRewriter (if configured) for content transformation.
 func (h *Handler) modifyResponse(resp *http.Response) error {
-	for _, name := range stripResponseHeaders {
-		resp.Header.Del(name)
+	h.restartForCriticalCH(resp) // may replace resp with a second response
+	sessionID, _ := resp.Request.Context().Value(SessionContextKey{}).(string)
+	upgradeLoaded(resp, sessionID)
+	// Whatever is changed below, scripts still read what the origin sent.
+	sent := resp.Header.Clone()
+	defer func() { carryOriginalHeaders(resp.Header, sent) }()
+	if err := h.translateResponse(resp); err != nil {
+		return rewriteError{err}
+	}
+	return nil
+}
+
+// rewriteError marks a failure of the proxy's own processing of a response
+// the origin did send — not a failure to reach the origin.
+type rewriteError struct{ error }
+
+func (e rewriteError) Unwrap() error { return e.error }
+
+func (h *Handler) translateResponse(resp *http.Response) error {
+	translatePermissionsPolicy(resp.Header)
+	if resp.Header.Get("Alt-Svc") != "" {
+		resp.Header.Set("Alt-Svc", "clear")
 	}
 	for _, name := range hopByHopHeaders {
 		resp.Header.Del(name)
@@ -349,6 +362,7 @@ func (h *Handler) modifyResponse(resp *http.Response) error {
 		if v := resp.Header.Get("Refresh"); v != "" {
 			resp.Header.Set("Refresh", urlrewrite.RewriteRefresh(v, resp.Request.URL, h.opts.ProxyCfg))
 		}
+		h.logExchange(resp) // before the Set-Cookie headers are replaced
 		h.routeSetCookies(resp)
 	}
 	if resp.Request != nil && resp.Request.URL != nil {
@@ -383,7 +397,7 @@ func rewriteRedirectHeader(resp *http.Response, name string, cfg urlrewrite.Prox
 
 // errorHandler turns transport errors into a 502 with a useful body and
 // logs the upstream URL so we can debug from the proxy logs.
-func (h *Handler) errorHandler(target *url.URL) func(http.ResponseWriter, *http.Request, error) {
+func (h *Handler) errorHandler(target *url.URL, inbound *http.Request) func(http.ResponseWriter, *http.Request, error) {
 	return func(w http.ResponseWriter, _ *http.Request, err error) {
 		// Connection-reset and timeout are the common failure modes — log
 		// them at warn so we don't drown debugging signal in noise.
@@ -395,7 +409,29 @@ func (h *Handler) errorHandler(target *url.URL) func(http.ResponseWriter, *http.
 			slog.String("target", target.String()),
 			slog.String("err", err.Error()),
 		)
-		http.Error(w, "bad gateway", http.StatusBadGateway)
+		var re rewriteError
+		if errors.As(err, &re) {
+			// The proxy's own failure: say so.
+			http.Error(w, "bad gateway", http.StatusBadGateway)
+			return
+		}
+		// An upgraded navigation whose https load failed falls back to
+		// http, as Chrome's does (https_upgrades.go).
+		if target.Scheme == "https" && h.upgradeFailed(w, inbound, target.Host) {
+			return
+		}
+		// A navigation that cannot reach its origin gets the browser's
+		// error page direct; here, one saying why (no page script sees it).
+		if inbound.Header.Get("Sec-Fetch-Mode") == "navigate" {
+			h.navigationError(w, inbound, target, err)
+			return
+		}
+		// The origin could not be reached (no such host, refused, reset, TLS
+		// failure, cancelled). A browser going there directly gets no
+		// response at all — fetch rejects, an image fails — so the page gets
+		// none either: the connection is closed without one. (A 502 would be
+		// a response, and fetch would resolve with it.)
+		panic(http.ErrAbortHandler)
 	}
 }
 
@@ -403,4 +439,118 @@ func (h *Handler) errorHandler(target *url.URL) func(http.ResponseWriter, *http.
 // pipeline (as opposed to a static-asset hit on the same path).
 func IsLoadRequest(r *http.Request) bool {
 	return strings.HasPrefix(r.URL.Path, "/cyrano/")
+}
+
+// logExchange records, at debug level, what went upstream and what came
+// back: status, the names of the cookies sent and set (never their values),
+// and the fetch metadata. For following a flow such as a challenge.
+func (h *Handler) logExchange(resp *http.Response) {
+	if !h.opts.Logger.Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+	names := func(vs []string, sep string) string {
+		var out []string
+		for _, v := range vs {
+			for _, part := range strings.Split(v, sep) {
+				if name, _, ok := strings.Cut(strings.TrimSpace(part), "="); ok && name != "" {
+					out = append(out, name)
+				}
+				if sep == "\x00" {
+					break
+				}
+			}
+		}
+		return strings.Join(out, ",")
+	}
+	var set []string
+	for _, v := range resp.Header.Values("Set-Cookie") {
+		name, rest, _ := strings.Cut(v, "=")
+		attrs := ""
+		if i := strings.Index(rest, ";"); i >= 0 {
+			attrs = rest[i:]
+		}
+		set = append(set, strings.TrimSpace(name)+attrs)
+	}
+	r := resp.Request
+	h.opts.Logger.LogAttrs(context.Background(), slog.LevelDebug, "exchange",
+		slog.String("method", r.Method), slog.String("target", r.URL.Scheme+"://"+r.URL.Host+r.URL.Path),
+		slog.Int("status", resp.StatusCode),
+		slog.String("sent_cookies", names(r.Header.Values("Cookie"), ";")),
+		slog.String("set_cookies", strings.Join(set, " | ")),
+		slog.String("dest", r.Header.Get("Sec-Fetch-Dest")), slog.String("site", r.Header.Get("Sec-Fetch-Site")),
+		slog.String("referer", r.Header.Get("Referer")), slog.String("origin", r.Header.Get("Origin")),
+		slog.String("mitigated", resp.Header.Get("Cf-Mitigated")),
+		slog.String("clearance_sent", tag(cookieValue(r.Header.Values("Cookie"), "cf_clearance"))),
+		slog.String("clearance_set", tag(setCookieValue(resp.Header.Values("Set-Cookie"), "cf_clearance"))),
+		slog.String("conn", connTag(r)),
+		slog.String("hints", hintNamesOf(r.Header)),
+		slog.String("sent", headerSummary(r.Header)))
+}
+
+// headerSummary lists the request headers sent upstream, sorted, values cut
+// short and cookies left out: for comparing with a direct browser's.
+func headerSummary(h http.Header) string {
+	var out []string
+	for name, vals := range h {
+		if name == "Cookie" || len(vals) == 0 {
+			continue
+		}
+		v := strings.Join(vals, ", ")
+		if len(v) > 70 {
+			v = v[:70] + "…"
+		}
+		out = append(out, strings.ToLower(name)+"="+v)
+	}
+	sort.Strings(out)
+	return strings.Join(out, " | ")
+}
+
+// tag is a short fingerprint of a secret value, for comparing in logs.
+func tag(v string) string {
+	if v == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(v))
+	return fmt.Sprintf("%x/%d", sum[:4], len(v))
+}
+
+func cookieValue(headers []string, name string) string {
+	for _, h := range headers {
+		for _, part := range strings.Split(h, ";") {
+			if n, v, ok := strings.Cut(strings.TrimSpace(part), "="); ok && n == name {
+				return v
+			}
+		}
+	}
+	return ""
+}
+
+func setCookieValue(headers []string, name string) string {
+	for _, h := range headers {
+		first, _, _ := strings.Cut(h, ";")
+		if n, v, ok := strings.Cut(strings.TrimSpace(first), "="); ok && n == name {
+			return v
+		}
+	}
+	return ""
+}
+
+func connTag(r *http.Request) string {
+	info, ok := r.Context().Value(upstream.ConnInfoKey{}).(*upstream.ConnInfo)
+	if !ok || info.Local == "" {
+		return ""
+	}
+	host, _, _ := net.SplitHostPort(info.Local)
+	return fmt.Sprintf("local=%s reused=%v remote=%s", tag(host), info.Reused, info.Remote)
+}
+
+func hintNamesOf(h http.Header) string {
+	var out []string
+	for name := range h {
+		if l := strings.ToLower(name); isHint(l) {
+			out = append(out, strings.TrimPrefix(l, "sec-ch-"))
+		}
+	}
+	sort.Strings(out)
+	return strings.Join(out, ",")
 }

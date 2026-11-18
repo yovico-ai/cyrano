@@ -8,6 +8,8 @@
 // so the safest thing is to return values as-is and let same-origin policy
 // surface its own errors.
 
+import { crossOriginView } from "../native/cross-origin";
+
 function hasOwnLikeProperty(obj: unknown, key: string): boolean {
     return obj !== null && obj !== undefined && key in (obj as object);
 }
@@ -29,10 +31,11 @@ function isWindowLike(obj: unknown): obj is Window {
 
 /**
  * Server-side rule emits `$rewriter.wrap_get_top_window(top)` in place of
- * bare `top` reads. Identity for now; reserved for future unwrap logic.
+ * bare `top` (and `parent`) reads: the window, or its cross-origin view
+ * (native/cross-origin.ts).
  */
-export function wrapGetTopWindow(top: Window): Window {
-    return top;
+export function wrapGetTopWindow(top: Window, viewer?: object): Window {
+    return crossOriginView(top, null, viewer);
 }
 
 /**
@@ -43,13 +46,13 @@ export function wrapGetTopWindow(top: Window): Window {
  * unchanged so that `.top` resolves as a normal property and method calls
  * preserve their original `this` binding.
  */
-export function wrapTopWindow(arg: { obj: unknown }): { top: unknown } {
+export function wrapTopWindow(arg: { obj: unknown }, viewer?: object): { top: unknown } {
     if (arg.obj != null && !isWindowLike(arg.obj)) {
         return arg.obj as { top: unknown };
     }
     return {
         top: hasOwnLikeProperty(arg.obj, "top")
-            ? (arg.obj as { top: unknown }).top
+            ? crossOriginView((arg.obj as { top: unknown }).top, null, viewer)
             : undefined,
     };
 }
@@ -63,13 +66,13 @@ export function wrapTopWindow(arg: { obj: unknown }): { top: unknown } {
  * method calls preserve their original `this` binding. Without this guard,
  * `jqueryObj.parent()` becomes `{parent: fn}.parent()` with broken `this`.
  */
-export function wrapParentWindow(arg: { obj: unknown }): { parent: unknown } {
+export function wrapParentWindow(arg: { obj: unknown }, viewer?: object): { parent: unknown } {
     if (arg.obj != null && !isWindowLike(arg.obj)) {
         return arg.obj as { parent: unknown };
     }
     return {
         parent: hasOwnLikeProperty(arg.obj, "parent")
-            ? (arg.obj as { parent: unknown }).parent
+            ? crossOriginView((arg.obj as { parent: unknown }).parent, null, viewer)
             : undefined,
     };
 }

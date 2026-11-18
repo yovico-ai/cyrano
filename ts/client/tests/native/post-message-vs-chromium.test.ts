@@ -94,6 +94,41 @@ describe.skipIf(!wanted)("postMessage in Chromium", () => {
         ]);
     }, 60_000);
 
+    it("windows of different original origins are cross-origin to each other", async () => {
+        const page = await browser.newPage();
+        await page.goto(`${origin}/cyrano/https/top.example/`);
+        await page.waitForFunction("window.got && window.got.length >= 2");
+        // As rewritten page code reaches other windows: through the helpers.
+        const r = await page.evaluate(() => {
+            const w = window as unknown as { $rewriter: Record<string, (...a: unknown[]) => any> };
+            const frame = document.querySelector("iframe")!;
+            const child = frame.contentWindow as any;
+            const real = (w.$rewriter as any)._.windows ? [...(w.$rewriter as any)._.windows].map((x: any) => x.deref()).find((x: any) => x && x !== window) : null;
+            const inChild = (code: string): string => { try { return String(real.eval(code)); } catch (e) { return "THROWS " + (e as Error).name; } };
+            const tryIt = (f: () => unknown): string => { try { const v = f(); return v === null ? "null" : typeof v; } catch (e) { return "THROWS " + (e as Error).name; } };
+            return {
+                childDocument: tryIt(() => child.document),
+                childLocationHref: tryIt(() => child.location.href),
+                childFoo: tryIt(() => child.foo),
+                childPostMessage: tryIt(() => child.postMessage),
+                childLength: tryIt(() => child.length),
+                contentDocument: tryIt(() => frame.contentDocument),
+                sourceIsContentWindow: (window as any).got[0].fromChild,
+                // In the frame: its parent, as its rewritten code sees it.
+                parentDocument: inChild("try { String($rewriter.wrap_parent_window({obj: window}).parent.document) } catch (e) { 'THROWS ' + e.name + ': ' + e.message }"),
+                parentIsTop: inChild("$rewriter.wrap_parent_window({obj: window}).parent === $rewriter.wrap_get_top_window(top)"),
+                frameElement: inChild("String(window.frameElement)"),
+                parentLocation: inChild("try { String($rewriter.wrap_location({obj: $rewriter.wrap_parent_window({obj: window}).parent}).location.href) } catch (e) { 'THROWS ' + e.name }"),
+            };
+        });
+        expect(r).toEqual({
+            childDocument: "THROWS SecurityError", childLocationHref: "THROWS SecurityError", childFoo: "THROWS SecurityError",
+            childPostMessage: "function", childLength: "number", contentDocument: "null", sourceIsContentWindow: true,
+            parentDocument: 'THROWS SecurityError: Blocked a frame with origin "https://child.example" from accessing a cross-origin frame.',
+            parentIsTop: "true", frameElement: "null", parentLocation: "THROWS SecurityError",
+        });
+    }, 60_000);
+
     it("the receiver sees the sending window and its original origin", async () => {
         const page = await browser.newPage();
         const logs: string[] = [];

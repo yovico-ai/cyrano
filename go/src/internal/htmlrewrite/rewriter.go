@@ -195,12 +195,14 @@ func applyAttrRules(tag string, attrs []html.Attribute, cfg *Config) []html.Attr
 		}
 	}
 
-	// HTML_METATAG — drop <meta http-equiv="content-security-policy"> so
-	// the origin's CSP doesn't block our injected /rewriter.js.
+	// HTML_METATAG — a <meta http-equiv="content-security-policy"> keeps
+	// enforcing, translated for the proxy as a header policy is
+	// (urlrewrite.RewriteCSP). The runtime is already in place above it.
 	if tag == "meta" {
-		if eq, ok := getAttr(attrs, "http-equiv"); ok && strings.EqualFold(eq, "content-security-policy") {
-			attrs = removeAttr(attrs, "content")
-			attrs = removeAttr(attrs, "http-equiv")
+		if eq, ok := getAttr(attrs, "http-equiv"); ok && strings.EqualFold(strings.TrimSpace(eq), "content-security-policy") {
+			if v, ok := getAttr(attrs, "content"); ok && cfg.Proxy.PublicURL != nil {
+				attrs = setAttr(attrs, "content", urlrewrite.RewriteCSP(v, cfg.Proxy.PublicURL.Scheme+"://"+cfg.Proxy.PublicURL.Host))
+			}
 		}
 		// A declarative refresh navigates like a link: through the proxy.
 		if eq, ok := getAttr(attrs, "http-equiv"); ok && strings.EqualFold(strings.TrimSpace(eq), "refresh") {
@@ -244,10 +246,18 @@ func applyAttrRules(tag string, attrs []html.Attribute, cfg *Config) []html.Attr
 		}
 	}
 
-	// HTML_SRCSET — comma-separated URL list with descriptors.
-	if tag == "img" || tag == "source" {
-		if v, ok := getAttr(attrs, "srcset"); ok {
-			attrs = setAttr(attrs, "srcset",
+	// HTML_SRCSET — comma-separated URL list with descriptors: img and
+	// source srcset, and a preload link's imagesrcset (TS: isSrcsetAttr).
+	srcsetAttr := ""
+	switch tag {
+	case "img", "source":
+		srcsetAttr = "srcset"
+	case "link":
+		srcsetAttr = "imagesrcset"
+	}
+	if srcsetAttr != "" {
+		if v, ok := getAttr(attrs, srcsetAttr); ok {
+			attrs = setAttr(attrs, srcsetAttr,
 				rewriteSrcset(v, func(u string) string { return rewriteOne(u, urlOpts{}) }))
 		}
 	}
@@ -258,6 +268,29 @@ func applyAttrRules(tag string, attrs []html.Attribute, cfg *Config) []html.Attr
 	if cfg.RewriteInlineCSS != nil {
 		if v, ok := getAttr(attrs, "style"); ok {
 			attrs = setAttr(attrs, "style", string(cfg.RewriteInlineCSS([]byte(v))))
+		}
+	}
+
+	// <iframe srcdoc>: a whole document in an attribute. It is rewritten
+	// like any other — with the runtime first, since the frame's scripts
+	// run as it is parsed. Its base URL is the page's.
+	if tag == "iframe" {
+		if v, ok := getAttr(attrs, "srcdoc"); ok {
+			// The frame's document has its own referrer — this page's URL —
+			// not this page's: left to the browser's value.
+			sub := *cfg
+			if _, has := sub.ClientPassthrough["referrer"]; has {
+				sub.ClientPassthrough = make(map[string]any, len(cfg.ClientPassthrough))
+				for k, v := range cfg.ClientPassthrough {
+					if k != "referrer" {
+						sub.ClientPassthrough[k] = v
+					}
+				}
+			}
+			var doc bytes.Buffer
+			if err := Rewrite(&doc, strings.NewReader(v), sub); err == nil {
+				attrs = setAttr(attrs, "srcdoc", doc.String())
+			}
 		}
 	}
 

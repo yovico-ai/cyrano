@@ -7,6 +7,7 @@
 // (which Object.getOwnPropertySymbols lists) and no Symbol.for registry
 // keys a script could ask for by name.
 
+import { defineHidden } from "./hidden-globals";
 import type { RewriterApi } from "../runtime/api-types";
 
 // WeakRef, for a `lib` target that predates it.
@@ -27,6 +28,8 @@ export interface Internals {
      * one), so the frame tree alone does not reach every window.
      */
     windows?: Set<Ref<Window>>;
+    /** The runtime bootstrap as HTML, for documents this window creates from markup. */
+    bootstrapHtml?: () => string;
 }
 
 const KEY = "_";
@@ -45,7 +48,7 @@ export function internalsOf(win: unknown): Internals | undefined {
 /** Attaches `internals` to `api` and publishes `api` as the window's `$rewriter`. */
 export function publish(win: Window, api: RewriterApi, internals: Internals): void {
     Object.defineProperty(api, KEY, { value: internals, enumerable: false, configurable: true, writable: false });
-    (win as unknown as { $rewriter: RewriterApi }).$rewriter = api;
+    defineHidden(win, "$rewriter", api); // not enumerable: native/hidden-globals.ts
     register(win, internals);
 }
 

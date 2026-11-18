@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/yovico/cyrano/internal/config"
 	"github.com/yovico/cyrano/internal/headerorder"
@@ -355,7 +356,16 @@ func challengeOriginFromSession(r *http.Request, jar *proxy.SessionJar, sessName
 // logRequests is a tiny middleware that emits one slog line per request.
 func logRequests(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Development aid (CYRANO_DEBUG_SCRIPT): a page's debug beacons end here.
+		if strings.HasPrefix(r.URL.Path, "/__dbg/") {
+			logger.Info("dbg", "msg", strings.TrimPrefix(r.URL.Path, "/__dbg/"))
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		start := time.Now()
+		defer func() {
+			logger.Info("req", "method", r.Method, "path", r.URL.Path, "host", r.Host, "ms", time.Since(start).Milliseconds())
+		}()
 		next.ServeHTTP(w, r)
-		logger.Info("req", "method", r.Method, "path", r.URL.Path, "host", r.Host)
 	})
 }

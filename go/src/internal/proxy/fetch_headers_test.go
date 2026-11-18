@@ -48,6 +48,33 @@ func TestDirectFetchHeaders(t *testing.T) {
 		}
 	})
 
+	// A blob: worker sends no Referer; the runtime names its origin
+	// (Cloudflare's challenge fetches hagen.challenges.cloudflare.com so).
+	t.Run("a referrer-less context is told by the initiator header", func(t *testing.T) {
+		got := send("GET", upstream.URL+"/i", map[string]string{
+			"Crn-I": "https://page.example", "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty",
+		})
+		if v := got.Get("Origin"); v != "https://page.example" {
+			t.Errorf("Origin = %q", v)
+		}
+		if v := got.Get("Sec-Fetch-Site"); v != "cross-site" {
+			t.Errorf("Sec-Fetch-Site = %q", v)
+		}
+		if got.Get("Referer") != "" || got.Get("Crn-I") != "" {
+			t.Errorf("Referer %q, Crn-I %q went upstream", got.Get("Referer"), got.Get("Crn-I"))
+		}
+		got = send("GET", upstream.URL+"/i", map[string]string{
+			"Crn-I": upstream.URL, "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty",
+		})
+		if got.Get("Origin") != "" || got.Get("Sec-Fetch-Site") != "same-origin" {
+			t.Errorf("same-origin GET: Origin %q, site %q", got.Get("Origin"), got.Get("Sec-Fetch-Site"))
+		}
+		got = send("GET", upstream.URL+"/i", map[string]string{"Crn-I": "javascript:1"})
+		if got.Get("Crn-I") != "" {
+			t.Error("the initiator header went upstream")
+		}
+	})
+
 	t.Run("same-origin referrer is sent whole, without fragment", func(t *testing.T) {
 		got := send("GET", upstream.URL+"/next", map[string]string{
 			"Referer": proxied(upstream.URL+"/page?x=1") + "#f", "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document",

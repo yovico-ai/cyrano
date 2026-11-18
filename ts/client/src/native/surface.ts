@@ -4,20 +4,23 @@
 // Page code must see a native where cyrano put a wrapper. Everything a
 // script can ask of a function or property is kept as the native's:
 //
-//   * a method is a Proxy around the native function — `name`, `length`,
-//     the absence of `prototype`, non-constructability, and the
-//     "Illegal invocation" TypeError on a wrong receiver all stay native;
-//   * a constructor is a Proxy too, with `prototype.constructor` pointing
-//     back at it, so `instanceof`, statics and `new.target` behave;
+//   * a method is a function standing in for the native (standIn) — `name`,
+//     `length`, the absence of `prototype`, non-constructability, and the
+//     "Illegal invocation" TypeError on a wrong receiver are the native's;
+//   * a constructor is a stand-in too, with the native's `prototype`
+//     object and static members and `prototype.constructor` pointing back
+//     at it, so `instanceof`, statics and `new.target` behave;
 //   * an accessor keeps the native descriptor's shape — same object, same
 //     enumerable/configurable, a setter where the native has one — with
-//     Proxy-wrapped getter/setter (`name` "get URL" etc. kept);
+//     stand-in getter/setter (`name` "get URL" etc. kept);
 //   * Function.prototype.toString answers for every wrapper what it
 //     answers for the native it replaced ("function fetch() { [native
 //     code] }"), and for itself.
 //
 // This is heuristic, not a guarantee (owner, 2026-11-17): page code can
 // capture natives before cyrano runs, or probe in ways no wrapper hides.
+
+import { original } from "../js/marks";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyFn = (...args: any[]) => unknown;
@@ -37,16 +40,87 @@ export function installToStringMask(realm: typeof globalThis): void {
     if (installedRealms.has(FnProto)) return;
     installedRealms.add(FnProto);
     const nativeToString = FnProto.toString;
-    const masked = new Proxy(nativeToString, {
+    const masked = standIn(nativeToString, {
         apply(target, thisArg: unknown, args: unknown[]) {
             const shown = typeof thisArg === "function" || typeof thisArg === "object"
                 ? masks.get(thisArg as object) ?? thisArg
                 : thisArg;
-            return Reflect.apply(target, shown, args);
+            // A function from a rewritten script shows the source the page
+            // wrote: the rewriters' edits are taken out again (js/marks.ts).
+            const text = Reflect.apply(target, shown, args) as unknown;
+            return typeof text === "string" ? original(text) : text;
         },
     });
     masks.set(masked, nativeToString);
     defineLike(FnProto, "toString", { value: masked });
+}
+
+/**
+ * A function to stand in for the native function `native`: `handler.apply`
+ * runs for a call, `handler.construct` for `new` (without it the stand-in
+ * is no constructor, as a native method is none).
+ *
+ * It is a function of its own, not a Proxy of the native. A Proxy can be
+ * told from the function it wraps without calling it, and challenge
+ * scripts do (Cloudflare's runs both of these on every native it checks):
+ *   * `Object.setPrototypeOf(f, f)` — "Cyclic __proto__ value" for any
+ *     ordinary object — succeeds on a Proxy;
+ *   * V8 names a stack frame's receiver by the `constructor` it finds on
+ *     the receiver's prototype chain and does not look into a Proxy:
+ *     `Object.create(f).toString()` fails "at Function.toString" for a
+ *     function, "at Object.toString" for a Proxy of one.
+ * What a script can read of the stand-in is made the native's: name,
+ * length, [[Prototype]], no own `prototype` (a method) or the native's own
+ * (a constructor, with its static members), no own `arguments`/`caller`
+ * (strict, as built-ins), and its source through Function.prototype.toString
+ * (maskAs). Known difference: reading `.caller` or `.arguments` throws on a
+ * strict function and yields null on a built-in.
+ */
+export function standIn<F extends object>(
+    native: F,
+    handler: {
+        apply?: (target: F, self: unknown, args: unknown[]) => unknown;
+        construct?: (target: F, args: unknown[], newTarget: unknown) => object;
+    },
+): F {
+    const call = handler.apply;
+    const construct = handler.construct;
+    let wrapper: object;
+    // Defined under the native's name: the name V8 itself knows the
+    // function by (in stack frames) is then the native's too.
+    const name = String((native as { name?: unknown }).name ?? "");
+    if (construct) {
+        wrapper = ({
+            [name]: function (this: unknown, ...args: unknown[]): unknown {
+                if (new.target === undefined) {
+                    // Called as a function: a DOM constructor refuses in its own words.
+                    return call ? call(native, this, args) : Reflect.apply(native as unknown as AnyFn, this, args);
+                }
+                return construct(native, args, new.target);
+            },
+        })[name] as object;
+        // The native's static members (WebSocket.OPEN, URL.createObjectURL …).
+        for (const key of Reflect.ownKeys(native)) {
+            if (key === "length" || key === "name" || key === "prototype" || key === "arguments" || key === "caller") continue;
+            const d = Object.getOwnPropertyDescriptor(native, key);
+            if (d) { try { Object.defineProperty(wrapper, key, d); } catch { /* stays absent */ } }
+        }
+        const proto = Object.getOwnPropertyDescriptor(native, "prototype");
+        if (proto) Object.defineProperty(wrapper, "prototype", proto);
+    } else {
+        // A method definition: no `prototype`, not a constructor.
+        wrapper = ({
+            [name](this: unknown, ...args: unknown[]): unknown {
+                return call ? call(native, this, args) : Reflect.apply(native as unknown as AnyFn, this, args);
+            },
+        })[name] as object;
+    }
+    for (const key of ["length", "name"] as const) {
+        const d = Object.getOwnPropertyDescriptor(native, key);
+        if (d) Object.defineProperty(wrapper, key, d); else delete (wrapper as Record<string, unknown>)[key];
+    }
+    Object.setPrototypeOf(wrapper, Object.getPrototypeOf(native) as object | null);
+    return wrapper as F;
 }
 
 /** Records that `wrapper` must read as `native` (for wrappers built elsewhere). */
@@ -102,7 +176,7 @@ export function wrapMethod<F extends AnyFn>(
     if (!holder) return undefined;
     const native = Object.getOwnPropertyDescriptor(holder, key)?.value as F | undefined;
     if (typeof native !== "function") return undefined;
-    const wrapper = new Proxy(native, {
+    const wrapper = standIn(native, {
         apply(target, self: unknown, args: unknown[]) {
             return impl(target, self, args as Parameters<F>);
         },
@@ -133,12 +207,12 @@ export function wrapAccessor<T>(
     if (hooks.get && native.get) {
         const g = native.get as (this: unknown) => T;
         const hook = hooks.get;
-        change.get = maskAs(new Proxy(g, { apply: (_t, self: unknown) => hook(g, self) }), g);
+        change.get = maskAs(standIn(g, { apply: (_t, self: unknown) => hook(g, self) }), g);
     }
     if (hooks.set && native.set) {
         const s = native.set as (this: unknown, v: T) => void;
         const hook = hooks.set;
-        change.set = maskAs(new Proxy(s, { apply: (_t, self: unknown, args: unknown[]) => hook(s, self, args[0] as T) }), s);
+        change.set = maskAs(standIn(s, { apply: (_t, self: unknown, args: unknown[]) => hook(s, self, args[0] as T) }), s);
     }
     defineLike(holder, key, change);
     return native;
@@ -158,7 +232,7 @@ export function wrapConstructor<C extends abstract new (...args: never[]) => obj
     if (!holder) return undefined;
     const native = Object.getOwnPropertyDescriptor(holder, key)?.value as C | undefined;
     if (typeof native !== "function") return undefined;
-    const wrapper: C = new Proxy(native, {
+    const wrapper: C = standIn(native, {
         construct(target, args: unknown[], newTarget: unknown): object {
             // A subclass of the wrapper (class X extends WebSocket) must still
             // get an instance of its own class.

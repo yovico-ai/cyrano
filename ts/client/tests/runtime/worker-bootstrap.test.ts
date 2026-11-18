@@ -36,7 +36,7 @@ function makeFakeScope() {
 describe("initWorker — location", () => {
     it("wrap_get_location masks the worker's real (blob:) location with the upstream URL", () => {
         const { scope } = makeFakeScope();
-        const api = initWorker(config, "https://claude.ai/cdn-cgi/challenge-platform/worker", scope);
+        const api = initWorker(config, "https://claude.ai/cdn-cgi/challenge-platform/worker", undefined, scope);
         const loc = api.wrap_get_location(undefined);
         expect(loc.href).toBe("https://claude.ai/cdn-cgi/challenge-platform/worker");
         expect(loc.host).toBe("claude.ai");
@@ -45,7 +45,7 @@ describe("initWorker — location", () => {
     it("wrap_set_location rewrites the assigned value through the URL containment logic", () => {
         const { scope } = makeFakeScope();
         const setter = vi.fn();
-        const api = initWorker(config, "https://claude.ai/", scope);
+        const api = initWorker(config, "https://claude.ai/", undefined, scope);
         const assignable = api.wrap_set_location(undefined, setter);
         assignable.value = "https://claude.ai/other";
         expect(setter).toHaveBeenCalledWith(
@@ -57,7 +57,7 @@ describe("initWorker — location", () => {
 describe("initWorker — wrap_member_expression", () => {
     it("self['location'] is the worker's location view; another object's is its own property", () => {
         const { scope } = makeFakeScope();
-        const api = initWorker(config, "https://claude.ai/", scope);
+        const api = initWorker(config, "https://claude.ai/", undefined, scope);
         const result = api.wrap_member_expression(scope, "location") as { location: unknown };
         expect((result.location as { host: string }).host).toBe("claude.ai");
         const own = { location: { host: "its-own" } };
@@ -66,7 +66,7 @@ describe("initWorker — wrap_member_expression", () => {
 
     it("passes through unrelated properties unchanged", () => {
         const { scope } = makeFakeScope();
-        const api = initWorker(config, "https://claude.ai/", scope);
+        const api = initWorker(config, "https://claude.ai/", undefined, scope);
         const obj = { foo: "bar" };
         expect(api.wrap_member_expression(obj, "foo")).toBe(obj);
     });
@@ -75,7 +75,7 @@ describe("initWorker — wrap_member_expression", () => {
 describe("initWorker — eval", () => {
     it("wrap_eval_arg rewrites a string source argument", () => {
         const { scope } = makeFakeScope();
-        const api = initWorker(config, "https://claude.ai/", scope);
+        const api = initWorker(config, "https://claude.ai/", undefined, scope);
         const rewritten = api.wrap_eval_arg(eval, "location.href");
         expect(rewritten).toContain("$rewriter.wrap_get_location");
     });
@@ -84,7 +84,7 @@ describe("initWorker — eval", () => {
 describe("initWorker — patches the worker's own fetch/XHR/importScripts", () => {
     it("rewrites a bare-path fetch to the proxified upstream URL", async () => {
         const { scope, fetchSpy } = makeFakeScope();
-        initWorker(config, "https://claude.ai/cdn-cgi/challenge-platform/x", scope);
+        initWorker(config, "https://claude.ai/cdn-cgi/challenge-platform/x", undefined, scope);
 
         await scope.fetch("/cdn-cgi/challenge-platform/h/g/ci/rayid/1/tok");
 
@@ -96,7 +96,7 @@ describe("initWorker — patches the worker's own fetch/XHR/importScripts", () =
 
     it("rewrites the URL argument of XMLHttpRequest.open", () => {
         const { scope, openSpy } = makeFakeScope();
-        initWorker(config, "https://claude.ai/cdn-cgi/challenge-platform/x", scope);
+        initWorker(config, "https://claude.ai/cdn-cgi/challenge-platform/x", undefined, scope);
 
         const xhr = new scope.XMLHttpRequest();
         xhr.open("GET", "/cdn-cgi/challenge-platform/h/g/pat/rayid/1/tok");
@@ -109,7 +109,7 @@ describe("initWorker — patches the worker's own fetch/XHR/importScripts", () =
 
     it("rewrites importScripts URL arguments before delegating", () => {
         const { scope, importScriptsSpy } = makeFakeScope();
-        initWorker(config, "https://claude.ai/cdn-cgi/challenge-platform/x", scope);
+        initWorker(config, "https://claude.ai/cdn-cgi/challenge-platform/x", undefined, scope);
 
         scope.importScripts("/cdn-cgi/challenge-platform/h/g/extra.js");
 

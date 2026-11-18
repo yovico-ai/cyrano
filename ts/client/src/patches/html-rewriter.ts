@@ -26,11 +26,12 @@
 // descriptors at module-init time (lazily, on first call) and bypass the
 // patches by calling the originals directly.
 
+import { trusted, trustedPolicyName } from "../native/trusted";
 import { rewriteCssText } from "../css/rewriter";
 import { ORIGINALS_ATTR } from "../native/originals";
 import { defaultJsRewriteOptions, rewriteJsSource } from "../js/rewriter";
 import { rewriteSrcsetAttribute } from "./srcset";
-import { urlAttrsForTagName } from "./url-attribute-map";
+import { urlAttrsForTagName, isSrcsetAttr } from "./url-attribute-map";
 
 interface CapturedNatives {
     innerHTMLGet: (this: Element) => string;
@@ -73,6 +74,27 @@ function ensureCaptured(): CapturedNatives {
 }
 
 /**
+ * An iframe's srcdoc as the frame must get it: its markup rewritten like
+ * any other, and the runtime first — the frame's scripts run as it is
+ * parsed, before anything could be injected from outside. The bootstrap
+ * goes after a doctype, which must stay first (or the frame is in quirks
+ * mode). The frame's base URL is its parent's, so the parent's rewriteOne
+ * resolves its URLs.
+ */
+export function rewriteSrcdoc(
+    html: string,
+    rewriteOne: (url: string) => string,
+    proxyOrigin: string = "",
+    bootstrap?: () => string,
+): string {
+    const rewritten = rewriteHtmlString(html, rewriteOne, proxyOrigin, bootstrap);
+    if (!bootstrap) return rewritten;
+    const doctype = /^\s*<!doctype[^>]*>/i.exec(rewritten);
+    const at = doctype ? doctype[0].length : 0;
+    return rewritten.slice(0, at) + bootstrap() + rewritten.slice(at);
+}
+
+/**
  * Rewrites every URL-bearing attribute in the given HTML string and returns
  * the rewritten serialization. Returns the input unchanged when:
  *   - input is empty / not a string,
@@ -84,6 +106,7 @@ export function rewriteHtmlString(
     html: string,
     rewriteOne: (url: string) => string,
     proxyOrigin: string = "",
+    bootstrap?: () => string,
 ): string {
     if (typeof html !== "string" || html.length === 0) return html;
 
@@ -95,8 +118,16 @@ export function rewriteHtmlString(
         return html;
     }
 
+    // A <template> drops the document's own tags (doctype, html, head,
+    // body): kept aside here and put back as written after serialization.
+    const structural: string[] = [];
+    const parsed = holdStructuralTags(html, structural);
+
     const template = document.createElement("template");
-    natives.innerHTMLSet.call(template, html);
+    // (Trusted values for the sinks written below: under Trusted Types
+    // the runtime's own policy makes them — native/trusted.ts.)
+    const T = (kind: "HTML" | "Script" | "ScriptURL", text: string): string => trusted(globalThis, kind, text) as string;
+    natives.innerHTMLSet.call(template, T("HTML", parsed));
 
     // The template content is a DocumentFragment; walk all element descendants.
     // querySelectorAll('*') matches all elements, in document order.
@@ -125,7 +156,7 @@ export function rewriteHtmlString(
         if (element.tagName === "SCRIPT" && !element.hasAttribute("src")) {
             const jsText = element.textContent ?? "";
             if (jsText.length > 0) {
-                element.textContent = rewriteJsSource(jsText, defaultJsRewriteOptions());
+                element.textContent = T("Script", rewriteJsSource(jsText, defaultJsRewriteOptions()));
             }
         }
 
@@ -145,7 +176,7 @@ export function rewriteHtmlString(
                 natives.setAttribute.call(
                     element,
                     "content",
-                    rewriteCspContent(content, proxyOrigin),
+                    rewriteCspContent(content, proxyOrigin, trustedPolicyName()),
                 );
             }
         }
@@ -172,6 +203,12 @@ export function rewriteHtmlString(
             }
         }
 
+        // 3b. <iframe srcdoc>: a whole document in an attribute.
+        if (element.tagName === "IFRAME") {
+            const srcdoc = element.getAttribute("srcdoc");
+            if (srcdoc !== null) natives.setAttribute.call(element, "srcdoc", T("HTML", rewriteSrcdoc(srcdoc, rewriteOne, proxyOrigin, bootstrap)));
+        }
+
         // 4. Global `style="..."` attribute — applies to every element.
         const styleAttr = element.getAttribute("style");
         if (styleAttr !== null && styleAttr.length > 0) {
@@ -188,12 +225,13 @@ export function rewriteHtmlString(
         for (const attrName of attrs) {
             const value = element.getAttribute(attrName);
             if (value === null || value.length === 0) continue;
-            const rewritten = attrName === "srcset"
+            const rewritten = isSrcsetAttr(attrName)
                 ? rewriteSrcsetAttribute(value, rewriteOne)
                 : rewriteOne(value);
             // Use the captured native setAttribute so we don't recurse through
             // our own setAttribute patch (which would rewrite again).
-            natives.setAttribute.call(element, attrName, rewritten);
+            natives.setAttribute.call(element, attrName,
+                attrName === "src" && (element.tagName === "SCRIPT" || element.tagName === "EMBED") ? T("ScriptURL", rewritten) : rewritten);
         }
     }
 
@@ -208,12 +246,75 @@ export function rewriteHtmlString(
         if (changed) natives.setAttribute.call(element, ORIGINALS_ATTR, JSON.stringify(o));
     }
 
-    return natives.innerHTMLGet.call(template);
+    const out = natives.innerHTMLGet.call(template);
+    return structural.length === 0 ? out : restoreStructuralTags(out, structural);
+}
+
+// ── The document's own tags ─────────────────────────────────────────────
+//
+// `<html><body><script>…document.body…</script></body></html>` written into
+// an empty frame (DoubleVerify does exactly this) must reach the frame's
+// parser with its <body>: without it the script runs in <head> and
+// document.body is null. A template parses markup as a fragment and drops
+// these tags, so each is replaced by a comment holding its index before
+// parsing (a comment stays where it is) and written back afterwards.
+// Script, style and other raw-text bodies and comments are skipped: a
+// "<body>" inside them is text.
+
+const HOLD = "\u007fcrn-tag-";
+const RAW_TEXT = /^(script|style|textarea|title|xmp|iframe|noembed|noframes|plaintext)$/i;
+
+function holdStructuralTags(html: string, held: string[]): string {
+    let out = "";
+    let i = 0;
+    let from = 0;
+    while ((i = html.indexOf("<", i)) !== -1) {
+        if (html.startsWith("<!--", i)) {
+            const end = html.indexOf("-->", i + 4);
+            i = end === -1 ? html.length : end + 3;
+            continue;
+        }
+        const m = /^<(\/?)([A-Za-z][^\s/>]*)|^<!doctype/i.exec(html.slice(i, i + 64));
+        if (!m) { i++; continue; }
+        const close = tagEnd(html, i);
+        if (m[2] === undefined || /^(html|head|body)$/i.test(m[2])) {
+            out += html.slice(from, i) + "<!--" + HOLD + held.length + "-->";
+            held.push(html.slice(i, close));
+            from = i = close;
+            continue;
+        }
+        i = close;
+        if (!m[1] && RAW_TEXT.test(m[2])) {
+            const end = html.toLowerCase().indexOf("</" + m[2].toLowerCase(), i);
+            i = end === -1 ? html.length : end;
+        }
+    }
+    return held.length === 0 ? html : out + html.slice(from);
+}
+
+/** Where the tag starting at `at` ends: after its `>`, quotes respected. */
+function tagEnd(html: string, at: number): number {
+    let quote = "";
+    for (let j = at + 1; j < html.length; j++) {
+        const c = html[j]!;
+        if (quote) { if (c === quote) quote = ""; continue; }
+        if (c === '"' || c === "'") {
+            // Quotes only open an attribute value (after "=").
+            if (/=\s*$/.test(html.slice(Math.max(at, j - 8), j))) quote = c;
+            continue;
+        }
+        if (c === ">") return j + 1;
+    }
+    return html.length;
+}
+
+function restoreStructuralTags(html: string, held: string[]): string {
+    return html.replace(/<!--\u007fcrn-tag-(\d+)-->/g, (_, n: string) => held[Number(n)] ?? "");
 }
 
 // Mirrors Go's rewriteCSP: adds proxyOrigin to every *-src directive so
 // proxy-rewritten resource URLs pass the browser's CSP check.
-function rewriteCspContent(csp: string, proxyOrigin: string): string {
+function rewriteCspContent(csp: string, proxyOrigin: string, ttPolicy?: string): string {
     const directives = csp.split(";");
     for (let i = 0; i < directives.length; i++) {
         const dir = directives[i]!;
@@ -221,12 +322,19 @@ function rewriteCspContent(csp: string, proxyOrigin: string): string {
         if (parts.length === 0 || !parts[0]) continue;
         const name = parts[0].toLowerCase();
         // As the server's rewriteCSP (go/src/internal/proxy/csp.go): reports
-        // would go straight to the origin; Trusted Types enforcement breaks
-        // the runtime; and on an http proxy, upgrade-insecure-requests /
+        // would go straight to the origin; and on an http proxy, upgrade-insecure-requests /
         // block-all-mixed-content would upgrade or block every proxied load.
+        // Trusted Types stay enforced; the runtime's policy is admitted
+        // beside the page's ('none' admits no policy: now only ours).
+        if (name === "trusted-types") {
+            const kept = parts.slice(1).filter((t) => t.toLowerCase() !== "'none'");
+            if (ttPolicy && !kept.includes(ttPolicy) && !kept.includes("*")) kept.push(ttPolicy);
+            const lead = dir.slice(0, dir.length - dir.trimStart().length);
+            directives[i] = lead + parts[0] + " " + kept.join(" ");
+            continue;
+        }
         if (
             name === "report-uri" || name === "report-to" ||
-            name === "require-trusted-types-for" || name === "trusted-types" ||
             ((name === "upgrade-insecure-requests" || name === "block-all-mixed-content") &&
                 proxyOrigin.toLowerCase().startsWith("http://"))
         ) {
@@ -235,10 +343,12 @@ function rewriteCspContent(csp: string, proxyOrigin: string): string {
         }
         if (!name.includes("-src")) continue;
 
-        // Check if proxy origin is already present.
+        // Check if proxy origin is already present. 'none' stays 'none' (as
+        // Go's RewriteCSP): a source next to it would void it.
         let hasProxy = false;
         for (const tok of parts.slice(1)) {
-            if (tok.toLowerCase() === proxyOrigin.toLowerCase()) {
+            const t = tok.toLowerCase();
+            if (t === proxyOrigin.toLowerCase() || t === "'none'") {
                 hasProxy = true;
                 break;
             }

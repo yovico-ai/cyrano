@@ -6,6 +6,9 @@
 // stay narrow. Adding a new wrapper means: write the module, import it here,
 // expose it on the returned RewriterApi.
 
+import { isView } from "../native/cross-origin";
+import { buildBootstrapHtml } from "./bootstrap-html";
+import { honourOptionalChains } from "./optional";
 import type { ClientConfig } from "../config";
 import type { RewriterApi } from "./api-types";
 import { BaseUrlState } from "./base-url-state";
@@ -73,8 +76,12 @@ export function createRewriterApi(
             (locationOf(obj) as { href: string }).href = String(v);
         },
     });
-    const locationOf = (obj: unknown): unknown =>
-        obj === targetWindow || obj === targetWindow.document ? wrappedLocation : foreignLocationView(obj, config);
+    const locationOf = (obj: unknown): unknown => {
+        if (obj === targetWindow || obj === targetWindow.document) return wrappedLocation;
+        // A cross-origin window's location is its view's: settable, not readable.
+        if (isView(obj)) return (obj as { location: unknown }).location;
+        return foreignLocationView(obj, config);
+    };
 
     // Single rewriter closure shared by every wrapper that needs to proxify
     // a URL string against the *current* base URL. The base URL changes over
@@ -86,20 +93,9 @@ export function createRewriterApi(
     // Mirrors the server's inject.go bootstrapScript() for HTML written via
     // document.write at runtime — injects <script src=...> + init call into
     // any <head> element so inline scripts that reference $rewriter can run.
-    const buildBootstrapHtml = (): string => {
-        const src = config.apiBaseURL + config.source;
-        const configJson = htmlSafeJson(config);
-        const locationLit = jsStringLiteral(baseUrlState.get().href);
-        const nonce = config.nonce ? ` nonce="${config.nonce.replace(/[^A-Za-z0-9+/_=-]/g, "")}"` : "";
-        return (
-            `<script${nonce} src="${src}"></script>` +
-            `<script${nonce}>window.$rewriter=window.$rewriter_init(window,${configJson}).inject();` +
-            `$rewriter.set_location(${locationLit});` +
-            `document.currentScript.remove();</script>`
-        );
-    };
+    const buildBootstrap = (): string => buildBootstrapHtml(config, baseUrlState.get().href);
 
-    return {
+    return honourOptionalChains({
         config,
 
         // ── Base-URL state ─────────────────────────────────────────────────
@@ -131,13 +127,14 @@ export function createRewriterApi(
         wrap_location: (arg) => locationHolder(arg.obj),
 
         // ── Window tree ────────────────────────────────────────────────────
-        wrap_get_top_window: wrapGetTopWindow,
-        wrap_top_window: wrapTopWindow,
-        wrap_parent_window: wrapParentWindow,
+        // Other windows, as this window's code may see them (native/cross-origin.ts).
+        wrap_get_top_window: (top) => wrapGetTopWindow(top, targetWindow),
+        wrap_top_window: (arg) => wrapTopWindow(arg, targetWindow),
+        wrap_parent_window: (arg) => wrapParentWindow(arg, targetWindow),
         get_top_level_window: getTopLevelWindow,
 
         // ── Document.write / postMessage / eval / member expression ────────
-        wrap_document_write: (arg) => wrapDocumentWrite(arg, rewriteOne, buildBootstrapHtml, initialBaseUrl.origin),
+        wrap_document_write: (arg) => wrapDocumentWrite(arg, rewriteOne, buildBootstrap, initialBaseUrl.origin),
         wrap_postMessage: (arg) => wrapPostMessage(arg, initialBaseUrl.origin, () => baseUrlState.get().origin, (h) => unwrapProxiedUrl(h, config)),
         // Computed member access obj[expr] — mirror what the static-access
         // wrappers return so that obj["location"], obj["write"], etc. go
@@ -147,12 +144,12 @@ export function createRewriterApi(
                 case "location":
                     return locationHolder(obj);
                 case "top":
-                    return wrapTopWindow({ obj });
+                    return wrapTopWindow({ obj }, targetWindow);
                 case "parent":
-                    return wrapParentWindow({ obj });
+                    return wrapParentWindow({ obj }, targetWindow);
                 case "write":
                 case "writeln":
-                    return wrapDocumentWrite({ obj }, rewriteOne, buildBootstrapHtml, initialBaseUrl.origin);
+                    return wrapDocumentWrite({ obj }, rewriteOne, buildBootstrap, initialBaseUrl.origin);
                 case "postMessage":
                     return wrapPostMessage({ obj }, initialBaseUrl.origin, () => baseUrlState.get().origin, (h) => unwrapProxiedUrl(h, config));
                 case "eval":
@@ -191,33 +188,5 @@ export function createRewriterApi(
         append_rewrite_script_into_iframe: (iframe) => {
             injectIntoIframe(iframe, targetWindow, config, baseUrlState.get().href);
         },
-    };
-}
-
-// Produce a double-quoted JS string literal safe to embed inside a <script>
-// block. Escapes \, ", control characters, and < (prevents </script> breakout).
-function jsStringLiteral(s: string): string {
-    let out = '"';
-    for (let i = 0; i < s.length; i++) {
-        const code = s.charCodeAt(i);
-        const c = s[i]!;
-        if (c === "\\") { out += "\\\\"; }
-        else if (c === '"') { out += '\\"'; }
-        else if (c === "\n") { out += "\\n"; }
-        else if (c === "\r") { out += "\\r"; }
-        else if (c === "\t") { out += "\\t"; }
-        else if (c === "<") { out += "\\x3c"; } // prevent </script> breakout
-        else if (code < 0x20) { out += "\\u00" + code.toString(16).padStart(2, "0"); }
-        else { out += c; }
-    }
-    return out + '"';
-}
-
-// JSON.stringify with HTML-safe escaping — mirrors Go's json.Marshal which
-// escapes <, >, & by default so the JSON is safe inside a <script> block.
-function htmlSafeJson(obj: unknown): string {
-    return JSON.stringify(obj)
-        .replace(/</g, "\\u003c")
-        .replace(/>/g, "\\u003e")
-        .replace(/&/g, "\\u0026");
+    });
 }

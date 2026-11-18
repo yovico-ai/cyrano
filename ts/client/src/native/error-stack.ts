@@ -9,17 +9,18 @@
 // built-in Error. Cyrano's formatter is installed there; it drops runtime
 // frames and shows each frame's original URL. Natively Error has no
 // prepareStackTrace until the page sets one, so the page's global `Error`
-// is a Proxy of the built-in that reports prepareStackTrace exactly as the
-// page has set, defined or deleted it — and the page's own formatter, if
-// any, is called with the filtered call sites, original URLs in place.
+// is a function standing in for the built-in: prepareStackTrace on it is
+// only what the page has set, defined or deleted — and the page's own
+// formatter, if any, is called with the filtered call sites, original URLs
+// in place.
 // Error.prototype.constructor and the native error subclasses' [[Prototype]]
-// point at the Proxy, so `e.constructor === Error` and
+// point at the stand-in, so `e.constructor === Error` and
 // `Object.getPrototypeOf(TypeError) === Error` hold.
 //
 // Heuristic (REQUIREMENTS.md): V8 only; a page that captured the built-in
 // before cyrano ran, or that compares realms' intrinsics, can still tell.
 
-import { maskAs, replaceValue } from "./surface";
+import { maskAs, replaceValue, standIn } from "./surface";
 
 type CallSite = {
     getFileName(): string | null | undefined;
@@ -73,9 +74,23 @@ export function patchErrorStacks(
     if (installed.has(Intrinsic)) return;
     installed.add(Intrinsic);
 
-    // What the page has done with Error.prepareStackTrace.
-    let pageHas = Object.prototype.hasOwnProperty.call(Intrinsic, "prepareStackTrace");
-    let pageHook: unknown = Intrinsic.prepareStackTrace;
+    // What the page had done with Error.prepareStackTrace before this ran.
+    const pageHad = Object.getOwnPropertyDescriptor(Intrinsic, "prepareStackTrace");
+    const KEY = "prepareStackTrace";
+    // The page's formatter and stack limit, as it has them on the `Error`
+    // it holds (the stand-in below).
+    const pageHook = (): unknown => {
+        try { return (Shown as unknown as Record<string, unknown>)[KEY]; } catch { return undefined; }
+    };
+    const syncLimit = (): void => {
+        try {
+            const d = Object.getOwnPropertyDescriptor(Shown, "stackTraceLimit");
+            const I = Intrinsic as unknown as { stackTraceLimit?: unknown };
+            if (!d) { delete I.stackTraceLimit; return; }
+            const v = "value" in d ? d.value as unknown : (d.get ? d.get.call(Shown) as unknown : undefined);
+            if (I.stackTraceLimit !== v) I.stackTraceLimit = v;
+        } catch { /* stays as it is */ }
+    };
 
     const ours = (site: CallSite): boolean => site.getFileName?.() === runtimeUrl;
     const shown = (site: CallSite): CallSite => {
@@ -97,38 +112,41 @@ export function patchErrorStacks(
     };
     const format: PrepareStackTrace = (err, sites) => {
         if (rawMode) return [header(err), ...sites.map((s) => `    at ${s.toString()}`)].join("\n");
-        const visible = sites.filter((s) => !ours(s)).map(shown);
-        if (typeof pageHook === "function") return (pageHook as PrepareStackTrace)(err, visible);
+        let visible = sites.filter((s) => !ours(s)).map(shown);
+        // The limit the page set on its `Error` since the last error was made.
+        const limit = (Shown as unknown as { stackTraceLimit?: unknown }).stackTraceLimit;
+        if (typeof limit === "number" && limit >= 0 && visible.length > limit) visible = visible.slice(0, Math.floor(limit));
+        syncLimit();
+        const hook = pageHook();
+        if (typeof hook === "function") return (hook as PrepareStackTrace).call(Shown, err, visible);
         return [header(err), ...visible.map((s) => `    at ${s.toString()}`)].join("\n");
     };
-    Object.defineProperty(Intrinsic, "prepareStackTrace", { value: format, writable: true, configurable: true, enumerable: false });
+    Object.defineProperty(Intrinsic, KEY, { value: format, writable: true, configurable: true, enumerable: false });
 
-    const KEY = "prepareStackTrace";
-    const pageDescriptor = (): PropertyDescriptor => ({ value: pageHook, writable: true, enumerable: true, configurable: true });
-    const Shown: ErrorConstructor = new Proxy(Intrinsic, {
-        get(t, k, r): unknown { return k === KEY ? (pageHas ? pageHook : undefined) : Reflect.get(t, k, r === Shown ? t : r); },
-        set(t, k, v, r): boolean {
-            if (k === KEY) { pageHas = true; pageHook = v; return true; }
-            return Reflect.set(t, k, v, r === Shown ? t : r);
-        },
-        has(t, k) { return k === KEY ? pageHas : Reflect.has(t, k); },
-        ownKeys(t) {
-            const keys = Reflect.ownKeys(t).filter((k) => k !== KEY);
-            return pageHas ? [...keys, KEY] : keys;
-        },
-        getOwnPropertyDescriptor(t, k) {
-            if (k === KEY) return pageHas ? pageDescriptor() : undefined;
-            return Reflect.getOwnPropertyDescriptor(t, k);
-        },
-        defineProperty(t, k, d) {
-            if (k === KEY) { pageHas = true; pageHook = d.value; return true; }
-            return Reflect.defineProperty(t, k, d);
-        },
-        deleteProperty(t, k) {
-            if (k === KEY) { pageHas = false; pageHook = undefined; return true; }
-            return Reflect.deleteProperty(t, k);
+    // The page's `Error`: a function of its own standing in for the
+    // built-in (native/surface.ts standIn — a Proxy here would be told, and
+    // every native error class inherits from it). It makes its errors with
+    // the built-in; `prepareStackTrace` and `stackTraceLimit` on it are the
+    // page's own, read by the formatter above — the limit is copied to the
+    // built-in, where V8 reads it, whenever an error is made through it.
+    const Shown: ErrorConstructor = standIn(Intrinsic as ErrorConstructor, {
+        apply(target, self, args) { syncLimit(); return Reflect.apply(target, self, args); },
+        construct(target, args, newTarget) {
+            syncLimit();
+            return Reflect.construct(target, args, (newTarget === Shown ? target : newTarget) as ErrorConstructor) as object;
         },
     });
+    // standIn copied the built-in's static members, cyrano's formatter among them.
+    delete (Shown as unknown as Record<string, unknown>)[KEY];
+    if (pageHad) Object.defineProperty(Shown, KEY, pageHad);
+    const capture = (Intrinsic as unknown as { captureStackTrace: (...a: unknown[]) => unknown }).captureStackTrace;
+    const captureDesc = Object.getOwnPropertyDescriptor(Intrinsic, "captureStackTrace");
+    if (captureDesc) {
+        Object.defineProperty(Shown, "captureStackTrace", {
+            ...captureDesc,
+            value: maskAs(standIn(capture, { apply(target, self, args) { syncLimit(); return Reflect.apply(target, self === Shown ? Intrinsic : self, args); } }), capture),
+        });
+    }
     maskAs(Shown, Intrinsic);
     shownErrors.add(Shown);
     replaceValue(Intrinsic.prototype, "constructor", Shown);

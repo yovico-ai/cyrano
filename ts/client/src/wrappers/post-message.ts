@@ -27,11 +27,13 @@ export interface PostMessageWrapper {
 }
 
 /**
- * `obj.postMessage(...)` from rewritten code: the call goes to the
- * recipient's postMessage — the native-surface wrapper
- * (patches/post-message.ts), which finds this code's window on the call
- * stack and sends as it. Anything that is not a window (MessagePort,
- * Worker, BroadcastChannel, …) is called as written.
+ * `obj.postMessage` in rewritten code is the object's own postMessage:
+ * for a window that is the native-surface wrapper
+ * (patches/post-message.ts), which finds the calling window on the call
+ * stack and sends as it; for anything else (MessagePort, Worker,
+ * BroadcastChannel, a plain object with such a key) it is the property as
+ * it is. So the object itself is returned — reads, calls and assignments
+ * of `postMessage` behave exactly as written.
  */
 export function wrapPostMessage(
     arg: { obj: unknown },
@@ -39,9 +41,5 @@ export function wrapPostMessage(
     _senderOrigin: () => string | null,
     _unwrap: (href: string) => string,
 ): PostMessageWrapper {
-    const target = arg.obj as { postMessage?: (...a: unknown[]) => unknown } | null;
-    return {
-        postMessage: (...args: unknown[]): unknown =>
-            (target?.postMessage as (...a: unknown[]) => unknown).apply(target, args),
-    };
+    return arg.obj as PostMessageWrapper;
 }

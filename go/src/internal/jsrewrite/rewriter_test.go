@@ -9,13 +9,13 @@ import (
 // rewrite is a thin helper — string-in, string-out, default options.
 func rewrite(t *testing.T, in string) string {
 	t.Helper()
-	return string(Rewrite([]byte(in), DefaultOptions()))
+	return string(Unmarked(Rewrite([]byte(in), DefaultOptions())))
 }
 
 // rewriteWith runs Rewrite with a single rule enabled (everything else off).
 func rewriteWith(t *testing.T, in string, opts Options) string {
 	t.Helper()
-	return string(Rewrite([]byte(in), opts))
+	return string(Unmarked(Rewrite([]byte(in), opts)))
 }
 
 // ── WRAP_GET_LOCATION ───────────────────────────────────────────────────────
@@ -150,20 +150,16 @@ func TestWrapDocumentWrite_NestedObjectWrite_NotWrapped(t *testing.T) {
 
 // ── WRAP_POST_MESSAGE ───────────────────────────────────────────────────────
 
-func TestWrapPostMessage(t *testing.T) {
-	got := rewrite(t, `window.postMessage(msg, origin);`)
-	if !strings.Contains(got, `$rewriter.wrap_postMessage({obj`) {
-		t.Errorf("wrap_postMessage missing: %s", got)
+// obj.postMessage is the object's own: a window's is wrapped at its surface
+// by the client (patches/post-message.ts), anything else's is called as
+// written. The source is not touched.
+func TestPostMessage_LeftAsWritten(t *testing.T) {
+	for _, src := range []string{`window.postMessage(msg, origin);`, `iframe.contentWindow.postMessage(msg, origin);`} {
+		if got := rewrite(t, src); got != src {
+			t.Errorf("got: %s", got)
+		}
 	}
 }
-
-func TestWrapPostMessage_ChainedReceiver(t *testing.T) {
-	got := rewrite(t, `iframe.contentWindow.postMessage(msg, origin);`)
-	if !strings.Contains(got, `wrap_postMessage`) {
-		t.Errorf("wrap_postMessage on chained receiver missing: %s", got)
-	}
-}
-
 
 // ── WRAP_EVAL / EVAL_ARG / EVAL_MEMEXP ──────────────────────────────────────
 
@@ -214,21 +210,13 @@ func TestWrapMemberExpression(t *testing.T) {
 }
 
 func TestWrapMemberExpression_CommaIndex(t *testing.T) {
-	// obj[a, b] — comma operator inside index. The comma must become part of
-	// the assignment RHS, not a third function argument:
-	//   wrap_member_expression(obj, ($var = (a, b)))[$var]
-	// Without parenthesising (a,b), the printer emits
-	//   wrap_member_expression(obj, $var = a, b)
-	// which assigns a to $var and passes b as a third arg — accessing obj[a]
-	// instead of the correct obj[b].
+	// obj[a, b] — a comma expression as the key. It must stay one argument:
+	// without the parentheses the helper would be passed b as a third
+	// argument and the access would be obj[a].
 	got := rewrite(t, `var v = N[GI.prototype.h = z[0](3, xG), 11];`)
-	// The assignment must capture the full comma expression.
-	if !strings.Contains(got, `= (`) {
-		t.Errorf("comma index not parenthesised in assignment: %s", got)
-	}
-	// 11 must NOT appear as a third argument to wrap_member_expression.
-	if strings.Contains(got, `wrap_member_expression(N,`) && strings.Contains(got, `, 11)`) {
-		t.Errorf("11 leaked as third arg to wrap_member_expression: %s", got)
+	want := `var v = $rewriter.wrap_member_expression(N,$__crn_key__=(GI.prototype.h = z[0](3, xG), 11))[$__crn_key__];`
+	if got != want {
+		t.Errorf("got:  %s\nwant: %s", got, want)
 	}
 }
 
@@ -394,8 +382,8 @@ func TestWrapImportArg_DynamicSpecifier(t *testing.T) {
 
 func TestWrapImportArg_PreservesChain(t *testing.T) {
 	// import(...).then(...) — the promise chain must survive.
-	got := rewrite(t, `import("mod.js").then(m => m.init());`)
-	if !strings.Contains(got, `$rewriter.wrap_import_arg("mod.js")`) {
+	got := rewrite(t, `import("./mod.js").then(m => m.init());`)
+	if !strings.Contains(got, `$rewriter.wrap_import_arg("./mod.js")`) {
 		t.Errorf("import chain lost wrapper: %s", got)
 	}
 	if !strings.Contains(got, `.then(`) {
@@ -801,10 +789,9 @@ func TestWrapNewWorker_Disabled(t *testing.T) {
 	}
 }
 
-
 func TestRewrite_StripsDebuggerStatements(t *testing.T) {
 	in := `function f(){debugger;var x=1;if(x){debugger}return x;}`
-	out := string(Rewrite([]byte(in), DefaultOptions()))
+	out := string(Unmarked(Rewrite([]byte(in), DefaultOptions())))
 	if strings.Contains(out, "debugger") {
 		t.Errorf("debugger statement not stripped: %s", out)
 	}
@@ -818,7 +805,7 @@ func TestRewrite_PreservesOptionalChainOnComputedAccess(t *testing.T) {
 	opts.WrapMemberExpression = true
 	// n?.routes[k] must NOT become wrap_member_expression(n?.routes,k)[k], which
 	// throws when n is nullish instead of short-circuiting (TanStack Router bug).
-	out := string(Rewrite([]byte(`function f(n,k){return n?.routes[k];}`), opts))
+	out := string(Unmarked(Rewrite([]byte(`function f(n,k){return n?.routes[k];}`), opts)))
 	if strings.Contains(out, "wrap_member_expression(n?.routes") ||
 		strings.Contains(out, "wrap_member_expression(n == null") {
 		t.Errorf("optional-chain object was wrapped (breaks short-circuit): %s", out)
@@ -827,7 +814,7 @@ func TestRewrite_PreservesOptionalChainOnComputedAccess(t *testing.T) {
 		t.Errorf("optional chaining lost entirely: %s", out)
 	}
 	// Plain computed access on a non-optional object is still wrapped.
-	out2 := string(Rewrite([]byte(`function g(o,k){return o[k];}`), opts))
+	out2 := string(Unmarked(Rewrite([]byte(`function g(o,k){return o[k];}`), opts)))
 	if !strings.Contains(out2, "wrap_member_expression") {
 		t.Errorf("non-optional computed access should still be wrapped: %s", out2)
 	}

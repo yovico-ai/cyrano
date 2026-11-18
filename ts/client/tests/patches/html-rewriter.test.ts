@@ -1,6 +1,7 @@
 // Runs under happy-dom. Exercises the HTML mini-rewriter end-to-end:
 // parse string → walk → rewrite URL attrs → serialize back.
 
+import { unmarked } from "../../src/js/marks";
 import { describe, expect, it } from "vitest";
 import { rewriteHtmlString } from "../../src/patches/html-rewriter";
 
@@ -172,7 +173,7 @@ describe("rewriteHtmlString — inline <script> JS rewriting", () => {
             "<script>var x = location;</script>",
             tag,
         );
-        expect(got).toContain("$rewriter.wrap_get_location(location)");
+        expect(unmarked(String(got))).toContain("$rewriter.wrap_get_location(location)");
     });
 
     it("rewrites `obj.location` inside inline script content", () => {
@@ -180,7 +181,7 @@ describe("rewriteHtmlString — inline <script> JS rewriting", () => {
             "<script>var x = window.location;</script>",
             tag,
         );
-        expect(got).toContain("$rewriter.wrap_location");
+        expect(unmarked(String(got))).toContain("$rewriter.wrap_location");
     });
 
     it("does not touch <script src=...> external scripts (already-attribute-rewritten path)", () => {
@@ -191,7 +192,7 @@ describe("rewriteHtmlString — inline <script> JS rewriting", () => {
         // src attribute went through URL rewriting…
         expect(got).toContain('src="/lib.js?proxified=1"');
         // …but no JS rewriting happened (there's no inline body).
-        expect(got).not.toContain("$rewriter.wrap_");
+        expect(unmarked(String(got))).not.toContain("$rewriter.wrap_");
     });
 
     it("preserves plain inline scripts without hooked identifiers", () => {
@@ -200,6 +201,40 @@ describe("rewriteHtmlString — inline <script> JS rewriting", () => {
             tag,
         );
         expect(got).toContain("var x = 1 + 2");
-        expect(got).not.toContain("$rewriter.wrap_");
+        expect(unmarked(String(got))).not.toContain("$rewriter.wrap_");
+    });
+});
+
+describe("rewriteHtmlString — a preload link's imagesrcset", () => {
+    it("rewrites each candidate URL", () => {
+        const got = rewriteHtmlString('<link rel="preload" as="image" imagesrcset="https://cdn.example/a.webp 16w, https://cdn.example/b.webp 32w">', (u) => `P(${u})`);
+        expect(got).toContain('imagesrcset="P(https://cdn.example/a.webp) 16w, P(https://cdn.example/b.webp) 32w"');
+    });
+});
+
+describe("rewriteHtmlString — a <meta> CSP", () => {
+    it("'none' stays 'none'; other source lists get the proxy origin", () => {
+        const got = rewriteHtmlString(`<meta http-equiv="Content-Security-Policy" content="object-src 'none'; img-src https://a.example">`, (u) => u, "http://proxy.example");
+        expect(got).toContain(`object-src 'none';`);
+        expect(got).toContain(`img-src https://a.example http://proxy.example`);
+    });
+});
+
+describe("rewriteHtmlString — the document's own tags stay", () => {
+    const id = (u: string) => u;
+    it("keeps doctype, html, head and body as written (a frame written whole)", () => {
+        const html = '<!DOCTYPE html><html lang="en"><head><title>t</title></head><body class="b"><script>document.body.appendChild(x)</script></body></html>';
+        expect(unmarked(rewriteHtmlString(html, id))).toBe(html);
+    });
+    it("keeps a write that is only the opening tags", () => {
+        expect(rewriteHtmlString("<html><body>", id)).toBe("<html><body>");
+    });
+    it("leaves a <body> inside script text and comments alone", () => {
+        const html = '<body><script>var s="<body>";</script><!-- <head> --></body>';
+        expect(unmarked(rewriteHtmlString(html, id))).toBe(html);
+    });
+    it("still rewrites what is between them", () => {
+        const out = rewriteHtmlString('<html><body><img src="https://a.example/x.png"></body></html>', (u) => "/p/" + u);
+        expect(out).toMatch(/^<html><body><img src="\/p\/https:\/\/a\.example\/x\.png"[^>]*><\/body><\/html>$/);
     });
 });

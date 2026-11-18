@@ -45,8 +45,24 @@ function snapshot(): Record<string, string> {
         let src: string;
         try { src = toStr.call(f); } catch (e) { src = `throws ${(e as Error).name}`; }
         const d = (k: string) => Object.getOwnPropertyDescriptor(f, k);
+        // What a challenge script's integrity battery asks of a function
+        // (Cloudflare's does both): the frame V8 names when toString is
+        // called on an object inheriting from it, and whether it can be
+        // made its own prototype (never, for anything but a Proxy).
+        let frame: string;
+        try { (Object.create(f) as { toString(): string }).toString(); frame = "no throw"; } catch (e) {
+            frame = String((e as Error).stack).split("\n").slice(0, 2).map((l) => l.trim()).join(" / ");
+        }
+        let cycle: string;
+        const was = Object.getPrototypeOf(f) as object | null;
+        try { Object.setPrototypeOf(f, f); cycle = "no throw"; try { Object.setPrototypeOf(f, was); } catch { /* frozen */ } } catch (e) {
+            cycle = `${(e as Error).name}: ${(e as Error).message} / ${e instanceof TypeError} / ${String((e as Error).stack).split("\n")[1]?.trim()}`;
+        }
+        let viaReflect: string;
+        try { viaReflect = String(Reflect.setPrototypeOf(f, f)); } catch (e) { viaReflect = `throws ${(e as Error).name}`; }
+        if (viaReflect === "true") { try { Object.setPrototypeOf(f, was); } catch { /* frozen */ } }
         return JSON.stringify([f.name, f.length, Object.prototype.hasOwnProperty.call(f, "prototype"),
-            src, d("name")?.writable, d("length")?.writable]);
+            src, d("name")?.writable, d("length")?.writable, frame, cycle, viaReflect]);
     };
     const describeProp = (o: object, k: string): string => {
         let d: PropertyDescriptor | undefined;

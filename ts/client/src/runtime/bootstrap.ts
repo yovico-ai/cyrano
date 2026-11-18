@@ -5,6 +5,8 @@
 // head-injection script expects. It also makes it easy to construct the API
 // without immediately patching globals (useful in tests).
 
+import { buildBootstrapHtml } from "./bootstrap-html";
+import { defineHidden } from "../native/hidden-globals";
 import type { ClientConfig } from "../config";
 import type { RewriterApi } from "./api-types";
 import { createRewriterApi } from "./api";
@@ -31,7 +33,10 @@ export function init(
             const existing = internalsOf(targetWindow);
             if (existing) return existing.api;
             const api = createRewriterApi(targetWindow, config);
-            const internals: Internals = { api };
+            const internals: Internals = {
+                api,
+                bootstrapHtml: () => buildBootstrapHtml(config, (api.get_base_url() ?? new URL(targetWindow.location.href)).href),
+            };
             installPatches(
                 targetWindow,
                 () => api.get_base_url(),
@@ -46,6 +51,7 @@ export function init(
                 api.wrap_get_location(targetWindow.location),
                 (u) => unwrapProxiedUrl(u, config),
                 config.referrer,
+                () => api.get_base_url() ?? new URL(targetWindow.location.href),
             );
             // Publish the shared bracket-key variable as a writable global property.
             // The server and client JS rewriters emit `$__crn_key__ = expr` to
@@ -54,7 +60,7 @@ export function init(
             // here as a window property ensures any strict-mode eval'd fragment can
             // assign to it without error (assigning to an existing global property
             // is always permitted).
-            (targetWindow as Window & { $__crn_key__: null }).$__crn_key__ = null;
+            defineHidden(targetWindow, "$__crn_key__", null);
             publish(targetWindow, api, internals);
             return api;
         },

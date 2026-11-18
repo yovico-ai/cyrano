@@ -107,3 +107,59 @@ func TestNoCompressionDictionaryAcrossSites(t *testing.T) {
 		t.Errorf("Use-As-Dictionary kept: %v", resp.Header)
 	}
 }
+
+type rtFunc func(*http.Request) (*http.Response, error)
+
+func (f rtFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// Chrome restarts a navigation whose response names, in Critical-CH, hints
+// the request lacked. Through the proxy the browser has already sent them
+// (to the proxy's origin) and the proxy withheld them — so the proxy sends
+// the second request, and the origin sees what a direct Chrome shows it.
+func TestCriticalCHRestart(t *testing.T) {
+	target, _ := url.Parse("https://cf.example/page")
+	var second *http.Request
+	h := &Handler{transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		second = r
+		return &http.Response{StatusCode: 403, Header: http.Header{"Set-Cookie": {"b=2"}, "X-Which": {"second"}}, Body: http.NoBody, Request: r}, nil
+	})}
+	req := &http.Request{Method: "GET", URL: target, Header: http.Header{}}
+	for _, n := range []string{"Sec-Ch-Ua", "Sec-Ch-Ua-Arch", "Sec-Ch-Ua-Model", "Sec-Ch-Ua-Bitness"} {
+		req.Header.Set(n, "v-"+n)
+	}
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Cookie", "a=1; x=old")
+	h.filterClientHints(req, target, "s-crit") // nothing asked yet: high-entropy hints withheld
+	if req.Header.Get("Sec-Ch-Ua-Arch") != "" || req.Header.Get("Sec-Ch-Ua") == "" {
+		t.Fatalf("first request should carry low-entropy hints only: %v", req.Header)
+	}
+	resp := &http.Response{StatusCode: 403, Body: http.NoBody, Request: req, Header: http.Header{
+		"Accept-Ch":   {"Sec-CH-UA-Arch, Sec-CH-UA-Model"},
+		"Critical-Ch": {"Sec-CH-UA-Arch"},
+		"Set-Cookie":  {"x=new; Path=/; HttpOnly"},
+		"X-Which":     {"first"},
+	}}
+	h.restartForCriticalCH(resp)
+	if second == nil || resp.Header.Get("X-Which") != "second" {
+		t.Fatalf("no restart: %v", resp.Header)
+	}
+	if second.Header.Get("Sec-Ch-Ua-Arch") == "" || second.Header.Get("Sec-Ch-Ua-Model") == "" || second.Header.Get("Sec-Ch-Ua-Bitness") != "" {
+		t.Errorf("second request should carry exactly the hints asked for: %v", second.Header)
+	}
+	if got := second.Header.Get("Cookie"); got != "a=1; x=new" {
+		t.Errorf("second request's cookies: %q", got)
+	}
+	if got := resp.Header.Values("Set-Cookie"); len(got) != 2 || got[0] != "x=new; Path=/; HttpOnly" || got[1] != "b=2" {
+		t.Errorf("cookies of both responses should be set: %v", got)
+	}
+
+	// No restart when the request already carried what is critical.
+	second = nil
+	plain := &http.Response{StatusCode: 200, Body: http.NoBody, Request: second2(req), Header: http.Header{"Accept-Ch": {"Sec-CH-UA-Arch"}, "Critical-Ch": {"Sec-CH-UA"}}}
+	h.restartForCriticalCH(plain)
+	if second != nil {
+		t.Errorf("restarted although the critical hint was sent")
+	}
+}
+
+func second2(r *http.Request) *http.Request { return r.Clone(r.Context()) }

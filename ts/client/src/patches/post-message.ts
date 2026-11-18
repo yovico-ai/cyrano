@@ -26,7 +26,9 @@ export function patchPostMessage(
     const PE = (targetWindow as unknown as { PerformanceEntry?: { prototype: PerformanceEntry } }).PerformanceEntry;
     const nameGet = PE ? Object.getOwnPropertyDescriptor(PE.prototype, "name")?.get : undefined;
     const nameOf = (e: PerformanceEntry): string => (nameGet ? (nameGet.call(e) as string) : e.name);
-    const native = wrapMethod<(...a: unknown[]) => void>(targetWindow, "postMessage", (nativeFn, self, args) => {
+    const native = wrapMethod<(...a: unknown[]) => void>(targetWindow, "postMessage", (nativeFn, receiver, args) => {
+        // A bare `postMessage(...)` call has no receiver: the global object, as for any Window operation.
+        const self = receiver === undefined || receiver === null ? targetWindow : receiver;
         const sender = callingWindow(targetWindow, runtimeUrl, nameOf, unwrap) ?? targetWindow;
         const d = delivery(self, args[1], originalOrigin(sender, unwrap), proxyOrigin, unwrap);
         if (d.kind === "drop") return;

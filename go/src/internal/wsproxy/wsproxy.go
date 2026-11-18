@@ -14,6 +14,7 @@ package wsproxy
 import (
 	"context"
 	"fmt"
+	"github.com/yovico/cyrano/internal/dnscache"
 	"github.com/yovico/cyrano/internal/tlsdial"
 	"io"
 	"log/slog"
@@ -161,14 +162,16 @@ func (h *Handler) dialUpstream(target *url.URL) (net.Conn, error) {
 			host += ":80"
 		}
 	}
-	d := &net.Dialer{Timeout: h.opts.DialTimeout}
+	d := &dnscache.Dialer{Dialer: net.Dialer{Timeout: h.opts.DialTimeout}}
 
 	if target.Scheme == "wss" {
 		ctx, cancel := context.WithTimeout(context.Background(), h.opts.DialTimeout)
 		defer cancel()
 		return tlsdial.DialTLS(ctx, "tcp", host, h.opts.SkipTLSVerify)
 	}
-	return d.Dial("tcp", host)
+	ctx, cancel := context.WithTimeout(context.Background(), h.opts.DialTimeout)
+	defer cancel()
+	return d.DialContext(ctx, "tcp", host)
 }
 
 // buildUpstreamRequest clones the inbound request with rewritten Host and

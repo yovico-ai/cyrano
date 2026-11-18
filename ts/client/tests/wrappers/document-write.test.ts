@@ -92,14 +92,10 @@ describe("wrapDocumentWrite — non-Document target (must NOT rewrite as HTML)",
         expect(stream.write).toHaveBeenCalledWith(bytes);
     });
 
-    it("does nothing when obj has no .write method (won't crash)", () => {
-        const wrapper = wrapDocumentWrite({ obj: { nodeType: 1 } }, tag);
-        expect(() => wrapper.write("anything")).not.toThrow();
-    });
-
-    it("does nothing when obj is null/undefined (won't crash)", () => {
-        const wrapper = wrapDocumentWrite({ obj: null }, tag);
-        expect(() => wrapper.write("anything")).not.toThrow();
+    it("anything that is not a Document comes back as it is — its write is its own", () => {
+        const obj = { nodeType: 1 };
+        expect(wrapDocumentWrite({ obj }, tag)).toBe(obj);
+        expect(wrapDocumentWrite({ obj: null }, tag)).toBeNull(); // null.write is then the native TypeError
     });
 });
 

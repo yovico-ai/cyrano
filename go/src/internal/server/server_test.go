@@ -547,7 +547,16 @@ func TestHandler_NoDoubleslashRedirect(t *testing.T) {
 		nil)
 	req.Host = "localhost"
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
+	func() {
+		// The host does not resolve: the proxy closes the connection
+		// without a response (http.ErrAbortHandler), as unreachable origins do.
+		defer func() {
+			if r := recover(); r != nil && r != http.ErrAbortHandler {
+				panic(r)
+			}
+		}()
+		handler.ServeHTTP(w, req)
+	}()
 
 	// Must NOT be a 301 redirect that collapses // → /
 	if w.Code == http.StatusMovedPermanently {

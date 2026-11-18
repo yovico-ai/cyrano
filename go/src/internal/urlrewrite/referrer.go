@@ -178,6 +178,21 @@ func registrable(host string) string {
 	return s
 }
 
+// SchemefulSite is a URL's schemeful site, "scheme://registrable-domain"
+// (the host itself where it has no registrable domain), or "" when it does
+// not parse.
+func SchemefulSite(raw string) string {
+	u, res := parseRef(nil, preprocess(raw))
+	if res != parsedURL {
+		return ""
+	}
+	site := registrable(hostOf(u))
+	if site == "" {
+		site = hostOf(u)
+	}
+	return u.scheme + "://" + site
+}
+
 // SecFetchSite is the Sec-Fetch-Site a direct browser sends for a request
 // from a document at init to target (schemeful same-site), or "" when
 // either does not parse.

@@ -180,10 +180,13 @@ func TestRewrite_CrossoriginFontPreloadStaysAnonymous(t *testing.T) {
 
 // ── HTML_METATAG (CSP) ───────────────────────────────────────────────────────
 
-func TestRewrite_DropsCspMeta(t *testing.T) {
-	got := rewrite(t, `<meta http-equiv="content-security-policy" content="default-src 'self'">`)
-	if strings.Contains(got, "content-security-policy") || strings.Contains(got, "default-src") {
-		t.Errorf("CSP meta should be neutralized: %s", got)
+// A <meta> CSP keeps enforcing, translated as a header policy is:
+// the proxy origin added where sources are allowed, 'none' left alone.
+func TestRewrite_TranslatesCspMeta(t *testing.T) {
+	got := rewrite(t, `<meta http-equiv="content-security-policy" content="default-src 'self'; object-src 'none'; frame-src 'none'; report-uri /r">`)
+	want := `<meta http-equiv="content-security-policy" content="default-src 'self' http://localhost:9081; object-src 'none'; frame-src 'none'">`
+	if got != want {
+		t.Errorf("\n got  %s\n want %s", got, want)
 	}
 }
 
@@ -304,9 +307,9 @@ func TestRewrite_FullPage(t *testing.T) {
 		`</head><body><a href="/about">about</a><img src="/p.png"/></body></html>`
 	got := rewrite(t, in, withInject)
 
-	// CSP meta gone
-	if strings.Contains(got, "content-security-policy") {
-		t.Errorf("CSP not stripped: %s", got)
+	// CSP meta kept (translated; "x" is no directive it changes)
+	if !strings.Contains(got, `<meta http-equiv="content-security-policy" content="x">`) {
+		t.Errorf("CSP meta not kept: %s", got)
 	}
 	// Integrity stripped
 	if strings.Contains(got, "integrity") {
@@ -560,5 +563,41 @@ func TestRewrite_BootstrapCarriesThePagesNonce(t *testing.T) {
 	})
 	if strings.Count(got, `<script nonce="ab&#34;c"`) != 2 {
 		t.Errorf("both bootstrap scripts need the nonce (escaped): %s", got)
+	}
+}
+
+// An iframe's srcdoc is a document: its URLs are rewritten and it gets the
+// runtime before its own scripts (ibm.com: tracking frames written as
+// srcdoc fetched everything directly).
+func TestRewrite_IframeSrcdoc(t *testing.T) {
+	out := rewrite(t, `<html><head></head><body><iframe srcdoc="&lt;script src=&quot;https://t.example/a.js&quot;&gt;&lt;/script&gt;"></iframe></body></html>`, func(cfg *Config) {
+		cfg.InjectBootstrap = true
+	})
+	i := strings.Index(out, `srcdoc="`)
+	if i < 0 {
+		t.Fatalf("no srcdoc: %s", out)
+	}
+	doc := out[i:]
+	doc = doc[:strings.Index(doc, `></iframe>`)]
+	boot, script := strings.Index(doc, "$rewriter_init"), strings.Index(doc, "/cyrano/https/t.example/a.js")
+	if boot < 0 || script < 0 || boot > script {
+		t.Errorf("srcdoc needs the runtime, then its script proxified (runtime at %d, script at %d):\n%s", boot, script, doc)
+	}
+	if strings.Contains(doc, "<script") {
+		t.Errorf("srcdoc must stay escaped inside the attribute:\n%s", doc)
+	}
+}
+
+// A preload link's imagesrcset is a srcset (zerohedge.com: Next.js image
+// preloads escaped the proxy).
+func TestRewrite_LinkImageSrcset(t *testing.T) {
+	got := rewrite(t, `<link rel="preload" as="image" imagesrcset="a.webp 16w, https://cdn.example/b.webp 32w" imagesizes="50vw">`)
+	for _, want := range []string{"/cyrano/https/cdn.example/b.webp 32w", "a.webp 16w"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %s", want, got)
+		}
+	}
+	if strings.Contains(got, `"https://cdn.example/b.webp`) || strings.Contains(got, ` https://cdn.example/b.webp`) {
+		t.Errorf("an imagesrcset URL escaped: %s", got)
 	}
 }

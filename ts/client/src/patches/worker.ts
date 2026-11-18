@@ -4,6 +4,7 @@
 // object URL holding the worker runtime and the rewritten source
 // (blob-worker-source.ts); the page's own Blob and URL are untouched.
 
+import { isTrustedValue, trusted } from "../native/trusted";
 import { wrapConstructor } from "../native/surface";
 import type { WorkerScriptFor } from "./blob-worker-source";
 
@@ -18,7 +19,9 @@ export function patchWorker(
             const url = String(args[0]);
             const opts = args[1] as { type?: unknown } | string | undefined;
             const module = typeof opts === "object" && opts !== null && opts.type === "module";
-            return Reflect.construct(Native, [workerScriptFor(url, module) ?? rewriteOne(url), ...args.slice(1)], newTarget as typeof Worker);
+            const script = workerScriptFor(url, module) ?? rewriteOne(url);
+            // A TrustedScriptURL (the page's, under Trusted Types) stays trusted.
+            return Reflect.construct(Native, [isTrustedValue(args[0]) ? trusted(targetWindow, "ScriptURL", script) : script, ...args.slice(1)], newTarget as typeof Worker);
         });
     }
 }

@@ -31,3 +31,13 @@ func TestRewriteLinkHeaderAndRefresh(t *testing.T) {
 		}
 	}
 }
+
+func TestRewriteLinkHeader_ImageSrcset(t *testing.T) {
+	base, _ := url.Parse("https://site.example/dir/page")
+	cfg := ProxyConfig{PublicURL: &url.URL{Scheme: "http", Host: "proxy.example"}}
+	in := `</a.jpg>; rel=preload; as=image; imagesrcset="a.jpg 1x, https://cdn.example/b.jpg 2x"; imagesizes="50vw", <x.css>; rel=preload; imagesrcset=c.jpg`
+	want := `<http://proxy.example/cyrano/https/site.example/a.jpg>; rel=preload; as=image; imagesrcset="http://proxy.example/cyrano/https/site.example/dir/a.jpg 1x, http://proxy.example/cyrano/https/cdn.example/b.jpg 2x"; imagesizes="50vw", <http://proxy.example/cyrano/https/site.example/dir/x.css>; rel=preload; imagesrcset=http://proxy.example/cyrano/https/site.example/dir/c.jpg`
+	if got := RewriteLinkHeader(in, base, cfg); got != want {
+		t.Errorf("\n got  %s\n want %s", got, want)
+	}
+}

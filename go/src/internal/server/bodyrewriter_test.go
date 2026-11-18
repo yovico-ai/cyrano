@@ -3,9 +3,11 @@ package server
 import (
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/andybalholm/brotli"
@@ -123,5 +125,65 @@ func TestReadDecompressedBody(t *testing.T) {
 				t.Errorf("Content-Encoding not stripped: %q", ce)
 			}
 		})
+	}
+}
+
+// A document with no Content-Type is sniffed as the browser sniffs it
+// (measureadv.com's sync frame): HTML is HTML, compressed or not, and the
+// response still has no Content-Type; anything else is left alone.
+func TestSniffedHTML(t *testing.T) {
+	doc := func(dest string, body []byte, enc string) *http.Response {
+		r := mkResp(enc, body)
+		r.Request = &http.Request{Header: http.Header{"Sec-Fetch-Dest": {dest}}}
+		return r
+	}
+	page := `<html><body><img src="https://a.example/x.png"></body></html>`
+	if r := doc("iframe", gzipBytes(t, page), "gzip"); !sniffedHTML(r) {
+		t.Error("gzipped untyped iframe document not sniffed as HTML")
+	} else if b, _ := io.ReadAll(r.Body); string(b) != page || r.Header.Get("Content-Type") != "" {
+		t.Errorf("body %q, type %q", b, r.Header.Get("Content-Type"))
+	}
+	if sniffedHTML(doc("document", []byte("just text"), "")) {
+		t.Error("text sniffed as HTML")
+	}
+	if sniffedHTML(doc("script", []byte(page), "")) {
+		t.Error("a script fetch sniffed as a document")
+	}
+	typed := doc("document", []byte(page), "")
+	typed.Header.Set("Content-Type", "text/plain")
+	if sniffedHTML(typed) {
+		t.Error("a typed response sniffed")
+	}
+}
+
+// A body the proxy changes keeps its original sizes for scripts: encoded
+// and decoded, in a Server-Timing metric beside the origin's own.
+func TestOriginalSizesNoted(t *testing.T) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	_, _ = gz.Write([]byte(strings.Repeat("hello ", 100)))
+	_ = gz.Close()
+	encoded := buf.Len()
+	resp := &http.Response{
+		Header: http.Header{"Content-Encoding": {"gzip"}, "Server-Timing": {"origin;dur=1"}},
+		Body:   io.NopCloser(bytes.NewReader(buf.Bytes())),
+	}
+	body, err := readDecompressedBody(resp)
+	if err != nil || len(body) != 600 {
+		t.Fatalf("%d %v", len(body), err)
+	}
+	want := fmt.Sprintf(`crnb;desc="%d-600"`, encoded)
+	got := resp.Header.Values("Server-Timing")
+	if len(got) != 2 || got[0] != "origin;dur=1" || got[1] != want {
+		t.Fatalf("Server-Timing = %q, want the origin's and %q", got, want)
+	}
+	// Read again (a sniffed document is read to look at it, then rewritten):
+	// the first note stands.
+	replaceBody(resp, body)
+	if _, err := readDecompressedBody(resp); err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.Header.Values("Server-Timing"); len(got) != 2 || got[1] != want {
+		t.Fatalf("after a second read: %q", got)
 	}
 }

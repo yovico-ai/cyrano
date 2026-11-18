@@ -1,6 +1,7 @@
 // A <script>'s or <style>'s content is JS or CSS, never markup — on every
 // path that sets it.
 
+import { unmarked } from "../../src/js/marks";
 import { afterEach, describe, expect, it } from "vitest";
 import { patchDynamicHtml, unpatchDynamicHtml, rawText } from "../../src/patches/dynamic-html";
 
@@ -11,10 +12,11 @@ describe("raw-text elements", () => {
     it("script.innerHTML is rewritten as JS, not parsed as HTML", () => {
         patchDynamicHtml(window, tag, (u) => u);
         const s = document.createElement("script");
-        s.innerHTML = "if (a<b && c>d) { x = location.href; }";
+        // (Spaced: happy-dom parses a script's innerHTML as markup, so `<b && c>` would be a tag there.)
+        s.innerHTML = "if (a < b && c > d) { x = location.href; }";
         expect(s.textContent).not.toContain("&lt;"); // not treated as markup
-        expect(s.textContent).toMatch(/a\s*<\s*b\s*&&\s*c\s*>\s*d/);
-        expect(s.textContent).toContain("$rewriter.wrap_get_location(location)");
+        expect(unmarked(String(s.textContent))).toMatch(/a\s*<\s*b\s*&&\s*c\s*>\s*d/);
+        expect(unmarked(String(s.textContent))).toContain("$rewriter.wrap_get_location(location)");
     });
     it("script.textContent and script.text are rewritten as JS", () => {
         patchDynamicHtml(window, tag, (u) => u);
