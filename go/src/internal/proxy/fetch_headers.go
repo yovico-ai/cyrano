@@ -220,7 +220,7 @@ type requesterKey struct{}
 
 // chromePriority is the Priority header (RFC 9218) Chrome most commonly
 // sends for a request of this Sec-Fetch-Dest and Sec-Fetch-Mode, measured
-// from Chromium 147 against an HTTP/2 server; "" for none.
+// from Chromium 147 against an HTTP/2 server; "" for none (spec/Priority.agda).
 //
 // Chrome sends Priority only over HTTP/2 and HTTP/3. A browser reaching
 // cyrano over HTTP/1.1 (local development) sends none, and cyrano's own
@@ -229,27 +229,38 @@ type requesterKey struct{}
 // browser knows (a script in the head or the body, async, an image in the
 // viewport, fetchpriority) and varies natively, so the commonest one is
 // used. Over HTTP/2 the browser's own header is forwarded as it is.
-func chromePriority(dest, mode string) string {
-	switch dest {
-	case "document", "iframe", "frame":
+func chromePriority(dest, mode, method, purpose string) string {
+	switch lowerASCII(dest) {
+	case "document", "iframe", "frame", "embed", "object":
 		return "u=0, i"
-	case "style":
+	case "style", "font":
 		return "u=0"
-	case "font":
-		return "u=0"
-	case "script":
+	case "script", "json":
 		return "u=1"
 	case "image", "video", "audio", "track":
 		return "i"
 	case "worker", "sharedworker", "serviceworker":
 		return "u=4, i"
 	case "empty":
-		if mode == "no-cors" {
+		// a prefetch, or a beacon (the commonest no-cors POST)
+		if lowerASCII(purpose) == "prefetch" || (lowerASCII(mode) == "no-cors" && method == "POST") {
 			return "u=4, i"
 		}
 		return "u=1, i"
 	}
 	return ""
+}
+
+// lowerASCII lowers A–Z only (as the spec's eqLower; strings.ToLower also
+// folds the Kelvin sign).
+func lowerASCII(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 32
+		}
+	}
+	return string(b)
 }
 
 // ensurePriority adds Chrome's Priority header to an https upstream request
@@ -258,7 +269,7 @@ func ensurePriority(req *http.Request, target *url.URL, incomingHTTP1 bool) {
 	if !incomingHTTP1 || target.Scheme != "https" || req.Header.Get("Priority") != "" {
 		return
 	}
-	if p := chromePriority(strings.ToLower(req.Header.Get("Sec-Fetch-Dest")), strings.ToLower(req.Header.Get("Sec-Fetch-Mode"))); p != "" {
+	if p := chromePriority(req.Header.Get("Sec-Fetch-Dest"), req.Header.Get("Sec-Fetch-Mode"), req.Method, req.Header.Get("Sec-Purpose")); p != "" {
 		req.Header.Set("Priority", p)
 	}
 }
@@ -268,30 +279,51 @@ func ensurePriority(req *http.Request, target *url.URL, incomingHTTP1 bool) {
 // only, in Available-Dictionary (adding dcb/dcz to Accept-Encoding). On the
 // proxy origin one site's dictionary would be offered to every site. So
 // none is ever registered — the upstream sees a browser that has no
-// dictionary yet, as on a first visit.
+// dictionary yet, as on a first visit (spec/Dictionary.agda).
 
 // noDictionaryOffer removes what a browser holding a dictionary adds.
 func noDictionaryOffer(req *http.Request) {
 	req.Header.Del("Available-Dictionary")
 	req.Header.Del("Dictionary-ID")
-	ae := req.Header.Get("Accept-Encoding")
-	if !strings.Contains(ae, "dc") {
-		return
-	}
-	var kept []string
-	for _, e := range strings.Split(ae, ",") {
-		switch strings.ToLower(strings.TrimSpace(strings.SplitN(e, ";", 2)[0])) {
-		case "dcb", "dcz":
-		default:
-			kept = append(kept, strings.TrimSpace(e))
+	if ae, ok := req.Header["Accept-Encoding"]; ok && len(ae) > 0 {
+		if v := acceptEncodingWithoutDictionaries(ae[0]); v != ae[0] {
+			req.Header.Set("Accept-Encoding", v)
 		}
 	}
-	req.Header.Set("Accept-Encoding", strings.Join(kept, ", "))
 }
 
-// noDictionaryRegistration keeps the browser from storing a dictionary.
+// acceptEncodingWithoutDictionaries drops the dcb / dcz members (Dictionary
+// acceptEncoding): by name before any ";", OWS trimmed, any case; the rest
+// trimmed, joined by ", ". A value without such a member is unchanged.
+func acceptEncodingWithoutDictionaries(ae string) string {
+	parts := strings.Split(ae, ",")
+	var kept []string
+	dropped := false
+	for _, e := range parts {
+		name, _, _ := strings.Cut(e, ";")
+		switch strings.ToLower(strings.Trim(name, " \t")) {
+		case "dcb", "dcz":
+			dropped = true
+		default:
+			kept = append(kept, strings.Trim(e, " \t"))
+		}
+	}
+	if !dropped {
+		return ae
+	}
+	return strings.Join(kept, ", ")
+}
+
+// noDictionaryRegistration keeps the browser from storing a dictionary:
+// the header is changed, not removed (scripts read the origin's value
+// through Crn-H) — a later type member wins, and a dictionary of an
+// unknown type is not registered (Dictionary noRegistration).
 func noDictionaryRegistration(resp *http.Response) {
-	resp.Header.Del("Use-As-Dictionary")
+	vs := resp.Header.Values("Use-As-Dictionary")
+	if len(vs) == 0 {
+		return
+	}
+	resp.Header.Set("Use-As-Dictionary", strings.Join(vs, ", ")+", type=crn")
 }
 
 // RecordMetaPolicy notes a page's Referrer-Policy as its

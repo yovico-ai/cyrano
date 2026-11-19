@@ -9,6 +9,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { patchFetch } from "../../src/patches/fetch";
+import { deferredSize } from "../../src/patches/fetch-later";
 import type { CorsContext } from "../../src/patches/cors";
 
 const tag = (url: string): string =>
@@ -177,5 +178,29 @@ describe("fetchLater", () => {
         const { win, fetchLaterMock } = setup();
         win.fetchLater("https://ads.example/x");
         expect(fetchLaterMock.mock.contexts[0]).toBe(win);
+    });
+
+    // Measured in Chromium (spec/FetchLater.agda): an empty body is a
+    // TypeError there; the native's TypeError under a plain-http proxy read
+    // as the proxy's refusal, and the request was deferred instead.
+    it("an empty body throws the native's TypeError, under any proxy", () => {
+        const { win, fetchLaterMock } = setup();
+        fetchLaterMock.mockImplementation(() => { throw new TypeError("insecure"); });
+        expect(() => win.fetchLater("https://ads.example/x", { method: "POST", body: "" })).toThrow(/body with unknown length/);
+        expect(() => win.fetchLater("https://ads.example/x", { method: "POST", body: new ArrayBuffer(0) })).toThrow(TypeError);
+        expect(fetchLaterMock).not.toHaveBeenCalled();
+    });
+
+    // Chromium counts a string body's UTF-16 length, not its UTF-8 bytes.
+    it("a non-ASCII string body is counted by its length", () => {
+        const { win, fetchLaterMock } = setup();
+        win.fetchLater("https://ads.example/x", { method: "POST", body: "\u{1F600}".repeat(32000) }); // 64000 units, 128000 UTF-8 bytes
+        expect(fetchLaterMock).toHaveBeenCalledTimes(1);
+    });
+
+    // Chromium counts each header-list entry: a name given twice, twice.
+    it("a header given twice counts twice", () => {
+        expect(deferredSize(new URL("https://a.example/"), { headers: [["x-b", "1"], ["X-B", " 2 "]] }, Headers)).toBe(18 + 8 + 12);
+        expect(deferredSize(new URL("https://a.example/#f"), { headers: { "X-B": "1", "x-b": "2" } }, Headers)).toBe(18 + 8 + 12);
     });
 });

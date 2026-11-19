@@ -21,6 +21,13 @@
 --   setspolicy <dest>                  → {"out":"yes"|"no"} (its response sets a context's referrer policy)
 --   sniffhtml <body>                   → {"out":"yes"|"no"} (Chromium's HTML sniff)
 --   metadatasent <name> <0|1>          → {"out":"yes"|"no"} (reaches a target of that trustworthiness)
+--   dictae <accept-encoding>            → {"out":"<without dcb/dcz>"} (Dictionary.acceptEncoding)
+--   dictreg <use-as-dictionary>         → {"out":"<as the browser is given it>"}
+--   dictoffer <request header name>     → {"out":"yes"|"no"} (removed: a dictionary offer)
+--   priority <dest> <mode> <method> <purpose> → {"out":"<Priority>"|"none"}
+--   fetchlatersize <href> <headers k:v, LF> <none|text|params|buffer|blob:type> <body bytes> → {"out":"<n>"|"unknown-length"}
+--   workerruns <module 0|1> <mime>      → {"out":"yes"|"no"} (a blob:/data: worker runs)
+--   fetchlateradmit <used> <size>       → {"out":"ok"|"<the QuotaExceededError message>"}
 --   storagekey <ancestors> <site> <origin> → {"out":"<the partition key>"}
 --   storageaccess <mode> <dest> <cred> <chain> <from> <to> <site> <0|1> → {"out":"active"|"none"}
 --   allowframe <attr> <f> <0|1> <parent> <src> <frame> → {"out":"yes"|"no"} (the frame's featurePolicy)
@@ -145,6 +152,10 @@ import Permissions
 import Allow
 import Storage
 import Metadata
+import Dictionary
+import Priority
+import FetchLater
+import WorkerSource
 import Messaging
 import Selectors
 open import Html using (ScriptKind; scriptClassic; scriptModule; scriptImportMap; scriptSpeculation; scriptData; scriptKind; documentBase; BaseURL; baseOf′; aboutBlank; beyond)
@@ -312,6 +323,13 @@ dispatch op args =
   else if eqStr op (toList "storageaccess") then storageAccessReq args
   else if eqStr op (toList "storagekey") then storageKeyReq args
   else if eqStr op (toList "metadatasent") then metadataSentReq args
+  else if eqStr op (toList "priority") then priorityReq args
+  else if eqStr op (toList "fetchlatersize") then fetchLaterSizeReq args
+  else if eqStr op (toList "fetchlateradmit") then fetchLaterAdmitReq args
+  else if eqStr op (toList "workerruns") then workerRunsReq args
+  else if eqStr op (toList "dictae") then oneArg Dictionary.acceptEncoding args
+  else if eqStr op (toList "dictreg") then oneArg Dictionary.noRegistration args
+  else if eqStr op (toList "dictoffer") then oneArg (λ n → if Dictionary.offerHeader n then toList "yes" else toList "no") args
   else if eqStr op (toList "allowrewrite") then allowRewriteReq args
   else if eqStr op (toList "pptranslate") then ppTranslateReq args
   else if eqStr op (toList "swapscheme") then swapSchemeReq args
@@ -512,6 +530,49 @@ dispatch op args =
   metadataSentReq : List Str → Str
   metadataSentReq (n ∷ t ∷ []) = out (if Metadata.sentTo n (eqStr t (toList "1")) then toList "yes" else toList "no")
   metadataSentReq _ = errorReply "BadRequest"
+
+  fetchLaterSizeReq : List Str → Str
+  fetchLaterSizeReq (h ∷ hs ∷ b ∷ n ∷ []) =
+    answer (FetchLater.requestSize h (if Data.List.Base.null hs then [] else Data.List.Base.map pair (splitOn (is 10) hs)) (body b) (Url.digitsValue n))
+    where
+    answer : Maybe ℕ → Str
+    answer (just k) = out (showN k)
+    answer nothing  = out (toList "unknown-length")
+    pair : Str → Str × Str
+    pair l with Url.break (is 58) l
+    ... | k , (_ ∷ v) = k , v
+    ... | k , []      = k , []
+    body : Str → FetchLater.Body
+    body x = if eqStr x (toList "text") then FetchLater.text
+      else if eqStr x (toList "params") then FetchLater.params
+      else if eqStr x (toList "buffer") then FetchLater.buffer
+      else if eqStr (Data.List.Base.take 5 x) (toList "blob:") then FetchLater.blob (Data.List.Base.drop 5 x)
+      else FetchLater.noBody
+  fetchLaterSizeReq _ = errorReply "BadRequest"
+
+  workerRunsReq : List Str → Str
+  workerRunsReq (m ∷ t ∷ []) = out (if WorkerSource.runs (eqStr m (toList "1")) t then toList "yes" else toList "no")
+  workerRunsReq (m ∷ []) = out (if WorkerSource.runs (eqStr m (toList "1")) [] then toList "yes" else toList "no")
+  workerRunsReq _ = errorReply "BadRequest"
+
+  fetchLaterAdmitReq : List Str → Str
+  fetchLaterAdmitReq (u ∷ n ∷ []) with FetchLater.admit (Url.digitsValue u) (Url.digitsValue n)
+  ... | nothing = out (toList "ok")
+  ... | just m  = out m
+  fetchLaterAdmitReq _ = errorReply "BadRequest"
+
+  priorityReq : List Str → Str
+  priorityReq (d ∷ m ∷ me ∷ pu ∷ []) with Priority.priority d m me pu
+  ... | just v  = out v
+  ... | nothing = out (toList "none")
+  priorityReq (d ∷ m ∷ me ∷ []) with Priority.priority d m me []
+  ... | just v  = out v
+  ... | nothing = out (toList "none")
+  priorityReq _ = errorReply "BadRequest"
+
+  oneArg : (Str → Str) → List Str → Str
+  oneArg f (v ∷ []) = out (f v)
+  oneArg f _        = out (f [])
 
   -- storagekey <ancestor sites, top first, space-separated> <site> <origin>
   storageKeyReq : List Str → Str

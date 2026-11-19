@@ -16,6 +16,17 @@ const JS_ESSENCES = new Set([
 const lower = (s: string): string => s.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
 const strip = (s: string): string => s.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "");
 
+/** Whether a MIME type (a Content-Type, a Blob's type) is a JavaScript one: its essence — up to ";", HTTP whitespace trimmed, lowercased (spec/Disposition.agda essence, isJsType). */
+export function isJavaScriptMime(mime: string): boolean {
+    const semi = mime.indexOf(";");
+    return JS_ESSENCES.has(lower((semi === -1 ? mime : mime.slice(0, semi)).replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "")));
+}
+
+/** A blob: or data: worker runs: a classic one whatever its type, a module one only with a JavaScript MIME type (spec/WorkerSource.agda runs). */
+export function workerRuns(module: boolean, mime: string): boolean {
+    return !module || isJavaScriptMime(mime);
+}
+
 /** The kind of a script with these type and language attributes (null: absent). */
 export function scriptKind(type: string | null, language: string | null): ScriptKind {
     if (type === "" || (type === null && (language === null || language === ""))) return "classic";

@@ -6,7 +6,7 @@
 .PHONY: typecheck oracle spec-check browser-check chrome-check
 
 AGDA ?= agda
-SAFE_MODULES := Scheme Url Containment Srcset Referrer Cookies Fetch Csp Css Html ImportMap Attrs HtmlTok Link Disposition Refresh WsOrigin Carry Query Sf Hints Upgrades Permissions Allow Storage Metadata Messaging Selectors Oracle
+SAFE_MODULES := Scheme Url Containment Srcset Referrer Cookies Fetch Csp Css Html ImportMap Attrs HtmlTok Link Disposition Refresh WsOrigin Carry Query Sf Hints Upgrades Permissions Allow Storage Metadata Dictionary Priority FetchLater WorkerSource Messaging Selectors Oracle
 ORACLE := $(CURDIR)/spec/build/Main
 
 # Every rule module is checked under --safe on its own; Main.agda (the IO
@@ -36,7 +36,7 @@ spec-check: oracle
 browser-check: oracle
 	cd ts/client && npm run build
 	cd ts/client && CYRANO_ORACLE=$(ORACLE) CYRANO_REQUIRE_ORACLE=1 CYRANO_BROWSER=1 \
-		npx vitest run tests/spec/spec-vs-chromium.test.ts tests/spec/cookies-vs-chromium.test.ts tests/spec/fetch-vs-chromium.test.ts tests/spec/csp-vs-chromium.test.ts tests/spec/framing-vs-chromium.test.ts tests/spec/css-vs-chromium.test.ts tests/spec/html-vs-chromium.test.ts tests/spec/json-vs-chromium.test.ts tests/spec/attrs-vs-chromium.test.ts tests/spec/html-tok-vs-chromium.test.ts tests/spec/link-vs-chromium.test.ts tests/spec/refresh-vs-chromium.test.ts tests/spec/carry-vs-chromium.test.ts tests/spec/hints-vs-chromium.test.ts tests/spec/permissions-vs-chromium.test.ts tests/spec/allow-vs-chromium.test.ts tests/spec/storage-access-vs-chromium.test.ts tests/spec/metadata-vs-chromium.test.ts tests/spec/sniff-vs-chromium.test.ts tests/spec/policy-contexts-vs-chromium.test.ts tests/spec/post-message-vs-chromium.test.ts tests/spec/feature-policy-vs-chromium.test.ts tests/spec/selectors-vs-chromium.test.ts tests/spec/storage-partition-vs-chromium.test.ts tests/native
+		npx vitest run tests/spec/spec-vs-chromium.test.ts tests/spec/cookies-vs-chromium.test.ts tests/spec/fetch-vs-chromium.test.ts tests/spec/csp-vs-chromium.test.ts tests/spec/framing-vs-chromium.test.ts tests/spec/css-vs-chromium.test.ts tests/spec/html-vs-chromium.test.ts tests/spec/json-vs-chromium.test.ts tests/spec/attrs-vs-chromium.test.ts tests/spec/html-tok-vs-chromium.test.ts tests/spec/link-vs-chromium.test.ts tests/spec/refresh-vs-chromium.test.ts tests/spec/carry-vs-chromium.test.ts tests/spec/hints-vs-chromium.test.ts tests/spec/permissions-vs-chromium.test.ts tests/spec/allow-vs-chromium.test.ts tests/spec/storage-access-vs-chromium.test.ts tests/spec/metadata-vs-chromium.test.ts tests/spec/sniff-vs-chromium.test.ts tests/spec/policy-contexts-vs-chromium.test.ts tests/spec/post-message-vs-chromium.test.ts tests/spec/feature-policy-vs-chromium.test.ts tests/spec/selectors-vs-chromium.test.ts tests/spec/storage-partition-vs-chromium.test.ts tests/spec/dictionary-vs-chromium.test.ts tests/spec/priority-vs-chromium.test.ts tests/spec/fetch-later-vs-chromium.test.ts tests/spec/worker-source-vs-chromium.test.ts tests/native
 
 # Rules only real Chrome shows (Playwright's Chromium switches them off):
 # needs Google Chrome and a display (headed; DISPLAY=:98 under Xvfb).

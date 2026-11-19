@@ -76,4 +76,35 @@ describe("patchBlobWorkerSource", () => {
         const text = await workerText(scriptFor, new win.Blob(["location", ".href"], { type: "text/javascript" }));
         expect(unmarked(String(text))).toContain("$rewriter.wrap_get_location(location)");
     });
+
+    // Measured in Chromium (spec/WorkerSource.agda): a module worker whose
+    // script is not of a JavaScript MIME type fails natively; it ran under
+    // the proxy, from a text/javascript copy.
+    it("a module worker gets a private script only for a JavaScript MIME type", () => {
+        const scriptFor = setUp();
+        const odd = win.URL.createObjectURL(new win.Blob(["1"], { type: "application/javascriptx" }));
+        expect(scriptFor(odd, true)).toBeUndefined();
+        expect(scriptFor(odd, false)).toBeDefined();
+        const js = win.URL.createObjectURL(new win.Blob(["1"], { type: "Text/JavaScript; charset=utf-8" }));
+        expect(scriptFor(js, true)).toBeDefined();
+    });
+
+    it("a script read back keeps its type: classic runs, module only if JavaScript", () => {
+        const scriptFor = setUp();
+        let type = "text/plain;charset=US-ASCII";
+        class XHR {
+            status = 200;
+            responseText = "postMessage(1)";
+            open(): void { /* sync */ }
+            overrideMimeType(): void { /* kept */ }
+            send(): void { /* done */ }
+            getResponseHeader(n: string): string | null { return n.toLowerCase() === "content-type" ? type : null; }
+        }
+        (win as unknown as { XMLHttpRequest: unknown }).XMLHttpRequest = XHR;
+        expect(scriptFor("data:,postMessage(1)", true)).toBeUndefined();
+        expect(scriptFor("data:,postMessage(1)", false)).toBeDefined();
+        type = "text/livescript";
+        expect(scriptFor("data:text/livescript,postMessage(1)", true)).toBeDefined();
+    });
 });
+

@@ -152,7 +152,8 @@ the data copy. Unwrap ignores the marks.
   deployment) gets Chrome's usual order from a template instead. Client
   hints are per original origin (`proxy/client_hints.go`; gaps listed
   there: delegation, `<meta>` Accept-CH, the first cross-site navigation).
-  Compression dictionaries are never registered. TLS never resumes a
+  Compression dictionaries are never registered (spec/Dictionary.agda:
+Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS never resumes a
   session (no `pre_shared_key`), as a first connection.
 - **Cloudflare**: x.com, claude.ai, nowsecure.nl pass in real Chrome; the
   managed challenge at scrapingcourse.com/cloudflare-challenge passes
@@ -333,7 +334,8 @@ the data copy. Unwrap ignores the marks.
   destructuring is handled where the pattern has a source (R14:
   declarations, assignments — Transcend's consent manager), not in a
   parameter's or a nested pattern; a document whose CSP is `default-src 'none'` still gets the runtime.
-  `fetchLater` keeps its quota per original origin and defers what the
+  `fetchLater` keeps its quota per original origin (spec/FetchLater.agda)
+  and defers what the
   proxy makes the native refuse (`patches/fetch-later.ts`; tumblr) — the
   requests it defers go out with keepalive (64 KiB in flight at unload). DOM insertion by any
   method gives inserted empty frames the runtime (`dynamic-iframe.ts`); the

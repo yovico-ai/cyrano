@@ -26,12 +26,17 @@
 // the Worker is made (a synchronous read of the page's own URL, which is
 // still valid then) and treated the same way.
 //
+// The private copy is made only for a worker the native would run
+// (spec/WorkerSource.agda): a module worker whose script's type is not a
+// JavaScript MIME type is left to the native, which fails it.
+//
 // Known gap: the object URL's origin is the proxy's (blob:http://proxy/…)
 // where natively it is the site's; translating blob: URLs is a follow-up.
 import { SafeMap, SafeWeakMap, nR, sIncludes } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
 import { rewriteJsSource, defaultJsRewriteOptions } from "../js/rewriter";
 import { wrapConstructor, wrapMethod } from "../native/surface";
+import { workerRuns } from "./script-kind";
 
 export type WorkerScriptFor = (url: string, module: boolean) => string | undefined;
 
@@ -49,7 +54,7 @@ export function patchBlobWorkerSource(
         const [parts, options] = args as [unknown, BlobPropertyBag | undefined];
         const type = options?.type;
         if (isJsLikeType(type) && Array.isArray(parts) && parts.every((p) => typeof p === "string")) {
-            sources.set(blob, { source: (parts as string[]).join(""), type: type! });
+            sources.set(blob, { source: (parts as string[]).join(""), type: blob.type }); // the type as the Blob holds it
         }
         return blob;
     });
@@ -67,13 +72,13 @@ export function patchBlobWorkerSource(
     });
     return (url, module) => {
         const src = byUrl.get(url) ?? readScript(targetWindow, url);
-        if (!src || !nativeCreate) return undefined;
+        if (!src || !nativeCreate || !workerRuns(module, src.type)) return undefined;
         const key = `${module ? "m" : "c"} ${url}`;
         let priv = privateUrl.get(key);
         if (!priv) {
             const body = buildWorkerPreamble(config, getCurrentBaseUrl().href, module) +
                 rewriteJsSource(src.source, defaultJsRewriteOptions());
-            priv = nR.apply(nativeCreate, URLs, [new NativeBlob([body], { type: src.type })]) as string;
+            priv = nR.apply(nativeCreate, URLs, [new NativeBlob([body], { type: module ? src.type : "text/javascript" })]) as string;
             privateUrl.set(key, priv);
         }
         return priv;
@@ -95,7 +100,7 @@ function readScript(targetWindow: Window, url: string): { source: string; type: 
         x.overrideMimeType("text/javascript; charset=utf-8");
         x.send();
         if (x.status !== 200 && x.status !== 0) return undefined;
-        return { source: x.responseText, type: "text/javascript" };
+        return { source: x.responseText, type: x.getResponseHeader("Content-Type") ?? "" };
     } catch {
         return undefined;
     }

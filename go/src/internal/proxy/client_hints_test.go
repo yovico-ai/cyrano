@@ -103,8 +103,8 @@ func TestNoCompressionDictionaryAcrossSites(t *testing.T) {
 	}
 	resp := &http.Response{Header: http.Header{"Use-As-Dictionary": {`match="/*"`}}}
 	noDictionaryRegistration(resp)
-	if len(resp.Header) != 0 {
-		t.Errorf("Use-As-Dictionary kept: %v", resp.Header)
+	if got := resp.Header.Get("Use-As-Dictionary"); got != `match="/*", type=crn` {
+		t.Errorf("Use-As-Dictionary: %q (kept, made unregistrable)", got)
 	}
 }
 

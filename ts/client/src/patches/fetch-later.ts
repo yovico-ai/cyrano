@@ -1,8 +1,8 @@
 // fetchLater(input, init), as page code sees it natively.
 //
 // The browser keeps a deferred-fetch quota per destination origin (64 KiB:
-// the URL without its fragment, every header name and value, the body, and
-// 12 bytes more — measured in Chromium 147). Under the proxy every
+// the URL without its fragment, every header-list entry, the body, and 12
+// bytes more — spec/FetchLater.agda, checked against Chromium). Under the proxy every
 // destination is the proxy's origin, so all of a page's deferred fetches
 // share one quota (tumblr: "exceeds its quota" where natively there is
 // room); and a proxy reached over plain http makes every proxied URL
@@ -29,20 +29,61 @@ const OVERHEAD = 12;
 
 type Init = RequestInit & { activateAfter?: number };
 
-const utf8Length = (s: string): number => new TextEncoder().encode(s).length;
+const isHttpSpace = (c: number): boolean => c === 32 || c === 9 || c === 10 || c === 13;
 
-/** The bytes a deferred request counts against its origin's quota, or null when not known here. */
-function deferredSize(url: URL, init: Init | undefined, H: typeof Headers): number | null {
+/** A header value as the header list holds it (leading and trailing HTTP whitespace removed). */
+function trimHttp(v: string): string {
+    let a = 0;
+    let b = v.length;
+    while (a < b && isHttpSpace(v.charCodeAt(a))) a++;
+    while (b > a && isHttpSpace(v.charCodeAt(b - 1))) b--;
+    return v.slice(a, b);
+}
+
+const CONTENT_TYPE = "content-type";
+function isContentType(k: string): boolean {
+    if (k.length !== CONTENT_TYPE.length) return false;
+    for (let i = 0; i < k.length; i++) {
+        const c = k.charCodeAt(i);
+        if ((c >= 65 && c <= 90 ? c + 32 : c) !== CONTENT_TYPE.charCodeAt(i)) return false;
+    }
+    return true;
+}
+
+/**
+ * The request's header list: one entry per header given (Chromium counts a
+ * name given twice twice). A Headers object only shows its entries
+ * combined — counted so (a gap: duplicates there count ", " instead).
+ */
+function headerList(given: HeadersInit | undefined, H: typeof Headers): [string, string][] {
+    const out: [string, string][] = [];
+    if (given === undefined || given === null) return out;
+    if (given instanceof H || !(nO.getPrototypeOf(given) === Array.prototype || nO.getPrototypeOf(given) === Object.prototype || nO.getPrototypeOf(given) === null)) {
+        new H(given).forEach((v, k) => { out[out.length] = [k, v]; });
+        return out;
+    }
+    if (nO.getPrototypeOf(given) === Array.prototype) {
+        const a = given as [string, string][];
+        for (let i = 0; i < a.length; i++) out[out.length] = [String(a[i]![0]), trimHttp(String(a[i]![1]))];
+        return out;
+    }
+    const keys = nO.keys(given);
+    for (let i = 0; i < keys.length; i++) out[out.length] = [keys[i]!, trimHttp(String((given as Record<string, string>)[keys[i]!]))];
+    return out;
+}
+
+/** The bytes a deferred request counts against its origin's quota, or null when not known here (spec/FetchLater.agda deferredSize). */
+export function deferredSize(url: URL, init: Init | undefined, H: typeof Headers): number | null | "unknown-length" {
     const body = init?.body;
     let bodySize = 0;
     let contentType: string | null = null;
     if (body === undefined || body === null) {
         bodySize = 0;
     } else if (typeof body === "string") {
-        bodySize = utf8Length(body);
+        bodySize = body.length; // UTF-16 code units, as Chromium counts it
         contentType = "text/plain;charset=UTF-8";
     } else if (body instanceof URLSearchParams) {
-        bodySize = utf8Length(body.toString());
+        bodySize = body.toString().length; // ASCII
         contentType = "application/x-www-form-urlencoded;charset=UTF-8";
     } else if (body instanceof Blob) {
         bodySize = body.size;
@@ -54,20 +95,30 @@ function deferredSize(url: URL, init: Init | undefined, H: typeof Headers): numb
     } else {
         return null;
     }
+    if (body !== undefined && body !== null && bodySize === 0) return "unknown-length"; // refused natively, a TypeError
     let headerSize = 0;
     let hasType = false;
     try {
-        new H(init?.headers).forEach((v, k) => {
+        new H(init?.headers); // the native throws its own error
+        const list = headerList(init?.headers, H);
+        for (let i = 0; i < list.length; i++) {
+            const [k, v] = list[i]!;
             headerSize += k.length + v.length;
-            if (k === "content-type") hasType = true;
-        });
+            if (isContentType(k)) hasType = true;
+        }
     } catch {
-        return null; // the native throws its own error
+        return null;
     }
     if (contentType !== null && !hasType) headerSize += "content-type".length + contentType.length;
     const u = new URL(url.href);
     u.hash = "";
     return u.href.length + headerSize + bodySize + OVERHEAD;
+}
+
+/** The QuotaExceededError message for a request of `size` with `used` deferred to its origin, or null: admitted (spec/FetchLater.agda admit). */
+export function quotaRefusal(used: number, size: number): string | null {
+    if (used + size <= PER_ORIGIN) return null;
+    return `Failed to execute 'fetchLater' on 'Window': fetchLater exceeds its quota for the origin: got ${size} bytes, expected less than ${PER_ORIGIN - used} bytes.`;
 }
 
 export function patchFetchLater(
@@ -97,10 +148,8 @@ export function patchFetchLater(
             },
         });
     }
-    const quotaError = (got: number, left: number): Error => {
-        const msg = `Failed to execute 'fetchLater' on 'Window': fetchLater exceeds its quota for the origin: got ${got} bytes, expected less than ${left} bytes.`;
-        return w.QuotaExceededError ? new w.QuotaExceededError(msg) : new w.DOMException(msg, "QuotaExceededError");
-    };
+    const quotaError = (msg: string): Error =>
+        w.QuotaExceededError ? new w.QuotaExceededError(msg) : new w.DOMException(msg, "QuotaExceededError");
     // The native's refusals that are the proxy's doing: the proxy origin's
     // shared quota; and, on a plain-http proxy, the proxied URL being
     // insecure ("only supported over HTTPS", a TypeError — counted as the
@@ -150,14 +199,18 @@ export function patchFetchLater(
         }
         // The native's own argument errors (a negative activateAfter, …) as
         // natively; only a request it would accept is counted.
-        let size: number | null = null;
+        let size: number | null | "unknown-length" = null;
         if (original.protocol === "https:" && !(typeof init?.activateAfter === "number" && init.activateAfter < 0)) {
             size = deferredSize(original, init, w.Headers);
         }
+        // The native would say so too, but under a plain-http proxy its
+        // TypeError reads as the proxy's refusal.
+        if (size === "unknown-length") throw new (targetWindow as unknown as { TypeError: typeof TypeError }).TypeError("Failed to execute 'fetchLater' on 'Window': fetchLater doesn't support body with unknown length.");
         const next = [rewriteOne(raw), ...args.slice(1)];
         if (size === null) return nR.apply(native, self, next);
         const before = used.get(original.origin) ?? 0;
-        if (before + size > PER_ORIGIN) throw quotaError(size, PER_ORIGIN - before);
+        const refused = quotaRefusal(before, size);
+        if (refused !== null) throw quotaError(refused);
         let result: unknown;
         try {
             result = nR.apply(native, self, next);
