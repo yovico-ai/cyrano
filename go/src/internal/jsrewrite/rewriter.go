@@ -53,6 +53,7 @@ type Options struct {
 	WrapImportMetaUrl    bool
 	WrapStaticImport     bool
 	WrapNewWorker        bool
+	WrapPattern          bool // R14
 	// StripDebugger replaces `debugger` statements with empty ones (R12):
 	// a no-op unless DevTools is open, where scripts use it to detect and
 	// stall an inspector.
@@ -103,6 +104,7 @@ func DefaultOptions() Options {
 		WrapImportMetaUrl:    true,
 		WrapStaticImport:     true,
 		WrapNewWorker:        true,
+		WrapPattern:          true,
 		StripDebugger:        true,
 	}
 }

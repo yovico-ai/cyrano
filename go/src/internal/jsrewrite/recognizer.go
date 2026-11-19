@@ -82,7 +82,40 @@ type patItem struct {
 	target     bool  // already edited as an assignment target
 }
 
-type patScope struct{ items []patItem }
+type patScope struct {
+	items []patItem
+	// An object literal one of whose own keys is location / top / parent,
+	// or computed: as a pattern, its source goes through wrap_pattern (R14).
+	windowKey bool
+	object    bool // an object literal (not an array)
+}
+
+// windowKeyName: a property key that may read a window's location, top or
+// parent through a pattern (R14).
+func windowKeyName(name string) bool { return name == "location" || name == "top" || name == "parent" }
+
+// keyMayNameWindow reports whether the property key at the current token
+// is location / top / parent, or computed (R14).
+func (p *parser) keyMayNameWindow() bool {
+	switch {
+	case p.is("["):
+		return true
+	case p.tok.kind == tIdent:
+		return windowKeyName(identName(p.text()))
+	case p.tok.kind == tStr:
+		v, ok := stringValue(p.text())
+		return ok && windowKeyName(v)
+	}
+	return false
+}
+
+// wrapPatternSource: R14 around a pattern's source.
+func (p *parser) wrapPatternSource(src expr) {
+	if p.o.WrapPattern {
+		p.open(src.start, "$rewriter.wrap_pattern(")
+		p.close(src.end, ")")
+	}
+}
 
 type fnState struct{ async, generator bool }
 
@@ -595,9 +628,12 @@ func (p *parser) parenExpr() {
 
 func (p *parser) declarators() {
 	for {
-		p.bindingTarget()
+		windowKey := p.bindingTarget()
 		if p.eat("=") {
-			p.assign(false)
+			src := p.assign(false)
+			if windowKey {
+				p.wrapPatternSource(src) // R14
+			}
 		}
 		if !p.eat(",") {
 			return
@@ -758,7 +794,9 @@ func (p *parser) exportDeclaration() {
 // ── bindings ───────────────────────────────────────────────────────────
 
 // bindingTarget: an identifier, [pattern] or {pattern} being declared.
-func (p *parser) bindingTarget() {
+// bindingTarget parses a binding target; for an object pattern, it reports
+// whether one of its own keys may name location / top / parent (R14).
+func (p *parser) bindingTarget() (windowKey bool) {
 	switch {
 	case p.tok.kind == tIdent:
 		p.next()
@@ -785,6 +823,9 @@ func (p *parser) bindingTarget() {
 				p.bindingTarget()
 			} else {
 				shorthand := p.tok.kind == tIdent
+				if p.keyMayNameWindow() {
+					windowKey = true
+				}
 				p.propertyName()
 				if p.eat(":") {
 					p.bindingTarget()
@@ -803,6 +844,7 @@ func (p *parser) bindingTarget() {
 	default:
 		p.failAt()
 	}
+	return windowKey
 }
 
 // assignPlain: an assignment expression inside brackets (`in` is an operator).
@@ -1057,7 +1099,17 @@ func (p *parser) assign(patPos bool) expr {
 			}
 		}
 		p.next()
-		p.assign(false)
+		src := p.assign(false)
+		if left.pat != nil && left.pat.object && left.pat.windowKey {
+			e0 := len(p.edits)
+			p.wrapPatternSource(src) // R14
+			// Inside a possible pattern this `=` may be a default value
+			// ({a: {location: L} = d}), not an assignment: if the enclosing
+			// literal becomes a pattern (or parameters), the wrap goes.
+			if patPos && p.scope != nil && len(p.edits) > e0 {
+				p.scope.items = append(p.scope.items, patItem{e0: e0, e1: len(p.edits), start: src.start, end: src.end})
+			}
+		}
 		return expr{start: left.start, end: p.prevEnd}
 
 	case p.isAssignOp(): // compound: the target is left as written
@@ -1621,7 +1673,7 @@ func (p *parser) objectLiteral() expr {
 	p.next()
 	noIn, forInit, outer := p.noIn, p.forInit, p.scope
 	p.noIn, p.forInit = false, false
-	scope := &patScope{}
+	scope := &patScope{object: true}
 	p.scope = scope
 	for !p.is("}") {
 		if p.tok.kind == tEOF {
@@ -1643,6 +1695,9 @@ func (p *parser) objectLiteral() expr {
 
 // property: one member of an object literal.
 func (p *parser) property() {
+	if p.scope != nil && p.keyMayNameWindow() {
+		p.scope.windowKey = true // R14, if this object is a pattern
+	}
 	// name: value, a shorthand, or a method?
 	if p.tok.kind == tIdent {
 		t := p.peek()

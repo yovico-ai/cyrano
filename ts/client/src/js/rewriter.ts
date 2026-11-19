@@ -38,6 +38,8 @@ export interface JsRewriteOptions {
     wrapMemberExpression: boolean;
     wrapImportArg: boolean;
     wrapNewWorker: boolean;
+    /** R14: an object pattern's source that may give location / top / parent. */
+    wrapPattern: boolean;
     /** R12: `debugger` statements become empty statements. */
     stripDebugger: boolean;
     /** With `proxify`: import/export specifiers and literal import() are proxified in place. */
@@ -68,6 +70,7 @@ export function defaultJsRewriteOptions(): JsRewriteOptions {
         wrapMemberExpression: true,
         wrapImportArg: true,
         wrapNewWorker: true,
+        wrapPattern: true,
         stripDebugger: true,
         wrapStaticImport: true,
         wrapImportMetaUrl: true,
@@ -285,6 +288,9 @@ function memberHelper(name: string, called: boolean, o: JsRewriteOptions): strin
  *  R11 new C…, where C now starts with a call  →  new (C)…
  *  R12 debugger;  →  ;     (a no-op unless DevTools is open, where scripts
  *      use it to detect and stall an inspector)
+ *  R14 an object pattern assigned or declared from S, whose own keys name
+ *      location / top / parent (or are computed)  →  … = $rewriter.wrap_pattern(S)
+ *      (not: a parameter's pattern, a pattern nested in another, a for-in/of target)
  *  R13 inside a `with` body, the edits reach the runtime through the global
  *      object, not by name: `$rewriter` → `((function(){return this})()||…).$rewriter`,
  *      and so `$__crn_key__` — a with object may claim every name (Vue's
@@ -394,6 +400,7 @@ class Splicer {
             case "AssignmentExpression":
                 this.visit(n["left"], n["operator"] === "=" ? "target" : "modify", false);
                 this.visit(n["right"], "expr", false);
+                if (n["operator"] === "=") this.wrapPatternSource(n["left"] as N, n["right"] as N);
                 return;
 
             case "UpdateExpression":
@@ -407,6 +414,7 @@ class Splicer {
             case "VariableDeclarator":
                 this.visit(n["id"], "binding", false);
                 this.visit(n["init"], "expr", false);
+                if (n["init"]) this.wrapPatternSource(n["id"] as N, n["init"] as N);
                 return;
 
             case "FunctionDeclaration":
@@ -519,6 +527,21 @@ class Splicer {
             if (Array.isArray(v)) this.all(v as N[], "expr");
             else if (v && typeof v === "object" && typeof (v as N).type === "string") this.visit(v as N, "expr", false);
         }
+    }
+
+    /** R14: the source of an object pattern that may read location / top / parent. */
+    private wrapPatternSource(pattern: N, source: N): void {
+        if (!this.o.wrapPattern || pattern.type !== "ObjectPattern") return;
+        const reads = ((pattern["properties"] as N[]) ?? []).some((p) => {
+            if (p.type !== "Property") return false;
+            if (p["computed"]) return true;
+            const k = p["key"] as N;
+            const name = k.type === "Identifier" ? k["name"] : k.type === "Literal" ? String(k["value"]) : "";
+            return name === "location" || name === "top" || name === "parent";
+        });
+        if (!reads) return;
+        this.open(source.start, "$rewriter.wrap_pattern(");
+        this.close(source.end, ")");
     }
 
     /** R1: `$rewriter.<h>(` id `)`. */

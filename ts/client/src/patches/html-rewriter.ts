@@ -122,8 +122,13 @@ export function rewriteHtmlString(
     // A <template> drops the document's own tags (doctype, html, head,
     // body): kept aside here and put back as written after serialization.
     const structural: string[] = [];
-    const parsed = holdStructuralTags(html, structural);
+    const parsed = hideStyleAttributes(holdStructuralTags(html, structural));
 
+    // Style attributes are parsed under another name: parsing one, anywhere,
+    // is checked against the page's CSP (a nonce policy refuses it) and
+    // reported as a violation — the page's own insertion of the result is
+    // the one parse the page causes natively (reCAPTCHA's innerHTML on
+    // my.jumpapp.com reported twice).
     const template = document.createElement("template");
     // (Trusted values for the sinks written below: under Trusted Types
     // the runtime's own policy makes them — native/trusted.ts.)
@@ -138,7 +143,7 @@ export function rewriteHtmlString(
     const written = new SafeMap<Element, Map<string, string>>();
     for (const element of elements) {
         const m = new SafeMap<string, string>();
-        for (const a of Array.from(element.attributes)) m.set(a.name, a.value);
+        for (const a of Array.from(element.attributes)) m.set(a.name === HIDDEN_STYLE ? "style" : a.name, a.value);
         written.set(element, m);
     }
     for (const element of elements) {
@@ -206,10 +211,11 @@ export function rewriteHtmlString(
             if (srcdoc !== null) ncall(natives.setAttribute, element, "srcdoc", T("HTML", rewriteSrcdoc(srcdoc, rewriteOne, proxyOrigin, bootstrap)));
         }
 
-        // 4. Global `style="..."` attribute — applies to every element.
-        const styleAttr = element.getAttribute("style");
+        // 4. Global `style="..."` attribute — applies to every element
+        // (held under HIDDEN_STYLE while parsed here).
+        const styleAttr = element.getAttribute(HIDDEN_STYLE);
         if (styleAttr !== null && styleAttr.length > 0) {
-            ncall(natives.setAttribute, element, "style", rewriteCssText(styleAttr, rewriteOne));
+            ncall(natives.setAttribute, element, HIDDEN_STYLE, rewriteCssText(styleAttr, rewriteOne));
         }
 
         // 5. Type-specific URL-bearing attributes (img.src, a.href, ...).
@@ -232,14 +238,72 @@ export function rewriteHtmlString(
         const o: Record<string, string | null> = {};
         let changed = false;
         const now = new SafeMap<string, string>();
-        for (const a of Array.from(element.attributes)) now.set(a.name, a.value);
+        for (const a of Array.from(element.attributes)) now.set(a.name === HIDDEN_STYLE ? "style" : a.name, a.value);
         for (const [name, value] of was) if (now.get(name) !== value) { o[name] = value; changed = true; }
         for (const name of now.keys()) if (!was.has(name)) { o[name] = null; changed = true; }
         if (changed) ncall(natives.setAttribute, element, ORIGINALS_ATTR, JSON.stringify(o));
     }
 
-    const out = ncall(natives.innerHTMLGet, template);
+    const out = showStyleAttributes(ncall(natives.innerHTMLGet, template));
     return structural.length === 0 ? out : restoreStructuralTags(out, structural);
+}
+
+// ── Style attributes, under another name while parsed ──────────────────
+
+const HIDDEN_STYLE = "data-crn-hs";
+
+/** `style` attribute names in start tags renamed HIDDEN_STYLE (quotes, comments and raw text respected). */
+function hideStyleAttributes(html: string): string {
+    if (!/style/i.test(html)) return html;
+    let out = "";
+    let from = 0;
+    let i = 0;
+    while ((i = html.indexOf("<", i)) !== -1) {
+        if (html.startsWith("<!--", i)) {
+            const end = html.indexOf("-->", i + 4);
+            i = end === -1 ? html.length : end + 3;
+            continue;
+        }
+        const m = /^<([A-Za-z][^\s/>]*)/.exec(html.slice(i, i + 64));
+        if (!m) { i++; continue; }
+        const close = tagEnd(html, i);
+        // Attributes: name [= value], after the tag name.
+        let j = i + 1 + m[1]!.length;
+        while (j < close) {
+            const c = html[j]!;
+            if (c === ">" || c === "/" || /\s/.test(c)) { j++; continue; }
+            let k = j;
+            while (k < close && !/[\s=>]/.test(html[k]!) && !(html[k] === "/" && html[k + 1] === ">")) k++;
+            if (html.slice(j, k).toLowerCase() === "style") {
+                out += html.slice(from, j) + HIDDEN_STYLE;
+                from = k;
+            }
+            j = k;
+            while (j < close && /\s/.test(html[j]!)) j++;
+            if (html[j] === "=") {
+                j++;
+                while (j < close && /\s/.test(html[j]!)) j++;
+                const q = html[j];
+                if (q === '"' || q === "'") {
+                    const e = html.indexOf(q, j + 1);
+                    j = e === -1 ? close : e + 1;
+                } else {
+                    while (j < close && !/[\s>]/.test(html[j]!)) j++;
+                }
+            }
+        }
+        i = close;
+        if (RAW_TEXT.test(m[1]!)) {
+            const end = html.toLowerCase().indexOf("</" + m[1]!.toLowerCase(), i);
+            i = end === -1 ? html.length : end;
+        }
+    }
+    return from === 0 ? html : out + html.slice(from);
+}
+
+/** The serialization's HIDDEN_STYLE attributes named style again. */
+function showStyleAttributes(html: string): string {
+    return html.includes(HIDDEN_STYLE) ? html.split(" " + HIDDEN_STYLE + "=").join(" style=") : html;
 }
 
 // ── The document's own tags ─────────────────────────────────────────────

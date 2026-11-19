@@ -41,6 +41,8 @@ export interface RewriterApi {
     // Window, MessagePort, BroadcastChannel, ServiceWorker, etc.
     wrap_postMessage(arg: { obj: unknown }): PostMessageWrapper;
     wrap_member_expression(obj: unknown, prop: PropertyKey): unknown;
+    /** R14: the source of an object pattern that may read location / top / parent. */
+    wrap_pattern(source: unknown): unknown;
     wrap_eval(evalFn: typeof eval): typeof eval;
     wrap_eval_arg(evalFn: typeof eval, source: unknown): unknown;
     wrap_eval_memexp(obj: unknown): unknown;

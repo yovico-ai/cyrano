@@ -277,8 +277,9 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
   setAttributeNS are rewritten); `<a ping>` in TS (Go rewrites it). The
   Navigation API is wrapped (`patches/navigation.ts`; Shopify). Open from
   random-site testing (2026-11-18): `location` / `top` / `parent` read by
-  destructuring (`const {location: L} = globalThis`, parameter patterns)
-  leaks the proxy URL; an element's `referrerPolicy` drops the Referer;
+  destructuring is handled where the pattern has a source (R14:
+  declarations, assignments — Transcend's consent manager), not in a
+  parameter's or a nested pattern; an element's `referrerPolicy` drops the Referer;
   `fetchLater` fails over the http proxy and shares one quota over TLS; a
   document whose CSP is `default-src 'none'` still gets the runtime. DOM insertion by any
   method gives inserted empty frames the runtime (`dynamic-iframe.ts`); the

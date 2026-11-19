@@ -25,7 +25,8 @@ func TestRewrite_ReachesEveryExpressionPosition(t *testing.T) {
 		{`class C extends f(location.href) { m() { return location.href; } static s() { return location.href; } f = location.href; static { location.href; } #p() { return location.href; } [location.host]() {} get g() { return location.port; } }`, 8},
 		{`var K = class { m() { return location.href; } };`, 1},
 		{`(self.webpackChunk = self.webpackChunk || []).push([[1], { 5(e, t, o) { globalThis.x = globalThis.location.pathname; } }]);`, 1},
-		{`var {a = location.href, [location.host]: b = location.port} = o; var [c = location.href, [d = location.host]] = arr;`, 5},
+		// (6: the pattern with a computed key also reads its source through wrap_pattern, R14)
+		{`var {a = location.href, [location.host]: b = location.port} = o; var [c = location.href, [d = location.host]] = arr;`, 6},
 		{`function d(p = location.href, {q = location.host}, ...[r = location.port]) {} var e = (p = location.href) => p; var g = function (p = location.host) {};`, 5},
 		{`try { x } catch ({ m = location.href }) { location.host }`, 2},
 		{`do { location.href } while (location.host); with (location.port) { location.href }`, 4},

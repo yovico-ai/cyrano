@@ -238,3 +238,26 @@ describe("rewriteHtmlString — the document's own tags stay", () => {
         expect(out).toMatch(/^<html><body><img src="\/p\/https:\/\/a\.example\/x\.png"[^>]*><\/body><\/html>$/);
     });
 });
+
+// Style attributes are parsed under another name (a parse of `style`
+// anywhere is checked against the page's CSP and reported), then named
+// style again: what comes out is as before.
+describe("rewriteHtmlString — style attributes, renamed while parsed", () => {
+    it("rewrites url() in a style attribute and names it style", () => {
+        const got = rewriteHtmlString('<div style="background:url(/a.png)">x</div>', tag);
+        expect(got).toBe('<div style="background:url(&quot;/a.png?proxified=1&quot;)" crn-o="{&quot;style&quot;:&quot;background:url(/a.png)&quot;}">x</div>');
+    });
+    it("leaves other attributes, quoted text and raw text alone", () => {
+        const html = `<p title="style=x" data-style='y' STYLE=color:red class=a>style="z"</p><script>var s = '<b style=q>';</script>`;
+        const got = rewriteHtmlString(html, tag);
+        expect(got).toContain('title="style=x"');
+        expect(got).toContain('data-style="y"');
+        expect(got).toContain('style="color:red"');
+        expect(got).toContain('>style="z"</p>');
+        expect(got).toContain("var s = '<b style=q>';");
+        expect(got).not.toContain("data-crn-hs");
+    });
+    it("keeps a valueless style attribute", () => {
+        expect(rewriteHtmlString("<b style>x</b>", tag)).toBe('<b style="">x</b>');
+    });
+});

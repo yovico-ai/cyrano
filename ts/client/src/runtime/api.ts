@@ -6,7 +6,7 @@
 // stay narrow. Adding a new wrapper means: write the module, import it here,
 // expose it on the returned RewriterApi.
 
-import { nO } from "../native/intrinsics";
+import { nO, nR } from "../native/intrinsics";
 import { crossOriginView } from "../native/cross-origin";
 import { markSender } from "../messaging/target-origin";
 import { isView } from "../native/cross-origin";
@@ -214,6 +214,20 @@ export function createRewriterApi(
         // `$__crn_key__`. The key is put back on the way out, so the access
         // reads the key the page wrote (Ad-Shield hooks natives in its
         // integrity checks; its `window["Array"]["from"]` read "call").
+        // R14: `const {location: L} = window` (and an assignment pattern)
+        // reads its source through this: a window's or document's location,
+        // top and parent as `obj.location` etc. give them; anything else is
+        // the source itself. The Proxy is only destructured — page code never
+        // holds it — and every other read is the source's own (Transcend's
+        // consent manager read the proxy's origin and refused to run).
+        wrap_pattern: (source: unknown): unknown => {
+            if (!isWindowLike(source)) return source;
+            return new Proxy(source as object, {
+                get: (t, k) => (k === "location" || k === "top" || k === "parent"
+                    ? (memberHolder(t, k) as Record<PropertyKey, unknown>)[k]
+                    : nR.get(t, k, t)),
+            });
+        },
         wrap_member_expression: (obj: unknown, prop: PropertyKey): unknown => {
             const holder = memberHolder(obj, prop);
             (targetWindow as unknown as { $__crn_key__: unknown }).$__crn_key__ = prop;

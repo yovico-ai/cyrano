@@ -54,6 +54,7 @@ export interface WorkerRewriterApi {
     wrap_document_write(arg: { obj: unknown }): unknown;
     wrap_postMessage(arg: { obj: unknown }): unknown;
     wrap_member_expression(obj: unknown, prop: PropertyKey): unknown;
+    wrap_pattern(source: unknown): unknown;
     wrap_eval(evalFn: typeof eval): typeof eval;
     wrap_eval_arg(evalFn: typeof eval, source: unknown): unknown;
     wrap_eval_memexp(obj: unknown): unknown;
@@ -105,6 +106,11 @@ export function initWorker(
         wrap_parent_window: wrapParentWindow,
         wrap_document_write: (arg) => wrapDocumentWrite(arg, rewriteOne),
         wrap_postMessage: (arg) => wrapPostMessage(arg, new URL(config.apiBaseURL).origin, () => null, (h: string) => h),
+        // R14: a pattern destructured from the worker's global reads its
+        // location view (no top / parent in a worker).
+        wrap_pattern: (source) => (source === scope
+            ? new Proxy(scope as object, { get: (t, k) => (k === "location" ? wrappedLocation : nR.get(t, k, t)) })
+            : source),
         wrap_member_expression: (obj, prop) => {
             switch (prop) {
                 case "location":

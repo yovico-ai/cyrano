@@ -8,6 +8,8 @@
 //     its proxied image (smile.io);
 //   * new StorageEvent(…, {storageArea: localStorage}) and initStorageEvent
 //     threw: the page's storage is the runtime's view (macys).
+//   * location read by destructuring (`{location: L} = globalThis`) gave
+//     the proxy's (Transcend's consent manager refused to run);
 //   * a module script built by page code imported straight from the origin
 //     (HubSpot on wurthlac); its import.meta.url is the page's URL.
 // Each request must reach the proxy, and the page must read back what it wrote.
@@ -49,6 +51,12 @@ describe.skipIf(!wanted)("escapes and breaks found on random sites, in Chromium"
             if (u.endsWith(".png")) { res.writeHead(200, { "content-type": "image/png" }); res.end(PNG); return; }
             if (u.endsWith(".mjs")) { res.writeHead(200, { "content-type": "text/javascript" }); res.end("window.modLoaded = 1;"); return; }
             if (u.endsWith(".woff2")) { res.writeHead(200, { "content-type": "font/woff2" }); res.end(Buffer.alloc(0)); return; }
+            if (u.startsWith("/cyrano/https/csp.example/")) {
+                // A nonce style policy: a style attribute is refused and reported.
+                res.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-security-policy": "style-src 'nonce-s'; script-src 'nonce-n' 'unsafe-eval'" });
+                res.end(`<!doctype html><head>${boot("https://csp.example/page").replace(/<script/g, '<script nonce="n"')}</head><body></body>`);
+                return;
+            }
             res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
             res.end(`<!doctype html><head>${boot("https://site.example/page")}</head><body></body>`);
         });
@@ -90,6 +98,12 @@ describe.skipIf(!wanted)("escapes and breaks found on random sites, in Chromium"
             } catch (e) {
                 r["withError"] = String(e);
             }
+            // location / top / parent read by destructuring (Transcend's
+            // consent manager: `{…, parent:Bc, location:Qo, …} = S`).
+            r["patternDecl"] = new Function("var S = globalThis; var {location: Qo} = S; return Qo.origin")();
+            r["patternAssign"] = new Function("var Q; ({location: Q} = self); return Q.href")();
+            r["patternComputed"] = new Function("var k = 'loca' + 'tion'; const {[k]: L} = window; return L.hostname")();
+            r["patternParent"] = new Function("const {parent: P} = window; return P === window")();
             r["xlinkReadBack"] = img.getAttributeNS("http://www.w3.org/1999/xlink", "href");
             r["xlinkGetAttribute"] = img.getAttribute("xlink:href");
             const f = document.createElement("iframe");
@@ -111,6 +125,10 @@ describe.skipIf(!wanted)("escapes and breaks found on random sites, in Chromium"
         expect(out).toEqual({
             modMeta: "https://site.example/page",
             withParent: "P",
+            patternDecl: "https://site.example",
+            patternAssign: "https://site.example/page",
+            patternComputed: "site.example",
+            patternParent: true,
             withMember: 1,
             withStrictNested: 1,
             xlinkReadBack: "https://cdn.example/avatar.png",
@@ -122,5 +140,23 @@ describe.skipIf(!wanted)("escapes and breaks found on random sites, in Chromium"
         expect(hits).toContain("/cyrano/https/cdn.example/avatar.png");
         expect(hits).toContain("/cyrano/https/cdn.example/srcdoc.png");
         expect(hits).toContain("/cyrano/https/cdn.example/mod.mjs");
+    }, 60_000);
+
+    // The runtime parses written markup to rewrite it; a style attribute
+    // parsed anywhere is checked against the page's CSP and reported. The
+    // page's innerHTML must report once, as natively (reCAPTCHA reported twice).
+    it("a style attribute written by the page reports one CSP violation", async () => {
+        const page = await browser.newPage();
+        await page.goto(`${origin}/cyrano/https/csp.example/page`);
+        const n = await page.evaluate(async () => {
+            let count = 0;
+            document.addEventListener("securitypolicyviolation", () => count++);
+            const d = document.createElement("div");
+            document.body.appendChild(d);
+            d.innerHTML = '<b style="color:red">x</b>';
+            await new Promise((r) => setTimeout(r, 400));
+            return count;
+        });
+        expect(n).toBe(1);
     }, 60_000);
 });
