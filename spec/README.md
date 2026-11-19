@@ -119,8 +119,7 @@ upkeep"). What remains, by priority (inventory of 2026-11-18; remove an
 entry when its module lands):
 
 
-Medium: crossorigin / integrity / sandbox rules;
-fetchLater's quota formula (TS); the storage partition key (TS: by
+Medium: fetchLater's quota formula (TS); the storage partition key (TS: by
 origin, browsers by site); blob/data worker sources; a frame's pending
 origin; error-stack URL extraction; compression-dictionary removal;
 Chrome's Priority table; the header-order recorder (HTTP/1.1 framing);

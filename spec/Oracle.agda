@@ -15,6 +15,7 @@
 --                                       → {"out":"js|css|html|none"} (what the proxy does with the body)
 --   acceptch <field lines>              → {"out":"<names, space-separated>"|"none"} (none: counts for nothing)
 --   hintsent <hint> <set> <0|1> <0|1> <0|1> → {"out":"yes"|"no"}
+--   crossorigin <0|1> <tag> <rel> <as>  → {"out":"<value written>"|"keep"}
 --   widenselector <proxy> <base> <selector> → {"out":"<the selector the DOM is given>"}
 --   postdelivery <sender> <recipient> <targetOrigin> → {"out":"deliver"|"drop"|"throw"}
 --   setspolicy <dest>                  → {"out":"yes"|"no"} (its response sets a context's referrer policy)
@@ -294,6 +295,7 @@ dispatch op args =
   else if eqStr op (toList "setspolicy") then setsPolicyReq args
   else if eqStr op (toList "postdelivery") then postDeliveryReq args
   else if eqStr op (toList "widenselector") then widenSelectorReq args
+  else if eqStr op (toList "crossorigin") then crossoriginReq args
   else if eqStr op (toList "refreshread") then refreshReadReq args
   else if eqStr op (toList "wsmark") then wsMarkReq args
   else if eqStr op (toList "jsonbytes") then jsonBytesReq args
@@ -444,6 +446,13 @@ dispatch op args =
     opt : Str → Str → Maybe Str
     opt p v = if eqStr p (toList "1") then just v else nothing
   dispositionReq _ = errorReply "BadRequest"
+
+  -- crossorigin <html 0|1> <tag> <rel> <as>
+  crossoriginReq : List Str → Str
+  crossoriginReq (h ∷ t ∷ r ∷ a ∷ []) with Attrs.crossoriginValue (eqStr h (toList "1")) t r a
+  ... | just v  = out v
+  ... | nothing = out (toList "keep")
+  crossoriginReq _ = errorReply "BadRequest"
 
   -- widenselector <proxy> <base> <selector>: the proxy's origin is the proxyBase
   widenSelectorReq : List Str → Str

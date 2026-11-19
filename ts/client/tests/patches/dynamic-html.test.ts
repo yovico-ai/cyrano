@@ -300,3 +300,23 @@ describe("patchDynamicHtml — iframe allow", () => {
         expect(d.getAttributeNS(null, "allow")).toBe("camera https://meet.example");
     });
 });
+
+// crossorigin is written use-credentials on HTML elements only: an SVG
+// element's was forced through setAttribute while markup kept it
+// (spec/Attrs.agda crossoriginValue).
+describe("patchDynamicHtml — crossorigin", () => {
+    it("forces HTML elements, keeps SVG and font preloads", () => {
+        patchDynamicHtml(window, tag, (u) => u);
+        const img = document.createElement("img");
+        img.setAttribute("crossorigin", "anonymous");
+        expect(img.getAttributeNS(null, "crossorigin")).toBe("use-credentials");
+        const svgImage = document.createElementNS("http://www.w3.org/2000/svg", "image");
+        svgImage.setAttribute("crossorigin", "anonymous");
+        expect(svgImage.getAttributeNS(null, "crossorigin")).toBe("anonymous");
+        const font = document.createElement("link");
+        font.setAttribute("rel", "preload");
+        font.setAttribute("as", "font");
+        font.setAttribute("crossorigin", "anonymous");
+        expect(font.getAttributeNS(null, "crossorigin")).toBe("anonymous");
+    });
+});

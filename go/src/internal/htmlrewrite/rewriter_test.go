@@ -199,10 +199,13 @@ func TestRewrite_KeepsOtherMeta(t *testing.T) {
 
 // ── HTML_SANDBOX ─────────────────────────────────────────────────────────────
 
-func TestRewrite_IframeSandboxAddsAllowSameOrigin(t *testing.T) {
+// A sandbox is kept as written: allow-same-origin added let the parent
+// read the frame's document, its messages come from a real origin and its
+// cookies work, where directly it is opaque.
+func TestRewrite_IframeSandboxKeptAsWritten(t *testing.T) {
 	got := rewrite(t, `<iframe src="/x" sandbox="allow-scripts"></iframe>`)
-	if !strings.Contains(got, `sandbox="allow-scripts allow-same-origin"`) {
-		t.Errorf("sandbox not augmented: %s", got)
+	if !strings.Contains(got, `sandbox="allow-scripts"`) || strings.Contains(got, "allow-same-origin") {
+		t.Errorf("sandbox changed: %s", got)
 	}
 }
 

@@ -107,3 +107,28 @@ func TestSpecConformance_URLDest(t *testing.T) {
 		}
 	})
 }
+
+func TestSpecConformance_Crossorigin(t *testing.T) {
+	oracle := specoracle.Need(t)
+	rapid.Check(t, func(rt *rapid.T) {
+		html := rapid.Bool().Draw(rt, "html")
+		tag := rapid.SampledFrom([]string{"link", "script", "img", "image", "video"}).Draw(rt, "tag")
+		rel := rapid.SampledFrom([]string{"", "preload", "Preload", "prefetch", "stylesheet", "modulepreload", "preload x"}).Draw(rt, "rel")
+		as := rapid.SampledFrom([]string{"", "font", "FONT", "script", "style"}).Draw(rt, "as")
+		b := "0"
+		if html {
+			b = "1"
+		}
+		want, _, err := oracle.Ask("crossorigin", b, tag, rel, as)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		got := "keep"
+		if v, ok := crossoriginValue(html, tag, rel, as); ok {
+			got = v
+		}
+		if got != want {
+			rt.Fatalf("crossoriginValue(%v, %s, %q, %q) = %s, spec %s", html, tag, rel, as, got, want)
+		}
+	})
+}

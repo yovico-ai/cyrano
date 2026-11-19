@@ -18,6 +18,18 @@
 -- Elements by namespace and local name (lowercase; an SVG element's
 -- feImage is "feimage"). In HTML, "image" is "img" (the parser renames it).
 --
+-- Besides the URLs (both runtimes, markup and setAttribute alike):
+--   integrity    dropped (rewritten content cannot match a hash); the page
+--                reads back what it wrote.
+--   crossorigin  on an HTML element, use-credentials — a resource and its
+--                preload keep one credentials mode (crossoriginValue) —
+--                except a font preload or prefetch, kept as written to
+--                match @font-face's anonymous fetch.
+--   sandbox      kept as written: a sandboxed frame is opaque through the
+--                proxy as directly (allow-same-origin, once added, let the
+--                parent read the frame's document, its messages come from
+--                a real origin, its cookies work).
+--
 -- Checked against Chromium (attrs-vs-chromium): every pair Chromium
 -- fetches from is oneUrl, urlList or srcsetList; every pair it does not is
 -- none or reflected; every IDL property resolving a URL is on a pair that
@@ -160,3 +172,17 @@ urlDest htmlNs t a rel as =
     else if hasRel "preload" rel ∨ hasRel "prefetch" rel then
       (if asIs "script" then just destScript else if asIs "style" then just destStyle else nothing)
     else nothing
+
+------------------------------------------------------------------------
+-- crossorigin, as written by the runtimes (nothing: left as written).
+-- html: an HTML element; rel, as: its attributes (ASCII case aside).
+
+crossoriginValue : Bool → Str → Str → Str → Maybe Str
+crossoriginValue html tag rel as =
+  if not html then nothing
+  else if eqStr tag (toList "link") ∧ (eqStr r (toList "preload") ∨ eqStr r (toList "prefetch")) ∧ eqStr (map lowerAscii as) (toList "font") then nothing
+  else just (toList "use-credentials")
+  where
+  open import Data.Bool.Base using (not; _∧_)
+  r : Str
+  r = map lowerAscii rel

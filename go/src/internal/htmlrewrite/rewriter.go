@@ -259,22 +259,16 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 	if _, ok := getAttr(attrs, "crossorigin"); ok {
 		rel, _ := getAttr(attrs, "rel")
 		as, _ := getAttr(attrs, "as")
-		isFontPreload := tag == "link" &&
-			(strings.EqualFold(rel, "preload") || strings.EqualFold(rel, "prefetch")) &&
-			strings.EqualFold(as, "font")
-		if !isFontPreload {
-			attrs = setAttr(attrs, "crossorigin", "use-credentials")
+		if v, set := crossoriginValue(!svg, tag, rel, as); set {
+			attrs = setAttr(attrs, "crossorigin", v)
 		}
 	}
 
-	// HTML_SANDBOX on <iframe> — ensure allow-same-origin so the
-	// nested document can talk to its parent's $rewriter.
-	if tag == "iframe" {
-		if v, ok := getAttr(attrs, "sandbox"); ok && !strings.Contains(v, "allow-same-origin") {
-			next := strings.TrimSpace(v + " allow-same-origin")
-			attrs = setAttr(attrs, "sandbox", next)
-		}
-	}
+	// An iframe's sandbox is kept as written (spec/Attrs.agda): a sandboxed
+	// frame without allow-same-origin has an opaque origin through the proxy
+	// as directly — its runtime is its own, its requests reach the proxy.
+	// allow-same-origin was added once: the parent then read the frame's
+	// document, its messages came from a real origin, its cookies worked.
 
 	// HTML_STYLE — inline `style="..."` is a declaration list, not a full
 	// stylesheet. The CSS rewriter is grammar-tolerant enough to handle a
@@ -560,4 +554,19 @@ func withOriginals(written, attrs []html.Attribute) []html.Attribute {
 	}
 	b.WriteByte('}')
 	return append(attrs, html.Attribute{Key: OriginalsAttr, Val: b.String()})
+}
+
+// crossoriginValue is the crossorigin written for an element
+// (spec/Attrs.agda crossoriginValue): on an HTML element use-credentials,
+// except a font preload or prefetch; set false: as written. An SVG
+// element's was forced too, where the runtime left it.
+func crossoriginValue(html bool, tag, rel, as string) (string, bool) {
+	if !html {
+		return "", false
+	}
+	r := strings.ToLower(rel)
+	if tag == "link" && (r == "preload" || r == "prefetch") && strings.ToLower(as) == "font" {
+		return "", false
+	}
+	return "use-credentials", true
 }

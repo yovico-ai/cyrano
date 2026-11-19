@@ -30,6 +30,7 @@ import { tokenize, withBootstrap, type Ns, type Tok, type TokAttr } from "./html
 import { isReferrerPolicy } from "../url/containment";
 import { isRefreshEquiv, rewriteRefresh } from "../url/refresh";
 import { rewriteAllow } from "../url/allow";
+import { crossoriginValue } from "../url/crossorigin";
 
 interface CapturedNatives {
     innerHTMLSet: (this: Element, value: string) => void;
@@ -217,10 +218,9 @@ function editStartTag(src: string, t: Extract<Tok, { kind: "start" }>, rewriteOn
         // request, alike for a resource and its preload (a preload left
         // "anonymous" is discarded and fetched twice); a font preload stays,
         // to match the anonymous @font-face fetch.
-        if (html && a.name === "crossorigin") {
-            const rel = (value("rel") ?? "").toLowerCase(), as = (value("as") ?? "").toLowerCase();
-            const fontPreload = t.name === "link" && (rel === "preload" || rel === "prefetch") && as === "font";
-            if (!fontPreload) change(a, "crossorigin", "use-credentials");
+        if (a.name === "crossorigin") {
+            const v2 = crossoriginValue(html, t.name, value("rel") ?? "", value("as") ?? "");
+            if (v2 !== null) change(a, "crossorigin", v2);
             continue;
         }
         const kind = urlAttrKind(!html, t.name, a.name);

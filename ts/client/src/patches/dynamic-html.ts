@@ -51,6 +51,7 @@ import { XLINK_NS, kindOf, rewriteByKind } from "./url-attribute-map";
 import { remark, rewriteFor, type RewriteOne } from "./referrer-policy";
 import { isRefreshEquiv, rewriteRefresh } from "../url/refresh";
 import { rewriteAllow } from "../url/allow";
+import { crossoriginValue } from "../url/crossorigin";
 import { scriptKindOf } from "./script-kind";
 import { isReferrerPolicy } from "../url/containment";
 import { wrapAccessor, wrapMethod } from "../native/surface";
@@ -392,10 +393,8 @@ function attributeValue(el: Element, name: string, value: string, rewriteOne: (u
     const lowerName = name.toLowerCase();
     if (lowerName === "integrity") return null;
     if (lowerName === "crossorigin") {
-        const rel = (el.getAttribute("rel") || "").toLowerCase();
-        const as = (el.getAttribute("as") || "").toLowerCase();
-        const isFontPreload = el.tagName === "LINK" && (rel === "preload" || rel === "prefetch") && as === "font";
-        return isFontPreload ? value : "use-credentials";
+        const html = el.namespaceURI === "http://www.w3.org/1999/xhtml";
+        return crossoriginValue(html, el.localName, heldAttr(el, "rel") ?? "", heldAttr(el, "as") ?? "") ?? value;
     }
     if (lowerName === "style") return rewriteCssText(value, rewriteOne);
     // A declarative refresh navigates like a link: through the proxy (spec/Refresh.agda).
