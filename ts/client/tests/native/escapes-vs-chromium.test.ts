@@ -142,6 +142,29 @@ describe.skipIf(!wanted)("escapes and breaks found on random sites, in Chromium"
         expect(hits).toContain("/cyrano/https/cdn.example/mod.mjs");
     }, 60_000);
 
+    // fetchLater: the quota is per original origin (under the proxy every
+    // destination is the proxy's — tumblr lost posts to "exceeds its
+    // quota"); requests beyond the proxy origin's own quota are deferred by
+    // the runtime and sent when the page goes away, as the browser's are.
+    it("fetchLater: per-origin quota, and every deferred request sent on leaving", async () => {
+        const page = await browser.newPage();
+        await page.goto(`${origin}/cyrano/https/site.example/page`);
+        const out = await page.evaluate(() => {
+            const r: string[] = [];
+            // 40 KB, then 30 KB and 20 KB to other origins: natively each
+            // origin has room; the proxy's one origin has not.
+            for (const [d, n] of [["https://a.example/later", 40000], ["https://b.example/later", 30000], ["https://c.example/later", 20000]] as const) {
+                try { (window as unknown as { fetchLater(u: string, i: object): unknown }).fetchLater(d, { method: "POST", body: "x".repeat(n) }); r.push("ok"); } catch (e) { r.push((e as Error).name); }
+            }
+            return r;
+        });
+        expect(out).toEqual(["ok", "ok", "ok"]);
+        await page.goto(`${origin}/cyrano/https/site.example/other`);
+        await page.waitForTimeout(1500);
+        const later = hits.filter((h) => h.includes("/later"));
+        expect(later.sort()).toEqual(["/cyrano/https/a.example/later", "/cyrano/https/b.example/later", "/cyrano/https/c.example/later"]);
+    }, 60_000);
+
     // The runtime parses written markup to rewrite it; a style attribute
     // parsed anywhere is checked against the page's CSP and reported. The
     // page's innerHTML must report once, as natively (reCAPTCHA reported twice).

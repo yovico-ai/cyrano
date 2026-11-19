@@ -280,8 +280,10 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
   destructuring is handled where the pattern has a source (R14:
   declarations, assignments — Transcend's consent manager), not in a
   parameter's or a nested pattern; an element's `referrerPolicy` drops the Referer;
-  `fetchLater` fails over the http proxy and shares one quota over TLS; a
-  document whose CSP is `default-src 'none'` still gets the runtime. DOM insertion by any
+  a document whose CSP is `default-src 'none'` still gets the runtime.
+  `fetchLater` keeps its quota per original origin and defers what the
+  proxy makes the native refuse (`patches/fetch-later.ts`; tumblr) — the
+  requests it defers go out with keepalive (64 KiB in flight at unload). DOM insertion by any
   method gives inserted empty frames the runtime (`dynamic-iframe.ts`); the
   URL fix-up before insert is still only appendChild/insertBefore/replaceChild.
 - Live check: `ts/e2e/tools/live-compare.cjs` (direct vs proxied, same

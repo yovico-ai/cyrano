@@ -17,6 +17,7 @@
 // "cors".
 
 import { SafeWeakMap, nO, nOP, nR, ncall } from "../native/intrinsics";
+import { patchFetchLater } from "./fetch-later";
 import { wrapAccessor, wrapConstructor, wrapMethod } from "../native/surface";
 import { CREDENTIALS, INITIATOR, includesCredentials, initiatorValue, corsAllows, exposedBy, isCrossOrigin, type CorsContext, type Exposed } from "./cors";
 import { headerViewsOf } from "./response-headers";
@@ -61,7 +62,7 @@ export function patchFetch(
     /** Responses that passed the CORS check → what they expose. */
     const corsResponses = new SafeWeakMap<object, Exposed>();
 
-    wrapMethod<typeof fetch>(targetWindow, "fetch", (native, self, args) => {
+    const nativeFetch = wrapMethod<typeof fetch>(targetWindow, "fetch", (native, self, args) => {
         const [input, ...rest] = args;
         const viaRequest = isRequest(input);
         // input.url reads back the original (patched getter below).
@@ -141,14 +142,10 @@ export function patchFetch(
         }]) as Promise<Response>;
     });
 
-    // fetchLater(input, init): a request the browser sends when the page
-    // goes away (ad measurement uses it). The URL is proxified as fetch's.
-    wrapMethod<(...a: unknown[]) => unknown>(targetWindow, "fetchLater", (native, self, args) => {
-        if (!args.length || isRequest(args[0])) return nR.apply(native, self, args);
-        const raw = String(args[0]);
-        if (nativeRefuses(raw, baseUrl)) return nR.apply(native, self, args);
-        return nR.apply(native, self, [rewriteOne(raw), ...args.slice(1)]);
-    });
+    // fetchLater: its quota per original origin, and deferred here where
+    // the native refuses for the proxy's reasons (fetch-later.ts).
+    patchFetchLater(targetWindow, rewriteOne, baseUrl, nativeFetch as ((...a: unknown[]) => Promise<Response>) | undefined,
+        (raw) => nativeRefuses(raw, baseUrl), isRequest);
 
     const R = w.Response?.prototype;
     if (R) {
