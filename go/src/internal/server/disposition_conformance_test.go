@@ -5,6 +5,7 @@ package server
 // Content-Type and sniffing. The Content-Type is never changed.
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/yovico/cyrano/internal/specoracle"
@@ -22,7 +23,8 @@ func TestSpecConformance_Disposition(t *testing.T) {
 		"iframe", "frame", "embed", "object", "empty", "image", "font", "manifest", "track", "video", "report", ""}
 	cts := []string{"text/javascript", "text/plain", "TEXT/HTML; charset=utf-8", " text/html ", "application/xhtml+xml", "text/css",
 		"text/css;x", "application/javascript", "application/x-javascript", "text/jscript", "application/json", "image/png",
-		"application/octet-stream", "", "text/htmlx", "text/javascript1.5", "\ttext/css\t"}
+		"application/octet-stream", "", "text/htmlx", "text/javascript1.5", "\ttext/css\t", "unknown/unknown", "Application/Unknown", "*/*", "foo",
+		"te xt/html", "text/html,", "foo,text/html", "text/html,*/*", "text/html, text/plain", "/html", "text/", "text/html x", "text/plain;a=b, unknown/unknown"}
 	rapid.Check(t, func(rt *rapid.T) {
 		mark := rapid.SampledFrom([]string{"-", "-", "js", "css"}).Draw(rt, "mark")
 		has := rapid.Bool().Draw(rt, "has")
@@ -48,4 +50,39 @@ func TestSpecConformance_Disposition(t *testing.T) {
 			rt.Fatalf("responseKind(%q, %q/%v, %q/%v, %v) = %s, spec says %s", mark, sfd, has, ct, hasCT, sniffed, got, want)
 		}
 	})
+}
+
+// Chromium's HTML sniff, against spec/Disposition.agda sniffHtml.
+func TestSpecConformance_SniffHTML(t *testing.T) {
+	oracle := specoracle.Need(t)
+	pieces := []string{"<p", "<P", "<b", "<bx", "<x", "<h1", "<h2", "<!--", "<!doctype html", "<!DOCTYPE HTM", "<script", "<scrip", "<?xml ?>", "hello",
+		" ", "\f", "\r", "\v", strings.Repeat(" ", 300), "<a", "<br", "<body", "<span", ">", "x"}
+	rapid.Check(t, func(rt *rapid.T) {
+		body := strings.Join(rapid.SliceOfN(rapid.SampledFrom(pieces), 1, 5).Draw(rt, "pieces"), "")
+		want, _, err := oracle.Ask("sniffhtml", body)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		if got := sniffHTMLBytes([]byte(body)); got != (want == "yes") {
+			rt.Fatalf("sniffHTMLBytes(%q) = %v, spec %s", body, got, want)
+		}
+	})
+}
+
+// A document served as unknown/unknown, */*, or a type without "/" is
+// sniffed by Chromium as one with none: its HTML was passed unrewritten,
+// and its URLs went straight to the origins. "<bx" is HTML to Chromium,
+// not to Go's DetectContentType.
+func TestResponseKind_SniffsUntakenTypes(t *testing.T) {
+	for _, ct := range []string{"unknown/unknown", "*/*", "foo", "", "te xt/html"} {
+		if k := responseKind("", "document", true, ct, true, func() bool { return true }); k != kindHTML {
+			t.Errorf("%q: %s, want html", ct, k)
+		}
+	}
+	if k := responseKind("", "document", true, "foo, text/html", true, func() bool { return false }); k != kindHTML {
+		t.Errorf("the last type taken: %s", k)
+	}
+	if !sniffHTMLBytes([]byte("\v<bx")) || sniffHTMLBytes([]byte("\ufeff<p>")) {
+		t.Error("sniff")
+	}
 }

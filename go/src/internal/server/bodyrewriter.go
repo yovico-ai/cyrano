@@ -317,17 +317,62 @@ func responseKind(mark urlrewrite.Dest, sfd string, has bool, ct string, hasCT b
 	case "style":
 		return kindCSS
 	case "document", "iframe", "frame", "embed", "object":
+		m, taken := "", false
 		if hasCT {
-			if isHTMLType {
-				return kindHTML
-			}
-			return kindAsIs
+			m, taken = takenMime(ct)
 		}
-		if sniffed() {
+		switch {
+		case taken && (m == "text/html" || m == "application/xhtml+xml"):
+			return kindHTML
+		case (!taken || m == "unknown/unknown" || m == "application/unknown") && sniffed():
 			return kindHTML
 		}
 	}
 	return kindAsIs
+}
+
+// takenMime is the MIME type Chromium takes from a Content-Type value
+// (spec/Disposition.agda takenMime): of each comma-separated item, HTTP
+// whitespace skipped, up to ";" or whitespace, lowercased; the last with a
+// "/" that is not */*. None: the document's type is sniffed.
+func takenMime(ct string) (string, bool) {
+	m, ok := "", false
+	for _, item := range strings.Split(ct, ",") {
+		item = strings.TrimLeft(item, " \t\r\n")
+		if i := strings.IndexAny(item, "; \t\r\n"); i >= 0 {
+			item = item[:i]
+		}
+		item = strings.ToLower(item)
+		if strings.Contains(item, "/") && item != "*/*" {
+			m, ok = item, true
+		}
+	}
+	return m, ok
+}
+
+// htmlPrefixes are what Chromium's HTML sniff looks for (spec/Disposition
+// sniffHtml).
+var htmlPrefixes = []string{"<!doctype html", "<script", "<html", "<!--", "<head", "<iframe", "<h1", "<div",
+	"<font", "<table", "<a", "<style", "<title", "<b", "<body", "<br", "<p"}
+
+// sniffHTMLBytes: Chromium's HTML sniff (looser than MIME Sniffing §7.1) —
+// in the first 512 bytes, after ASCII whitespace (vertical tab too), one
+// of htmlPrefixes, case aside, nothing required after it.
+func sniffHTMLBytes(body []byte) bool {
+	if len(body) > 512 {
+		body = body[:512]
+	}
+	i := 0
+	for i < len(body) && strings.IndexByte(" \t\n\v\f\r", body[i]) >= 0 {
+		i++
+	}
+	rest := strings.ToLower(string(body[i:]))
+	for _, p := range htmlPrefixes {
+		if strings.HasPrefix(rest, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func kindOf(resp *http.Response) bodyKind {
@@ -338,10 +383,7 @@ func kindOf(resp *http.Response) bodyKind {
 		}
 	}
 	cts := resp.Header.Values("Content-Type")
-	ct, hasCT := "", len(cts) > 0
-	if hasCT {
-		ct = cts[0]
-	}
+	ct, hasCT := strings.Join(cts, ","), len(cts) > 0 // the lines, as one list (Chromium reads them all)
 	return responseKind(proxy.RequestDest(resp), sfd, has, ct, hasCT, func() bool { return sniffedHTML(resp) })
 }
 
@@ -354,20 +396,14 @@ func replaceBody(resp *http.Response, body []byte) {
 	resp.Header.Del("Transfer-Encoding")
 }
 
-// sniffedHTML reports whether a document with no Content-Type at all is
-// one the browser renders as HTML: it sniffs the type from the first bytes
-// (WHATWG MIME Sniffing, "identifying an unknown MIME type"; Go's
-// http.DetectContentType is that algorithm). measureadv.com's sync frame is
-// such a page; unrewritten, its pixels went straight to the origins. The
-// body is read (decompressed) to look at it and put back; the response
-// keeps having no Content-Type, as it has for the page.
+// sniffedHTML reports whether a document whose type Chromium does not take
+// (no Content-Type, none with a "/", unknown/unknown, …: takenMime) is one
+// it renders as HTML: it sniffs the first bytes (sniffHTMLBytes).
+// measureadv.com's sync frame is such a page; unrewritten, its pixels went
+// straight to the origins. The body is read (decompressed) to look at it
+// and put back; the Content-Type stays as the origin sent it.
 func sniffedHTML(resp *http.Response) bool {
-	if len(resp.Header.Values("Content-Type")) != 0 || resp.Request == nil {
-		return false
-	}
-	switch strings.ToLower(resp.Request.Header.Get("Sec-Fetch-Dest")) {
-	case "document", "iframe", "frame", "embed", "object":
-	default:
+	if resp.Request == nil {
 		return false
 	}
 	body, err := readDecompressedBody(resp)
@@ -376,11 +412,7 @@ func sniffedHTML(resp *http.Response) bool {
 		return false
 	}
 	replaceBody(resp, body)
-	head := body
-	if len(head) > 512 {
-		head = head[:512]
-	}
-	return strings.HasPrefix(http.DetectContentType(head), "text/html")
+	return sniffHTMLBytes(body)
 }
 
 // isHTML reports whether the response Content-Type is rewritable HTML.

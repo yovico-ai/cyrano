@@ -14,8 +14,9 @@
 --   * Otherwise the request's Sec-Fetch-Dest says: script and the
 --     worker destinations are JavaScript, style is CSS (whatever the
 --     Content-Type, likewise); a document, frame, iframe, embed or object
---     is HTML when its MIME type's essence is HTML, or when it has no
---     Content-Type and its bytes sniff as HTML; a fetch() or XHR (empty)
+--     is HTML when its MIME type is HTML, or when it has none Chromium
+--     takes (no Content-Type, one without "/", */*, unknown/unknown,
+--     application/unknown) and its bytes sniff as HTML (sniffHtml); a fetch() or XHR (empty)
 --     is the page's data, as sent; any other destination too.
 --   * A request with no Sec-Fetch-Dest (a client that sends none) goes by
 --     the MIME type's essence.
@@ -30,6 +31,8 @@ open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.String.Base using (String; toList)
 
 open import Url using (Str; is; eqStr; lowerAscii; dropWhile; break)
+import Url
+open import Data.Nat.Base using (ℕ; zero; suc)
 open import Containment using (Dest; destScript; destStyle)
 
 data Kind : Set where
@@ -65,6 +68,64 @@ isJsType e = inS e ("application/ecmascript" ∷ "application/javascript" ∷ "a
   ∷ "text/javascript1.5" ∷ "text/jscript" ∷ "text/livescript" ∷ "text/x-ecmascript"
   ∷ "text/x-javascript" ∷ [])
 
+------------------------------------------------------------------------
+-- A document's type and sniffing, as Chromium does them (checked:
+-- sniff-vs-chromium). The value is a comma-separated list; of each item
+-- the MIME type is read — HTTP whitespace skipped, up to ";" or
+-- whitespace, lowercased — and the last one with a "/" that is not */* is
+-- taken (te xt,text/html is HTML). None taken, or unknown/unknown,
+-- application/unknown: the type is sniffed. Anything else with a "/" is
+-- taken as it is (/html, text/ are not sniffed).
+
+chromiumMime : Str → Str
+chromiumMime ct = map lowerAscii (Data.Product.Base.proj₁ (break stop (dropWhile ws ct)))
+  where
+  import Data.Product.Base
+  ws : _ → Bool
+  ws c = is 32 c ∨ is 9 c ∨ is 10 c ∨ is 13 c
+  stop : _ → Bool
+  stop c = is 59 c ∨ ws c
+
+unknownMime : Str → Bool
+unknownMime m = inS m ("unknown/unknown" ∷ "application/unknown" ∷ [])
+
+-- The type Chromium takes from a Content-Type value, if any.
+takenMime : Str → Maybe Str
+takenMime ct = lastOf (Url.splitOn (is 44) ct) nothing
+  where
+  lastOf : List Str → Maybe Str → Maybe Str
+  lastOf [] acc = acc
+  lastOf (x ∷ xs) acc =
+    lastOf xs (if Url.any (is 47) (chromiumMime x) ∧ not (eqStr (chromiumMime x) (toList "*/*")) then just (chromiumMime x) else acc)
+
+-- The HTML sniff (Chromium's, looser than MIME Sniffing §7.1): in the
+-- first 512 bytes, after ASCII whitespace (vertical tab too), one of these
+-- prefixes, ASCII case aside, with nothing required after it ("<bx" is
+-- HTML).
+htmlPrefixes : List String
+htmlPrefixes = "<!doctype html" ∷ "<script" ∷ "<html" ∷ "<!--" ∷ "<head" ∷ "<iframe" ∷ "<h1" ∷ "<div"
+  ∷ "<font" ∷ "<table" ∷ "<a" ∷ "<style" ∷ "<title" ∷ "<b" ∷ "<body" ∷ "<br" ∷ "<p" ∷ []
+
+sniffHtml : Str → Bool
+sniffHtml body = anyP htmlPrefixes
+  where
+  take : ℕ → Str → Str
+  take zero _ = []
+  take (suc n) [] = []
+  take (suc n) (c ∷ cs) = c ∷ take n cs
+  sws : _ → Bool
+  sws c = is 32 c ∨ is 9 c ∨ is 10 c ∨ is 11 c ∨ is 12 c ∨ is 13 c
+  rest : Str
+  rest = dropWhile sws (take 512 body)
+  starts : Str → Str → Bool
+  starts [] _ = true
+  starts (p ∷ ps) (c ∷ cs) = Data.Char.Base._≈ᵇ_ p (lowerAscii c) ∧ starts ps cs
+    where import Data.Char.Base
+  starts _ [] = false
+  anyP : List String → Bool
+  anyP []       = false
+  anyP (p ∷ ps) = starts (toList p) rest ∨ anyP ps
+
 -- dest: the URL's mark; sfd: Sec-Fetch-Dest (ASCII case aside; nothing:
 -- the request had none); ct: the Content-Type (nothing: none); sniffed: the
 -- body's first bytes sniff as HTML.
@@ -80,7 +141,11 @@ responseKind nothing (just d₀) ct sniffed =
   d : Str
   d = map lowerAscii d₀
   document : Maybe Str → Kind
-  document (just t) = if isHtmlType (essence t) then asHtml else asIs
+  document (just t) = byTaken (takenMime t)
+    where
+    byTaken : Maybe Str → Kind
+    byTaken nothing  = if sniffed then asHtml else asIs
+    byTaken (just m) = if isHtmlType m then asHtml else if unknownMime m ∧ sniffed then asHtml else asIs
   document nothing  = if sniffed then asHtml else asIs
 responseKind nothing nothing (just t) _ =
   if isHtmlType (essence t) then asHtml

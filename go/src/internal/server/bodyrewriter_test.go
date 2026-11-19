@@ -146,12 +146,14 @@ func TestSniffedHTML(t *testing.T) {
 	if sniffedHTML(doc("document", []byte("just text"), "")) {
 		t.Error("text sniffed as HTML")
 	}
-	if sniffedHTML(doc("script", []byte(page), "")) {
+	// Only a document whose type Chromium does not take is sniffed at all
+	// (responseKind asks).
+	asked := false
+	sniff := func() bool { asked = true; return true }
+	if responseKind("", "script", true, "", false, sniff); asked {
 		t.Error("a script fetch sniffed as a document")
 	}
-	typed := doc("document", []byte(page), "")
-	typed.Header.Set("Content-Type", "text/plain")
-	if sniffedHTML(typed) {
+	if k := responseKind("", "document", true, "text/plain", true, sniff); asked || k != kindAsIs {
 		t.Error("a typed response sniffed")
 	}
 }

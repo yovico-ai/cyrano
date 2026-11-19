@@ -15,6 +15,7 @@
 --                                       → {"out":"js|css|html|none"} (what the proxy does with the body)
 --   acceptch <field lines>              → {"out":"<names, space-separated>"|"none"} (none: counts for nothing)
 --   hintsent <hint> <set> <0|1> <0|1> <0|1> → {"out":"yes"|"no"}
+--   sniffhtml <body>                   → {"out":"yes"|"no"} (Chromium's HTML sniff)
 --   metadatasent <name> <0|1>          → {"out":"yes"|"no"} (reaches a target of that trustworthiness)
 --   storageaccess <mode> <dest> <cred> <chain> <from> <to> <site> <0|1> → {"out":"active"|"none"}
 --   allowframe <attr> <f> <0|1> <parent> <src> <frame> → {"out":"yes"|"no"} (the frame's featurePolicy)
@@ -282,6 +283,7 @@ dispatch op args =
   else if eqStr op (toList "targetdest") then targetDestReq args
   else if eqStr op (toList "rewritemark") then rewriteMarkReq args
   else if eqStr op (toList "disposition") then dispositionReq args
+  else if eqStr op (toList "sniffhtml") then sniffHtmlReq args
   else if eqStr op (toList "refreshread") then refreshReadReq args
   else if eqStr op (toList "wsmark") then wsMarkReq args
   else if eqStr op (toList "jsonbytes") then jsonBytesReq args
@@ -430,6 +432,10 @@ dispatch op args =
     opt : Str → Str → Maybe Str
     opt p v = if eqStr p (toList "1") then just v else nothing
   dispositionReq _ = errorReply "BadRequest"
+
+  sniffHtmlReq : List Str → Str
+  sniffHtmlReq (b ∷ []) = out (if Disposition.sniffHtml b then toList "yes" else toList "no")
+  sniffHtmlReq _ = errorReply "BadRequest"
 
   joinSp : List Str → Str
   joinSp []       = []

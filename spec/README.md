@@ -36,7 +36,7 @@ The rules both runtimes must follow byte for byte, written once:
 | `Metadata.agda` | the request headers sent only to potentially trustworthy targets (Sec-Fetch-*, client hints): none to an http name | `urlrewrite.SecureOnlyHeader`, `upstream.copyHeaders` |
 | `Hints.agda` | client hints: Accept-CH as Chromium reads it (an RFC 8941 list of tokens; invalid counts for nothing), how a set is replaced, which hints go where, and the Sec-CH-UA a Chrome of a version sends | `proxy/client_hints.go`; `upstream.SecChUa` |
 | `Upgrades.agda` | HTTPS-Upgrades: which navigations Chrome tries over https (unique names: a known ICANN TLD), the scheme swap in a marked URL, the per-host pending / fallback state | `proxy/https_upgrades.go` |
-| `Disposition.agda` | what the proxy rewrites a response's body as — JavaScript, CSS, HTML or nothing — by its URL's mark, else Sec-Fetch-Dest, never by changing the Content-Type | `server/bodyrewriter.go` (`responseKind`) |
+| `Disposition.agda` | what the proxy rewrites a response's body as — JavaScript, CSS, HTML or nothing — by its URL's mark, else Sec-Fetch-Dest, never by changing the Content-Type; a document's MIME type as Chromium reads it (a comma list, the last type with "/") and its HTML sniff | `server/bodyrewriter.go` (`responseKind`, `takenMime`, `sniffHTMLBytes`) |
 | `Oracle.agda` | wire format only (one request line → one JSON line) | — |
 | `Main.agda` | the IO loop (spec-oracle skill's file, unchanged) | — |
 
@@ -78,7 +78,7 @@ host, IDNA, an invalid last `Max-Age`): a URL or cookie the user's browser
 accepts and cyrano does not would escape containment. `make browser-check`
 runs the spec against real Chromium (URLs: `spec-vs-chromium`, cookies:
 `cookies-vs-chromium`, CORS: `fetch-vs-chromium`, framing:
-`framing-vs-chromium`, CSS URLs: `css-vs-chromium`, script kinds and the base URL: `html-vs-chromium`, the JSON import maps are read as: `json-vs-chromium`; what Chromium fetches from and which IDL properties resolve URLs: `attrs-vs-chromium`; which start tags make elements in which namespace, and that the bootstrap placed by the spec runs first and leaves the document as direct: `html-tok-vs-chromium`; what a Link header makes Chromium fetch, direct and rewritten: `link-vs-chromium`; what a refresh does: `refresh-vs-chromium`; a carried header and crnb metric as Chromium shows them: `carry-vs-chromium`; which client hints Chromium sends, and its Sec-CH-UA: `hints-vs-chromium`; what document.featurePolicy says under a Permissions-Policy and its translation: `permissions-vs-chromium`; what a frame's featurePolicy says under its allow attribute and its translation: `allow-vs-chromium`; Sec-Fetch-Storage-Access over random frame trees: `storage-access-vs-chromium`; which headers reach trustworthy and http targets: `metadata-vs-chromium`; which navigations real Chrome upgrades to https, and that a fallback sticks: `upgrades-vs-chrome` (`make chrome-check`: Google Chrome on a display); and for the CSP translation, which is cyrano's own
+`framing-vs-chromium`, CSS URLs: `css-vs-chromium`, script kinds and the base URL: `html-vs-chromium`, the JSON import maps are read as: `json-vs-chromium`; what Chromium fetches from and which IDL properties resolve URLs: `attrs-vs-chromium`; which start tags make elements in which namespace, and that the bootstrap placed by the spec runs first and leaves the document as direct: `html-tok-vs-chromium`; what a Link header makes Chromium fetch, direct and rewritten: `link-vs-chromium`; what a refresh does: `refresh-vs-chromium`; a carried header and crnb metric as Chromium shows them: `carry-vs-chromium`; which client hints Chromium sends, and its Sec-CH-UA: `hints-vs-chromium`; what document.featurePolicy says under a Permissions-Policy and its translation: `permissions-vs-chromium`; what a frame's featurePolicy says under its allow attribute and its translation: `allow-vs-chromium`; Sec-Fetch-Storage-Access over random frame trees: `storage-access-vs-chromium`; which headers reach trustworthy and http targets: `metadata-vs-chromium`; which documents Chromium renders as markup, by Content-Type and sniff: `sniff-vs-chromium`; which navigations real Chrome upgrades to https, and that a fallback sticks: `upgrades-vs-chrome` (`make chrome-check`: Google Chrome on a display); and for the CSP translation, which is cyrano's own
 rule, the page-cannot-tell property: what loads directly loads proxied,
 `csp-vs-chromium`) and the runtime's native surface, `postMessage` and
 workers in it (`tests/native`). IDNA, outside the spec, is checked by a
@@ -118,8 +118,8 @@ entry when its module lands):
 
 - Feature-Policy translation (Go `proxy/permissions.go`, the older word
   rule).
-- MIME sniffing beyond the HTML check, and `fetch_headers.go`'s
-  destination lists (the body decision is `Disposition.agda`).
+- `fetch_headers.go`'s destination lists (which responses set a
+  document's referrer policy).
 - postMessage targetOrigin (TS `messaging/target-origin.ts`).
 
 Medium: CSS attribute selectors widened to proxied URLs (TS

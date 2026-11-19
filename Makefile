@@ -36,7 +36,7 @@ spec-check: oracle
 browser-check: oracle
 	cd ts/client && npm run build
 	cd ts/client && CYRANO_ORACLE=$(ORACLE) CYRANO_REQUIRE_ORACLE=1 CYRANO_BROWSER=1 \
-		npx vitest run tests/spec/spec-vs-chromium.test.ts tests/spec/cookies-vs-chromium.test.ts tests/spec/fetch-vs-chromium.test.ts tests/spec/csp-vs-chromium.test.ts tests/spec/framing-vs-chromium.test.ts tests/spec/css-vs-chromium.test.ts tests/spec/html-vs-chromium.test.ts tests/spec/json-vs-chromium.test.ts tests/spec/attrs-vs-chromium.test.ts tests/spec/html-tok-vs-chromium.test.ts tests/spec/link-vs-chromium.test.ts tests/spec/refresh-vs-chromium.test.ts tests/spec/carry-vs-chromium.test.ts tests/spec/hints-vs-chromium.test.ts tests/spec/permissions-vs-chromium.test.ts tests/spec/allow-vs-chromium.test.ts tests/spec/storage-access-vs-chromium.test.ts tests/spec/metadata-vs-chromium.test.ts tests/native
+		npx vitest run tests/spec/spec-vs-chromium.test.ts tests/spec/cookies-vs-chromium.test.ts tests/spec/fetch-vs-chromium.test.ts tests/spec/csp-vs-chromium.test.ts tests/spec/framing-vs-chromium.test.ts tests/spec/css-vs-chromium.test.ts tests/spec/html-vs-chromium.test.ts tests/spec/json-vs-chromium.test.ts tests/spec/attrs-vs-chromium.test.ts tests/spec/html-tok-vs-chromium.test.ts tests/spec/link-vs-chromium.test.ts tests/spec/refresh-vs-chromium.test.ts tests/spec/carry-vs-chromium.test.ts tests/spec/hints-vs-chromium.test.ts tests/spec/permissions-vs-chromium.test.ts tests/spec/allow-vs-chromium.test.ts tests/spec/storage-access-vs-chromium.test.ts tests/spec/metadata-vs-chromium.test.ts tests/spec/sniff-vs-chromium.test.ts tests/native
 
 # Rules only real Chrome shows (Playwright's Chromium switches them off):
 # needs Google Chrome and a display (headed; DISPLAY=:98 under Xvfb).
