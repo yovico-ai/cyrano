@@ -119,8 +119,7 @@ upkeep"). What remains, by priority (inventory of 2026-11-18; remove an
 entry when its module lands):
 
 
-Medium: URL-bearing CSS properties (TS
-`css-style-declaration.ts`); crossorigin / integrity / sandbox rules;
+Medium: crossorigin / integrity / sandbox rules;
 fetchLater's quota formula (TS); the storage partition key (TS: by
 origin, browsers by site); blob/data worker sources; a frame's pending
 origin; error-stack URL extraction; compression-dictionary removal;

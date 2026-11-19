@@ -106,3 +106,19 @@ describe("patchCssStyleDeclaration — named property setters", () => {
         }).not.toThrow();
     });
 });
+
+// A URL in a property outside the old URL-bearing list went straight to
+// the origin when assigned by name (-webkit-mask-image, clip-path, …); and
+// image-set("…") was not sniffed by setProperty.
+describe("patchCssStyleDeclaration — any property, by its value", () => {
+    it("rewrites a URL assigned to any property, and image-set strings", () => {
+        patchCssStyleDeclaration(window, tag);
+        const div = document.createElement("div");
+        div.style.setProperty("mask-image", 'image-set("m.png" 1x)');
+        expect(div.style.getPropertyValue("mask-image")).toContain("m.png?p=1");
+        div.style.setProperty("clip-path", "url(c.svg)");
+        expect(div.style.getPropertyValue("clip-path")).toContain("c.svg?p=1");
+        div.style.setProperty("width", "calc(100% - 10px)");
+        expect(div.style.getPropertyValue("width")).toBe("calc(100% - 10px)");
+    });
+});

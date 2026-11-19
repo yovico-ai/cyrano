@@ -52,4 +52,15 @@ describe.skipIf(located.skip !== "")("CSS: spec conformance", () => {
             expect(cssUrls(text).join("\n"), JSON.stringify(text)).toBe(want);
         }), { numRuns: 800 });
     });
+
+    // The runtime rewrites a style value only when it holds "(" (patches/
+    // css-style-declaration.ts mayHoldUrl): text with neither "(" nor "@"
+    // (no url(, image-set(, @import) is left as it is by the spec.
+    it("a value without ( or @ is left as it is", async () => {
+        const proxy = "http://localhost:9081", base = "https://site.example/dir/page";
+        const plain = css.map((t) => t.replace(/[(@]/g, ""));
+        await fc.assert(fc.asyncProperty(plain, async (text) => {
+            expect(await oracle.ask("css", [proxy, base, text]), JSON.stringify(text)).toBe(text);
+        }), { numRuns: 800 });
+    });
 });

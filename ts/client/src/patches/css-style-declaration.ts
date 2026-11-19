@@ -8,10 +8,8 @@
 //      block. Rewrite the value as a CSS source string.
 //
 //   2. `el.style.setProperty("background-image", "url('x.png')")` — method-
-//      form assignment. Rewrite the value when the property name is one we
-//      recognise as URL-bearing, OR if the value contains a url(...) /
-//      @import construct (defensive: covers shorthand props like `background`
-//      that mix URL with other declarations).
+//      form assignment. Rewrite a value that may name a URL (mayHoldUrl),
+//      whatever the property.
 //
 //   3. `el.style.backgroundImage = "url('x.png')"` — named-property setter.
 //      We patch the prototype-level setter for each known URL-bearing CSS
@@ -28,42 +26,9 @@
 // Recursion safety: rewriteCssText is pure (no DOM callbacks), so calling
 // it inside the patched setter is recursion-free.
 
-import { SafeSet, SafeWeakMap, SafeWeakSet, nO, nOP, nR, ncall } from "../native/intrinsics";
+import { SafeWeakMap, SafeWeakSet, nO, nOP, nR, ncall } from "../native/intrinsics";
 import { rewriteCssText } from "../css/rewriter";
 import { wrapAccessor, wrapMethod } from "../native/surface";
-
-// Camel-case named CSS properties that carry a URL value (the form the JS
-// API exposes). The CSS-attribute form (with hyphens) is what setProperty
-// receives. Both are listed explicitly; conversion would be straightforward
-// (camelCase → kebab-case via regex) but kept explicit so the list is
-// scannable and easy to extend.
-const URL_BEARING_CAMEL = [
-    "backgroundImage",
-    "borderImage",
-    "borderImageSource",
-    "listStyleImage",
-    "maskImage",
-    "cursor",
-    "content",
-    // Shorthand / multi-value properties that may contain url(...). Listed
-    // so the named-setter patch covers them; setProperty also does a content
-    // sniff for url()/@import which catches everything else.
-    "background",
-    "border",
-    "borderTop",
-    "borderRight",
-    "borderBottom",
-    "borderLeft",
-    "mask",
-] as const;
-
-const URL_BEARING_KEBAB_SET = new SafeSet<string>(
-    URL_BEARING_CAMEL.map(camelToKebab),
-);
-
-function camelToKebab(s: string): string {
-    return s.replace(/([A-Z])/g, "-$1").toLowerCase();
-}
 
 // Prototypes already patched, per realm (see css-rules.ts).
 const done = new SafeWeakSet<object>();
@@ -136,7 +101,7 @@ function patchSetProperty(
         if (typeof name === "string" && typeof value === "string") {
             // A known URL-bearing property, or a value with url()/@import
             // (unknown shorthands, future properties).
-            if (URL_BEARING_KEBAB_SET.has(name.toLowerCase()) || /url\s*\(|@import/i.test(value)) {
+            if (mayHoldUrl(value)) {
                 const next = args.slice();
                 next[1] = rewriteCssText(value, rewriteOne);
                 return nR.apply(native, self, next) as void;
@@ -159,9 +124,15 @@ function patchNamedSetters(
     proto: object,
     rewriteOne: (url: string) => string,
 ): void {
-    for (const propName of URL_BEARING_CAMEL) {
-        wrapAccessor<unknown>(proto, propName, {
-            set: (set, self, value) => ncall(set, self, typeof value === "string" ? rewriteCssText(value, rewriteOne) : value),
+    // Where the named properties are accessors (not Chrome's own
+    // properties: the views below), each setter rewrites a value that may
+    // name a URL, whatever the property.
+    for (const key of nR.ownKeys(proto)) {
+        if (typeof key !== "string" || key === "cssText") continue;
+        const d = nO.getOwnPropertyDescriptor(proto, key);
+        if (!d?.set || !d.configurable) continue;
+        wrapAccessor<unknown>(proto, key, {
+            set: (set, self, value) => ncall(set, self, typeof value === "string" && mayHoldUrl(value) ? rewriteCssText(value, rewriteOne) : value),
         });
     }
 }
@@ -188,8 +159,17 @@ const reals = new SafeWeakMap<object, object>(); // view → declaration
 /** The declaration behind a view, or the value itself. */
 const unview = (x: unknown): unknown => (typeof x === "object" && x !== null && reals.get(x)) || x;
 
-function isUrlBearing(name: string): boolean {
-    return URL_BEARING_KEBAB_SET.has(name) || URL_BEARING_KEBAB_SET.has(camelToKebab(name));
+/**
+ * Whether a declaration value may name a URL: every URL a CSS value can
+ * name — a url( token, a string in image-set( — needs a literal "(" (an
+ * escaped one opens nothing). Decided by the value, never the property:
+ * by name, -webkit-mask-image, clip-path, filter, shape-outside, marker-*,
+ * fill, @font-face's src … went straight to the origin. A value without
+ * "(" is left as it is by the rewriter anyway (spec/Css.agda; checked:
+ * css-conformance).
+ */
+export function mayHoldUrl(value: string): boolean {
+    return value.indexOf("(") >= 0;
 }
 
 function viewOf(decl: unknown, rewriteOne: (url: string) => string): unknown {
@@ -198,13 +178,13 @@ function viewOf(decl: unknown, rewriteOne: (url: string) => string): unknown {
     if (!v) {
         v = new Proxy(decl, {
             set: (target, p, value, receiver) => {
-                if (typeof p === "string" && typeof value === "string" && isUrlBearing(p)) value = rewriteCssText(value, rewriteOne);
+                if (typeof p === "string" && typeof value === "string" && mayHoldUrl(value)) value = rewriteCssText(value, rewriteOne);
                 // Assignments land on the declaration itself (the engine's setter).
                 return nR.set(target, p, value, receiver === v ? target : receiver);
             },
             get: (target, p, receiver) => nR.get(target, p, receiver === v ? target : receiver),
             defineProperty: (target, p, d) => {
-                if (typeof p === "string" && "value" in d && typeof d.value === "string" && isUrlBearing(p)) {
+                if (typeof p === "string" && "value" in d && typeof d.value === "string" && mayHoldUrl(d.value)) {
                     d = { ...d, value: rewriteCssText(d.value, rewriteOne) };
                 }
                 return nR.defineProperty(target, p, d);

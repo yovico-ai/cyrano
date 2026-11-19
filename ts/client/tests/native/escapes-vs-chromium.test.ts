@@ -12,6 +12,8 @@
 //     the proxy's (Transcend's consent manager refused to run);
 //   * a module script built by page code imported straight from the origin
 //     (HubSpot on wurthlac); its import.meta.url is the page's URL.
+//   * a URL assigned to a style property outside a fixed list
+//     (el.style.webkitMaskImage, clip-path, …) went straight to the origin.
 // Each request must reach the proxy, and the page must read back what it wrote.
 //
 // Needs the built bundle and Playwright's Chromium; `make browser-check`.
@@ -25,7 +27,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const bundlePath = resolve(__dirname, "../../../../go/assets/client/rewriter.js");
 const wanted = process.env.CYRANO_BROWSER === "1" && existsSync(bundlePath);
 
-type Page = { goto(u: string): Promise<unknown>; evaluate<T>(f: () => T): Promise<T>; waitForTimeout(ms: number): Promise<void> };
+type Page = { goto(u: string): Promise<unknown>; evaluate<T>(f: () => T): Promise<T>; waitForTimeout(ms: number): Promise<void>; on(e: "request", f: (r: { url(): string }) => void): void };
 type Browser = { newPage(): Promise<Page>; close(): Promise<void> };
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
@@ -204,5 +206,34 @@ describe.skipIf(!wanted)("escapes and breaks found on random sites, in Chromium"
             return count;
         });
         expect(n).toBe(1);
+    }, 60_000);
+
+    // Every CSS property Chromium has, assigned a url() and an image-set() by
+    // name and by setProperty: whatever it fetches goes through the proxy.
+    it("a URL in any style property reaches the proxy", async () => {
+        const page = await browser.newPage();
+        const escaped: string[] = [];
+        page.on("request", (r) => { if (!r.url().startsWith(origin) && !r.url().startsWith("data:")) escaped.push(r.url()); });
+        await page.goto(`${origin}/cyrano/https/site.example/page`);
+        const n = await page.evaluate(async () => {
+            const probe = document.createElement("div").style as unknown as Record<string, unknown>;
+            const names = Object.keys(probe).filter((k) => typeof probe[k] === "string" && !/^\d+$/.test(k) && k !== "cssText");
+            names.forEach((name, i) => {
+                const a = document.createElement("div");
+                a.textContent = "x";
+                document.body.appendChild(a);
+                (a.style as unknown as Record<string, string>)[name] = `url("https://cdn.example/n${i}.png")`;
+                const b = document.createElement("div");
+                b.textContent = "x";
+                document.body.appendChild(b);
+                const kebab = name.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase()).replace(/^webkit-/, "-webkit-");
+                b.style.setProperty(kebab, `image-set("https://cdn.example/s${i}.png" 1x)`);
+            });
+            await new Promise((r) => setTimeout(r, 1500));
+            return names.length;
+        });
+        expect(n).toBeGreaterThan(300);
+        expect(escaped).toEqual([]);
+        expect(hits.filter((h) => h.startsWith("/cyrano/https/cdn.example/n")).length).toBeGreaterThan(3);
     }, 60_000);
 });
