@@ -93,7 +93,15 @@ func asciiWS(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\
 // (spec/Allow.agda rewriteAllow): each allowlist word that names an origin
 // becomes 'src' — through the proxy the frame's src is a proxy URL, and an
 // origin there names nothing. Every other byte is kept.
-func RewriteAllow(v string) string {
+func RewriteAllow(v string) string { return rewriteWords(v, "'src'", false) }
+
+// RewriteFeaturePolicy is a Feature-Policy header as the browser is given
+// it (spec/Allow.agda rewriteFeaturePolicy): each origin word becomes
+// 'self' — every document has the proxy's origin there; a *. pattern is
+// not one (Feature-Policy reads none), nor is an unknown word.
+func RewriteFeaturePolicy(v string) string { return rewriteWords(v, "'self'", true) }
+
+func rewriteWords(v, to string, noWild bool) string {
 	dirs := strings.Split(v, ";")
 	for i, d := range dirs {
 		var b strings.Builder
@@ -110,8 +118,8 @@ func RewriteAllow(v string) string {
 				k++
 			}
 			w := d[j:k]
-			if seenName && allowWordIsOrigin(w) {
-				w = "'src'"
+			if seenName && allowWordIsOrigin(w) && !(noWild && wildOrigin(w)) {
+				w = to
 			}
 			b.WriteString(w)
 			seenName = true
@@ -120,6 +128,12 @@ func RewriteAllow(v string) string {
 		dirs[i] = b.String()
 	}
 	return strings.Join(dirs, ";")
+}
+
+// wildOrigin: an origin word whose host is a *. pattern.
+func wildOrigin(w string) bool {
+	u, res := parseRef(nil, w)
+	return res == parsedURL && strings.HasPrefix(strings.ToLower(u.auth), "%2a.")
 }
 
 // allowWordIsOrigin: an allow attribute's word that names an origin — not

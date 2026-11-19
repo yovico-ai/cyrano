@@ -21,6 +21,8 @@
 --   metadatasent <name> <0|1>          → {"out":"yes"|"no"} (reaches a target of that trustworthiness)
 --   storageaccess <mode> <dest> <cred> <chain> <from> <to> <site> <0|1> → {"out":"active"|"none"}
 --   allowframe <attr> <f> <0|1> <parent> <src> <frame> → {"out":"yes"|"no"} (the frame's featurePolicy)
+--   fpallows <pp lines|""> <fp> <f> <0|1> <doc> <origin> → {"out":"yes"|"no"} (featurePolicy.allowsFeature)
+--   fprewrite <Feature-Policy>          → {"out":"<the header the browser is given>"}
 --   allowrewrite <attr>                 → {"out":"<the attribute the browser is given>"}
 --   ppallows <lines> <feature> <0|1> <doc> <origin> → {"out":"yes"|"no"} (featurePolicy.allowsFeature)
 --   pptranslate <lines>                 → {"out":"<the lines the browser is given>"}
@@ -299,6 +301,8 @@ dispatch op args =
   else if eqStr op (toList "upgradable") then upgradableReq args
   else if eqStr op (toList "ppallows") then ppAllowsReq args
   else if eqStr op (toList "allowframe") then allowFrameReq args
+  else if eqStr op (toList "fpallows") then fpAllowsReq args
+  else if eqStr op (toList "fprewrite") then fpRewriteReq args
   else if eqStr op (toList "storageaccess") then storageAccessReq args
   else if eqStr op (toList "metadatasent") then metadataSentReq args
   else if eqStr op (toList "allowrewrite") then allowRewriteReq args
@@ -493,6 +497,20 @@ dispatch op args =
   allowFrameReq (a ∷ f ∷ d ∷ p ∷ sr ∷ fr ∷ []) =
     out (if Allow.frameAllows (eqStr d (toList "1")) a f p sr fr then toList "yes" else toList "no")
   allowFrameReq _ = errorReply "BadRequest"
+
+  -- fpallows <Permissions-Policy lines, LF-separated> <Feature-Policy> <feature> <default * 0|1> <doc> <origin>
+  fpAllowsReq : List Str → Str
+  fpAllowsReq (pp ∷ fp ∷ f ∷ d ∷ doc ∷ o ∷ []) =
+    out (if Allow.fpAllows (eqStr d (toList "1")) (ppLines pp) fp f doc o then toList "yes" else toList "no")
+    where
+    ppLines : Str → List Str
+    ppLines [] = []
+    ppLines x  = splitOn (is 10) x
+  fpAllowsReq _ = errorReply "BadRequest"
+
+  fpRewriteReq : List Str → Str
+  fpRewriteReq (a ∷ []) = out (Allow.rewriteFeaturePolicy a)
+  fpRewriteReq _ = errorReply "BadRequest"
 
   allowRewriteReq : List Str → Str
   allowRewriteReq (a ∷ []) = out (Allow.rewriteAllow a)

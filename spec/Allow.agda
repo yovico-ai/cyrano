@@ -25,6 +25,7 @@ open import Data.String.Base using (toList)
 
 open import Url using (Str; is; eqStr; eqLower; lowerAscii; splitOn; isEmpty)
 open import Permissions using (Entry; all; self; orig; wild; originEntry; matches)
+import Permissions
 
 asciiWS : Char → Bool
 asciiWS c = is 32 c ∨ is 9 c ∨ is 10 c ∨ is 12 c ∨ is 13 c
@@ -53,15 +54,17 @@ item w =
   byOrigin (just e) = origin e
   byOrigin nothing  = junk
 
--- The directives: (feature, items), a feature's first directive kept.
-directives : Str → List (Str × List Item)
-directives s = firsts (dir (splitOn (is 59) s))
+-- The directives: (feature, items), a feature's first directive kept; a
+-- feature with no allowlist gets the default item ('src' in an allow
+-- attribute, 'self' in a Feature-Policy header).
+directivesWith : Item → Str → List (Str × List Item)
+directivesWith dflt s = firsts (dir (splitOn (is 59) s))
   where
   dir : List Str → List (Str × List Item)
   dir [] = []
   dir (d ∷ ds) with words d
   ... | []       = dir ds
-  ... | f ∷ []   = (f , srcI ∷ []) ∷ dir ds          -- names as written: case matters
+  ... | f ∷ []   = (f , dflt ∷ []) ∷ dir ds          -- names as written: case matters
   ... | f ∷ i ∷ is = (f , map item (i ∷ is)) ∷ dir ds
   known : Str → List (Str × List Item) → Bool
   known f [] = false
@@ -72,11 +75,18 @@ directives s = firsts (dir (splitOn (is 59) s))
   firsts : List (Str × List Item) → List (Str × List Item)
   firsts = firstsAcc []
 
+directives : Str → List (Str × List Item)
+directives = directivesWith srcI
+
 ------------------------------------------------------------------------
 -- The frame's view: whether a frame of origin `frame`, whose src had
 -- origin `src`, in a document of origin `parent` (with no
 -- Permissions-Policy) is allowed feature f. defaultAll: the feature's
 -- default allowlist is *.
+
+-- In a header 'src' matches no origin: the src origin given is this.
+noSrc : Str
+noSrc = toList "\0src"
 
 itemMatches : Str → Str → Str → Item → Bool
 itemMatches parent src frame any        = true
@@ -103,16 +113,23 @@ frameAllows defaultAll attr f parent src frame with lookupD f (directives attr)
 -- The translation: each word of a directive's allowlist that names an
 -- origin becomes 'src'; every other byte is kept.
 
-rewriteWord : Str → Str
-rewriteWord w with item w
-... | origin _ = toList "'src'"
+-- A Feature-Policy reads no *. pattern (Permissions-Policy does).
+noWild : Item → Item
+noWild (origin (wild _ _)) = junk
+noWild i                   = i
+
+rewriteWordTo : (Item → Item) → Str → Str → Str
+rewriteWordTo adj to w with adj (item w)
+... | origin _ = to
 ... | _        = w
 
 -- Words are rewritten in place: the runs of whitespace between them, and
 -- the feature names, as written.
-rewriteAllow : Str → Str
-rewriteAllow s = joinSemi (map dirText (splitOn (is 59) s))
+rewriteWordsTo : (Item → Item) → Str → Str → Str
+rewriteWordsTo adj to s = joinSemi (map dirText (splitOn (is 59) s))
   where
+  rewriteWord : Str → Str
+  rewriteWord = rewriteWordTo adj to
   joinSemi : List Str → Str
   joinSemi []       = []
   joinSemi (x ∷ []) = x
@@ -133,3 +150,33 @@ rewriteAllow s = joinSemi (map dirText (splitOn (is 59) s))
     flushed = if isEmpty acc then [] else (if seenName then rewriteWord (reverse acc) else reverse acc)
   dirText : Str → Str
   dirText d = walk false [] d
+
+rewriteAllow : Str → Str
+rewriteAllow = rewriteWordsTo (λ i → i) (toList "'src'")
+
+------------------------------------------------------------------------
+-- The Feature-Policy header (the older syntax of Permissions-Policy, still
+-- read by Chromium): the attribute's directives, a feature with no
+-- allowlist meaning 'self'; 'src' names nothing here, nor does a *.
+-- pattern (Permissions-Policy's only). A feature the
+-- Permissions-Policy names is decided by it alone (the two headers
+-- together: Chromium; checked in feature-policy-vs-chromium). The proxy
+-- writes each origin 'self' — every document there has the proxy's origin
+-- — and keeps every other byte: an unknown word stays one Chromium ignores.
+
+fpAllows : Bool → List Str → Str → Str → Str → Str → Bool
+fpAllows defaultAll ppLines fp f doc o with Permissions.policy ppLines
+... | just p with Permissions.lookupF f p
+...   | just es = Permissions.anyE (Permissions.matches doc o) es
+...   | nothing = byFP
+  where
+  byFP : Bool
+  byFP with lookupD f (directivesWith selfI fp)
+  ... | just is = anyI (λ i → itemMatches doc noSrc o (noWild i)) is
+  ... | nothing = defaultAll ∨ eqStr o doc
+fpAllows defaultAll ppLines fp f doc o | nothing with lookupD f (directivesWith selfI fp)
+... | just is = anyI (λ i → itemMatches doc noSrc o (noWild i)) is
+... | nothing = defaultAll ∨ eqStr o doc
+
+rewriteFeaturePolicy : Str → Str
+rewriteFeaturePolicy = rewriteWordsTo noWild (toList "'self'")

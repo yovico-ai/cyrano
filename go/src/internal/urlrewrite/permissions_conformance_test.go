@@ -65,3 +65,23 @@ func TestSpecConformance_RewriteAllow(t *testing.T) {
 		}
 	})
 }
+
+func TestSpecConformance_RewriteFeaturePolicy(t *testing.T) {
+	oracle := specoracle.Need(t)
+	words := []string{"geolocation", "camera", "*", "'self'", "'SELF'", "'src'", "'none'", "self", "https://a.example", "https://a.example:8443/p",
+		"http://u@h.example", "data:x", "junk", "https://*.a.example", "HTTPS://*.A.EXAMPLE", "ws://h", "http:/x"}
+	rapid.Check(t, func(rt *rapid.T) {
+		var b strings.Builder
+		for n := rapid.IntRange(1, 10).Draw(rt, "n"); n > 0; n-- {
+			b.WriteString(rapid.SampledFrom(append(append([]string{}, words...), " ", "  ", "\t", ";", "; ", ";;")).Draw(rt, "piece"))
+		}
+		v := b.String()
+		want, _, err := oracle.Ask("fprewrite", v)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		if got := RewriteFeaturePolicy(v); got != want {
+			rt.Fatalf("RewriteFeaturePolicy(%q)\n got  %q\n spec %q", v, got, want)
+		}
+	})
+}

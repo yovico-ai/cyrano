@@ -8,12 +8,14 @@ import (
 func TestTranslatePermissionsPolicy(t *testing.T) {
 	h := http.Header{}
 	h.Set("Permissions-Policy", `camera=(), sync-xhr=(), xr-spatial-tracking=*, geolocation=(self "https://maps.example" "https://x.example"), fullscreen=("https://a.example")`)
-	h.Set("Feature-Policy", `camera 'none'; geolocation 'self' https://maps.example; fullscreen *`)
+	h.Set("Feature-Policy", `camera 'none'; geolocation 'self' https://maps.example; fullscreen * junk`)
 	translatePermissionsPolicy(h)
 	if got, want := h.Get("Permissions-Policy"), `camera=(), sync-xhr=(), xr-spatial-tracking=*, geolocation=(self), fullscreen=(self)`; got != want {
 		t.Errorf("Permissions-Policy:\n got  %s\n want %s", got, want)
 	}
-	if got, want := h.Get("Feature-Policy"), `camera 'none'; geolocation 'self'; fullscreen *`; got != want {
+	// Origins become 'self' in place; an unknown word stays one Chromium
+	// ignores (the old rule made it 'self', granting the feature).
+	if got, want := h.Get("Feature-Policy"), `camera 'none'; geolocation 'self' 'self'; fullscreen * junk`; got != want {
 		t.Errorf("Feature-Policy:\n got  %s\n want %s", got, want)
 	}
 }

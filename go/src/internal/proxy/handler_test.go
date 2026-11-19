@@ -348,7 +348,9 @@ func TestServeHTTPWithTarget_HeaderReconstitution(t *testing.T) {
 	if v := rec.Header().Get("Permissions-Policy"); v != "ch-dpr=(), ch-viewport-width=()" {
 		t.Errorf("Permissions-Policy should be translated to the proxy, got %q", v)
 	}
-	if v := rec.Header().Get("Feature-Policy"); v != "dpr 'self'" {
+	// i.dell.com is no URL: Chromium ignores the word (nobody is allowed
+	// dpr), so it stays (spec/Allow.agda; the old rule granted 'self').
+	if v := rec.Header().Get("Feature-Policy"); v != "dpr i.dell.com" {
 		t.Errorf("Feature-Policy should be translated to the proxy, got %q", v)
 	}
 	// … and the rest passes as the origin sent it.
