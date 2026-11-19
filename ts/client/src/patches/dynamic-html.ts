@@ -49,6 +49,7 @@ export function bootstrapOf(node: unknown): (() => string) | undefined {
 import { rewriteSrcsetAttribute } from "./srcset";
 import { SVG_NS, XLINK_NS, isSrcsetAttr, svgUrlAttrs, urlAttrsForTagName } from "./url-attribute-map";
 import { remark, rewriteFor } from "./referrer-policy";
+import { scriptKindOf } from "./script-kind";
 import { isReferrerPolicy } from "../url/containment";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 import { injectFramesIn } from "./dynamic-iframe";
@@ -257,10 +258,9 @@ export function rawText(el: Element, text: string, rewriteOne: (url: string) => 
     const tag = el.tagName;
     if (tag === "STYLE") return rewriteCssText(text, rewriteOne);
     if (tag !== "SCRIPT") return null;
-    const type = (el.getAttribute("type") ?? "").trim().toLowerCase();
-    if (type === "importmap") return rewriteImportMap(text, rewriteOne);
-    const isJs = type === "" || type === "module" || /^(text|application)\/(x-)?(java|ecma)script$/.test(type);
-    if (!isJs) return text;
+    const kind = scriptKindOf(el);
+    if (kind === "importmap") return rewriteImportMap(text, rewriteOne);
+    if (kind !== "classic" && kind !== "module") return text;
     // As the server's: static import/export specifiers and literal import()
     // are proxified against the script's base URL, which import.meta.url
     // then is (HubSpot's islands imported straight from the origin).

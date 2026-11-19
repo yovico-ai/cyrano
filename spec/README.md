@@ -19,6 +19,8 @@ The rules both runtimes must follow byte for byte, written once:
 | `Cookies.agda` | reading Set-Cookie, storing, choosing cookies for a URL, SameSite, and the wire form of a cookie in the browser's jar (RFC 6265bis) | `urlrewrite/cookies.go`, `proxy/cookies.go`; `ts/client/src/cookies/rfc.ts` |
 | `Fetch.agda` | a page's cross-origin fetch/XHR: whether it carries credentials (and so cookies), the CORS check of its response, the response headers a script sees (Access-Control-Expose-Headers) | `proxy/cors.go`, `proxy/cookies.go`; `ts/client/src/patches/cors.ts` (fetch, XHR) |
 | `Csp.agda` | reading a Content-Security-Policy (CSP3 §2.2), translating it for the proxy (header and `<meta>`), the bootstrap's nonce and inline-or-external choice, and framing: frame-ancestors source matching and X-Frame-Options | `urlrewrite/csp.go`, `proxy/frame_ancestors.go`; `ts/client/src/patches/html-rewriter.ts` (`<meta>`) |
+| `Css.agda` | the URLs in CSS text (CSS Syntax 3 tokenization: url tokens, `url("…")`, `@import`, `image-set()`) and the rewritten CSS | `go/src/internal/cssrewrite`; `ts/client/src/css/rewriter.ts` |
+| `Html.agda` | what a `<script>` is (classic, module, import map, speculation rules, data block) and the document base URL (the first `<base href>`) | `htmlrewrite.ScriptKindFor`, `urlrewrite.DocumentBase`; `ts/client/src/patches/script-kind.ts` |
 | `Oracle.agda` | wire format only (one request line → one JSON line) | — |
 | `Main.agda` | the IO loop (spec-oracle skill's file, unchanged) | — |
 
@@ -60,7 +62,7 @@ host, IDNA, an invalid last `Max-Age`): a URL or cookie the user's browser
 accepts and cyrano does not would escape containment. `make browser-check`
 runs the spec against real Chromium (URLs: `spec-vs-chromium`, cookies:
 `cookies-vs-chromium`, CORS: `fetch-vs-chromium`, framing:
-`framing-vs-chromium`; and for the CSP translation, which is cyrano's own
+`framing-vs-chromium`, CSS URLs: `css-vs-chromium`, script kinds and the base URL: `html-vs-chromium`; and for the CSP translation, which is cyrano's own
 rule, the page-cannot-tell property: what loads directly loads proxied,
 `csp-vs-chromium`) and the runtime's native surface, `postMessage` and
 workers in it (`tests/native`). IDNA, outside the spec, is checked by a
@@ -89,3 +91,45 @@ Plain `go test ./...` and `npx vitest run` use `spec/build/Main` when it
 exists (or `CYRANO_ORACLE`), and skip the conformance tests with a note
 when it is missing or older than any `spec/*.agda` — so they still work
 without Nix, and a stale oracle never passes silently.
+
+## Not yet specified (the work list)
+
+Every hand-written parser or decision rule over URLs, headers, HTML/CSS
+text or another wire format is meant to be specified here and checked in
+both runtimes (owner, 2026-11-18: "Agda completeness … super important for
+upkeep"). What remains, by priority (inventory of 2026-11-18; remove an
+entry when its module lands):
+
+High — both runtimes, or what the page sees / what goes upstream:
+- Import maps (Go `urlrewrite.RewriteImportMap`; TS `rewriteImportMap`:
+  key order, non-string addresses differ); `IsURLLikeSpecifier`.
+- URL-bearing attribute tables (Go `htmlrewrite/config.go`; TS
+  `url-attribute-map.ts`: `a ping`, `frame src`, `background`, … differ).
+- Bootstrap placement and the TS tag scanners (`holdStructuralTags`,
+  `tagEnd`, `hideStyleAttributes`) — HTML tokenization.
+- WebSocket origin marker (Go `SplitWSOrigin`; TS `withPageOrigin`).
+- `Crn-H` original-headers JSON and the Server-Timing `crnb` entry (Go
+  writers, TS readers).
+- Link header (RFC 8288) and Refresh / `<meta http-equiv=refresh>` (Go).
+- Query values unproxified upstream (Go `UnproxyQueryValues`).
+- Client hints: Accept-CH / Critical-CH (RFC 8941 lists), which hints go
+  where; the synthesized Sec-CH-UA (Go `proxy/client_hints.go`,
+  `upstream`).
+- HTTPS-Upgrades (Go `proxy/https_upgrades.go`).
+- Permissions-Policy / Feature-Policy translation (Go `proxy/permissions.go`).
+- Sec-Fetch-Storage-Access (Go `proxy/storage_access.go`).
+- Which responses are documents, and MIME essence / sniffing (Go
+  `server/bodyrewriter.go`, `fetch_headers.go`: destination lists differ).
+- postMessage targetOrigin (TS `messaging/target-origin.ts`).
+
+Medium: CSS attribute selectors widened to proxied URLs (TS
+`selectors.ts`); URL-bearing CSS properties (TS
+`css-style-declaration.ts`); crossorigin / integrity / sandbox rules;
+fetchLater's quota formula (TS); the storage partition key (TS: by
+origin, browsers by site); blob/data worker sources; a frame's pending
+origin; error-stack URL extraction; compression-dictionary removal;
+Chrome's Priority table; the header-order recorder (HTTP/1.1 framing);
+Referer-based routing.
+
+Low: challenge heuristics, debug-variable parsing, boot/worker-init query
+JSON, base64url.

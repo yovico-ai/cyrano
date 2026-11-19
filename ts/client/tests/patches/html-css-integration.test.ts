@@ -13,7 +13,7 @@ describe("HTML rewriter dispatches to CSS rewriter", () => {
             "<style>.icon { background: url('icon.png'); }</style>",
             tag,
         );
-        expect(got).toContain("background: url('icon.png?p=1')");
+        expect(got).toContain(`background: url("icon.png?p=1")`);
     });
 
     it("rewrites @import inside an inline <style> tag", () => {

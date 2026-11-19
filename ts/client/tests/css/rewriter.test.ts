@@ -18,7 +18,7 @@ describe("rewriteCssText — url() forms", () => {
 
     it("rewrites single-quoted url()", () => {
         expect(rewriteCssText("background: url('img.png')", tag))
-            .toBe("background: url('img.png?p=1')");
+            .toBe(`background: url("img.png?p=1")`);
     });
 
     it("rewrites unquoted url() — defensively wraps result in double quotes", () => {
@@ -38,7 +38,7 @@ describe("rewriteCssText — url() forms", () => {
             ".a { background: url('a.png'), url('b.png'); }",
             tag,
         );
-        expect(got).toBe(".a { background: url('a.png?p=1'), url('b.png?p=1'); }");
+        expect(got).toBe(`.a { background: url("a.png?p=1"), url("b.png?p=1"); }`);
     });
 
     it("rewrites url() with absolute URLs", () => {
@@ -58,7 +58,7 @@ describe("rewriteCssText — @import forms", () => {
 
     it("rewrites @import '...'", () => {
         expect(rewriteCssText("@import '/style.css';", tag))
-            .toBe("@import '/style.css?p=1';");
+            .toBe(`@import "/style.css?p=1";`);
     });
 
     it("rewrites @import url(...) form via the url() pass", () => {
@@ -109,7 +109,7 @@ describe("rewriteCssText — preservation", () => {
     it("preserves declarations surrounding the URL", () => {
         const css = ".a { color: red; background: url('x.png'); padding: 1px; }";
         expect(rewriteCssText(css, tag)).toBe(
-            ".a { color: red; background: url('x.png?p=1'); padding: 1px; }",
+            `.a { color: red; background: url("x.png?p=1"); padding: 1px; }`,
         );
     });
 
@@ -120,6 +120,6 @@ describe("rewriteCssText — preservation", () => {
             }`;
         const got = rewriteCssText(css, tag);
         expect(got).toContain("@media (max-width: 600px)");
-        expect(got).toContain("background: url('icon.png?p=1')");
+        expect(got).toContain(`background: url("icon.png?p=1")`);
     });
 });

@@ -341,3 +341,28 @@ func Unwrap(proxiedHref string, cfg ProxyConfig) string {
 	}
 	return scheme + "://" + auth + pathText(orig) + queryText(a.query) + fragText(a.frag)
 }
+
+// DocumentBase is the document base URL given its first <base href>
+// (spec/Html.agda documentBase): href parsed against the document's URL;
+// about:blank when it does not parse (Chromium). A base of a scheme outside
+// the model (ftp:, data:, …) is taken as net/url reads it.
+func DocumentBase(doc *url.URL, href string) *url.URL {
+	d, dres := parseRef(nil, doc.String())
+	if dres != parsedURL {
+		return doc
+	}
+	a, res := parseRef(&d, preprocess(href))
+	switch res {
+	case parsedURL:
+		if u, err := url.Parse(a.href()); err == nil {
+			return u
+		}
+		return doc
+	case invalidURL:
+		return &url.URL{Scheme: "about", Opaque: "blank"}
+	}
+	if u, err := url.Parse(strings.TrimSpace(href)); err == nil {
+		return doc.ResolveReference(u)
+	}
+	return doc
+}

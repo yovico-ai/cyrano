@@ -27,6 +27,8 @@
 // patches by calling the originals directly.
 
 import { rewriteFor, type RewriteOne } from "./referrer-policy";
+import { scriptKindOf } from "./script-kind";
+import { rewriteImportMap } from "./dynamic-html";
 import { SafeMap, SafeSet, nO, ncall } from "../native/intrinsics";
 import { trusted, trustedPolicyName } from "../native/trusted";
 import { rewriteCssText } from "../css/rewriter";
@@ -160,10 +162,15 @@ export function rewriteHtmlString(
         // source). Run it through the JS source rewriter so `wrap_*` calls
         // are injected the same way the server-side rewriter would have
         // done it for a static <script>.
+        // What it is decides (spec/Html.agda scriptKind): JavaScript is
+        // rewritten as such, an import map as one, a data block not at all.
         if (element.tagName === "SCRIPT" && !element.hasAttribute("src")) {
             const jsText = element.textContent ?? "";
-            if (jsText.length > 0) {
+            const kind = scriptKindOf(element);
+            if (jsText.length > 0 && (kind === "classic" || kind === "module")) {
                 element.textContent = T("Script", rewriteJsSource(jsText, defaultJsRewriteOptions()));
+            } else if (jsText.length > 0 && kind === "importmap") {
+                element.textContent = rewriteImportMap(jsText, rewriteOne);
             }
         }
 

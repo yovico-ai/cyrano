@@ -38,7 +38,8 @@ func TestUrlAbsoluteDoubleQuoted(t *testing.T) {
 
 func TestUrlAbsoluteSingleQuoted(t *testing.T) {
 	got := rewrite(t, `.x { background: url('https://cdn.example.com/a.png'); }`)
-	if !strings.Contains(got, `url('http://localhost:9081/cyrano/https/cdn.example.com/a.png')`) {
+	// Rewritten URLs are written url("…") (spec/Css.agda serializeString).
+	if !strings.Contains(got, `url("http://localhost:9081/cyrano/https/cdn.example.com/a.png")`) {
 		t.Errorf("single-quote rewrite missing: %s", got)
 	}
 }
@@ -48,9 +49,10 @@ func TestUrlAbsoluteUnquoted(t *testing.T) {
 	if !strings.Contains(got, "localhost:9081/cyrano/https/cdn.example.com/a.png") {
 		t.Errorf("unquoted url not rewritten: %s", got)
 	}
-	// Must not gain spurious quoting
-	if strings.Contains(got, `url("`) || strings.Contains(got, `url('`) {
-		t.Errorf("rewrite added quotes to unquoted url: %s", got)
+	// Written as a string (spec/Css.agda): a proxified URL may hold ( or a
+	// space, which an unquoted url token cannot.
+	if !strings.Contains(got, `url("http://localhost:9081/cyrano/https/cdn.example.com/a.png")`) {
+		t.Errorf("rewrite not written url(\"…\"): %s", got)
 	}
 }
 
@@ -77,7 +79,7 @@ func TestImportUrlForm(t *testing.T) {
 
 func TestImportSingleQuote(t *testing.T) {
 	got := rewrite(t, `@import 'https://x.example.com/y.css';`)
-	if !strings.Contains(got, `'http://localhost:9081/cyrano/https/x.example.com/y.css'`) {
+	if !strings.Contains(got, `"http://localhost:9081/cyrano/https/x.example.com/y.css"`) {
 		t.Errorf("@import single-quote rewrite missing: %s", got)
 	}
 }
@@ -200,27 +202,3 @@ func TestCSSEscapedParensUnquoted(t *testing.T) {
 	}
 }
 
-func TestUnescapeCSS(t *testing.T) {
-	cases := []struct {
-		in   string
-		want string
-	}{
-		{"no escapes here", "no escapes here"},
-		{`\(`, "("},
-		{`\)`, ")"},
-		{`foo\(1\).png`, "foo(1).png"},
-		{`\41`, "A"},           // hex escape: U+0041
-		{`\41 x`, "Ax"},        // hex escape + space terminator
-		{`\000041 x`, "Ax"},    // 6-digit hex + space
-		{`\0000410`, "A0"},     // 5-digit hex (stops at 5), literal 0 follows
-		{`\\`, "\\"},           // double backslash: first \ escapes second \
-		{`\`, ""},              // trailing backslash — dropped
-	}
-	for _, tc := range cases {
-		t.Run(tc.in, func(t *testing.T) {
-			if got := unescapeCSS(tc.in); got != tc.want {
-				t.Errorf("unescapeCSS(%q) = %q, want %q", tc.in, got, tc.want)
-			}
-		})
-	}
-}

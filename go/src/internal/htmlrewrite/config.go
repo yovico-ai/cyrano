@@ -69,6 +69,9 @@ type Config struct {
 	// reports whether it is a policy (then the tag is given unsafe-url).
 	OnReferrerPolicy func(content string) bool
 
+	// baseSeen: a <base href> was met (only the first counts).
+	baseSeen bool
+
 	// NoOriginals suppresses the originals attribute (OriginalsAttr): for
 	// markup no runtime will read (a <noscript> body, re-parsed as text).
 	NoOriginals bool

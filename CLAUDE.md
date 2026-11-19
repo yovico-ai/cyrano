@@ -124,8 +124,7 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
   X-Frame-Options) is judged by the proxy for the real embedder, checked
   against Chromium (`framing-vs-chromium`). A faithful translation
   (host-sources → proxied path prefixes, rehashed inline scripts) is not
-  done: a proxied page is allowed more than direct. CSS `url()` handling still differs between
-  Go (lexer) and TS (regex).
+  done: a proxied page is allowed more than direct.
 - **Referrer policy**: the document's (header, `<meta name=referrer>`) is
   recorded per page; a request's own (an element's `referrerpolicy`,
   `fetch`/`Request` `referrerPolicy`) travels in its proxified URL,

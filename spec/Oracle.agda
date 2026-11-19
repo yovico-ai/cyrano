@@ -37,6 +37,13 @@
 --                                       → {"out":"<translated policy>"}
 --   cspnonce  <header values, LF-separated>  → {"out":"<nonce>"} / {"none":true}
 --   cspinline <header values, LF-separated>  → {"out":"yes"} / {"out":"no"}
+--   scriptkind <0|1> <type> <0|1> <language>
+--                                       (1: the attribute is present)
+--                                       → {"out":"classic|module|importmap|speculationrules|data"}
+--   docbase <document URL> <href>…      → {"out":"<base URL>"} (the hrefs of
+--                                         the document's <base> elements)
+--   css     <proxy> <base> <css text>  → {"out":"<rewritten css>"}
+--   cssurls <css text>                  → {"out":"<url>\n<url>…"} (the URLs it names)
 --   frameanc <CSP header value> <embedder URL> <document URL>
 --                                       → {"out":"allow"|"deny"} / {"none":true}
 --   xfo     <X-Frame-Options lines> <same|cross>
@@ -58,6 +65,7 @@ open import Data.Char.Base using (Char; toℕ; fromℕ)
 open import Data.List.Base using (List; []; _∷_; _++_; reverse; concatMap)
 open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.Nat.Base using (ℕ; zero; suc; _+_; _∸_; _*_; _<ᵇ_; _/_; _%_)
+import Data.String.Base
 open import Data.String.Base using (String; toList; fromList)
 
 open import Scheme
@@ -68,6 +76,8 @@ open import Referrer
 open import Cookies
 open import Fetch
 open import Csp
+open import Css using (rewriteCss; cssUrls)
+open import Html using (ScriptKind; scriptClassic; scriptModule; scriptImportMap; scriptSpeculation; scriptData; scriptKind; documentBase; BaseURL; baseOf′; aboutBlank; beyond)
 
 ------------------------------------------------------------------------
 -- Requests.
@@ -225,6 +235,10 @@ dispatch op args =
   else if eqStr op (toList "csp") then cspReq args
   else if eqStr op (toList "cspnonce") then cspNonceReq args
   else if eqStr op (toList "cspinline") then cspInlineReq args
+  else if eqStr op (toList "scriptkind") then scriptKindReq args
+  else if eqStr op (toList "docbase") then docBaseReq args
+  else if eqStr op (toList "css") then cssReq args
+  else if eqStr op (toList "cssurls") then cssUrlsReq args
   else if eqStr op (toList "frameanc") then frameAncReq args
   else if eqStr op (toList "xfo") then xfoReq args
   else errorReply "UnknownRequest"
@@ -399,6 +413,52 @@ dispatch op args =
   cspInlineReq : List Str → Str
   cspInlineReq (hs ∷ []) = yesNo (inlineScriptAllowed (fieldLines hs))
   cspInlineReq _ = errorReply "BadRequest"
+
+  scriptKindReq : List Str → Str
+  scriptKindReq (ht ∷ t ∷ hl ∷ l ∷ []) = out (toList (kindName (scriptKind (opt′ ht t) (opt′ hl l))))
+    where
+    opt′ : Str → Str → Maybe Str
+    opt′ h v = if eqStr h (toList "1") then just v else nothing
+
+    kindName : ScriptKind → Data.String.Base.String
+    kindName scriptClassic     = "classic"
+    kindName scriptModule      = "module"
+    kindName scriptImportMap   = "importmap"
+    kindName scriptSpeculation = "speculationrules"
+    kindName scriptData        = "data"
+  scriptKindReq _ = errorReply "BadRequest"
+
+  docBaseReq : List Str → Str
+  docBaseReq (d ∷ hrefs) with baseOf d
+  ... | just doc = byBase (documentBase doc hrefs)
+    where
+    byBase : BaseURL → Str
+    byBase (baseOf′ a) = out (href a)
+    byBase aboutBlank  = out (toList "about:blank")
+    byBase beyond      = errorReply "OutOfModel"
+  ... | nothing  = errorReply "OutOfModel"
+  docBaseReq _ = errorReply "BadRequest"
+
+  cssReq : List Str → Str
+  cssReq (p ∷ b ∷ text ∷ []) with proxyOf p | baseOf b
+  ... | just px | just base = out (rewriteCss rw text)
+    where
+    rw : Str → Maybe Str
+    rw u with rewriteUrl px base u
+    ... | emit _ v = just v
+    ... | _        = nothing
+  ... | nothing | _ = errorReply "BadProxy"
+  ... | just _  | nothing = errorReply "BadBase"
+  cssReq _ = errorReply "BadRequest"
+
+  cssUrlsReq : List Str → Str
+  cssUrlsReq (text ∷ []) = out (joinLF (cssUrls text))
+    where
+    joinLF : List Str → Str
+    joinLF []           = []
+    joinLF (u ∷ [])     = u
+    joinLF (u ∷ v ∷ us) = u ++ nl ∷ joinLF (v ∷ us)
+  cssUrlsReq _ = errorReply "BadRequest"
 
   frameAncReq : List Str → Str
   frameAncReq (h ∷ a ∷ d ∷ []) with baseOf a | baseOf d

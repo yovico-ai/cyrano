@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"strings"
 
 	"github.com/yovico/cyrano/internal/urlrewrite"
@@ -83,9 +82,8 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 			// An import map: JSON whose URLs must match the proxified module
 			// specifiers.
 			if tt == html.StartTagToken && tag == "script" {
-				t, _ := getAttr(attrs, "type")
 				_, hasSrc := getAttr(attrs, "src")
-				inImportMap = !hasSrc && strings.EqualFold(strings.TrimSpace(t), "importmap")
+				inImportMap = !hasSrc && scriptKindOf(attrs) == ScriptImportMap
 			}
 			// Same idea for <style> — the body is CSS.
 			if tt == html.StartTagToken && tag == "style" && cfg.RewriteInlineCSS != nil {
@@ -191,14 +189,13 @@ func applyAttrRules(tag string, attrs []html.Attribute, cfg *Config) []html.Attr
 
 	// HTML_BASETAG — <base href> updates the in-flight base URL so all
 	// downstream tags resolve relatives against the new origin.
-	if tag == "base" {
+	// Only the first <base> with an href counts, parsed against the
+	// document's URL (spec/Html.agda documentBase; urlrewrite.DocumentBase).
+	if tag == "base" && !cfg.baseSeen {
 		if v, ok := getAttr(attrs, "href"); ok {
-			if u, err := url.Parse(v); err == nil {
-				if cfg.BaseURL == nil {
-					cfg.BaseURL = u
-				} else {
-					cfg.BaseURL = cfg.BaseURL.ResolveReference(u)
-				}
+			cfg.baseSeen = true
+			if cfg.BaseURL != nil {
+				cfg.BaseURL = urlrewrite.DocumentBase(cfg.BaseURL, v)
 			}
 		}
 	}
@@ -399,40 +396,78 @@ func removeAttr(attrs []html.Attribute, key string) []html.Attribute {
 	return out
 }
 
-// jsMimeTypes is the set of <script type="..."> values whose content is JS.
-// Empty/missing type is also treated as JS by default.
-var jsMimeTypes = map[string]bool{
-	"application/ecmascript":   true,
-	"application/javascript":   true,
-	"application/x-ecmascript": true,
-	"application/x-javascript": true,
-	"text/ecmascript":          true,
-	"text/javascript":          true,
-	"text/javascript1.0":       true,
-	"text/javascript1.1":       true,
-	"text/javascript1.2":       true,
-	"text/javascript1.3":       true,
-	"text/javascript1.4":       true,
-	"text/javascript1.5":       true,
-	"text/jscript":             true,
-	"text/livescript":          true,
-	"text/x-ecmascript":        true,
-	"text/x-javascript":        true,
-	"module":                   true,
+// ScriptKind is what a <script> is (spec/Html.agda scriptKind, checked
+// against Chromium; TS: patches/dynamic-html.ts scriptKind).
+type ScriptKind uint8
+
+const (
+	ScriptClassic ScriptKind = iota
+	ScriptModule
+	ScriptImportMap
+	ScriptSpeculationRules
+	ScriptData
+)
+
+// jsEssences are the JavaScript MIME type essence strings (MIME Sniffing §4.6).
+var jsEssences = map[string]bool{
+	"application/ecmascript": true, "application/javascript": true, "application/x-ecmascript": true,
+	"application/x-javascript": true, "text/ecmascript": true, "text/javascript": true, "text/javascript1.0": true,
+	"text/javascript1.1": true, "text/javascript1.2": true, "text/javascript1.3": true, "text/javascript1.4": true,
+	"text/javascript1.5": true, "text/jscript": true, "text/livescript": true, "text/x-ecmascript": true,
+	"text/x-javascript": true,
 }
 
-// isJSScript reports whether a <script> tag's body should be processed by
-// the JS rewriter. False for tags with src= (external — the body is empty
-// anyway) or non-JS type= values (template, JSON, etc.).
+func asciiLowerHTML(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + 32
+		}
+	}
+	return string(b)
+}
+
+func stripASCIIWS(s string) string { return strings.Trim(s, "\t\n\f\r ") }
+
+// ScriptKindFor is the kind of a script with these type and language
+// attributes (has*: the attribute is present).
+func ScriptKindFor(hasType bool, typ string, hasLang bool, lang string) ScriptKind {
+	switch {
+	case hasType && typ == "", !hasType && hasLang && lang == "", !hasType && !hasLang:
+		return ScriptClassic
+	case !hasType:
+		if jsEssences[asciiLowerHTML(stripASCIIWS("text/"+lang))] {
+			return ScriptClassic
+		}
+		return ScriptData
+	}
+	switch l := asciiLowerHTML(typ); {
+	case jsEssences[asciiLowerHTML(stripASCIIWS(typ))]:
+		return ScriptClassic
+	case l == "module":
+		return ScriptModule
+	case l == "importmap":
+		return ScriptImportMap
+	case l == "speculationrules":
+		return ScriptSpeculationRules
+	}
+	return ScriptData
+}
+
+func scriptKindOf(attrs []html.Attribute) ScriptKind {
+	t, hasType := getAttr(attrs, "type")
+	l, hasLang := getAttr(attrs, "language")
+	return ScriptKindFor(hasType, t, hasLang, l)
+}
+
+// isJSScript reports whether a <script> tag's body is JavaScript to
+// rewrite: an inline classic or module script.
 func isJSScript(attrs []html.Attribute) bool {
 	if _, has := getAttr(attrs, "src"); has {
 		return false
 	}
-	t, has := getAttr(attrs, "type")
-	if !has || t == "" {
-		return true
-	}
-	return jsMimeTypes[strings.ToLower(strings.TrimSpace(t))]
+	k := scriptKindOf(attrs)
+	return k == ScriptClassic || k == ScriptModule
 }
 
 // referrerPolicyTags are the elements with a referrerpolicy attribute.
