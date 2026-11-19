@@ -15,6 +15,13 @@
 --                                       → {"out":"js|css|html|none"} (what the proxy does with the body)
 --   acceptch <field lines>              → {"out":"<names, space-separated>"|"none"} (none: counts for nothing)
 --   hintsent <hint> <set> <0|1> <0|1> <0|1> → {"out":"yes"|"no"}
+--   allowframe <attr> <f> <0|1> <parent> <src> <frame> → {"out":"yes"|"no"} (the frame's featurePolicy)
+--   allowrewrite <attr>                 → {"out":"<the attribute the browser is given>"}
+--   ppallows <lines> <feature> <0|1> <doc> <origin> → {"out":"yes"|"no"} (featurePolicy.allowsFeature)
+--   pptranslate <lines>                 → {"out":"<the lines the browser is given>"}
+--   upgradable <host[:port]> <known TLD 0|1> → {"out":"yes"|"no"} (Chrome tries it over https)
+--   swapscheme <from> <to> <target>     → {"out":"<target>"|"none"}
+--   upgradesteps <events>               → {"out":"<decisions>"} (n<t> l f<t>; U P B -)
 --   secchua <major> <brand>             → {"out":"<the Sec-CH-UA value>"}
 --   unproxyquery <proxy> <query>        → {"out":"<query, proxified values unwrapped>"}
 --   jsonbytes <value as bytes>          → {"out":"<JSON string, byte for byte>"}
@@ -123,6 +130,9 @@ import WsOrigin
 import Carry
 import Query
 import Hints
+import Upgrades
+import Permissions
+import Allow
 open import Html using (ScriptKind; scriptClassic; scriptModule; scriptImportMap; scriptSpeculation; scriptData; scriptKind; documentBase; BaseURL; baseOf′; aboutBlank; beyond)
 
 ------------------------------------------------------------------------
@@ -275,6 +285,13 @@ dispatch op args =
   else if eqStr op (toList "acceptch") then acceptCHReq args
   else if eqStr op (toList "hintsent") then hintSentReq args
   else if eqStr op (toList "secchua") then secChUaReq args
+  else if eqStr op (toList "upgradable") then upgradableReq args
+  else if eqStr op (toList "ppallows") then ppAllowsReq args
+  else if eqStr op (toList "allowframe") then allowFrameReq args
+  else if eqStr op (toList "allowrewrite") then allowRewriteReq args
+  else if eqStr op (toList "pptranslate") then ppTranslateReq args
+  else if eqStr op (toList "swapscheme") then swapSchemeReq args
+  else if eqStr op (toList "upgradesteps") then upgradeStepsReq args
   else if eqStr op (toList "crnh") then crnHReq args
   else if eqStr op (toList "crnbread") then crnbReadReq args
   else if eqStr op (toList "wssplit") then wsSplitReq args
@@ -425,6 +442,65 @@ dispatch op args =
   hintSentReq (h ∷ set ∷ s₁ ∷ n₁ ∷ p₁ ∷ []) =
     out (if Hints.hintSent h (splitOn (is 32) set) (eqStr s₁ (toList "1")) (eqStr n₁ (toList "1")) (eqStr p₁ (toList "1")) then toList "yes" else toList "no")
   hintSentReq _ = errorReply "BadRequest"
+
+  -- allowframe <attr> <feature> <default * 0|1> <parent> <src origin> <frame origin>
+  allowFrameReq : List Str → Str
+  allowFrameReq (a ∷ f ∷ d ∷ p ∷ sr ∷ fr ∷ []) =
+    out (if Allow.frameAllows (eqStr d (toList "1")) a f p sr fr then toList "yes" else toList "no")
+  allowFrameReq _ = errorReply "BadRequest"
+
+  allowRewriteReq : List Str → Str
+  allowRewriteReq (a ∷ []) = out (Allow.rewriteAllow a)
+  allowRewriteReq _ = errorReply "BadRequest"
+
+  -- ppallows <field lines, LF-separated> <feature> <default * 0|1> <doc origin> <origin>
+  ppAllowsReq : List Str → Str
+  ppAllowsReq (ls ∷ f ∷ d ∷ doc ∷ o ∷ []) =
+    out (if Permissions.allows (eqStr d (toList "1")) (splitOn (is 10) ls) f doc o then toList "yes" else toList "no")
+  ppAllowsReq _ = errorReply "BadRequest"
+
+  -- pptranslate <field lines, LF-separated> → the lines, LF-separated
+  ppTranslateReq : List Str → Str
+  ppTranslateReq (ls ∷ []) = out (joinLF (Permissions.translate (splitOn (is 10) ls)))
+    where
+    joinLF : List Str → Str
+    joinLF []       = []
+    joinLF (x ∷ []) = x
+    joinLF (x ∷ xs) = x ++ fromℕ 10 ∷ joinLF xs
+  ppTranslateReq _ = errorReply "BadRequest"
+
+  upgradableReq : List Str → Str
+  upgradableReq (h ∷ r ∷ []) = out (if Upgrades.upgradable (eqStr r (toList "1")) h then toList "yes" else toList "no")
+  upgradableReq _ = errorReply "BadRequest"
+
+  swapSchemeReq : List Str → Str
+  swapSchemeReq (f ∷ t ∷ x ∷ []) with Upgrades.swapScheme f t x
+  ... | just y  = out y
+  ... | nothing = out (toList "none")
+  swapSchemeReq _ = errorReply "BadRequest"
+
+  -- upgradesteps <events, space-separated: n<t> (an http navigation at t),
+  -- l (the https page loaded), f<t> (its load failed at t)>
+  --   → the decisions: U (upgrade sent) / P (passed), B (fell back) / -
+  upgradeStepsReq : List Str → Str
+  upgradeStepsReq (es ∷ []) = out (run (splitOn (is 32) es) (Upgrades.hostState nothing nothing))
+    where
+    run : List Str → Upgrades.HostState → Str
+    run [] _ = []
+    run ((c ∷ t) ∷ rest) st =
+      if is 110 c then step₁ (Upgrades.onHttpNavigation (digitsValue t) st)
+      else if is 108 c then run rest (Upgrades.onLoaded st)
+      else if is 102 c then step₂ (Upgrades.onFailed (digitsValue t) st)
+      else run rest st
+      where
+      step₁ : Upgrades.Decision × Upgrades.HostState → Str
+      step₁ (Upgrades.sendUpgrade , st′) = 'U' ∷ run rest st′
+      step₁ (Upgrades.passThrough , st′) = 'P' ∷ run rest st′
+      step₂ : Bool × Upgrades.HostState → Str
+      step₂ (true , st′)  = 'B' ∷ run rest st′
+      step₂ (false , st′) = '-' ∷ run rest st′
+    run ([] ∷ rest) st = run rest st
+  upgradeStepsReq _ = errorReply "BadRequest"
 
   -- secchua <major> <product brand>
   secChUaReq : List Str → Str

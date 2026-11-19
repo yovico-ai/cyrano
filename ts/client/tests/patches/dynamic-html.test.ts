@@ -275,3 +275,28 @@ describe("URL-bearing attributes by kind (spec/Attrs.agda)", () => {
         expect(a.getAttribute("xlink:href")).toBe("/x");
     });
 });
+
+// An iframe's allow naming an origin: through the proxy the frame has the
+// proxy's origin and lost the feature (spec/Allow.agda). The page's own
+// text is kept for reading back.
+describe("patchDynamicHtml — iframe allow", () => {
+    it("writes origins as 'src' through setAttribute, the property and innerHTML", async () => {
+        const { originalAttr, initOriginals } = await import("../../src/native/originals");
+        initOriginals(window); // the store reads the natives, as at install
+        patchDynamicHtml(window, tag, (u) => u);
+        const a = document.createElement("iframe");
+        a.setAttribute("allow", "camera https://meet.example; fullscreen");
+        expect(a.getAttributeNS(null, "allow")).toBe("camera 'src'; fullscreen");
+        expect(originalAttr(a, "allow")?.value).toBe("camera https://meet.example; fullscreen");
+        const b = document.createElement("iframe");
+        (b as unknown as { allow: string }).allow = "microphone 'self' https://x.example:8443";
+        expect(b.getAttributeNS(null, "allow")).toBe("microphone 'self' 'src'");
+        const div = document.createElement("div");
+        div.innerHTML = '<iframe allow="geolocation https://maps.example"></iframe>';
+        expect(div.querySelector("iframe")!.getAttributeNS(null, "allow")).toBe("geolocation 'src'");
+        // Not an iframe: left alone.
+        const d = document.createElement("div");
+        d.setAttribute("allow", "camera https://meet.example");
+        expect(d.getAttributeNS(null, "allow")).toBe("camera https://meet.example");
+    });
+});

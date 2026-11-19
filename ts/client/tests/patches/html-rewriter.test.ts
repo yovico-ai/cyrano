@@ -308,3 +308,14 @@ describe("rewriteHtmlString — <meta http-equiv=refresh>", () => {
         expect(rewriteHtmlString('<meta name=refresh content="0;url=/x">', tag)).toBe('<meta name=refresh content="0;url=/x">');
     });
 });
+
+// An iframe's allow naming an origin (spec/Allow.agda): through the proxy
+// the frame has the proxy's origin; the origin is written 'src'.
+describe("rewriteHtmlString — <iframe allow>", () => {
+    it("writes the allowlist's origins as 'src', the rest as written", () => {
+        expect(rewriteHtmlString('<iframe allow="camera https://meet.example;fullscreen"></iframe>', tag))
+            .toMatch(/^<iframe allow="camera 'src';fullscreen" crn-o=/);
+        expect(rewriteHtmlString('<iframe allow="fullscreen; autoplay"></iframe>', tag)).toBe('<iframe allow="fullscreen; autoplay"></iframe>');
+        expect(rewriteHtmlString('<div allow="camera https://meet.example"></div>', tag)).toBe('<div allow="camera https://meet.example"></div>');
+    });
+});

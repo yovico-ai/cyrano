@@ -17,3 +17,23 @@ func TestTranslatePermissionsPolicy(t *testing.T) {
 		t.Errorf("Feature-Policy:\n got  %s\n want %s", got, want)
 	}
 }
+
+// A bare string member names an origin as an inner list's does: it was
+// left as written (an upstream origin: nothing on the proxy), and a
+// header Chromium ignores whole was edited into one it reads.
+func TestTranslatePermissionsPolicy_AsChromiumReadsIt(t *testing.T) {
+	for in, want := range map[string]string{
+		`fullscreen="https://a.example"`:            `fullscreen=(self)`,
+		`geolocation="*", camera=("'self'" "self")`: `geolocation=*, camera=(self)`,
+		`camera=(https://a.example)`:                `camera=()`,
+		`Geolocation=("https://a.example")`:         `Geolocation=("https://a.example")`,
+		`camera=(), , geolocation=*`:                `camera=(), , geolocation=*`,
+	} {
+		h := http.Header{}
+		h.Set("Permissions-Policy", in)
+		translatePermissionsPolicy(h)
+		if got := h.Get("Permissions-Policy"); got != want {
+			t.Errorf("%s:\n got  %s\n want %s", in, got, want)
+		}
+	}
+}

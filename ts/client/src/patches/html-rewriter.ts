@@ -29,6 +29,7 @@ const relOf = (v: string | null): string[] => (v === null ? [] : lowerAscii(v).s
 import { tokenize, withBootstrap, type Ns, type Tok, type TokAttr } from "./html-tokens";
 import { isReferrerPolicy } from "../url/containment";
 import { isRefreshEquiv, rewriteRefresh } from "../url/refresh";
+import { rewriteAllow } from "../url/allow";
 
 interface CapturedNatives {
     innerHTMLSet: (this: Element, value: string) => void;
@@ -199,6 +200,8 @@ function editStartTag(src: string, t: Extract<Tok, { kind: "start" }>, rewriteOn
         if (v === "") continue;
         if (a.name === "style") { change(a, "style", rewriteCssText(v, rewriteOne)); continue; }
         if (html && t.name === "iframe" && a.name === "srcdoc") { change(a, "srcdoc", T("HTML", rewriteSrcdoc(v, rewriteOne, proxyOrigin, bootstrap))); continue; }
+        // An origin in allow names nothing on the proxy (spec/Allow.agda; Go: htmlrewrite).
+        if (html && t.name === "iframe" && a.name === "allow") { const now = rewriteAllow(v); if (now !== v) change(a, "allow", now); continue; }
         // A declarative refresh navigates like a link: through the proxy
         // (spec/Refresh.agda; Go: htmlrewrite's <meta>).
         if (html && t.name === "meta" && a.name === "content" && isRefreshEquiv(value("http-equiv"))) {

@@ -25,20 +25,20 @@ func upgradeHandler() *Handler {
 func TestHTTPSUpgrade_FallsBackWhenHTTPSFails(t *testing.T) {
 	h := upgradeHandler()
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, navigation("/cyrano/http/no-https.invalid/a?b=1", "s1"))
-	if rec.Code != http.StatusTemporaryRedirect || rec.Header().Get("Location") != "/cyrano/https/no-https.invalid/a?b=1" {
+	h.ServeHTTP(rec, navigation("/cyrano/http/no-https.com/a?b=1", "s1"))
+	if rec.Code != http.StatusTemporaryRedirect || rec.Header().Get("Location") != "/cyrano/https/no-https.com/a?b=1" {
 		t.Fatalf("http navigation: %d %q; want 307 to the https URL", rec.Code, rec.Header().Get("Location"))
 	}
 	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, navigation("/cyrano/https/no-https.invalid/a?b=1", "s1"))
-	if rec.Code != http.StatusTemporaryRedirect || rec.Header().Get("Location") != "/cyrano/http/no-https.invalid/a?b=1" {
+	h.ServeHTTP(rec, navigation("/cyrano/https/no-https.com/a?b=1", "s1"))
+	if rec.Code != http.StatusTemporaryRedirect || rec.Header().Get("Location") != "/cyrano/http/no-https.com/a?b=1" {
 		t.Fatalf("failed https load: %d %q; want 307 back to http", rec.Code, rec.Header().Get("Location"))
 	}
-	if h.upgradeNavigation(httptest.NewRecorder(), navigation("/cyrano/http/no-https.invalid/", "s1"), "no-https.invalid") {
+	if h.upgradeNavigation(httptest.NewRecorder(), navigation("/cyrano/http/no-https.com/", "s1"), "no-https.com") {
 		t.Fatal("an http-only host was upgraded again")
 	}
 	// Another session has not learnt it.
-	if !h.upgradeNavigation(httptest.NewRecorder(), navigation("/cyrano/http/no-https.invalid/", "s2"), "no-https.invalid") {
+	if !h.upgradeNavigation(httptest.NewRecorder(), navigation("/cyrano/http/no-https.com/", "s2"), "no-https.com") {
 		t.Fatal("another session's navigation was not upgraded")
 	}
 }
@@ -46,10 +46,10 @@ func TestHTTPSUpgrade_FallsBackWhenHTTPSFails(t *testing.T) {
 // An https page that redirects straight back to http: http it is.
 func TestHTTPSUpgrade_RedirectBackToHTTPIsFallback(t *testing.T) {
 	h := upgradeHandler()
-	if !h.upgradeNavigation(httptest.NewRecorder(), navigation("/cyrano/http/back.example/", "s"), "back.example") {
+	if !h.upgradeNavigation(httptest.NewRecorder(), navigation("/cyrano/http/back.com/", "s"), "back.com") {
 		t.Fatal("not upgraded")
 	}
-	if h.upgradeNavigation(httptest.NewRecorder(), navigation("/cyrano/http/back.example/", "s"), "back.example") {
+	if h.upgradeNavigation(httptest.NewRecorder(), navigation("/cyrano/http/back.com/", "s"), "back.com") {
 		t.Fatal("the http navigation after the upgrade was upgraded again (loop)")
 	}
 }
@@ -57,11 +57,11 @@ func TestHTTPSUpgrade_RedirectBackToHTTPIsFallback(t *testing.T) {
 // An upgrade that reached its page is over: a later http link is upgraded.
 func TestHTTPSUpgrade_LoadedClearsPending(t *testing.T) {
 	h := upgradeHandler()
-	h.upgradeNavigation(httptest.NewRecorder(), navigation("/cyrano/http/ok.example/", "s"), "ok.example")
+	h.upgradeNavigation(httptest.NewRecorder(), navigation("/cyrano/http/ok.com/", "s"), "ok.com")
 	out := navigation("/", "s")
-	out.URL = &url.URL{Scheme: "https", Host: "ok.example", Path: "/"}
+	out.URL = &url.URL{Scheme: "https", Host: "ok.com", Path: "/"}
 	upgradeLoaded(&http.Response{StatusCode: 200, Request: out}, "s")
-	if !h.upgradeNavigation(httptest.NewRecorder(), navigation("/cyrano/http/ok.example/x", "s"), "ok.example") {
+	if !h.upgradeNavigation(httptest.NewRecorder(), navigation("/cyrano/http/ok.com/x", "s"), "ok.com") {
 		t.Fatal("a later http navigation was not upgraded")
 	}
 }
@@ -79,8 +79,8 @@ func TestHTTPSUpgrade_OnlyMainFrameNavigationsToNames(t *testing.T) {
 			t.Errorf("%s was upgraded", host)
 		}
 	}
-	if !h.upgradeNavigation(httptest.NewRecorder(), navigation("/cyrano/http/a.example:80/", "s"), "a.example:80") {
-		t.Error("a.example:80 was not upgraded")
+	if !h.upgradeNavigation(httptest.NewRecorder(), navigation("/cyrano/http/a.com:80/", "s"), "a.com:80") {
+		t.Error("a.com:80 was not upgraded")
 	}
 }
 

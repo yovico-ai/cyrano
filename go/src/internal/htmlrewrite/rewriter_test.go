@@ -586,3 +586,15 @@ func TestRewrite_LinkImageSrcset(t *testing.T) {
 		t.Errorf("an imagesrcset URL escaped: %s", got)
 	}
 }
+
+// An iframe's allow naming the frame's origin: through the proxy the frame
+// has the proxy's origin, and lost the feature. The page reads its own text.
+func TestRewrite_IframeAllowOrigins(t *testing.T) {
+	out := rewrite(t, `<iframe allow="camera https://meet.example; fullscreen" src="https://meet.example/r"></iframe>`, func(c *Config) { c.NoOriginals = false })
+	if !strings.Contains(out, `allow="camera &#39;src&#39;; fullscreen"`) && !strings.Contains(out, `allow="camera 'src'; fullscreen"`) {
+		t.Errorf("allow not rewritten: %s", out)
+	}
+	if !strings.Contains(out, `crn-o=`) || !strings.Contains(out, "camera https://meet.example") {
+		t.Errorf("original allow not carried: %s", out)
+	}
+}

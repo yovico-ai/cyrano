@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 const (
@@ -45,17 +47,22 @@ func (s *upgradeStore) mark(m *map[string]time.Time, key string) {
 			break
 		}
 	}
-	(*m)[key] = time.Now()
+	(*m)[key] = upgradeClock()
 }
+
+// upgradeClock is the time the upgrade state is kept by (a test's own).
+var upgradeClock = time.Now
 
 func fresh(m map[string]time.Time, key string, ttl time.Duration) bool {
 	t, ok := m[key]
-	return ok && time.Since(t) < ttl
+	return ok && upgradeClock().Sub(t) < ttl
 }
 
 // upgradable reports whether Chrome would try a navigation to host over
-// https: a name (not an IP literal, not localhost, not a single label) on
-// the default port.
+// https (spec/Upgrades.agda upgradable): a name (not an IP literal, not
+// localhost) on the default port that is unique — more than one label,
+// the last a known ICANN TLD (Chromium IsHostnameNonUnique; a.example and
+// x.test are not upgraded).
 func upgradable(host string) bool {
 	h, port, err := net.SplitHostPort(host)
 	if err != nil {
@@ -69,7 +76,18 @@ func upgradable(host string) bool {
 		h == "localhost" || strings.HasSuffix(h, ".localhost") {
 		return false
 	}
-	return true
+	return knownTLD(h)
+}
+
+// knownTLD: the name's last label is a top-level domain of the
+// public-suffix list's ICANN section. With a second label this is what
+// makes a name unique to Chromium (recorded in Chrome: co.uk and a.ck are
+// upgraded though they are public suffixes; a.example is not).
+func knownTLD(h string) bool {
+	// Asked of a name under it: a TLD listed only by a wildcard (*.ck)
+	// is no rule of its own.
+	_, icann := publicsuffix.PublicSuffix("x." + h[strings.LastIndexByte(h, '.')+1:])
+	return icann
 }
 
 func isMainFrameNavigation(r *http.Request) bool {
@@ -97,14 +115,32 @@ func upgradeKey(session, host string) string {
 }
 
 // swapScheme is the proxied request's own URI with its target scheme
-// replaced: /cyrano/<from>/rest → /cyrano/<to>/rest, every other byte kept.
+// replaced: /cyrano/<from>[!marks]/rest → /cyrano/<to>[!marks]/rest, every
+// other byte kept (spec/Upgrades.agda swapScheme). A navigation carrying a
+// referrer-policy mark (/cyrano/http!origin/…) is swapped like any other.
 func swapScheme(r *http.Request, from, to string) (string, bool) {
-	uri := r.RequestURI
-	prefix := "/cyrano/" + from + "/"
+	return swapSchemeTarget(r.RequestURI, from, to)
+}
+
+func swapSchemeTarget(uri, from, to string) (string, bool) {
+	const prefix = "/cyrano/"
 	if !strings.HasPrefix(uri, prefix) {
 		return "", false
 	}
-	return "/cyrano/" + to + "/" + uri[len(prefix):], true
+	rest := uri[len(prefix):]
+	slash := strings.IndexByte(rest, '/')
+	if slash < 0 {
+		return "", false
+	}
+	seg := rest[:slash]
+	scheme, marks := seg, ""
+	if i := strings.IndexByte(seg, '!'); i >= 0 {
+		scheme, marks = seg[:i], seg[i:]
+	}
+	if scheme != from {
+		return "", false
+	}
+	return prefix + to + marks + rest[slash:], true
 }
 
 // upgradeNavigation sends a main-frame http navigation to its https URL, as

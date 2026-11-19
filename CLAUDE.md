@@ -186,6 +186,9 @@ the data copy. Unwrap ignores the marks.
   (Server-Timing metric `crnb`); read-back of script text through
   ancestors' `textContent`, text nodes and `XMLSerializer`;
   `Notification.permission` in a third-party frame (`patches/embedded.ts`).
+  Permissions-Policy and an iframe's `allow` are read as Chromium reads
+  them and translated (spec/Permissions.agda, Allow.agda: origins become
+  self / 'src', which on the proxy every frame is).
   Still different in a third-party frame: Permissions Policy (features with
   a 'self' default stay on: `document.featurePolicy`, `permissions.query`,
   `screen.isExtended`), the parent's timing entry for the frame (natively
@@ -252,8 +255,10 @@ the data copy. Unwrap ignores the marks.
   --assets go/assets` (self-signed cert; Playwright `ignoreHTTPSErrors`).
   Header order is then Chrome's template, not the browser's own
   (`internal/headerorder` reads HTTP/1.x only).
-- **HTTPS-Upgrades** as Chrome's (`proxy/https_upgrades.go`): a main-frame
-  http navigation is sent to https first and falls back to http when https
+- **HTTPS-Upgrades** as Chrome's (`proxy/https_upgrades.go`,
+  spec/Upgrades.agda; `make chrome-check` — real Chrome, as Playwright's
+  Chromium has the feature off): a main-frame http navigation to a unique
+  name (a known ICANN TLD; not a.example) is sent to https first and falls back to http when https
   fails (times.com: certificate for nytimes.com). The landing page sends a
   bare host as http. A navigation that cannot reach its origin gets an error
   page (subresources: connection closed). Check ads in a Chrome profile

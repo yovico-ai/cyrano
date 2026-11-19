@@ -343,7 +343,9 @@ func TestServeHTTPWithTarget_HeaderReconstitution(t *testing.T) {
 	if v := rec.Header().Get("Alt-Svc"); v != "clear" {
 		t.Errorf("Alt-Svc should be neutralized to clear, got %q", v)
 	}
-	if v := rec.Header().Get("Permissions-Policy"); v != "ch-dpr=(self), ch-viewport-width=(self)" {
+	// i.dell.com is a bare token, not a string: Chromium drops it, so
+	// nobody is allowed (spec/Permissions.agda; the old rule granted self).
+	if v := rec.Header().Get("Permissions-Policy"); v != "ch-dpr=(), ch-viewport-width=()" {
 		t.Errorf("Permissions-Policy should be translated to the proxy, got %q", v)
 	}
 	if v := rec.Header().Get("Feature-Policy"); v != "dpr 'self'" {

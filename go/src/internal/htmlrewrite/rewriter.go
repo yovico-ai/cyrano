@@ -306,6 +306,13 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 				attrs = setAttr(attrs, "srcdoc", doc.String())
 			}
 		}
+		// The allow attribute's origins name nothing on the proxy, where the
+		// frame's src is a proxy URL: written 'src' (spec/Allow.agda).
+		if v, ok := getAttr(attrs, "allow"); ok && !svg {
+			if now := urlrewrite.RewriteAllow(v); now != v {
+				attrs = setAttr(attrs, "allow", now)
+			}
+		}
 	}
 
 	// The URL-bearing attributes (spec/Attrs.agda attrKind): a URL, a URL

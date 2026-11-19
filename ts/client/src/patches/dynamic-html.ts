@@ -50,6 +50,7 @@ import { rewriteSrcsetAttribute } from "./srcset";
 import { XLINK_NS, kindOf, rewriteByKind } from "./url-attribute-map";
 import { remark, rewriteFor, type RewriteOne } from "./referrer-policy";
 import { isRefreshEquiv, rewriteRefresh } from "../url/refresh";
+import { rewriteAllow } from "../url/allow";
 import { scriptKindOf } from "./script-kind";
 import { isReferrerPolicy } from "../url/containment";
 import { wrapAccessor, wrapMethod } from "../native/surface";
@@ -211,6 +212,7 @@ export function patchDynamicHtml(
     });
     patchIntegrityProperty(targetWindow);
     patchSrcdocProperty(targetWindow);
+    patchAllowProperty(targetWindow);
 }
 
 /**
@@ -399,6 +401,8 @@ function attributeValue(el: Element, name: string, value: string, rewriteOne: (u
     // A declarative refresh navigates like a link: through the proxy (spec/Refresh.agda).
     if (lowerName === "content" && isRefreshMeta(el)) return rewriteRefresh(value, rewriteOne);
     if (lowerName === "srcdoc" && el.tagName === "IFRAME") return rewriteSrcdoc(value, rewriteOne, proxyOrigin, bootstrapOf(el));
+    // An origin in allow names nothing on the proxy (spec/Allow.agda).
+    if (lowerName === "allow" && el.tagName === "IFRAME") return rewriteAllow(value);
     // An element's own referrer policy: the browser is told unsafe-url, its
     // URLs carry the policy (patches/referrer-policy.ts).
     if (lowerName === "referrerpolicy" && isReferrerPolicy(value.replace(/[A-Z]/g, (c) => c.toLowerCase())) && elementPolicyCapable(el)) return "unsafe-url";
@@ -427,6 +431,20 @@ function patchSrcdocProperty(targetWindow: Window): void {
         get: (_get, self) => (self as Element).getAttribute("srcdoc") ?? "",
         // (The value as given: a TrustedHTML stays one — setAttribute above.)
         set: (_set, self, v) => { (self as Element).setAttribute("srcdoc", (sinkText(v) === null ? String(v) : v) as string); },
+    });
+}
+
+/**
+ * iframe.allow reflects the attribute: set the attribute's way (its origins
+ * written 'src'), read as the page set it.
+ */
+function patchAllowProperty(targetWindow: Window): void {
+    const proto = (targetWindow as unknown as { HTMLIFrameElement?: { prototype: object } }).HTMLIFrameElement?.prototype;
+    if (!proto || !nO.getOwnPropertyDescriptor(proto, "allow")) return;
+    save(proto, "allow");
+    wrapAccessor<unknown>(proto, "allow", {
+        get: (_get, self) => (self as Element).getAttribute("allow") ?? "",
+        set: (_set, self, v) => { (self as Element).setAttribute("allow", String(v)); },
     });
 }
 
