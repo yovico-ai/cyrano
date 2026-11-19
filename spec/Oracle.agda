@@ -23,6 +23,22 @@
 --                                       → {"out":"a=1; b=2"}
 --   site    <from> <fromSite|-> <to> <toSite|->
 --                                       → {"out":"same-origin|same-site|cross-site"}
+--   credentials <omit|same-origin|include> <same|cross>
+--                                       → {"out":"yes"} / {"out":"no"}
+--   cors    <origin> <cred|nocred> <ACAO lines> <ACAC lines>
+--                                       → {"out":"yes"} / {"out":"no"}
+--   expose  <cred|nocred> <Access-Control-Expose-Headers lines> <name>
+--                                       → {"out":"yes"} / {"out":"no"}
+--   csp     <header|meta> <proxy origin> <tt policy> <value>
+--                                       → {"out":"<translated policy>"}
+--   cspnonce  <header values, LF-separated>  → {"out":"<nonce>"} / {"none":true}
+--   cspinline <header values, LF-separated>  → {"out":"yes"} / {"out":"no"}
+--   frameanc <CSP header value> <embedder URL> <document URL>
+--                                       → {"out":"allow"|"deny"} / {"none":true}
+--   xfo     <X-Frame-Options lines> <same|cross>
+--                                       → {"out":"yes"} / {"out":"no"}
+--     (a header's field lines: one field, the lines separated by LF;
+--      an empty field is no line at all — Fetch.agda: they decide alike)
 --
 -- Fields are separated by one tab. In a field, "\u{HEX}" stands for that
 -- code point: the harness writes every backslash, control character and
@@ -46,6 +62,8 @@ open import Containment
 open import Srcset
 open import Referrer
 open import Cookies
+open import Fetch
+open import Csp
 
 ------------------------------------------------------------------------
 -- Requests.
@@ -203,6 +221,14 @@ dispatch op args =
   else if eqStr op (toList "setcookie") then setCookieReq args
   else if eqStr op (toList "cookies") then cookiesReq args
   else if eqStr op (toList "samesite") then sameSiteReq args
+  else if eqStr op (toList "credentials") then credentialsReq args
+  else if eqStr op (toList "cors") then corsReq args
+  else if eqStr op (toList "expose") then exposeReq args
+  else if eqStr op (toList "csp") then cspReq args
+  else if eqStr op (toList "cspnonce") then cspNonceReq args
+  else if eqStr op (toList "cspinline") then cspInlineReq args
+  else if eqStr op (toList "frameanc") then frameAncReq args
+  else if eqStr op (toList "xfo") then xfoReq args
   else errorReply "UnknownRequest"
   where
   rewriteReq : List Str → Str
@@ -303,6 +329,74 @@ dispatch op args =
   ... | just base = out (cookiesFor (eqStr api (toList "api")) base jar)
   ... | nothing   = errorReply "OutOfModel"
   cookiesReq _ = errorReply "BadRequest"
+
+  yesNo : Bool → Str
+  yesNo b = out (toList (if b then "yes" else "no"))
+
+  -- A header's field lines, LF-separated; empty: none.
+  fieldLines : Str → List Str
+  fieldLines [] = []
+  fieldLines v  = splitOn (is 10) v
+
+  credOf : Str → Maybe Bool
+  credOf x = if eqStr x (toList "cred") then just true
+             else if eqStr x (toList "nocred") then just false else nothing
+
+  credentialsReq : List Str → Str
+  credentialsReq (m ∷ so ∷ []) with modeOf′ m
+    where
+    modeOf′ : Str → Maybe Credentials
+    modeOf′ x = if eqStr x (toList "omit") then just credOmit
+                else if eqStr x (toList "same-origin") then just credSameOrigin
+                else if eqStr x (toList "include") then just credInclude else nothing
+  ... | just c  = yesNo (includesCredentials c (eqStr so (toList "same")))
+  ... | nothing = errorReply "BadRequest"
+  credentialsReq _ = errorReply "BadRequest"
+
+  corsReq : List Str → Str
+  corsReq (o ∷ c ∷ ao ∷ ac ∷ []) with credOf c
+  ... | just cred = yesNo (corsCheck (combine (fieldLines ao)) (combine (fieldLines ac)) o cred)
+  ... | nothing   = errorReply "BadRequest"
+  corsReq _ = errorReply "BadRequest"
+
+  exposeReq : List Str → Str
+  exposeReq (c ∷ eh ∷ n ∷ []) with credOf c
+  ... | just cred = yesNo (exposed cred (fieldLines eh) n)
+  ... | nothing   = errorReply "BadRequest"
+  exposeReq _ = errorReply "BadRequest"
+
+  cspReq : List Str → Str
+  cspReq (k ∷ o ∷ tt ∷ v ∷ []) =
+    if eqStr k (toList "header") then out (translateHeader px v)
+    else if eqStr k (toList "meta") then out (translateMeta px v)
+    else errorReply "BadRequest"
+    where
+    px : CspProxy
+    px = record { origin = o ; ttPolicy = tt ; plainHttp = prefixCI (toList "http://") o }
+  cspReq _ = errorReply "BadRequest"
+
+  cspNonceReq : List Str → Str
+  cspNonceReq (hs ∷ []) = maybeOut (scriptNonce (fieldLines hs))
+  cspNonceReq _ = errorReply "BadRequest"
+
+  cspInlineReq : List Str → Str
+  cspInlineReq (hs ∷ []) = yesNo (inlineScriptAllowed (fieldLines hs))
+  cspInlineReq _ = errorReply "BadRequest"
+
+  frameAncReq : List Str → Str
+  frameAncReq (h ∷ a ∷ d ∷ []) with baseOf a | baseOf d
+  ... | just anc | just doc = maybeOut (verdict (frameAncestors h anc doc))
+    where
+    verdict : Maybe Bool → Maybe Str
+    verdict (just true)  = just (toList "allow")
+    verdict (just false) = just (toList "deny")
+    verdict nothing      = nothing
+  ... | _ | _ = errorReply "OutOfModel"
+  frameAncReq _ = errorReply "BadRequest"
+
+  xfoReq : List Str → Str
+  xfoReq (ls ∷ so ∷ []) = yesNo (xfoAllows (fieldLines ls) (eqStr so (toList "same")))
+  xfoReq _ = errorReply "BadRequest"
 
   srcsetReq : List Str → Str
   srcsetReq (v ∷ []) = toList "{\"out\":" ++ jsonString (rewriteSrcset bracket v) ++ toList "}"

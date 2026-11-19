@@ -13,6 +13,7 @@
 //
 // The accessor stays the native's (Document.prototype.cookie).
 
+import { ncall } from "../native/intrinsics";
 import { getPublicSuffix } from "tldts";
 import { cookiesFor, parseSetCookie, storeCookie, wireName, wireValue } from "../cookies/rfc";
 import { wrapAccessor } from "../native/surface";
@@ -37,11 +38,11 @@ export function nativeCookieWrite(value: string, url: URL): string | null {
 
 export function patchDocumentCookie(targetWindow: Window, baseUrl: () => URL, only?: "get" | "set"): void {
     wrapAccessor<string>(targetWindow.document, "cookie", {
-        ...(only !== "set" ? { get: (get: (this: unknown) => string, self: unknown) => cookiesFor(true, baseUrl(), get.call(self)) } : {}),
+        ...(only !== "set" ? { get: (get: (this: unknown) => string, self: unknown) => cookiesFor(true, baseUrl(), ncall(get, self)) } : {}),
         ...(only !== "get" ? {
             set: (set: (this: unknown, v: string) => void, self: unknown, value: string) => {
                 const w = nativeCookieWrite(String(value), baseUrl());
-                if (w !== null) set.call(self, w);
+                if (w !== null) ncall(set, self, w);
             },
         } : {}),
     });

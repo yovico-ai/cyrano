@@ -9,6 +9,7 @@
 // last query parameter (Go urlrewrite.WSOriginParam), which the server
 // strips before the upstream sees the URL and which url never shows.
 
+import { nR, ncall } from "../native/intrinsics";
 import { wrapAccessor, wrapConstructor } from "../native/surface";
 
 export const WS_ORIGIN_PARAM = "__cyrano_ws_origin";
@@ -33,17 +34,17 @@ export function patchWebSocket(
     pageOrigin: () => string = () => "",
 ): void {
     const native = wrapConstructor<typeof WebSocket>(targetWindow, "WebSocket", (Native, args, newTarget) => {
-        if (!args.length) return Reflect.construct(Native, args, newTarget as typeof WebSocket);
+        if (!args.length) return nR.construct(Native, args, newTarget as typeof WebSocket);
         const raw = String(args[0]);
         const proxied = rewriteOne(raw);
         const origin = pageOrigin();
         const url = proxied !== raw && origin ? withPageOrigin(proxied, origin) : proxied;
-        return Reflect.construct(Native, [url, ...args.slice(1)], newTarget as typeof WebSocket);
+        return nR.construct(Native, [url, ...args.slice(1)], newTarget as typeof WebSocket);
     });
     if (native) {
         wrapAccessor<string>(native.prototype, "url", {
             get: (get, self) => {
-                const real = get.call(self);
+                const real = ncall(get, self);
                 const bare = withoutPageOrigin(real);
                 const original = unwrapOne(bare);
                 // Only a URL cyrano proxified carries cyrano's marker.

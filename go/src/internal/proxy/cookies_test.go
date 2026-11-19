@@ -156,3 +156,54 @@ func TestCookieExpiry(t *testing.T) {
 		}
 	}
 }
+
+// A request the page made without credentials — fetch's "omit", or its
+// default to another origin — names that to the proxy in Crn-C (the
+// runtime's patches/fetch.ts, xhr.ts): the upstream gets no cookies, from
+// the browser's jar or the session's, and its Set-Cookie is not stored.
+func TestCookies_CredentialsOmitSendsNoCookies(t *testing.T) {
+	upstream, captured := cookieUpstream(t, "fresh=1; Path=/", "secret2=2; HttpOnly")
+	up, _ := url.Parse(upstream.URL)
+	host := up.Hostname()
+	jar := NewSessionJar()
+	h := New(Options{ProxyCfg: devProxyCfg(), CookieJar: jar, SessionCookieName: "crnsct"})
+	jar.Store("sess", urlrewrite.StoredCookie{HostOnly: true, Domain: host, Path: "/", Name: "secret", Value: "2", HTTPOnly: true, SameSite: 'u'}, time.Time{})
+	browserJar := "crnsct=sess; __crn!h!" + host + "!%2F!a=iu:1"
+
+	send := func(credentials string) (*httptest.ResponseRecorder, http.Header) {
+		req := httptest.NewRequest("GET", cyranoPath(upstream.URL+"/api"), nil)
+		req.Host = "localhost:9081"
+		req.Header.Set("Cookie", browserJar)
+		if credentials != "" {
+			req.Header.Set(CredentialsHeader, credentials)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec, captured.headers
+	}
+
+	for _, omit := range []string{"omit", "OMIT"} {
+		rec, got := send(omit)
+		if c := got.Values("Cookie"); len(c) != 0 {
+			t.Errorf("Crn-C %q: upstream Cookie = %q, want none", omit, c)
+		}
+		if v := got.Get(CredentialsHeader); v != "" {
+			t.Errorf("Crn-C %q reached the upstream: %q", omit, v)
+		}
+		if sc := rec.Header().Values("Set-Cookie"); len(sc) != 0 {
+			t.Errorf("Crn-C %q: Set-Cookie to the browser = %q, want none (not stored)", omit, sc)
+		}
+	}
+	if stored := jar.Cookies("sess"); len(stored) != 1 || stored[0].Name != "secret" {
+		t.Errorf("session jar after uncredentialed requests = %+v, want only the original cookie", stored)
+	}
+
+	// Control: the same request with credentials gets the cookies, and its
+	// response's HttpOnly cookie is stored (sent on the next request).
+	if _, got := send("include"); got.Get("Cookie") != "a=1; secret=2" {
+		t.Errorf("Crn-C include: upstream Cookie = %q, want %q", got.Get("Cookie"), "a=1; secret=2")
+	}
+	if _, got := send(""); got.Get("Cookie") != "a=1; secret=2; secret2=2" {
+		t.Errorf("no Crn-C: upstream Cookie = %q, want %q", got.Get("Cookie"), "a=1; secret=2; secret2=2")
+	}
+}

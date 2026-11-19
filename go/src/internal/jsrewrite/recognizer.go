@@ -95,9 +95,12 @@ type parser struct {
 	noIn    bool // `in` is not an operator here (a for statement's head)
 	forInit bool // … and a trailing `in` / `of` ends the expression unread
 	fn      fnState
-	depth   int       // function nesting
-	scope   *patScope // the possible pattern being parsed
-	nest    int       // recursion depth
+	depth   int // function nesting
+	// withDepth > 0: inside a with body, where the runtime is reached
+	// through the global object (R13).
+	withDepth int
+	scope     *patScope // the possible pattern being parsed
+	nest      int       // recursion depth
 }
 
 type parseError struct{ at int }
@@ -329,7 +332,7 @@ func (p *parser) member(obj *expr, name string, static, computed, optional bool,
 		}
 		return false
 	}
-	if !inChain && p.o.WrapMemberExpression { // R5
+	if !inChain && p.o.WrapMemberExpression && (p.o.DebugR5At == nil || p.o.DebugR5At(lb)) { // R5
 		p.open(obj.start, "$rewriter.wrap_member_expression(")
 		p.replace(lb, 1, ",$__crn_key__=(")
 		p.replace(rb, 1, "))[$__crn_key__]")
@@ -545,7 +548,9 @@ func (p *parser) statement() {
 		case "with":
 			p.next()
 			p.parenExpr()
+			p.withDepth++ // R13
 			p.statement()
+			p.withDepth--
 			return
 		case "debugger":
 			// R12: an empty statement in its place (with its semicolon, so

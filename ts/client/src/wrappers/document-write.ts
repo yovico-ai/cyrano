@@ -19,6 +19,8 @@
 // check (`nodeType === 9`, the spec value for DOCUMENT_NODE). Cross-realm
 // safe — doesn't depend on `instanceof Document` against this realm's class.
 
+import { SafeSet, SafeWeakMap, SafeWeakSet, nO, nOP, nR, napply, ncall } from "../native/intrinsics";
+import { isDocumentObject } from "../native/brand";
 import { isTrustedValue, trusted } from "../native/trusted";
 import { rewriteHtmlString } from "../patches/html-rewriter";
 import { sinkText } from "../patches/dynamic-html";
@@ -37,12 +39,10 @@ interface WriteCapable {
     defaultView?: { $rewriter?: unknown } | null;
 }
 
-const DOCUMENT_NODE = 9;
 
+// Told apart without reading the object (native/brand.ts).
 function isDocumentLike(obj: unknown): obj is WriteCapable {
-    return obj !== null
-        && typeof obj === "object"
-        && (obj as { nodeType?: number }).nodeType === DOCUMENT_NODE;
+    return isDocumentObject(obj);
 }
 
 // Injects the bootstrap when the written content opens a new document or
@@ -76,9 +76,9 @@ function maybeInjectBootstrap(
 }
 
 // One pair of writers per document: `document.write === document.write`.
-const writers = new WeakMap<object, DocumentWriteWrapper>();
+const writers = new SafeWeakMap<object, DocumentWriteWrapper>();
 // Documents whose write / writeln the page replaced (through the setter below).
-const replaced = new WeakMap<object, Set<string>>();
+const replaced = new SafeWeakMap<object, Set<string>>();
 
 /** Whether `target[name]` is still the browser's own method. */
 function isNativeMethod(target: WriteCapable, name: "write" | "writeln"): boolean {
@@ -115,11 +115,11 @@ export function wrapDocumentWrite(
     if (!w) {
         const make = (name: "write" | "writeln") => (...args: unknown[]): unknown => {
             const native = target[name] as (...a: unknown[]) => unknown;
-            if (!allStrings(args)) return native.apply(target, args);
+            if (!allStrings(args)) return napply(native, target, args);
             const joined = args.map((a) => sinkText(a) ?? "").join("");
             let rewritten = rewriteHtmlString(joined, rewriteOne, proxyOrigin);
             if (getBootstrapHtml) rewritten = maybeInjectBootstrap(target, joined, rewritten, getBootstrapHtml);
-            return native.call(target, args.some(isTrustedValue) ? trusted(globalThis, "HTML", rewritten) : rewritten);
+            return ncall(native, target, args.some(isTrustedValue) ? trusted(globalThis, "HTML", rewritten) : rewritten);
         };
         w = { write: make("write"), writeln: make("writeln") };
         writers.set(target, w);
@@ -135,7 +135,7 @@ export function wrapDocumentWrite(
 
 function markReplaced(target: object, name: string): void {
     let names = replaced.get(target);
-    if (!names) replaced.set(target, (names = new Set()));
+    if (!names) replaced.set(target, (names = new SafeSet()));
     names.add(name);
 }
 
@@ -147,12 +147,12 @@ function markReplaced(target: object, name: string): void {
 // Document.prototype.write. So it is wrapped there, on the native surface,
 // and the source-level helper above passes such calls straight through.
 
-const nativelyWrapped = new WeakSet<object>();
+const nativelyWrapped = new SafeWeakSet<object>();
 
 /** Whether `doc`'s write is the wrapped native (its realm has the runtime). */
 function wrappedAtPrototype(doc: object): boolean {
-    for (let p: object | null = Object.getPrototypeOf(doc) as object | null; p; p = Object.getPrototypeOf(p) as object | null) {
-        if (Object.prototype.hasOwnProperty.call(p, "write")) return nativelyWrapped.has(p);
+    for (let p: object | null = nO.getPrototypeOf(doc) as object | null; p; p = nO.getPrototypeOf(p) as object | null) {
+        if (ncall(nOP.hasOwnProperty, p, "write")) return nativelyWrapped.has(p);
     }
     return false;
 }
@@ -166,15 +166,15 @@ export function patchDocumentWrite(
     const D = (targetWindow as unknown as { Document?: { prototype: object } }).Document?.prototype;
     if (!D) return;
     let holder: object | null = D;
-    while (holder && !Object.prototype.hasOwnProperty.call(holder, "write")) holder = Object.getPrototypeOf(holder) as object | null;
+    while (holder && !ncall(nOP.hasOwnProperty, holder, "write")) holder = nO.getPrototypeOf(holder) as object | null;
     if (!holder || nativelyWrapped.has(holder)) return;
     for (const key of ["write", "writeln"]) {
         wrapMethod<(...a: unknown[]) => unknown>(holder, key, (native, self, args) => {
-            if (!isDocumentLike(self) || !allStrings(args)) return Reflect.apply(native, self, args);
+            if (!isDocumentLike(self) || !allStrings(args)) return nR.apply(native, self, args);
             const joined = args.map((a) => sinkText(a) ?? "").join("");
             let rewritten = rewriteHtmlString(joined, rewriteOne, proxyOrigin, bootstrap);
             rewritten = maybeInjectBootstrap(self, joined, rewritten, bootstrap);
-            const out = Reflect.apply(native, self, [args.some(isTrustedValue) ? trusted(targetWindow, "HTML", rewritten) : rewritten]);
+            const out = nR.apply(native, self, [args.some(isTrustedValue) ? trusted(targetWindow, "HTML", rewritten) : rewritten]);
             // Frames the written markup made: the page may write into them next.
             if (/<iframe/i.test(joined)) injectFramesIn(targetWindow, self);
             return out;

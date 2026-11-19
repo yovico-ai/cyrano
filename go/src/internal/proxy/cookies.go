@@ -21,14 +21,19 @@ import (
 	"github.com/yovico/cyrano/internal/urlrewrite"
 )
 
+// noCredentialsKey marks a request made without credentials.
+type noCredentialsKey struct{}
+
 // upstreamCookies sets the outgoing Cookie header: from the browser's jar
 // (the incoming Cookie header) and the session jar, the cookies that match
 // target — domain, path, Secure, SameSite — longer paths first.
 func (h *Handler) upstreamCookies(req *http.Request, target *url.URL, sessionID string) {
 	// A request the page made without credentials (fetch's "omit", or its
-	// default to another origin) carries no cookies.
+	// default to another origin) carries no cookies, and its response's
+	// Set-Cookie is not stored (Fetch; spec/Fetch.agda includesCredentials).
 	if strings.EqualFold(req.Header.Get(CredentialsHeader), "omit") {
 		req.Header.Del("Cookie")
+		*req = *req.WithContext(context.WithValue(req.Context(), noCredentialsKey{}, true))
 		return
 	}
 	cookies := urlrewrite.JarCookies(strings.Join(req.Header.Values("Cookie"), "; "))
@@ -124,6 +129,10 @@ func browserSetCookie(c urlrewrite.StoredCookie, sc urlrewrite.SetCookie, httpOn
 // A cookie that changes between HttpOnly and script-visible moves between
 // the two stores. On first contact the proxy's session cookie is issued.
 func (h *Handler) routeSetCookies(resp *http.Response) {
+	if none, _ := resp.Request.Context().Value(noCredentialsKey{}).(bool); none {
+		resp.Header.Del("Set-Cookie")
+		return
+	}
 	target := pageKey(resp.Request.URL)
 	jar := h.opts.CookieJar
 	sessionID, _ := resp.Request.Context().Value(SessionContextKey{}).(string)

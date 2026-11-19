@@ -17,6 +17,8 @@ The rules both runtimes must follow byte for byte, written once:
 | `Srcset.agda` | where each srcset candidate's URL starts and ends | `htmlrewrite/srcset.go`; `ts/client/src/patches/srcset.ts` |
 | `Referrer.agda` | Referer, Origin and Sec-Fetch-Site as a direct browser sends them (Referrer Policy, Fetch, Fetch Metadata) | `urlrewrite/referrer.go`, applied in `proxy/fetch_headers.go` |
 | `Cookies.agda` | reading Set-Cookie, storing, choosing cookies for a URL, SameSite, and the wire form of a cookie in the browser's jar (RFC 6265bis) | `urlrewrite/cookies.go`, `proxy/cookies.go`; `ts/client/src/cookies/rfc.ts` |
+| `Fetch.agda` | a page's cross-origin fetch/XHR: whether it carries credentials (and so cookies), the CORS check of its response, the response headers a script sees (Access-Control-Expose-Headers) | `proxy/cors.go`, `proxy/cookies.go`; `ts/client/src/patches/cors.ts` (fetch, XHR) |
+| `Csp.agda` | reading a Content-Security-Policy (CSP3 §2.2), translating it for the proxy (header and `<meta>`), the bootstrap's nonce and inline-or-external choice, and framing: frame-ancestors source matching and X-Frame-Options | `urlrewrite/csp.go`, `proxy/frame_ancestors.go`; `ts/client/src/patches/html-rewriter.ts` (`<meta>`) |
 | `Oracle.agda` | wire format only (one request line → one JSON line) | — |
 | `Main.agda` | the IO loop (spec-oracle skill's file, unchanged) | — |
 
@@ -57,7 +59,10 @@ standards, where they differ (`^` and `|` in paths, a space or `*` in a
 host, IDNA, an invalid last `Max-Age`): a URL or cookie the user's browser
 accepts and cyrano does not would escape containment. `make browser-check`
 runs the spec against real Chromium (URLs: `spec-vs-chromium`, cookies:
-`cookies-vs-chromium`) and the runtime's native surface, `postMessage` and
+`cookies-vs-chromium`, CORS: `fetch-vs-chromium`, framing:
+`framing-vs-chromium`; and for the CSP translation, which is cyrano's own
+rule, the page-cannot-tell property: what loads directly loads proxied,
+`csp-vs-chromium`) and the runtime's native surface, `postMessage` and
 workers in it (`tests/native`). IDNA, outside the spec, is checked by a
 fixture recorded from Chromium (`urlrewrite/fixtures/idna.json`).
 

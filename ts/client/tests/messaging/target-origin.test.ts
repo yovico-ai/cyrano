@@ -55,6 +55,7 @@ describe("sending as the sender", () => {
     const withRuntime = (win: Record<string, unknown>, native: (...a: unknown[]) => unknown) => {
         const internals = { api: {} } as unknown as Internals;
         installSender(internals, native);
+        win["window"] = win; // a window: only windows have internals (native/brand.ts)
         win["$rewriter"] = { _: internals };
         return win;
     };
@@ -72,7 +73,7 @@ describe("sending as the sender", () => {
     it("puts nothing on the window itself", () => {
         const w = withRuntime({}, vi.fn());
         expect(Object.getOwnPropertySymbols(w)).toEqual([]);
-        expect(Object.keys(w)).toEqual(["$rewriter"]);
+        expect(Object.keys(w)).toEqual(["window", "$rewriter"]);
     });
 });
 

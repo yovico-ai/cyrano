@@ -25,7 +25,7 @@ Formats and inverse: `ts/client/src/js/marks.ts`,
 
 ## The rules
 
-R1…R12, stated in `ts/client/src/js/rewriter.ts` (class `Splicer`). Each is
+R1…R13, stated in `ts/client/src/js/rewriter.ts` (class `Splicer`). Each is
 a small edit at a position the grammar gives: where a member access's
 object starts and ends, whether an identifier is read, assigned or
 declared.
@@ -52,8 +52,8 @@ They are held together by:
 ```
 
 The corpus test also checks that what would be served still parses and
-that the original comes back byte for byte. Last run: 1,518 scripts,
-144 MB, 805k edits — identical.
+that the original comes back byte for byte. Last run (2026-11-18, R13): 1,342 scripts,
+172.9 MB — identical.
 
 ## Known limits
 

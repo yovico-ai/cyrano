@@ -26,17 +26,18 @@
 // through rewriteCssText. The rewriter is pure (no DOM callbacks) so there
 // is no recursion concern.
 
+import { SafeWeakSet, nO, nOP, nR, ncall } from "../native/intrinsics";
 import { rewriteCssText } from "../css/rewriter";
 import { wrapMethod } from "../native/surface";
 
 // Prototypes already patched. Per realm: the runtime module is shared by a
 // page and the empty frames it initializes, each with its own prototypes.
-const done = new WeakSet<object>();
+const done = new SafeWeakSet<object>();
 
 /** Where `key` is defined on `proto`'s chain. */
 function holderOf(proto: object | undefined, key: string): object | null {
-    for (let p: object | null = proto ?? null; p; p = Object.getPrototypeOf(p) as object | null) {
-        if (Object.prototype.hasOwnProperty.call(p, key)) return p;
+    for (let p: object | null = proto ?? null; p; p = nO.getPrototypeOf(p) as object | null) {
+        if (ncall(nOP.hasOwnProperty, p, key)) return p;
     }
     return null;
 }
@@ -149,8 +150,8 @@ function findGroupingRuleInsertRulePrototype(): object | null {
 }
 
 function findPrototypeWith(instance: object, methodName: string): object | null {
-    for (let p: object | null = Object.getPrototypeOf(instance); p; p = Object.getPrototypeOf(p)) {
-        const desc = Object.getOwnPropertyDescriptor(p, methodName);
+    for (let p: object | null = nO.getPrototypeOf(instance); p; p = nO.getPrototypeOf(p)) {
+        const desc = nO.getOwnPropertyDescriptor(p, methodName);
         if (desc && typeof desc.value === "function") return p;
     }
     return null;
@@ -160,11 +161,11 @@ function patchInsertRuleOn(
     proto: object | null,
     rewriteOne: (url: string) => string,
 ): void {
-    if (!proto || !Object.prototype.hasOwnProperty.call(proto, "insertRule")) return;
+    if (!proto || !ncall(nOP.hasOwnProperty, proto, "insertRule")) return;
     wrapMethod<(...a: unknown[]) => number>(proto, "insertRule", (native, self, args) => {
-        if (typeof args[0] !== "string") return Reflect.apply(native, self, args) as number;
+        if (typeof args[0] !== "string") return nR.apply(native, self, args) as number;
         const next = args.slice();
         next[0] = rewriteCssText(args[0], rewriteOne);
-        return Reflect.apply(native, self, next) as number;
+        return nR.apply(native, self, next) as number;
     });
 }

@@ -3,7 +3,7 @@
 // up correctly: base-URL state, location wrapper, the various wrap_* helpers.
 
 import { unmarked } from "../../src/js/marks";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { ClientConfig } from "../../src/config";
 import { createRewriterApi } from "../../src/runtime/api";
 
@@ -33,6 +33,44 @@ describe("createRewriterApi — base URL state", () => {
         api.set_base_url("https://example.com/initial");
         api.set_base_url("not a url");
         expect(api.get_base_url().href).toBe("https://example.com/initial");
+    });
+});
+
+// A fragment never reaches the server: the URL the bootstrap declares has
+// none, and the document's fragment is the one the browser holds (Stripe
+// passes its frames' parameters there).
+describe("createRewriterApi — set_location keeps the browser's fragment", () => {
+    afterEach(() => {
+        window.location.hash = "";
+    });
+
+    it("a declared URL without a fragment takes location.hash", () => {
+        window.location.hash = "#key=pk_test&frame=1";
+        const api = createRewriterApi(window, config);
+        api.set_location("https://js.stripe.example/v3/controller.html");
+        expect(api.get_base_url().href).toBe("https://js.stripe.example/v3/controller.html#key=pk_test&frame=1");
+        expect(api.wrap_get_location(window.location).hash).toBe("#key=pk_test&frame=1");
+    });
+
+    it("a declared URL with its own fragment keeps that one", () => {
+        window.location.hash = "#browser";
+        const api = createRewriterApi(window, config);
+        api.set_location("https://example.org/page#declared");
+        expect(api.get_base_url().href).toBe("https://example.org/page#declared");
+    });
+
+    it("no fragment in the browser: the declared URL as is", () => {
+        window.location.hash = "";
+        const api = createRewriterApi(window, config);
+        api.set_location("https://example.org/page?q=1");
+        expect(api.get_base_url().href).toBe("https://example.org/page?q=1");
+    });
+
+    it("set_base_url does not take the fragment (only the page's own declaration does)", () => {
+        window.location.hash = "#browser";
+        const api = createRewriterApi(window, config);
+        api.set_base_url("https://example.org/page");
+        expect(api.get_base_url().href).toBe("https://example.org/page");
     });
 });
 

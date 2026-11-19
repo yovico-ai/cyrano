@@ -20,6 +20,7 @@
 // Heuristic (REQUIREMENTS.md): V8 only; a page that captured the built-in
 // before cyrano ran, or that compares realms' intrinsics, can still tell.
 
+import { SafeWeakSet, nO, nOP, nR, nbind, ncall } from "./intrinsics";
 import { maskAs, replaceValue, standIn } from "./surface";
 
 type CallSite = {
@@ -43,7 +44,7 @@ export function rawStackUrls(ErrorCtor: ErrorConstructor): string[] {
     const limit = E.stackTraceLimit;
     // Without cyrano's formatter in this realm, keep the page's out of it.
     const ownFormatter = shownErrors.has(ErrorCtor);
-    const hadPrep = !ownFormatter && Object.prototype.hasOwnProperty.call(E, "prepareStackTrace");
+    const hadPrep = !ownFormatter && ncall(nOP.hasOwnProperty, E, "prepareStackTrace");
     const prep = hadPrep ? E.prepareStackTrace : undefined;
     let stack = "";
     rawMode = true;
@@ -75,7 +76,7 @@ export function patchErrorStacks(
     installed.add(Intrinsic);
 
     // What the page had done with Error.prepareStackTrace before this ran.
-    const pageHad = Object.getOwnPropertyDescriptor(Intrinsic, "prepareStackTrace");
+    const pageHad = nO.getOwnPropertyDescriptor(Intrinsic, "prepareStackTrace");
     const KEY = "prepareStackTrace";
     // The page's formatter and stack limit, as it has them on the `Error`
     // it holds (the stand-in below).
@@ -84,10 +85,10 @@ export function patchErrorStacks(
     };
     const syncLimit = (): void => {
         try {
-            const d = Object.getOwnPropertyDescriptor(Shown, "stackTraceLimit");
+            const d = nO.getOwnPropertyDescriptor(Shown, "stackTraceLimit");
             const I = Intrinsic as unknown as { stackTraceLimit?: unknown };
             if (!d) { delete I.stackTraceLimit; return; }
-            const v = "value" in d ? d.value as unknown : (d.get ? d.get.call(Shown) as unknown : undefined);
+            const v = "value" in d ? d.value as unknown : (d.get ? ncall(d.get, Shown) as unknown : undefined);
             if (I.stackTraceLimit !== v) I.stackTraceLimit = v;
         } catch { /* stays as it is */ }
     };
@@ -102,13 +103,13 @@ export function patchErrorStacks(
             get(t, k) {
                 if (k === "getFileName" || k === "getScriptNameOrSourceURL") return () => original;
                 if (k === "toString") return () => t.toString().split(file).join(original);
-                const v = Reflect.get(t, k, t) as unknown;
-                return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+                const v = nR.get(t, k, t) as unknown;
+                return typeof v === "function" ? nbind((v as (...a: unknown[]) => unknown), t) : v;
             },
         });
     };
     const header = (err: unknown): string => {
-        try { return (targetWindow as unknown as { Error: ErrorConstructor }).Error.prototype.toString.call(err); } catch { return "Error"; }
+        try { return ncall((targetWindow as unknown as { Error: ErrorConstructor }).Error.prototype.toString, err); } catch { return "Error"; }
     };
     const format: PrepareStackTrace = (err, sites) => {
         if (rawMode) return [header(err), ...sites.map((s) => `    at ${s.toString()}`)].join("\n");
@@ -118,10 +119,10 @@ export function patchErrorStacks(
         if (typeof limit === "number" && limit >= 0 && visible.length > limit) visible = visible.slice(0, Math.floor(limit));
         syncLimit();
         const hook = pageHook();
-        if (typeof hook === "function") return (hook as PrepareStackTrace).call(Shown, err, visible);
+        if (typeof hook === "function") return ncall((hook as PrepareStackTrace), Shown, err, visible);
         return [header(err), ...visible.map((s) => `    at ${s.toString()}`)].join("\n");
     };
-    Object.defineProperty(Intrinsic, KEY, { value: format, writable: true, configurable: true, enumerable: false });
+    nO.defineProperty(Intrinsic, KEY, { value: format, writable: true, configurable: true, enumerable: false });
 
     // The page's `Error`: a function of its own standing in for the
     // built-in (native/surface.ts standIn — a Proxy here would be told, and
@@ -130,21 +131,21 @@ export function patchErrorStacks(
     // page's own, read by the formatter above — the limit is copied to the
     // built-in, where V8 reads it, whenever an error is made through it.
     const Shown: ErrorConstructor = standIn(Intrinsic as ErrorConstructor, {
-        apply(target, self, args) { syncLimit(); return Reflect.apply(target, self, args); },
+        apply(target, self, args) { syncLimit(); return nR.apply(target, self, args); },
         construct(target, args, newTarget) {
             syncLimit();
-            return Reflect.construct(target, args, (newTarget === Shown ? target : newTarget) as ErrorConstructor) as object;
+            return nR.construct(target, args, (newTarget === Shown ? target : newTarget) as ErrorConstructor) as object;
         },
     });
     // standIn copied the built-in's static members, cyrano's formatter among them.
     delete (Shown as unknown as Record<string, unknown>)[KEY];
-    if (pageHad) Object.defineProperty(Shown, KEY, pageHad);
+    if (pageHad) nO.defineProperty(Shown, KEY, pageHad);
     const capture = (Intrinsic as unknown as { captureStackTrace: (...a: unknown[]) => unknown }).captureStackTrace;
-    const captureDesc = Object.getOwnPropertyDescriptor(Intrinsic, "captureStackTrace");
+    const captureDesc = nO.getOwnPropertyDescriptor(Intrinsic, "captureStackTrace");
     if (captureDesc) {
-        Object.defineProperty(Shown, "captureStackTrace", {
+        nO.defineProperty(Shown, "captureStackTrace", {
             ...captureDesc,
-            value: maskAs(standIn(capture, { apply(target, self, args) { syncLimit(); return Reflect.apply(target, self === Shown ? Intrinsic : self, args); } }), capture),
+            value: maskAs(standIn(capture, { apply(target, self, args) { syncLimit(); return nR.apply(target, self === Shown ? Intrinsic : self, args); } }), capture),
         });
     }
     maskAs(Shown, Intrinsic);
@@ -152,10 +153,10 @@ export function patchErrorStacks(
     replaceValue(Intrinsic.prototype, "constructor", Shown);
     for (const name of SUBCLASSES) {
         const Sub = g[name];
-        if (typeof Sub === "function" && Object.getPrototypeOf(Sub) === Intrinsic) Object.setPrototypeOf(Sub, Shown);
+        if (typeof Sub === "function" && nO.getPrototypeOf(Sub) === Intrinsic) nO.setPrototypeOf(Sub, Shown);
     }
     replaceValue(targetWindow, "Error", Shown);
 }
 
-const installed = new WeakSet<object>();
-const shownErrors = new WeakSet<object>();
+const installed = new SafeWeakSet<object>();
+const shownErrors = new SafeWeakSet<object>();

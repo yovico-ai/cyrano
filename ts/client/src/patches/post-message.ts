@@ -10,6 +10,7 @@
 // window posting to itself, or a caller that cannot be told, goes to the
 // native from here.
 
+import { nO, nR, ncall } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
 import { wrapMethod } from "../native/surface";
 import type { Internals } from "../native/internals";
@@ -24,8 +25,8 @@ export function patchPostMessage(
     const proxyOrigin = new URL(config.apiBaseURL).origin;
     const runtimeUrl = config.apiBaseURL + config.source;
     const PE = (targetWindow as unknown as { PerformanceEntry?: { prototype: PerformanceEntry } }).PerformanceEntry;
-    const nameGet = PE ? Object.getOwnPropertyDescriptor(PE.prototype, "name")?.get : undefined;
-    const nameOf = (e: PerformanceEntry): string => (nameGet ? (nameGet.call(e) as string) : e.name);
+    const nameGet = PE ? nO.getOwnPropertyDescriptor(PE.prototype, "name")?.get : undefined;
+    const nameOf = (e: PerformanceEntry): string => (nameGet ? (ncall(nameGet, e) as string) : e.name);
     const native = wrapMethod<(...a: unknown[]) => void>(targetWindow, "postMessage", (nativeFn, receiver, args) => {
         // A bare `postMessage(...)` call has no receiver: the global object, as for any Window operation.
         const self = receiver === undefined || receiver === null ? targetWindow : receiver;
@@ -41,9 +42,9 @@ export function patchPostMessage(
         if (sender === self || sender === targetWindow && self === targetWindow) {
             // From a function of the sender's own realm (target-origin.ts callInRealmOf).
             const sent = callInRealmOf(sender, nativeFn, self, next);
-            return (sent === NOT_SENT ? Reflect.apply(nativeFn, self, next) : sent) as void;
+            return (sent === NOT_SENT ? nR.apply(nativeFn, self, next) : sent) as void;
         }
-        return sendAs(sender, self, next, () => Reflect.apply(nativeFn, self, next)) as void;
+        return sendAs(sender, self, next, () => nR.apply(nativeFn, self, next)) as void;
     });
     if (native) installSender(internals, native);
 }

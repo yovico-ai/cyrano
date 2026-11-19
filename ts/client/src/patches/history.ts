@@ -8,6 +8,7 @@
 // native call the page's base URL follows the real location — for every
 // change, a "#fragment" one included.
 
+import { nR } from "../native/intrinsics";
 import { wrapMethod } from "../native/surface";
 
 export function patchHistory(
@@ -27,7 +28,7 @@ export function patchHistory(
     };
     for (const name of ["pushState", "replaceState"] as const) {
         wrapMethod<(...a: unknown[]) => void>(H.prototype, name, (native, self, args) => {
-            if (args.length < 3 || args[2] == null) return Reflect.apply(native, self, args) as void;
+            if (args.length < 3 || args[2] == null) return nR.apply(native, self, args) as void;
             const raw = String(args[2]);
             const base = baseUrl();
             let target: URL | null = null;
@@ -42,7 +43,7 @@ export function patchHistory(
             }
             const next = args.slice();
             next[2] = target ? rewriteOne(raw) : raw;
-            Reflect.apply(native, self, next);
+            nR.apply(native, self, next);
             follow();
         });
     }

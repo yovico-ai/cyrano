@@ -22,6 +22,7 @@
 // at the microtask checkpoint the parser performs before running each
 // script, so no page script sees the attribute.
 
+import { SafeMap, SafeWeakMap, nO, ncall } from "./intrinsics";
 import { trusted } from "./trusted";
 import { MARK, original } from "../js/marks";
 
@@ -29,8 +30,8 @@ export const ORIGINALS_ATTR = "crn-o";
 
 interface Entry { now: string | null; was: string | null }
 
-const attrStore = new WeakMap<object, Map<string, Entry>>();
-const textStore = new WeakMap<object, { now: string; was: string }>();
+const attrStore = new SafeWeakMap<object, Map<string, Entry>>();
+const textStore = new SafeWeakMap<object, { now: string; was: string }>();
 
 /** False until anything is recorded: reads then take the native path at no cost. */
 let any = false;
@@ -50,8 +51,8 @@ interface Natives {
 let nat: Natives | null = null;
 
 function accessor(proto: object | undefined, key: string): PropertyDescriptor | undefined {
-    for (let p = proto ?? null; p; p = Object.getPrototypeOf(p) as object | null) {
-        const d = Object.getOwnPropertyDescriptor(p, key);
+    for (let p = proto ?? null; p; p = nO.getPrototypeOf(p) as object | null) {
+        const d = nO.getOwnPropertyDescriptor(p, key);
         if (d) return d;
     }
     return undefined;
@@ -92,7 +93,7 @@ export function recordAttr(el: Element, name: string, now: string | null, was: s
     const key = lower(name);
     if (now === was) return forgetAttr(el, key);
     let m = attrStore.get(el);
-    if (!m) attrStore.set(el, (m = new Map()));
+    if (!m) attrStore.set(el, (m = new SafeMap()));
     m.set(key, { now, was });
     any = true;
 }
@@ -110,7 +111,7 @@ export function originalAttr(el: unknown, name: string): { value: string | null 
     const e = attrStore.get(el)?.get(lower(name));
     if (!e) return undefined;
     let current: string | null;
-    try { current = nat.getAttribute.call(el as Element, name); } catch { return undefined; }
+    try { current = ncall(nat.getAttribute, el as Element, name); } catch { return undefined; }
     return current === e.now ? { value: e.was } : undefined;
 }
 
@@ -130,11 +131,11 @@ export function originalText(el: unknown): string | undefined {
         // own original: the edits are marked in its text (js/marks.ts).
         if ((el as Element).tagName !== "SCRIPT") return undefined;
         let now: string | null;
-        try { now = nat.textGet.call(el as Node); } catch { return undefined; }
+        try { now = ncall(nat.textGet, el as Node); } catch { return undefined; }
         return now !== null && now.includes(MARK) ? original(now) : undefined;
     }
     let current: string | null;
-    try { current = nat.textGet.call(el as Node); } catch { return undefined; }
+    try { current = ncall(nat.textGet, el as Node); } catch { return undefined; }
     return current === t.now ? t.was : undefined;
 }
 
@@ -147,15 +148,15 @@ export function consume(root: unknown): void {
     const r = root as Partial<Element> & { querySelectorAll?: (s: string) => ArrayLike<Element> };
     const one = (el: Element): void => {
         let raw: string | null;
-        try { raw = nat!.getAttribute.call(el, ORIGINALS_ATTR); } catch { return; }
+        try { raw = ncall(nat!.getAttribute, el, ORIGINALS_ATTR); } catch { return; }
         if (raw === null) return;
-        nat!.removeAttribute.call(el, ORIGINALS_ATTR);
+        ncall(nat!.removeAttribute, el, ORIGINALS_ATTR);
         let o: unknown;
         try { o = JSON.parse(raw); } catch { return; }
         if (typeof o !== "object" || o === null) return;
-        for (const [name, was] of Object.entries(o)) {
+        for (const [name, was] of nO.entries(o)) {
             if (was !== null && typeof was !== "string") continue;
-            recordAttr(el, name, nat!.getAttribute.call(el, name), was);
+            recordAttr(el, name, ncall(nat!.getAttribute, el, name), was);
         }
     };
     if (r.nodeType === 1) one(r as Element);
@@ -169,7 +170,7 @@ function elementsOf(node: Node): Element[] {
     if (node.nodeType === 1) out.push(node as Element);
     const q = (node as Partial<Element>).querySelectorAll;
     if (typeof q === "function") {
-        const all = q.call(node, "*") as ArrayLike<Element>;
+        const all = ncall(q, node, "*") as ArrayLike<Element>;
         for (let i = 0; i < all.length; i++) out.push(all[i]!);
     }
     return out;
@@ -183,7 +184,7 @@ export function copyOriginals(source: Node, copy: Node, deep: boolean): void {
     if (from.length !== to.length) return;
     for (let i = 0; i < from.length; i++) {
         const m = attrStore.get(from[i]!);
-        if (m) attrStore.set(to[i]!, new Map(m));
+        if (m) attrStore.set(to[i]!, new SafeMap(m));
         const t = textStore.get(from[i]!);
         if (t) textStore.set(to[i]!, { ...t });
     }
@@ -205,8 +206,8 @@ export function asWritten<T extends Node>(node: T): T {
         // own, with no browsing context either.)
         const inert = node.nodeType === 9 ? null : nat.inert();
         clone = (inert && nat.importNode
-            ? nat.importNode.call(inert, node, true)
-            : nat.cloneNode.call(node, true)) as T;
+            ? ncall(nat.importNode, inert, node, true)
+            : ncall(nat.cloneNode, node, true)) as T;
     } catch {
         return node; // not clonable (a ShadowRoot)
     }
@@ -219,15 +220,15 @@ export function asWritten<T extends Node>(node: T): T {
         const m = attrStore.get(src);
         if (m) {
             for (const [name, e] of m) {
-                if (nat.getAttribute.call(src, name) !== e.now) continue; // changed behind the store's back
-                if (e.was === null) nat.removeAttribute.call(dst, name);
+                if (ncall(nat.getAttribute, src, name) !== e.now) continue; // changed behind the store's back
+                if (e.was === null) ncall(nat.removeAttribute, dst, name);
                 // (Trusted values: the clone's attributes and script text
                 // are sinks too under Trusted Types — native/trusted.ts.)
-                else nat.setAttribute.call(dst, name, trustedForAttr(dst, name, e.was));
+                else ncall(nat.setAttribute, dst, name, trustedForAttr(dst, name, e.was));
             }
         }
         const t = originalText(src);
-        if (t !== undefined) nat.textSet.call(dst, (dst.tagName === "SCRIPT" ? trusted(globalThis, "Script", t) : t) as string);
+        if (t !== undefined) ncall(nat.textSet, dst, (dst.tagName === "SCRIPT" ? trusted(globalThis, "Script", t) : t) as string);
     }
     return clone;
 }
@@ -286,7 +287,7 @@ export function textAsWritten(node: unknown, raw: string): string {
         const el = n as Element;
         if (typeof el.querySelector !== "function" || !el.querySelector("script,style")) return raw;
         const clone = asWritten(n);
-        const text = clone === n ? raw : nat.textGet.call(clone);
+        const text = clone === n ? raw : ncall(nat.textGet, clone);
         return text === null ? raw : (text.includes(MARK) ? original(text) : text);
     } catch {
         return raw;

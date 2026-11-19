@@ -27,6 +27,8 @@
 //     `obj` unchanged. Plugs the `obj.eval(src)` leak that previously fell
 //     through to the bare eval at the call site.
 
+import { SafeWeakMap, SafeWeakSet, nOP, nR, ncall } from "../native/intrinsics";
+import { isWindowObject } from "../native/brand";
 import { isTrustedValue, realmOfFunction, trusted } from "../native/trusted";
 import { defaultJsRewriteOptions, rewriteJsSource } from "../js/rewriter";
 import { maskAs, standIn } from "../native/surface";
@@ -37,10 +39,10 @@ import { maskAs, standIn } from "../native/surface";
 // the source it runs (the page cannot tell): a Proxy of the native, so its
 // name, length, absent `prototype` and own keys are the native's, read by
 // Function.prototype.toString as the native, and the same object each time.
-const wrappers = new WeakMap<object, object>();
-const wrapped = new WeakSet<object>();
+const wrappers = new SafeWeakMap<object, object>();
+const wrapped = new SafeWeakSet<object>();
 /** stand-in → the native eval it stands for. */
-const natives = new WeakMap<object, typeof eval>();
+const natives = new SafeWeakMap<object, typeof eval>();
 
 /** The stand-in for a realm's `eval`: rewrites a string source, then calls it (an indirect eval, as any call through a value is). */
 export function wrapEval(nativeEval: typeof eval): typeof eval {
@@ -50,10 +52,10 @@ export function wrapEval(nativeEval: typeof eval): typeof eval {
     const w = maskAs(standIn(nativeEval, {
         apply(target, self, args: unknown[]) {
             if (isTrustedValue(args[0])) {
-                return Reflect.apply(target, self, [trusted(realmOf(target), "Script", rewriteJsSource(String(args[0]), defaultJsRewriteOptions())), ...args.slice(1)]);
+                return nR.apply(target, self, [trusted(realmOf(target), "Script", rewriteJsSource(String(args[0]), defaultJsRewriteOptions())), ...args.slice(1)]);
             }
-            if (typeof args[0] !== "string") return Reflect.apply(target, self, args);
-            return Reflect.apply(target, self, [rewriteJsSource(args[0], defaultJsRewriteOptions()), ...args.slice(1)]);
+            if (typeof args[0] !== "string") return nR.apply(target, self, args);
+            return nR.apply(target, self, [rewriteJsSource(args[0], defaultJsRewriteOptions()), ...args.slice(1)]);
         },
     }), nativeEval);
     wrappers.set(nativeEval, w);
@@ -91,23 +93,19 @@ export function wrapEvalMemexp(obj: unknown): unknown {
     }
     // Only a global object's `eval` is the evaluator; any other object's
     // `eval` property is its own, read and assigned as written.
-    let isGlobal = false;
-    try {
-        const o = obj as { window?: unknown; self?: unknown };
-        isGlobal = o.window === obj || o.self === obj;
-    } catch { /* a cross-origin window: its eval is not reachable anyway */ }
-    if (!isGlobal) return obj;
+    // (Told apart without reading the object: native/brand.ts.)
+    if (!isWindowObject(obj) && obj !== globalThis) return obj;
     const target = obj as object;
     return new Proxy(target, {
         get(_t, prop, receiver) {
             if (prop === "eval") {
-                const realEval = Reflect.get(target, prop, receiver);
+                const realEval = nR.get(target, prop, receiver);
                 if (typeof realEval !== "function") return realEval;
                 // The realm's own evaluator gets its stand-in; an `eval`
                 // the page assigned over it is the page's own function.
                 return isEvaluator(realEval) ? wrapEval(realEval as typeof eval) : realEval;
             }
-            return Reflect.get(target, prop, receiver);
+            return nR.get(target, prop, receiver);
         },
     });
 }
@@ -116,8 +114,8 @@ export function wrapEvalMemexp(obj: unknown): unknown {
 function isEvaluator(f: Function): boolean {
     if (wrapped.has(f)) return false;
     try {
-        return f.name === "eval" && !Object.prototype.hasOwnProperty.call(f, "prototype") &&
-            /\[native code\]/.test(Function.prototype.toString.call(f));
+        return f.name === "eval" && !ncall(nOP.hasOwnProperty, f, "prototype") &&
+            /\[native code\]/.test(ncall(Function.prototype.toString, f));
     } catch {
         return false;
     }

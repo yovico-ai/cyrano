@@ -12,18 +12,20 @@ import { wrapDocumentWrite } from "../../src/wrappers/document-write";
 const tag = (url: string): string =>
     url + (url.includes("?") ? "&" : "?") + "proxified=1";
 
-const DOCUMENT_NODE = 9;
-
-function fakeDocument(): {
+// A real (happy-dom) Document: the wrapper tells documents apart by the
+// native brand check, never by reading `nodeType` (native/brand.ts). Its
+// write/writeln are spies; the document's own, not the prototype's.
+function fakeDocument(opts: { hasRewriter?: boolean } = {}): {
     write: ReturnType<typeof vi.fn>;
     writeln: ReturnType<typeof vi.fn>;
-    nodeType: number;
+    defaultView: { $rewriter?: object } | null;
 } {
-    return {
-        write: vi.fn(),
-        writeln: vi.fn(),
-        nodeType: DOCUMENT_NODE,
-    };
+    const doc = document.implementation.createHTMLDocument("t");
+    for (const name of ["write", "writeln"]) {
+        Object.defineProperty(doc, name, { value: vi.fn(), writable: true, configurable: true });
+    }
+    Object.defineProperty(doc, "defaultView", { value: opts.hasRewriter ? { $rewriter: {} } : {}, configurable: true });
+    return doc as unknown as ReturnType<typeof fakeDocument>;
 }
 
 describe("document.write end-to-end — inline script rewriting", () => {

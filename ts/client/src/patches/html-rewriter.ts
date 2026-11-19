@@ -26,6 +26,7 @@
 // descriptors at module-init time (lazily, on first call) and bypass the
 // patches by calling the originals directly.
 
+import { SafeMap, SafeSet, nO, ncall } from "../native/intrinsics";
 import { trusted, trustedPolicyName } from "../native/trusted";
 import { rewriteCssText } from "../css/rewriter";
 import { ORIGINALS_ATTR } from "../native/originals";
@@ -57,7 +58,7 @@ export function captureNativeElementOps(): void {
 }
 
 function readCurrentDescriptors(): CapturedNatives {
-    const innerHTMLDesc = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML");
+    const innerHTMLDesc = nO.getOwnPropertyDescriptor(Element.prototype, "innerHTML");
     if (!innerHTMLDesc?.set || !innerHTMLDesc?.get) {
         throw new Error("Element.prototype.innerHTML descriptor missing — environment unsupported");
     }
@@ -127,16 +128,16 @@ export function rewriteHtmlString(
     // (Trusted values for the sinks written below: under Trusted Types
     // the runtime's own policy makes them — native/trusted.ts.)
     const T = (kind: "HTML" | "Script" | "ScriptURL", text: string): string => trusted(globalThis, kind, text) as string;
-    natives.innerHTMLSet.call(template, T("HTML", parsed));
+    ncall(natives.innerHTMLSet, template, T("HTML", parsed));
 
     // The template content is a DocumentFragment; walk all element descendants.
     // querySelectorAll('*') matches all elements, in document order.
     const elements = template.content.querySelectorAll("*");
     // Each element's attributes as the page wrote them, to record what the
     // rewriting below changes (native/originals.ts).
-    const written = new Map<Element, Map<string, string>>();
+    const written = new SafeMap<Element, Map<string, string>>();
     for (const element of elements) {
-        const m = new Map<string, string>();
+        const m = new SafeMap<string, string>();
         for (const a of Array.from(element.attributes)) m.set(a.name, a.value);
         written.set(element, m);
     }
@@ -173,11 +174,7 @@ export function rewriteHtmlString(
         ) {
             const content = element.getAttribute("content") ?? "";
             if (content.length > 0) {
-                natives.setAttribute.call(
-                    element,
-                    "content",
-                    rewriteCspContent(content, proxyOrigin, trustedPolicyName()),
-                );
+                ncall(natives.setAttribute, element, "content", rewriteCspContent(content, proxyOrigin, trustedPolicyName()));
             }
         }
 
@@ -199,24 +196,20 @@ export function rewriteHtmlString(
                 (rel === "preload" || rel === "prefetch") &&
                 as === "font";
             if (!isFontPreload) {
-                natives.setAttribute.call(element, "crossorigin", "use-credentials");
+                ncall(natives.setAttribute, element, "crossorigin", "use-credentials");
             }
         }
 
         // 3b. <iframe srcdoc>: a whole document in an attribute.
         if (element.tagName === "IFRAME") {
             const srcdoc = element.getAttribute("srcdoc");
-            if (srcdoc !== null) natives.setAttribute.call(element, "srcdoc", T("HTML", rewriteSrcdoc(srcdoc, rewriteOne, proxyOrigin, bootstrap)));
+            if (srcdoc !== null) ncall(natives.setAttribute, element, "srcdoc", T("HTML", rewriteSrcdoc(srcdoc, rewriteOne, proxyOrigin, bootstrap)));
         }
 
         // 4. Global `style="..."` attribute — applies to every element.
         const styleAttr = element.getAttribute("style");
         if (styleAttr !== null && styleAttr.length > 0) {
-            natives.setAttribute.call(
-                element,
-                "style",
-                rewriteCssText(styleAttr, rewriteOne),
-            );
+            ncall(natives.setAttribute, element, "style", rewriteCssText(styleAttr, rewriteOne));
         }
 
         // 5. Type-specific URL-bearing attributes (img.src, a.href, ...).
@@ -230,8 +223,7 @@ export function rewriteHtmlString(
                 : rewriteOne(value);
             // Use the captured native setAttribute so we don't recurse through
             // our own setAttribute patch (which would rewrite again).
-            natives.setAttribute.call(element, attrName,
-                attrName === "src" && (element.tagName === "SCRIPT" || element.tagName === "EMBED") ? T("ScriptURL", rewritten) : rewritten);
+            ncall(natives.setAttribute, element, attrName, attrName === "src" && (element.tagName === "SCRIPT" || element.tagName === "EMBED") ? T("ScriptURL", rewritten) : rewritten);
         }
     }
 
@@ -239,14 +231,14 @@ export function rewriteHtmlString(
     for (const [element, was] of written) {
         const o: Record<string, string | null> = {};
         let changed = false;
-        const now = new Map<string, string>();
+        const now = new SafeMap<string, string>();
         for (const a of Array.from(element.attributes)) now.set(a.name, a.value);
         for (const [name, value] of was) if (now.get(name) !== value) { o[name] = value; changed = true; }
         for (const name of now.keys()) if (!was.has(name)) { o[name] = null; changed = true; }
-        if (changed) natives.setAttribute.call(element, ORIGINALS_ATTR, JSON.stringify(o));
+        if (changed) ncall(natives.setAttribute, element, ORIGINALS_ATTR, JSON.stringify(o));
     }
 
-    const out = natives.innerHTMLGet.call(template);
+    const out = ncall(natives.innerHTMLGet, template);
     return structural.length === 0 ? out : restoreStructuralTags(out, structural);
 }
 
@@ -312,52 +304,50 @@ function restoreStructuralTags(html: string, held: string[]): string {
     return html.replace(/<!--\u007fcrn-tag-(\d+)-->/g, (_, n: string) => held[Number(n)] ?? "");
 }
 
-// Mirrors Go's rewriteCSP: adds proxyOrigin to every *-src directive so
-// proxy-rewritten resource URLs pass the browser's CSP check.
-function rewriteCspContent(csp: string, proxyOrigin: string, ttPolicy?: string): string {
-    const directives = csp.split(";");
-    for (let i = 0; i < directives.length; i++) {
-        const dir = directives[i]!;
-        const parts = dir.trim().split(/\s+/);
-        if (parts.length === 0 || !parts[0]) continue;
-        const name = parts[0].toLowerCase();
-        // As the server's rewriteCSP (go/src/internal/proxy/csp.go): reports
-        // would go straight to the origin; and on an http proxy, upgrade-insecure-requests /
-        // block-all-mixed-content would upgrade or block every proxied load.
-        // Trusted Types stay enforced; the runtime's policy is admitted
-        // beside the page's ('none' admits no policy: now only ours).
-        if (name === "trusted-types") {
-            const kept = parts.slice(1).filter((t) => t.toLowerCase() !== "'none'");
-            if (ttPolicy && !kept.includes(ttPolicy) && !kept.includes("*")) kept.push(ttPolicy);
-            const lead = dir.slice(0, dir.length - dir.trimStart().length);
-            directives[i] = lead + parts[0] + " " + kept.join(" ");
-            continue;
-        }
-        if (
-            name === "report-uri" || name === "report-to" ||
-            ((name === "upgrade-insecure-requests" || name === "block-all-mixed-content") &&
-                proxyOrigin.toLowerCase().startsWith("http://"))
-        ) {
-            directives[i] = "";
-            continue;
-        }
-        if (!name.includes("-src")) continue;
+// A <meta http-equiv="Content-Security-Policy"> content, translated for the
+// proxy: spec/Csp.agda translateMeta, which is the authority (Go:
+// urlrewrite.RewriteMetaCSP; both checked against the spec). Reading per
+// CSP3 §2.2.1 (ASCII whitespace, names lowercased, non-ASCII directives and
+// later duplicates skipped); then reports dropped, upgrade/mixed-content
+// dropped on an http proxy, Trusted Types kept with the runtime's policy
+// admitted, the proxy origin added to every fetch directive that is not
+// exactly 'none', and a hash-pinned script/style directive falling back to
+// 'unsafe-inline' 'self'. Output: "name value…" joined by "; ".
+const CSP_FETCH = new SafeSet(["child-src", "connect-src", "default-src", "fenced-frame-src", "font-src", "frame-src",
+    "img-src", "manifest-src", "media-src", "object-src", "prefetch-src", "script-src", "script-src-elem",
+    "script-src-attr", "style-src", "style-src-elem", "style-src-attr", "worker-src"]);
+const CSP_SCRIPT_STYLE = new SafeSet(["default-src", "script-src", "script-src-elem", "script-src-attr",
+    "style-src", "style-src-elem", "style-src-attr"]);
+const cspWords = (s: string): string[] => s.split(/[\t\n\f\r ]+/).filter((w) => w !== "");
+const asciiLower = (s: string): string => s.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+const isHashSource = (t: string): boolean => /^'sha(256|384|512)-/.test(asciiLower(t));
+const hasCI = (vals: string[], t: string): boolean => vals.some((v) => asciiLower(v) === asciiLower(t));
+const appendIfAbsent = (vals: string[], t: string): string[] => (hasCI(vals, t) ? vals : [...vals, t]);
 
-        // Check if proxy origin is already present. 'none' stays 'none' (as
-        // Go's RewriteCSP): a source next to it would void it.
-        let hasProxy = false;
-        for (const tok of parts.slice(1)) {
-            const t = tok.toLowerCase();
-            if (t === proxyOrigin.toLowerCase() || t === "'none'") {
-                hasProxy = true;
-                break;
+export function rewriteCspContent(csp: string, proxyOrigin: string, ttPolicy?: string): string {
+    const plainHttp = asciiLower(proxyOrigin).startsWith("http://");
+    const seen = new SafeSet<string>();
+    const out: string[] = [];
+    for (const tok of csp.split(";")) {
+        const w = cspWords(tok);
+        if (w.length === 0 || /[^\x00-\x7f]/.test(tok)) continue;
+        const name = asciiLower(w[0]!);
+        if (seen.has(name)) continue;
+        seen.add(name);
+        let vals = w.slice(1);
+        if (name === "report-uri" || name === "report-to") continue;
+        if (plainHttp && (name === "upgrade-insecure-requests" || name === "block-all-mixed-content")) continue;
+        if (name === "trusted-types") {
+            vals = vals.filter((t) => asciiLower(t) !== "'none'");
+            if (ttPolicy && !vals.includes(ttPolicy) && !vals.includes("*")) vals.push(ttPolicy);
+        } else if (CSP_FETCH.has(name)) {
+            if (CSP_SCRIPT_STYLE.has(name) && vals.some(isHashSource)) {
+                vals = vals.filter((t) => { const l = asciiLower(t); return !isHashSource(t) && !l.startsWith("'nonce-") && l !== "'strict-dynamic'"; });
+                vals = appendIfAbsent(appendIfAbsent(vals, "'unsafe-inline'"), "'self'");
             }
+            if (proxyOrigin !== "" && !(vals.length === 1 && asciiLower(vals[0]!) === "'none'")) vals = appendIfAbsent(vals, proxyOrigin);
         }
-        if (!hasProxy) {
-            // Preserve leading whitespace in the directive.
-            const lead = dir.length - dir.trimStart().length;
-            directives[i] = dir.slice(0, lead) + parts.join(" ") + " " + proxyOrigin;
-        }
+        out.push([name, ...vals].join(" "));
     }
-    return directives.filter((d, i) => d !== "" || csp.split(";")[i] === "").join(";");
+    return out.join("; ");
 }

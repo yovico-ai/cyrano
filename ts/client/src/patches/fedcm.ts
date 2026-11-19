@@ -11,6 +11,7 @@
 // sign-in (Google Identity Services does). Everything else about
 // navigator.credentials is the browser's.
 
+import { nR } from "../native/intrinsics";
 import { wrapMethod } from "../native/surface";
 
 export function patchFedCM(targetWindow: Window): void {
@@ -20,7 +21,7 @@ export function patchFedCM(targetWindow: Window): void {
     wrapMethod<(...a: unknown[]) => unknown>(C, "get", (native, self, args) => {
         let identity: unknown;
         try { identity = (args[0] as { identity?: unknown } | undefined)?.identity; } catch { identity = undefined; }
-        if (identity === undefined || identity === null) return Reflect.apply(native, self, args);
+        if (identity === undefined || identity === null) return nR.apply(native, self, args);
         const DE = g["DOMException"] as typeof DOMException;
         const P = g["Promise"] as PromiseConstructor;
         return P.reject(new DE("Error retrieving a token.", "NetworkError"));

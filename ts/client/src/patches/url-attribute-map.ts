@@ -60,3 +60,20 @@ export function urlAttrsForTagName(tagName: string): readonly string[] | undefin
 export function isSrcsetAttr(name: string): boolean {
     return name === "srcset" || name === "imagesrcset";
 }
+
+export const SVG_NS = "http://www.w3.org/2000/svg";
+export const XLINK_NS = "http://www.w3.org/1999/xlink";
+
+/**
+ * The URL-bearing attributes of an SVG element (by its lowercase local
+ * name), as the server's table (go/src/internal/htmlrewrite/config.go):
+ * an image, a use, a feImage, a link or a script refers by href or
+ * xlink:href.
+ */
+export function svgUrlAttrs(localName: string): readonly string[] | undefined {
+    switch (localName.toLowerCase()) {
+        case "image": case "use": case "feimage": case "a": case "script":
+            return ["href", "xlink:href"];
+    }
+    return undefined;
+}

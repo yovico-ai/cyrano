@@ -1,3 +1,4 @@
+import { SafeWeakMap, nO, nOP, ncall } from "./intrinsics";
 // Trusted Types, enforced as the page asked (the proxy keeps its
 // `require-trusted-types-for` / `trusted-types` directives: a page checks
 // that they hold — Cloudflare's challenge does).
@@ -22,15 +23,15 @@ interface Policy {
     createScriptURL(s: string): unknown;
 }
 
-const policies = new WeakMap<object, Policy | null>();
+const policies = new SafeWeakMap<object, Policy | null>();
 let policyName: string | undefined;
 /** A realm's Function.prototype → the realm (its global object). */
-const realms = new WeakMap<object, object>();
+const realms = new SafeWeakMap<object, object>();
 
 /** The realm (global object) a built-in function belongs to, or this module's. */
 export function realmOfFunction(fn: unknown): object {
     try {
-        const fp = typeof fn === "function" ? Object.getPrototypeOf(fn) as object | null : null;
+        const fp = typeof fn === "function" ? nO.getPrototypeOf(fn) as object | null : null;
         return (fp && realms.get(fp)) || globalThis;
     } catch {
         return globalThis;
@@ -46,7 +47,7 @@ export function initTrusted(realm: object, name: string | undefined, made?: unkn
     if (name) policyName = name;
     if (policies.has(realm)) return;
     try {
-        const fp = Object.getPrototypeOf((realm as { Object: object }).Object) as object | null;
+        const fp = nO.getPrototypeOf((realm as { Object: object }).Object) as object | null;
         if (fp) realms.set(fp, realm);
     } catch { /* no Object: not a script realm */ }
     let policy: Policy | null = null;
@@ -86,6 +87,6 @@ export function trustedLike(realm: object, kind: Kind, given: unknown, text: str
 /** True when `v` is a Trusted Types value (TrustedHTML, TrustedScript, TrustedScriptURL). */
 export function isTrustedValue(v: unknown): boolean {
     if (typeof v !== "object" || v === null) return false;
-    const tag = Object.prototype.toString.call(v);
+    const tag = ncall(nOP.toString, v);
     return tag === "[object TrustedHTML]" || tag === "[object TrustedScript]" || tag === "[object TrustedScriptURL]";
 }

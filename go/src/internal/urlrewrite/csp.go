@@ -3,6 +3,7 @@ package urlrewrite
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"strconv"
 	"strings"
 )
 
@@ -17,188 +18,84 @@ var TrustedTypesPolicy = func() string {
 	return "_" + hex.EncodeToString(b)
 }()
 
-// rewriteCSP rewrites a Content-Security-Policy (or CSP-Report-Only) header
-// value so the proxy can operate transparently. Four things are done:
+// Content Security Policy for the proxy: reading a policy (CSP3 §2.2) and
+// translating it. spec/Csp.agda is the authority — keep this in step with
+// it and with ts/client/src/patches/html-rewriter.ts (rewriteCspContent);
+// both are checked against the spec (csp_conformance_test.go).
 //
-//  1. Nonces and hashes (script/style/default-src directives only):
-//     A nonce is kept, and 'strict-dynamic' with it: the page's scripts
-//     carry their nonce attribute through rewriting, and cyrano's injected
-//     bootstrap scripts are given the same nonce (ScriptNonce; the HTML
-//     rewriter's Config.ScriptNonce). Keeping it matters: a nonce authorizes
-//     a script whatever its URL — Facebook loads scripts from data: URLs
-//     that only the nonce allows.
-//     A hash is of the page's original inline script; the rewritten script
-//     cannot match it. A directive with hashes therefore falls back to
-//     dropping its nonces, hashes and 'strict-dynamic' and adding
-//     'unsafe-inline' and 'self'.
-//
-//  2. Proxy origin injection (all *-src source-list directives):
-//     When proxyOrigin is non-empty (e.g. "https://proxy.example.com"), it is
-//     appended to every directive whose name ends in "-src" and does not
-//     already have 'none'. This is necessary because our client-side rewriter
-//     rewrites resource URLs to go through the proxy: a page with
-//     "script-src https://cdn.ampproject.org/" would otherwise block scripts
-//     rewritten to "https://proxy.example.com/cyrano/https/cdn.ampproject.org/…".
-//     Directives with 'none' are left alone — 'none' combined with any other
-//     source is a browser warning and the directive type isn't proxied anyway.
-//
-//  3. report-uri / report-to stripping:
-//     These directives cause the browser to POST CSP violation reports directly
-//     to the origin server, leaking proxy-context URL patterns. They are
-//     removed entirely — the origin's CSP report endpoint is meaningless when
-//     all URLs are rewritten through the proxy anyway.
-//
-//  4. Trusted Types (require-trusted-types-for / trusted-types) stay:
-//     a page that asks for them finds them enforced — a string assigned to
-//     innerHTML throws, a policy it did not allow cannot be made. Sites
-//     check (Cloudflare's challenge turns interactive, and fails, when its
-//     frame's policy is not enforced). The runtime writes into the same
-//     sinks, so it has a policy of its own (TrustedTypesPolicy; TS:
-//     native/trusted.ts), which a `trusted-types` directive is made to
-//     admit beside the page's — replacing 'none', which admits no policy.
-//
-// All other directives (sandbox, upgrade-insecure-requests, …) pass through
-// unchanged.
-// RewriteCSP translates a Content-Security-Policy (a header's, or a
-// <meta http-equiv>'s content) for the proxy. TS: html-rewriter.ts
-// rewriteCspContent.
-func RewriteCSP(csp, proxyOrigin string) string {
-	raw := strings.Split(csp, ";")
-	var out []string
-	for _, dir := range raw {
-		parts := strings.Fields(dir)
-		if len(parts) == 0 {
-			out = append(out, dir)
-			continue
-		}
-		name := strings.ToLower(parts[0])
+// The translation weakens the policy (it does not translate host-sources
+// to proxied path prefixes):
+//   - report-uri / report-to are dropped (reports would leave the proxy);
+//   - on a plain-http proxy, upgrade-insecure-requests and
+//     block-all-mixed-content are dropped (they would upgrade or block
+//     every proxied load);
+//   - trusted-types stays enforced: 'none' is dropped and the runtime's own
+//     policy (TrustedTypesPolicy; TS native/trusted.ts) admitted beside the
+//     page's, unless "*" admits it — a site checks that its Trusted Types
+//     are enforced (Cloudflare's challenge);
+//   - a fetch directive gets the proxy origin, unless it is exactly 'none'
+//     or lists it already;
+//   - a script/style directive (and default-src) with a hash source drops
+//     its nonces, hashes and 'strict-dynamic' and gains 'unsafe-inline' and
+//     'self': rewritten inline scripts cannot match their hashes, and a hash
+//     makes the browser ignore 'unsafe-inline'. Without a hash, nonces and
+//     'strict-dynamic' stay — a nonce authorizes a script whatever its URL
+//     (Facebook loads scripts from data: URLs only the nonce allows), and
+//     the bootstrap is given it (ScriptNonce).
+// Output is canonical: "name value…" directives joined by "; ", a header's
+// policies by ", ", names lowercase, later duplicates left out.
 
-		// Strip report-uri and report-to — they direct the browser to POST
-		// violation reports to the origin server, bypassing URL containment.
-		if name == "report-uri" || name == "report-to" {
-			continue
-		}
-		// Trusted Types stay enforced (see 4. above). The runtime's own
-		// policy is admitted beside the page's.
-		if name == "trusted-types" {
-			var kept []string
-			has := false
-			for _, tok := range parts[1:] {
-				if strings.EqualFold(tok, "'none'") {
-					continue // "no policy at all": now only the runtime's
-				}
-				if tok == TrustedTypesPolicy || tok == "*" {
-					has = true
-				}
-				kept = append(kept, tok)
-			}
-			if !has {
-				kept = append(kept, TrustedTypesPolicy)
-			}
-			lead := dir[:len(dir)-len(strings.TrimLeft(dir, " \t"))]
-			out = append(out, lead+parts[0]+" "+strings.Join(kept, " "))
-			continue
-		}
-		// The page's resources are all fetched from the proxy. Served over
-		// plain http, "upgrade-insecure-requests" would turn every one of
-		// them into an https request the proxy does not answer, and
-		// "block-all-mixed-content" would block them. (Over https the
-		// directives are harmless and stay.)
-		if (name == "upgrade-insecure-requests" || name == "block-all-mixed-content") &&
-			strings.HasPrefix(strings.ToLower(proxyOrigin), "http://") {
-			continue
-		}
+type cspDirective struct {
+	name string
+	vals []string
+}
 
-		if !strings.Contains(name, "-src") {
-			out = append(out, dir)
-			continue
-		}
+func isCSPSpace(r rune) bool { return r == '\t' || r == '\n' || r == '\f' || r == '\r' || r == ' ' }
 
-		isNonceTarget := isScriptOrStyleDirective(name)
+func cspWords(s string) []string { return strings.FieldsFunc(s, isCSPSpace) }
 
-		// Preserve any leading whitespace ("; directive" → " directive") so the
-		// rejoined header string stays close to the original format.
-		lead := dir[:len(dir)-len(strings.TrimLeft(dir, " \t"))]
-		kept := []string{parts[0]} // directive name preserved verbatim
-		hadNonce := false
-		hasUnsafeInline := false
-		hasSelf := false
-		hasNone := false
-		hasProxy := proxyOrigin == "" // skip proxy-origin check when not configured
-
-		// Hash-pinned: the fallback (see 1. above). Otherwise nonces stay.
-		hashPinned := false
-		for _, tok := range parts[1:] {
-			if isHashSource(strings.ToLower(tok)) {
-				hashPinned = isNonceTarget
-			}
-		}
-		for _, tok := range parts[1:] {
-			lower := strings.ToLower(tok)
-			switch {
-			case isNonceTarget && !hashPinned && (strings.HasPrefix(lower, "'nonce-") || lower == "'strict-dynamic'"):
-				kept = append(kept, tok)
-			case isNonceTarget && strings.HasPrefix(lower, "'nonce-"):
-				hadNonce = true
-				// stripped
-			case isNonceTarget && (strings.HasPrefix(lower, "'sha256-") ||
-				strings.HasPrefix(lower, "'sha384-") ||
-				strings.HasPrefix(lower, "'sha512-")):
-				// Strip hash-sources too. Like nonces, the mere presence of a
-				// hash-source makes the browser IGNORE 'unsafe-inline' — so an
-				// origin that hash-pins its own inline scripts would block our
-				// injected bootstrap (different content, different hash) and
-				// $rewriter would never be defined. Dropping the hashes lets the
-				// 'unsafe-inline' we add below cover both the page's inline
-				// scripts and ours.
-				hadNonce = true
-				// stripped
-			case isNonceTarget && lower == "'strict-dynamic'":
-				hadNonce = true // mark changed; drop strict-dynamic alongside nonces
-				// stripped
-			case lower == "'none'":
-				hasNone = true
-				kept = append(kept, tok)
-			case lower == "'unsafe-inline'":
-				hasUnsafeInline = true
-				kept = append(kept, tok)
-			case lower == "'self'":
-				hasSelf = true
-				kept = append(kept, tok)
-			default:
-				if !hasProxy && strings.EqualFold(tok, proxyOrigin) {
-					hasProxy = true
-				}
-				kept = append(kept, tok)
-			}
-		}
-
-		changed := false
-		if isNonceTarget && hadNonce {
-			if !hasUnsafeInline {
-				kept = append(kept, "'unsafe-inline'")
-			}
-			if !hasSelf {
-				kept = append(kept, "'self'")
-			}
-			changed = true
-		}
-		// Don't inject proxy origin when 'none' is present — 'none' combined
-		// with any other source is a browser warning and the 'none' is ignored.
-		// Directives locked to 'none' (e.g. object-src 'none') block that
-		// resource type entirely and we don't need to route it through the proxy.
-		if !hasProxy && !hasNone {
-			kept = append(kept, proxyOrigin)
-			changed = true
-		}
-
-		if changed {
-			out = append(out, lead+strings.Join(kept, " "))
-		} else {
-			out = append(out, dir)
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
 		}
 	}
-	return strings.Join(out, ";")
+	return true
+}
+
+// parseCSPPolicy reads one serialized policy (CSP3 §2.2.1; spec parsePolicy).
+func parseCSPPolicy(s string) []cspDirective {
+	var out []cspDirective
+	seen := map[string]bool{}
+	for _, tok := range strings.Split(s, ";") {
+		w := cspWords(tok)
+		if len(w) == 0 || !isASCII(tok) {
+			continue
+		}
+		name := strings.ToLower(w[0])
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, cspDirective{name, w[1:]})
+	}
+	return out
+}
+
+// parseCSPHeader reads a header value: a comma-separated list of policies.
+func parseCSPHeader(s string) [][]cspDirective {
+	var out [][]cspDirective
+	for _, p := range strings.Split(s, ",") {
+		out = append(out, parseCSPPolicy(p))
+	}
+	return out
+}
+
+var cspFetchDirectives = map[string]bool{
+	"child-src": true, "connect-src": true, "default-src": true, "fenced-frame-src": true, "font-src": true,
+	"frame-src": true, "img-src": true, "manifest-src": true, "media-src": true, "object-src": true,
+	"prefetch-src": true, "script-src": true, "script-src-elem": true, "script-src-attr": true,
+	"style-src": true, "style-src-elem": true, "style-src-attr": true, "worker-src": true,
 }
 
 func isScriptOrStyleDirective(name string) bool {
@@ -215,33 +112,130 @@ func isHashSource(lower string) bool {
 	return strings.HasPrefix(lower, "'sha256-") || strings.HasPrefix(lower, "'sha384-") || strings.HasPrefix(lower, "'sha512-")
 }
 
-// ScriptNonce is the nonce a script needs under the (rewritten) policies of
-// a response, or "" when none asks for one: the first 'nonce-…' of the
-// directive that governs script elements (script-src-elem, else script-src,
-// else default-src) in the first policy that has one. Report-only policies
-// do not block and are not consulted.
-func ScriptNonce(policies []string) string {
-	for _, policy := range policies {
-		byName := map[string][]string{}
-		for _, dir := range strings.Split(policy, ";") {
-			f := strings.Fields(dir)
-			if len(f) > 0 {
-				if _, dup := byName[strings.ToLower(f[0])]; !dup {
-					byName[strings.ToLower(f[0])] = f[1:]
-				}
+func containsFold(vals []string, t string) bool {
+	for _, v := range vals {
+		if strings.EqualFold(v, t) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendIfAbsent(vals []string, t string) []string {
+	if containsFold(vals, t) {
+		return vals
+	}
+	return append(vals, t)
+}
+
+func translateCSPDirective(d cspDirective, proxyOrigin string) (cspDirective, bool) {
+	plainHTTP := strings.HasPrefix(strings.ToLower(proxyOrigin), "http://")
+	switch {
+	case d.name == "report-uri" || d.name == "report-to":
+		return d, false
+	case plainHTTP && (d.name == "upgrade-insecure-requests" || d.name == "block-all-mixed-content"):
+		return d, false
+	case d.name == "trusted-types":
+		var kept []string
+		for _, t := range d.vals {
+			if !strings.EqualFold(t, "'none'") {
+				kept = append(kept, t)
 			}
 		}
-		for _, name := range []string{"script-src-elem", "script-src", "default-src"} {
-			toks, ok := byName[name]
+		has := TrustedTypesPolicy == ""
+		for _, t := range kept {
+			if t == TrustedTypesPolicy || t == "*" {
+				has = true
+			}
+		}
+		if !has {
+			kept = append(kept, TrustedTypesPolicy)
+		}
+		return cspDirective{d.name, kept}, true
+	case cspFetchDirectives[d.name]:
+		vals := d.vals
+		if isScriptOrStyleDirective(d.name) {
+			hashed := false
+			for _, t := range vals {
+				if isHashSource(strings.ToLower(t)) {
+					hashed = true
+				}
+			}
+			if hashed {
+				var kept []string
+				for _, t := range vals {
+					l := strings.ToLower(t)
+					if isHashSource(l) || strings.HasPrefix(l, "'nonce-") || l == "'strict-dynamic'" {
+						continue
+					}
+					kept = append(kept, t)
+				}
+				vals = appendIfAbsent(appendIfAbsent(kept, "'unsafe-inline'"), "'self'")
+			}
+		}
+		if proxyOrigin != "" && !(len(vals) == 1 && strings.EqualFold(vals[0], "'none'")) {
+			vals = appendIfAbsent(vals, proxyOrigin)
+		}
+		return cspDirective{d.name, vals}, true
+	}
+	return d, true
+}
+
+func showCSPPolicy(p []cspDirective, proxyOrigin string) string {
+	var ds []string
+	for _, d := range p {
+		if t, ok := translateCSPDirective(d, proxyOrigin); ok {
+			ds = append(ds, strings.Join(append([]string{t.name}, t.vals...), " "))
+		}
+	}
+	return strings.Join(ds, "; ")
+}
+
+// RewriteCSP translates a Content-Security-Policy (or -Report-Only) header
+// value for the proxy (spec translateHeader).
+func RewriteCSP(header, proxyOrigin string) string {
+	var out []string
+	for _, p := range parseCSPHeader(header) {
+		out = append(out, showCSPPolicy(p, proxyOrigin))
+	}
+	return strings.Join(out, ", ")
+}
+
+// RewriteMetaCSP translates a <meta http-equiv="Content-Security-Policy">
+// content: one policy, no comma list (spec translateMeta).
+func RewriteMetaCSP(content, proxyOrigin string) string {
+	return showCSPPolicy(parseCSPPolicy(content), proxyOrigin)
+}
+
+// governingScriptDirective is the directive that governs script elements:
+// script-src-elem, else script-src, else default-src.
+func governingScriptDirective(p []cspDirective) ([]string, bool) {
+	for _, name := range []string{"script-src-elem", "script-src", "default-src"} {
+		for _, d := range p {
+			if d.name == name {
+				return d.vals, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// ScriptNonce is the nonce the bootstrap script needs under these policies
+// (header values as the origin sent them; report-only ones are not
+// passed), or "": the first nonce of the governing directive of the first
+// policy that has one (spec scriptNonce).
+func ScriptNonce(headers []string) string {
+	for _, h := range headers {
+		for _, p := range parseCSPHeader(h) {
+			vals, ok := governingScriptDirective(p)
 			if !ok {
 				continue
 			}
-			for _, t := range toks {
+			for _, t := range vals {
 				if l := strings.ToLower(t); strings.HasPrefix(l, "'nonce-") && strings.HasSuffix(t, "'") {
 					return t[len("'nonce-") : len(t)-1]
 				}
 			}
-			break // this directive governs; it has no nonce
 		}
 	}
 	return ""
@@ -249,43 +243,25 @@ func ScriptNonce(policies []string) string {
 
 // InlineScriptAllowed reports whether every one of these policies (as the
 // origin sent them) lets an inline <script> run once translated: the
-// bootstrap's own inline script must be an external one otherwise.
-// A policy governs scripts by script-src-elem, else script-src, else
-// default-src. A nonce there authorizes the bootstrap (it is given the
-// nonce); hashes are translated to 'unsafe-inline'; otherwise only
-// 'unsafe-inline' does — appleid.apple.com and api.twitter.com list hosts
-// alone.
-func InlineScriptAllowed(policies []string) bool {
-	for _, header := range policies {
-		for _, policy := range strings.Split(header, ",") {
-			dirs := map[string][]string{}
-			for _, d := range strings.Split(policy, ";") {
-				f := strings.Fields(d)
-				if len(f) > 0 {
-					if _, dup := dirs[strings.ToLower(f[0])]; !dup {
-						dirs[strings.ToLower(f[0])] = f[1:]
-					}
-				}
-			}
-			var src []string
-			found := false
-			for _, name := range []string{"script-src-elem", "script-src", "default-src"} {
-				if v, ok := dirs[name]; ok {
-					src, found = v, true
-					break
-				}
-			}
-			if !found {
+// bootstrap's own inline script must be an external one otherwise. The
+// governing directive must have 'unsafe-inline', a nonce (the bootstrap is
+// given it) or a hash (translated to 'unsafe-inline') — appleid.apple.com
+// and api.twitter.com list hosts alone (spec inlineScriptAllowed).
+func InlineScriptAllowed(headers []string) bool {
+	for _, h := range headers {
+		for _, p := range parseCSPHeader(h) {
+			vals, ok := governingScriptDirective(p)
+			if !ok {
 				continue
 			}
-			ok := false
-			for _, tok := range src {
-				l := strings.ToLower(tok)
+			allowed := false
+			for _, t := range vals {
+				l := strings.ToLower(t)
 				if l == "'unsafe-inline'" || strings.HasPrefix(l, "'nonce-") || isHashSource(l) {
-					ok = true
+					allowed = true
 				}
 			}
-			if !ok {
+			if !allowed {
 				return false
 			}
 		}
@@ -293,86 +269,256 @@ func InlineScriptAllowed(policies []string) bool {
 	return true
 }
 
-// FrameAncestors evaluates a policy's frame-ancestors directive (CSP3
-// §6.4.2, for one ancestor) for a document of origin self framed by a
-// document of origin ancestor ("scheme://host[:port]"): present reports
-// whether the policy has the directive, allowed whether it admits the
-// ancestor.
-func FrameAncestors(policy, ancestor, self string) (present, allowed bool) {
-	for _, d := range strings.Split(policy, ";") {
-		f := strings.Fields(d)
-		if len(f) == 0 || !strings.EqualFold(f[0], "frame-ancestors") {
-			continue
-		}
-		for _, src := range f[1:] {
-			if sourceMatchesOrigin(src, ancestor, self) {
-				return true, true
+// FrameAncestors is a CSP header value's frame-ancestors verdict for a
+// document at self framed by an embedder at ancestor (URLs; spec/Csp.agda
+// frameAncestors, checked against Chromium): present reports whether a
+// policy of the header has the directive, allowed whether every policy that
+// has it admits the embedder's origin.
+func FrameAncestors(header, ancestor, self string) (present, allowed bool) {
+	anc, ok1 := parseRef(nil, preprocess(ancestor))
+	doc, ok2 := parseRef(nil, preprocess(self))
+	allowed = true
+	for _, p := range parseCSPHeader(header) {
+		for _, d := range p {
+			if d.name != "frame-ancestors" {
+				continue
 			}
+			present = true
+			admits := false
+			if ok1 == parsedURL && ok2 == parsedURL {
+				for _, src := range d.vals {
+					if cspSourceMatch(doc, anc, src) {
+						admits = true
+						break
+					}
+				}
+			}
+			allowed = allowed && admits
 		}
-		return true, false
 	}
-	return false, true
+	return present, present && allowed || !present
 }
 
-// sourceMatchesOrigin: a CSP source expression against an origin (no path
-// matching: frame-ancestors has none).
-func sourceMatchesOrigin(src, origin, self string) bool {
-	l := strings.ToLower(src)
-	scheme, hostport, ok := strings.Cut(strings.ToLower(origin), "://")
-	if !ok {
-		return false
+// WithFrameAncestors is header with every policy's frame-ancestors source
+// list replaced by verdict ("'self'" or "'none'"), its other directives as
+// they were (read as CSP3 reads them).
+func WithFrameAncestors(header, verdict string) string {
+	var out []string
+	for _, p := range parseCSPHeader(header) {
+		var ds []string
+		for _, d := range p {
+			vals := d.vals
+			if d.name == "frame-ancestors" {
+				vals = []string{verdict}
+			}
+			ds = append(ds, strings.Join(append([]string{d.name}, vals...), " "))
+		}
+		out = append(out, strings.Join(ds, "; "))
 	}
-	host, port := hostport, ""
-	if i := strings.LastIndex(hostport, ":"); i >= 0 && !strings.HasSuffix(hostport, "]") {
-		host, port = hostport[:i], hostport[i+1:]
+	return strings.Join(out, ", ")
+}
+
+// cspPortOf is a canonical URL's explicit port ("" when the scheme's default).
+func cspPortOf(u absURL) (string, bool) {
+	rest := strings.TrimPrefix(hostPort(u.auth), hostOf(u))
+	if strings.HasPrefix(rest, ":") {
+		return rest[1:], true
 	}
-	selfScheme, _, _ := strings.Cut(strings.ToLower(self), "://")
+	return "", false
+}
+
+// cspSchemePartMatch: Chromium's scheme matching — a scheme admits itself,
+// "http" admits "https", "ws" admits "wss".
+func cspSchemePartMatch(a, b string) bool {
+	return a == b || a == "http" && b == "https" || a == "ws" && b == "wss"
+}
+
+func isCSPSchemeChar(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.'
+}
+
+func isAlphaByte(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
+
+// cspSourceMatch: does the origin of u (its path "/") match the source
+// expression, for a document at self (CSP3 §6.7.2.8, spec sourceMatch)?
+func cspSourceMatch(self, u absURL, expr string) bool {
+	e := asciiLower(expr)
 	switch {
-	case l == "'none'":
+	case e == "*":
+		return u.scheme == "http" || u.scheme == "https" || u.scheme == self.scheme
+	case e == "'self'":
+		return cspSelfMatch(self, u)
+	}
+	// scheme-source: "scheme:"
+	if strings.HasSuffix(e, ":") && len(e) > 1 && isAlphaByte(e[0]) {
+		body := e[:len(e)-1]
+		okScheme := true
+		for i := 0; i < len(body); i++ {
+			if !isCSPSchemeChar(body[i]) {
+				okScheme = false
+			}
+		}
+		if okScheme {
+			return cspSchemePartMatch(body, u.scheme)
+		}
+	}
+	// host-source: [scheme "://"] host [":" port] [path]
+	scheme, rest := "", e
+	for i := 0; i < len(e); i++ {
+		if strings.HasPrefix(e[i:], "://") {
+			scheme, rest = e[:i], e[i+3:]
+			break
+		}
+		if !isCSPSchemeChar(e[i]) {
+			break
+		}
+	}
+	if strings.HasPrefix(e, "://") {
+		return false // empty scheme
+	}
+	hostEnd := strings.IndexAny(rest, ":/")
+	host, tail := rest, ""
+	if hostEnd >= 0 {
+		host, tail = rest[:hostEnd], rest[hostEnd:]
+	}
+	if host == "" {
 		return false
-	case l == "'self'":
-		return strings.EqualFold(origin, self)
-	case l == "*":
-		return scheme == "http" || scheme == "https" || scheme == selfScheme
-	case strings.HasSuffix(l, ":") && !strings.Contains(l, "/"):
-		return scheme == strings.TrimSuffix(l, ":") || (l == "http:" && scheme == "https")
 	}
-	wantScheme := ""
-	if a, b, ok := strings.Cut(l, "://"); ok {
-		wantScheme, l = a, b
-	}
-	if i := strings.Index(l, "/"); i >= 0 {
-		l = l[:i]
-	}
-	wantHost, wantPort := l, ""
-	if i := strings.LastIndex(l, ":"); i >= 0 && !strings.HasSuffix(l, "]") {
-		wantHost, wantPort = l[:i], l[i+1:]
-	}
-	if wantScheme == "" {
-		// A scheme-less host source matches the document's scheme (and its
-		// secure upgrade).
-		if scheme != selfScheme && !(selfScheme == "http" && scheme == "https") {
+	for i := 0; i < len(host); i++ {
+		c := host[i]
+		if !(isAlphaByte(c) || c >= '0' && c <= '9' || c == '-' || c == '.' || c == '*') {
 			return false
 		}
-	} else if scheme != wantScheme && !(wantScheme == "http" && scheme == "https") {
-		return false
 	}
-	if strings.HasPrefix(wantHost, "*.") {
-		if !strings.HasSuffix(host, wantHost[1:]) {
+	port, hasPort, path := "", false, tail
+	if strings.HasPrefix(tail, ":") {
+		pp := tail[1:]
+		if i := strings.IndexByte(pp, '/'); i >= 0 {
+			port, path = pp[:i], pp[i:]
+		} else {
+			port, path = pp, ""
+		}
+		if port == "" {
 			return false
 		}
-	} else if host != wantHost {
+		if port != "*" {
+			for i := 0; i < len(port); i++ {
+				if port[i] < '0' || port[i] > '9' {
+					return false
+				}
+			}
+		}
+		hasPort = true
+	}
+	if scheme != "" && !isAlphaByte(scheme[0]) {
 		return false
 	}
-	if wantPort == "*" {
+	// scheme
+	if scheme != "" {
+		if !cspSchemePartMatch(scheme, u.scheme) {
+			return false
+		}
+	} else if !cspSchemePartMatch(self.scheme, u.scheme) {
+		return false
+	}
+	// host
+	uh := asciiLower(hostOf(u))
+	switch {
+	case host == "*":
+	case strings.HasPrefix(host, "*"):
+		if !strings.HasSuffix(uh, host[1:]) {
+			return false
+		}
+	default:
+		if host != uh {
+			return false
+		}
+	}
+	// port
+	up, explicit := cspPortOf(u)
+	if !hasPort {
+		if explicit {
+			return false
+		}
+	} else if port != "*" {
+		// As numbers (spec digitsValue: unbounded): digits without leading zeros.
+		want := strings.TrimLeft(port, "0")
+		if explicit {
+			if want != strings.TrimLeft(up, "0") {
+				return false
+			}
+		} else if want != strconv.Itoa(defaultPort[u.scheme]) {
+			return false
+		}
+	}
+	// path: the origin's URL path is "/"
+	return path == "" || path == "/"
+}
+
+func cspSelfMatch(self, u absURL) bool {
+	if sameOriginURL(self, u) {
 		return true
 	}
-	def := map[string]string{"http": "80", "https": "443"}[scheme]
-	if port == "" {
-		port = def
+	if asciiLower(hostOf(self)) != asciiLower(hostOf(u)) {
+		return false
 	}
-	if wantPort == "" {
-		return port == def
+	sp, se := cspPortOf(self)
+	up, ue := cspPortOf(u)
+	if se != ue || se && sp != up {
+		return false
 	}
-	return port == wantPort
+	return u.scheme == "https" || u.scheme == "wss" || self.scheme == "http" && (u.scheme == "http" || u.scheme == "ws")
+}
+
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + 32
+		}
+	}
+	return string(b)
+}
+
+// XFrameOptionsAllows is X-Frame-Options's verdict (HTML, spec/Csp.agda
+// xfoAllows, checked against Chromium) for these field lines and an
+// embedder that is or is not same-origin with the document: values split
+// on ",", trimmed of space and tab, lowercased, as a set; more than one
+// with deny, allowall or sameorigin among them blocks; "deny" blocks;
+// "sameorigin" admits a same-origin embedder only; anything else admits.
+func XFrameOptionsAllows(lines []string, sameOrigin bool) bool {
+	var set []string
+	for _, l := range lines {
+		for _, v := range strings.Split(l, ",") {
+			v = asciiLower(strings.Trim(v, " \t"))
+			dup := false
+			for _, x := range set {
+				if x == v {
+					dup = true
+				}
+			}
+			if !dup {
+				set = append(set, v)
+			}
+		}
+	}
+	has := func(k string) bool {
+		for _, x := range set {
+			if x == k {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case len(set) == 0:
+		return true
+	case len(set) > 1:
+		return !(has("deny") || has("allowall") || has("sameorigin"))
+	case set[0] == "deny":
+		return false
+	case set[0] == "sameorigin":
+		return sameOrigin
+	}
+	return true
 }

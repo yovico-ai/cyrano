@@ -7,6 +7,8 @@
 // (which Object.getOwnPropertySymbols lists) and no Symbol.for registry
 // keys a script could ask for by name.
 
+import { SafeSet, nO } from "./intrinsics";
+import { isWindowObject } from "./brand";
 import { defineHidden } from "./hidden-globals";
 import type { RewriterApi } from "../runtime/api-types";
 
@@ -42,6 +44,7 @@ const KEY = "_";
 
 /** The runtime state of `win`, or undefined when it has none (or is cross-origin). */
 export function internalsOf(win: unknown): Internals | undefined {
+    if (!isWindowObject(win)) return undefined;
     try {
         const r = (win as { $rewriter?: Record<string, unknown> } | null)?.$rewriter;
         const i = r ? (r[KEY] as Internals | undefined) : undefined;
@@ -53,7 +56,7 @@ export function internalsOf(win: unknown): Internals | undefined {
 
 /** Attaches `internals` to `api` and publishes `api` as the window's `$rewriter`. */
 export function publish(win: Window, api: RewriterApi, internals: Internals): void {
-    Object.defineProperty(api, KEY, { value: internals, enumerable: false, configurable: true, writable: false });
+    nO.defineProperty(api, KEY, { value: internals, enumerable: false, configurable: true, writable: false });
     defineHidden(win, "$rewriter", api); // not enumerable: native/hidden-globals.ts
     register(win, internals);
 }
@@ -73,7 +76,7 @@ function register(win: Window, internals: Internals): void {
         } catch { /* a really cross-origin relative */ }
         if (shared) break;
     }
-    internals.windows = shared ?? new Set();
+    internals.windows = shared ?? new SafeSet();
     internals.windows.add(new WeakRef(win));
 }
 

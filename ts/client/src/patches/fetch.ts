@@ -16,12 +16,13 @@
 // must pass the CORS check, shows only its exposed headers and has type
 // "cors".
 
+import { SafeWeakMap, nO, nOP, nR, ncall } from "../native/intrinsics";
 import { wrapAccessor, wrapConstructor, wrapMethod } from "../native/surface";
-import { CREDENTIALS, INITIATOR, initiatorValue, corsAllows, exposedBy, isCrossOrigin, type CorsContext, type Exposed } from "./cors";
+import { CREDENTIALS, INITIATOR, includesCredentials, initiatorValue, corsAllows, exposedBy, isCrossOrigin, type CorsContext, type Exposed } from "./cors";
 import { headerViewsOf } from "./response-headers";
 
 const isRequest = (x: unknown): x is Request =>
-    typeof x === "object" && x !== null && Object.prototype.toString.call(x) === "[object Request]";
+    typeof x === "object" && x !== null && ncall(nOP.toString, x) === "[object Request]";
 
 /** True when the browser itself would refuse `raw` in fetch (credentials). */
 function nativeRefuses(raw: string, base: () => URL): boolean {
@@ -46,7 +47,7 @@ export function patchFetch(
     const NativeRequest = w.Request;
     // (Before the accessor is wrapped below: the URL the Request really holds.)
     const nativeUrl = NativeRequest?.prototype
-        ? Object.getOwnPropertyDescriptor(NativeRequest.prototype, "url")?.get as ((this: unknown) => string) | undefined
+        ? nO.getOwnPropertyDescriptor(NativeRequest.prototype, "url")?.get as ((this: unknown) => string) | undefined
         : undefined;
     const sameUrl = (a: string, b: string): boolean => {
         if (a === b) return true;
@@ -55,28 +56,28 @@ export function patchFetch(
     const then = (w.Promise ?? Promise).prototype.then;
     const TypeErr = w.TypeError ?? TypeError;
     const headersOf = w.Response?.prototype
-        ? Object.getOwnPropertyDescriptor(w.Response.prototype, "headers")?.get as ((this: unknown) => Headers) | undefined
+        ? nO.getOwnPropertyDescriptor(w.Response.prototype, "headers")?.get as ((this: unknown) => Headers) | undefined
         : undefined;
     /** Responses that passed the CORS check → what they expose. */
-    const corsResponses = new WeakMap<object, Exposed>();
+    const corsResponses = new SafeWeakMap<object, Exposed>();
 
     wrapMethod<typeof fetch>(targetWindow, "fetch", (native, self, args) => {
         const [input, ...rest] = args;
         const viaRequest = isRequest(input);
         // input.url reads back the original (patched getter below).
         const original = viaRequest ? input.url : String(input);
-        if (nativeRefuses(original, baseUrl)) return Reflect.apply(native, self, args) as Promise<Response>;
+        if (nativeRefuses(original, baseUrl)) return nR.apply(native, self, args) as Promise<Response>;
         const rewritten = rewriteOne(original);
         // The page's own Request goes to the native as it is wherever it
         // already names the proxied URL (the Request constructor below
         // proxifies it): a Request rebuilt from another has that one's body
         // as a stream, which no HTTP/1.1 connection can send.
-        const asIs = viaRequest && nativeUrl !== undefined && sameUrl(nativeUrl.call(input), rewritten);
+        const asIs = viaRequest && nativeUrl !== undefined && sameUrl(ncall(nativeUrl, input), rewritten);
         const plain = (): Promise<Response> => {
-            if (!viaRequest) return Reflect.apply(native, self, [rewritten, ...rest]) as Promise<Response>;
-            if (asIs) return Reflect.apply(native, self, args) as Promise<Response>;
+            if (!viaRequest) return nR.apply(native, self, [rewritten, ...rest]) as Promise<Response>;
+            if (asIs) return nR.apply(native, self, args) as Promise<Response>;
             const Req = (NativeRequest ?? Request) as typeof Request; // the native: the URL is rewritten already
-            return Reflect.apply(native, self, [new Req(rewritten, input), ...rest]) as Promise<Response>;
+            return nR.apply(native, self, [new Req(rewritten, input), ...rest]) as Promise<Response>;
         };
         const own = cors?.origin();
         // Judged by where the request really goes: the original of the URL
@@ -93,7 +94,7 @@ export function patchFetch(
         const credentials = init?.credentials ?? (viaRequest ? input.credentials : "same-origin");
         const credentialed = credentials === "include";
         // The browser refuses this before any request: let it, on the original URL.
-        if (cross && mode === "same-origin") return Reflect.apply(native, self, args) as Promise<Response>;
+        if (cross && mode === "same-origin") return nR.apply(native, self, args) as Promise<Response>;
 
         // Name the requesting context to the proxy, in two request headers
         // (cors.ts) — set where the request's headers are taken from: the
@@ -108,19 +109,19 @@ export function patchFetch(
             } else {
                 const mark = (h: Headers): Headers => {
                     h.set(INITIATOR, from);
-                    h.set(CREDENTIALS, credentialed || (credentials === "same-origin" && !cross) ? "include" : "omit");
+                    h.set(CREDENTIALS, includesCredentials(credentials, !cross) ? "include" : "omit");
                     return h;
                 };
                 const H = (w as unknown as { Headers: typeof Headers }).Headers;
                 if (init && init.headers !== undefined) {
                     const first = viaRequest ? (asIs ? input : new (NativeRequest ?? Request)(rewritten, input)) : rewritten;
-                    sent = Reflect.apply(native, self, [first, { ...init, headers: mark(new H(init.headers)) }]) as Promise<Response>;
+                    sent = nR.apply(native, self, [first, { ...init, headers: mark(new H(init.headers)) }]) as Promise<Response>;
                 } else if (viaRequest) {
                     const req = asIs ? input : new (NativeRequest ?? Request)(rewritten, input);
                     mark(req.headers);
-                    sent = Reflect.apply(native, self, [req, ...rest]) as Promise<Response>;
+                    sent = nR.apply(native, self, [req, ...rest]) as Promise<Response>;
                 } else {
-                    sent = Reflect.apply(native, self, [rewritten, { ...(init ?? {}), headers: mark(new H()) }]) as Promise<Response>;
+                    sent = nR.apply(native, self, [rewritten, { ...(init ?? {}), headers: mark(new H()) }]) as Promise<Response>;
                 }
             }
         } catch {
@@ -128,8 +129,8 @@ export function patchFetch(
         }
         const views = headerViewsOf(targetWindow);
         if (!cross || mode !== "cors" || !views || !headersOf) return sent;
-        return Reflect.apply(then, sent, [(resp: Response) => {
-            const h = headersOf.call(resp);
+        return nR.apply(then, sent, [(resp: Response) => {
+            const h = ncall(headersOf, resp);
             if (!corsAllows(views.original(h, "access-control-allow-origin"), views.original(h, "access-control-allow-credentials"), own, credentialed)) {
                 throw new TypeErr("Failed to fetch");
             }
@@ -143,26 +144,26 @@ export function patchFetch(
     // fetchLater(input, init): a request the browser sends when the page
     // goes away (ad measurement uses it). The URL is proxified as fetch's.
     wrapMethod<(...a: unknown[]) => unknown>(targetWindow, "fetchLater", (native, self, args) => {
-        if (!args.length || isRequest(args[0])) return Reflect.apply(native, self, args);
+        if (!args.length || isRequest(args[0])) return nR.apply(native, self, args);
         const raw = String(args[0]);
-        if (nativeRefuses(raw, baseUrl)) return Reflect.apply(native, self, args);
-        return Reflect.apply(native, self, [rewriteOne(raw), ...args.slice(1)]);
+        if (nativeRefuses(raw, baseUrl)) return nR.apply(native, self, args);
+        return nR.apply(native, self, [rewriteOne(raw), ...args.slice(1)]);
     });
 
     const R = w.Response?.prototype;
     if (R) {
         wrapAccessor<string>(R, "type", {
             get: (get, self) => {
-                const t = get.call(self);
+                const t = ncall(get, self);
                 return t === "basic" && typeof self === "object" && self !== null && corsResponses.has(self) ? "cors" : t;
             },
         });
         wrapMethod<(...a: unknown[]) => Response>(R, "clone", (native, self, args) => {
-            const copy = Reflect.apply(native, self, args) as Response;
+            const copy = nR.apply(native, self, args) as Response;
             const allow = typeof self === "object" && self !== null ? corsResponses.get(self) : undefined;
             if (allow && headersOf) {
                 corsResponses.set(copy, allow);
-                headerViewsOf(targetWindow)?.expose(headersOf.call(copy), allow);
+                headerViewsOf(targetWindow)?.expose(ncall(headersOf, copy), allow);
             }
             return copy;
         });
@@ -176,10 +177,10 @@ export function patchFetch(
             const raw = String(next[0]);
             if (!nativeRefuses(raw, baseUrl)) next[0] = rewriteOne(raw);
         }
-        return Reflect.construct(Native, next, newTarget as typeof Request);
+        return nR.construct(Native, next, newTarget as typeof Request);
     });
     for (const Ctor of [w.Request, w.Response]) {
         if (!Ctor?.prototype) continue;
-        wrapAccessor<string>(Ctor.prototype, "url", { get: (get, self) => unwrapOne(get.call(self)) });
+        wrapAccessor<string>(Ctor.prototype, "url", { get: (get, self) => unwrapOne(ncall(get, self)) });
     }
 }

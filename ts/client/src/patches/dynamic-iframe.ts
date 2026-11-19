@@ -20,6 +20,7 @@
 // before any onload event fires. The only reliable interception point is
 // inside appendChild itself, before it returns to the caller.
 
+import { SafeWeakMap, nO, nOP, nR, ncall } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
 import { replaceValue, wrapMethod } from "../native/surface";
 import { unwrapProxiedUrl } from "../url/containment";
@@ -31,7 +32,7 @@ interface SavedOriginals {
     origAppendChild: typeof Node.prototype.appendChild;
     origInsertBefore: typeof Node.prototype.insertBefore;
 }
-const savedByWindow = new WeakMap<Window, SavedOriginals>();
+const savedByWindow = new SafeWeakMap<Window, SavedOriginals>();
 
 // Access window-specific constructors through a cast — TypeScript's Window
 // interface doesn't declare Node/HTMLIFrameElement as instance properties even
@@ -86,13 +87,13 @@ export function patchDynamicIframeAppend(
         const attrName = URL_ATTRS_BY_TAG[tag];
         if (!attrName) return;
         try {
-            const raw = nativeGetAttr.call(node as Element, attrName);
+            const raw = ncall(nativeGetAttr, node as Element, attrName);
             if (!raw) return;
             // rewriteUrl keeps an already-proxified URL, and other schemes,
             // as written (spec/Containment.agda).
             const rewritten = rewriteOne(raw);
             if (rewritten !== raw) {
-                nativeSetAttr.call(node as Element, attrName, rewritten);
+                ncall(nativeSetAttr, node as Element, attrName, rewritten);
             }
         } catch {
             // Cross-realm DOM exceptions — skip; the element will load from its
@@ -115,7 +116,7 @@ export function patchDynamicIframeAppend(
         // Only inject immediately for about:blank / no-src frames (e.g. the
         // Cloudflare beacon pattern that accesses contentDocument synchronously).
         // The raw attribute (iframe.src itself reads back the original URL).
-        const src = nativeGetAttr.call(iframe, "src");
+        const src = ncall(nativeGetAttr, iframe, "src");
         if (src && unwrapProxiedUrl(src, config) !== src) return;
 
         injectIntoIframe(iframe, targetWindow, config, getBaseHref());
@@ -157,7 +158,7 @@ export function patchDynamicIframeAppend(
             if (key !== "replaceChild" && parent && (parent.tagName === "SCRIPT" || parent.tagName === "STYLE")) rewriteTextNode(parent, node, rewriteOne);
             if (node instanceof Object) rewriteUrlBeforeInsert(node as Node);
             // A fragment is empty once inserted: its frames are found first.
-            return inserting(framesIn(node), () => Reflect.apply(native, self, args) as Node);
+            return inserting(framesIn(node), () => nR.apply(native, self, args) as Node);
         });
     }
     // The ParentNode / ChildNode methods and insertAdjacentElement insert
@@ -170,18 +171,18 @@ export function patchDynamicIframeAppend(
     for (const holderName of ["Element", "Document", "DocumentFragment", "CharacterData", "DocumentType"]) {
         const holder = globals[holderName]?.prototype as object | undefined;
         if (!holder) continue;
-        for (const [key, nodesOf] of Object.entries(nodeArgs)) {
-            if (!Object.prototype.hasOwnProperty.call(holder, key)) continue;
+        for (const [key, nodesOf] of nO.entries(nodeArgs)) {
+            if (!ncall(nOP.hasOwnProperty, holder, key)) continue;
             wrapMethod<(...a: unknown[]) => unknown>(holder, key, (native, self, args) => {
                 const frames: Node[] = [];
                 for (const n of nodesOf(args)) frames.push(...framesIn(n));
-                return inserting(frames, () => Reflect.apply(native, self, args));
+                return inserting(frames, () => nR.apply(native, self, args));
             });
         }
     }
 }
 
-const frameInjectors = new WeakMap<object, (root: unknown) => void>();
+const frameInjectors = new SafeWeakMap<object, (root: unknown) => void>();
 
 /**
  * Gives the runtime to the empty frames in `root`, which markup was just

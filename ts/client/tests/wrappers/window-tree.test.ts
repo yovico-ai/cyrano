@@ -28,12 +28,13 @@ describe("wrapTopWindow", () => {
         expect(wrapTopWindow({ obj: obj as { top: unknown } }).top).toBeUndefined();
     });
 
-    it("returns undefined for null", () => {
-        expect(wrapTopWindow({ obj: null }).top).toBeUndefined();
+    // As natively: `null.top` / `undefined.top` throw the TypeError.
+    it("hands null back, so reading .top throws as natively", () => {
+        expect(() => (wrapTopWindow({ obj: null }) as unknown as { top: unknown }).top).toThrow(TypeError);
     });
 
-    it("returns undefined for undefined", () => {
-        expect(wrapTopWindow({ obj: undefined }).top).toBeUndefined();
+    it("hands undefined back, so reading .top throws as natively", () => {
+        expect(() => (wrapTopWindow({ obj: undefined }) as unknown as { top: unknown }).top).toThrow(TypeError);
     });
 
     it("preserves method call this-binding on non-Window objects", () => {
@@ -72,8 +73,8 @@ describe("wrapParentWindow", () => {
         expect(wrapParentWindow({ obj: obj as { parent: unknown } }).parent).toBeUndefined();
     });
 
-    it("returns undefined for null", () => {
-        expect(wrapParentWindow({ obj: null }).parent).toBeUndefined();
+    it("hands null back, so reading .parent throws as natively", () => {
+        expect(() => (wrapParentWindow({ obj: null }) as unknown as { parent: unknown }).parent).toThrow(TypeError);
     });
 
     it("preserves method call this-binding on non-Window objects (jQuery .parent())", () => {

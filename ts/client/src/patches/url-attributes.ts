@@ -13,6 +13,8 @@
 // getAttribute and srcset return the text as the page *wrote* it (relative
 // URLs relative) — that needs the original text kept, a separate step.
 
+import { rewriteCssText } from "../css/rewriter";
+import { nO, nR, ncall } from "../native/intrinsics";
 import { isTrustedValue, trusted } from "../native/trusted";
 import { rewriteSrcsetAttribute } from "./srcset";
 import { URL_BEARING_ELEMENTS, isSrcsetAttr } from "./url-attribute-map";
@@ -34,7 +36,7 @@ export function patchUrlAttributes(
             const srcset = isSrcsetAttr(attribute);
             wrapAccessor<unknown>(proto, idlNames?.[attribute] ?? attribute, {
                 get: (get, self) => {
-                    const v = get.call(self);
+                    const v = ncall(get, self);
                     if (typeof v !== "string") return v;
                     // srcset reflects the attribute's text: the page's own.
                     // The others are resolved URLs: the original's.
@@ -44,11 +46,11 @@ export function patchUrlAttributes(
                 set: (set, self, value) => {
                     // null/undefined keep their native meaning; Trusted Types
                     // objects stringify to their URL.
-                    if (value == null) return set.call(self, value);
+                    if (value == null) return ncall(set, self, value);
                     const s = String(value);
                     const now = srcset ? rewriteSrcsetAttribute(s, rewriteOne) : rewriteOne(s);
                     // A TrustedScriptURL (script.src under Trusted Types) stays trusted.
-                    set.call(self, isTrustedValue(value) ? trusted(targetWindow, "ScriptURL", now) : now);
+                    ncall(set, self, isTrustedValue(value) ? trusted(targetWindow, "ScriptURL", now) : now);
                     recordAttr(self as Element, attribute, now, s);
                 },
             });
@@ -63,12 +65,26 @@ export function patchUrlAttributes(
  */
 export function patchAudioConstructor(targetWindow: Window, rewriteOne: (url: string) => string): void {
     wrapConstructor<typeof Audio>(targetWindow, "Audio", (Native, args, newTarget) => {
-        if (!args.length || args[0] === undefined) return Reflect.construct(Native, args, newTarget as typeof Audio);
+        if (!args.length || args[0] === undefined) return nR.construct(Native, args, newTarget as typeof Audio);
         const given = String(args[0]);
         const now = rewriteOne(given);
-        const el = Reflect.construct(Native, [now, ...args.slice(1)], newTarget as typeof Audio) as HTMLAudioElement;
+        const el = nR.construct(Native, [now, ...args.slice(1)], newTarget as typeof Audio) as HTMLAudioElement;
         if (now !== given) recordAttr(el, "src", now, given);
         return el;
+    });
+}
+
+/**
+ * new FontFace(family, source): a string source is a CSS src value —
+ * url(…) format(…), local(…) — whose URLs the browser fetches itself
+ * (IMDb's fonts escaped the proxy). Its url()s are proxified; a buffer
+ * source is left alone. A FontFace does not show its source to script.
+ */
+export function patchFontFaceConstructor(targetWindow: Window, rewriteOne: (url: string) => string): void {
+    wrapConstructor<typeof FontFace>(targetWindow, "FontFace", (Native, args, newTarget) => {
+        const next = args.slice();
+        if (typeof next[1] === "string") next[1] = rewriteCssText(next[1], rewriteOne);
+        return nR.construct(Native, next, newTarget as typeof FontFace);
     });
 }
 
@@ -96,7 +112,7 @@ export function patchAnchorUrlReflection(
         // The original URL behind this element's href, or null when its href
         // is not a proxified URL (then the native part is the right answer).
         const original = (self: unknown): URL | null => {
-            const raw = hrefGet.call(self) as string;
+            const raw = ncall(hrefGet, self) as string;
             if (!raw) return null;
             const o = unwrapOne(raw);
             if (o === raw) return null;
@@ -107,14 +123,14 @@ export function patchAnchorUrlReflection(
             wrapAccessor<string>(proto, part, {
                 get: (get, self) => {
                     const u = original(self);
-                    return u ? (u[part] as string) : get.call(self);
+                    return u ? (u[part] as string) : ncall(get, self);
                 },
                 ...(readOnly ? {} : {
                     set: (set: (this: unknown, v: string) => void, self: unknown, value: string) => {
                         const u = original(self);
-                        if (!u) return set.call(self, value);
+                        if (!u) return ncall(set, self, value);
                         (u as unknown as Record<string, unknown>)[part] = value;
-                        hrefSet.call(self, rewriteOne(u.href));
+                        ncall(hrefSet, self, rewriteOne(u.href));
                     },
                 }),
             });
@@ -123,8 +139,8 @@ export function patchAnchorUrlReflection(
 }
 
 function findDescriptor(o: object, key: string): PropertyDescriptor | undefined {
-    for (let p: object | null = o; p; p = Object.getPrototypeOf(p) as object | null) {
-        const d = Object.getOwnPropertyDescriptor(p, key);
+    for (let p: object | null = o; p; p = nO.getPrototypeOf(p) as object | null) {
+        const d = nO.getOwnPropertyDescriptor(p, key);
         if (d) return d;
     }
     return undefined;

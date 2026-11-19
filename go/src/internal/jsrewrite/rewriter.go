@@ -58,6 +58,10 @@ type Options struct {
 	// stall an inspector.
 	StripDebugger bool
 
+	// DebugR5At, when set, limits R5 to the accesses whose `[` is at an
+	// offset it accepts (development aid: bisecting a script's edits).
+	DebugR5At func(pos int) bool
+
 	// BaseURL is the URL of the script being rewritten. When set together
 	// with ProxifyURL:
 	//   - WrapImportArg: string-literal import() specifiers are resolved

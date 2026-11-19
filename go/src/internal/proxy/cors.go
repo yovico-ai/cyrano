@@ -60,16 +60,40 @@ func corsFails(resp *http.Response) bool {
 	if !ok {
 		return false
 	}
-	allow := resp.Header.Values("Access-Control-Allow-Origin")
-	if len(allow) != 1 { // none, or more than one: failure
-		return true
-	}
-	a := strings.TrimSpace(allow[0])
-	if !c.credentialed && a == "*" {
+	return !corsCheck(resp.Header.Values("Access-Control-Allow-Origin"), resp.Header.Values("Access-Control-Allow-Credentials"), c.origin, c.credentialed)
+}
+
+// corsCheck is the CORS check (Fetch §4.9; spec/Fetch.agda corsCheck) of a
+// response with these Access-Control-Allow-Origin and -Credentials field
+// lines, for a request from origin (its serialization).
+func corsCheck(allowOrigin, allowCredentials []string, origin string, credentialed bool) bool {
+	ao, ok := combineField(allowOrigin)
+	if !ok {
 		return false
 	}
-	if a != c.origin {
+	if !credentialed && ao == "*" {
 		return true
 	}
-	return c.credentialed && strings.TrimSpace(resp.Header.Get("Access-Control-Allow-Credentials")) != "true"
+	if ao != origin {
+		return false
+	}
+	if !credentialed {
+		return true
+	}
+	ac, ok := combineField(allowCredentials)
+	return ok && ac == "true"
+}
+
+// combineField is a header's value as Fetch's "get" gives it (spec/Fetch.agda
+// combine): its field lines, each trimmed of space and tab, joined by ", ";
+// false when there is none.
+func combineField(lines []string) (string, bool) {
+	if len(lines) == 0 {
+		return "", false
+	}
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = strings.Trim(l, " \t")
+	}
+	return strings.Join(out, ", "), true
 }

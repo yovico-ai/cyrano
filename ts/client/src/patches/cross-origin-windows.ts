@@ -7,6 +7,7 @@
 // (`parent` and `top` are unforgeable: rewritten code reaches them through
 // wrappers/window-tree.ts, which applies the same view.)
 
+import { nO, nR, ncall } from "../native/intrinsics";
 import { crossOriginView } from "../native/cross-origin";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 
@@ -33,45 +34,45 @@ export function patchCrossOriginWindows(targetWindow: Window, ensureRuntime: (fr
     for (const name of ["HTMLIFrameElement", "HTMLFrameElement", "HTMLObjectElement", "HTMLEmbedElement"]) {
         const proto = g[name]?.prototype;
         if (!proto) continue;
-        const cw = Object.getOwnPropertyDescriptor(proto, "contentWindow")?.get as ((this: unknown) => unknown) | undefined;
+        const cw = nO.getOwnPropertyDescriptor(proto, "contentWindow")?.get as ((this: unknown) => unknown) | undefined;
         if (cw) {
             wrapAccessor<unknown>(proto, "contentWindow", {
                 get: (get, self) => {
-                    const w = get.call(self);
+                    const w = ncall(get, self);
                     if (w) ensureRuntime(self);
                     return crossOriginView(w, pendingOrigin(self), targetWindow);
                 },
             });
         }
-        if (cw && Object.getOwnPropertyDescriptor(proto, "contentDocument")) {
+        if (cw && nO.getOwnPropertyDescriptor(proto, "contentDocument")) {
             wrapAccessor<unknown>(proto, "contentDocument", {
                 get: (get, self) => {
-                    const w = cw.call(self);
+                    const w = ncall(cw, self);
                     if (w) ensureRuntime(self);
-                    return crossOriginView(w, pendingOrigin(self), targetWindow) === w ? get.call(self) : null;
+                    return crossOriginView(w, pendingOrigin(self), targetWindow) === w ? ncall(get, self) : null;
                 },
             });
         }
         if (cw && "getSVGDocument" in proto) {
             wrapMethod<(...a: unknown[]) => unknown>(proto, "getSVGDocument", (native, self, args) => {
-                const w = cw.call(self);
-                return crossOriginView(w, null, targetWindow) === w ? Reflect.apply(native, self, args) : null;
+                const w = ncall(cw, self);
+                return crossOriginView(w, null, targetWindow) === w ? nR.apply(native, self, args) : null;
             });
         }
     }
     const ME = g["MessageEvent"]?.prototype;
-    if (ME && Object.getOwnPropertyDescriptor(ME, "source")) {
-        wrapAccessor<unknown>(ME, "source", { get: (get, self) => crossOriginView(get.call(self), null, targetWindow) });
+    if (ME && nO.getOwnPropertyDescriptor(ME, "source")) {
+        wrapAccessor<unknown>(ME, "source", { get: (get, self) => crossOriginView(ncall(get, self), null, targetWindow) });
     }
-    if (Object.getOwnPropertyDescriptor(targetWindow, "opener")) {
-        wrapAccessor<unknown>(targetWindow, "opener", { get: (get, self) => crossOriginView(get.call(self), null, targetWindow) });
+    if (nO.getOwnPropertyDescriptor(targetWindow, "opener")) {
+        wrapAccessor<unknown>(targetWindow, "opener", { get: (get, self) => crossOriginView(ncall(get, self), null, targetWindow) });
     }
-    if (Object.getOwnPropertyDescriptor(targetWindow, "frameElement")) {
+    if (nO.getOwnPropertyDescriptor(targetWindow, "frameElement")) {
         wrapAccessor<unknown>(targetWindow, "frameElement", {
             get: (get, self) => {
                 let parent: unknown;
                 try { parent = (self as Window).parent; } catch { return null; }
-                return crossOriginView(parent, null, targetWindow) === parent ? get.call(self) : null;
+                return crossOriginView(parent, null, targetWindow) === parent ? ncall(get, self) : null;
             },
         });
     }

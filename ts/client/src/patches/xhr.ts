@@ -4,8 +4,9 @@
 // original URL. A request to another origin names the requesting origin
 // to the proxy (cors.ts).
 
+import { nO, nR, ncall } from "../native/intrinsics";
 import { wrapAccessor, wrapMethod } from "../native/surface";
-import { CREDENTIALS, INITIATOR, crossOriginXhr, initiatorValue, initiatorOfXhr, isCrossOrigin, type CorsContext } from "./cors";
+import { CREDENTIALS, INITIATOR, crossOriginXhr, includesCredentials, initiatorValue, initiatorOfXhr, isCrossOrigin, type CorsContext } from "./cors";
 
 export function patchXmlHttpRequest(
     targetWindow: Window,
@@ -18,10 +19,10 @@ export function patchXmlHttpRequest(
     if (!XHR?.prototype) return;
     const proto = XHR.prototype;
     wrapMethod<(...a: unknown[]) => void>(proto, "open", (native, self, args) => {
-        if (args.length < 2) return Reflect.apply(native, self, args) as void; // the native's own TypeError
+        if (args.length < 2) return nR.apply(native, self, args) as void; // the native's own TypeError
         const next = args.slice();
         next[1] = rewriteOne(String(args[1]));
-        const done = Reflect.apply(native, self, next) as void;
+        const done = nR.apply(native, self, next) as void;
         // Opened: note whether it goes to another origin (cors.ts).
         if (cors && baseUrl && typeof self === "object" && self !== null) {
             const own = cors.origin();
@@ -34,16 +35,18 @@ export function patchXmlHttpRequest(
         return done;
     });
     const setHeader = proto.setRequestHeader;
-    const withCredentials = Object.getOwnPropertyDescriptor(proto, "withCredentials")?.get as ((this: unknown) => boolean) | undefined;
+    const withCredentials = nO.getOwnPropertyDescriptor(proto, "withCredentials")?.get as ((this: unknown) => boolean) | undefined;
     wrapMethod<(...a: unknown[]) => void>(proto, "send", (native, self, args) => {
         const from = typeof self === "object" && self !== null ? initiatorOfXhr.get(self) : undefined;
         if (from && from.href) {
             try {
-                setHeader.call(self, INITIATOR, from.href);
-                setHeader.call(self, CREDENTIALS, !from.cross || withCredentials?.call(self) ? "include" : "omit");
+                ncall(setHeader, self, INITIATOR, from.href);
+                // An XHR's credentials mode: "include" with withCredentials, else "same-origin".
+                const mode = withCredentials && ncall(withCredentials, self) ? "include" : "same-origin";
+                ncall(setHeader, self, CREDENTIALS, includesCredentials(mode, !from.cross) ? "include" : "omit");
             } catch { /* not opened: the native send throws */ }
         }
-        return Reflect.apply(native, self, args) as void;
+        return nR.apply(native, self, args) as void;
     });
-    wrapAccessor<string>(proto, "responseURL", { get: (get, self) => unwrapOne(get.call(self)) });
+    wrapAccessor<string>(proto, "responseURL", { get: (get, self) => unwrapOne(ncall(get, self)) });
 }

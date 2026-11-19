@@ -7,6 +7,7 @@
 // One accessor on the prototype covers addEventListener and onmessage
 // alike, and leaves the event object itself the native one.
 
+import { nO, ncall } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
 import { unwrapProxiedUrl } from "../url/containment";
 import { wrapAccessor } from "../native/surface";
@@ -17,12 +18,12 @@ export function patchMessageEventOrigin(targetWindow: Window, config: ClientConf
     if (!ME?.prototype) return;
     const proxyOrigin = new URL(config.apiBaseURL).origin;
     const unwrap = (h: string) => unwrapProxiedUrl(h, config);
-    const sourceGet = Object.getOwnPropertyDescriptor(ME.prototype, "source")?.get;
+    const sourceGet = nO.getOwnPropertyDescriptor(ME.prototype, "source")?.get;
     wrapAccessor<string>(ME.prototype, "origin", {
         get: (get, self) => {
-            const origin = get.call(self);
+            const origin = ncall(get, self);
             if (origin !== proxyOrigin || !sourceGet) return origin;
-            const source = sourceGet.call(self) as unknown;
+            const source = ncall(sourceGet, self) as unknown;
             return (source ? originalOrigin(source, unwrap) : null) ?? origin;
         },
     });

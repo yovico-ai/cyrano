@@ -16,6 +16,7 @@
 // (WorkerLocation has no assign/replace/reload) and the fetch/XHR/
 // importScripts patching are worker-specific.
 
+import { nR } from "../native/intrinsics";
 import { patchReflection } from "../native/hidden-globals";
 import { patchStorageNames } from "../patches/storage";
 import { honourOptionalChains } from "./optional";
@@ -178,7 +179,7 @@ function patchWorkerScope(
     // importScripts is classic-worker-only and synchronous.
     if (typeof scope.importScripts === "function") {
         wrapMethod<(...a: unknown[]) => void>(scope, "importScripts", (native, self, args) =>
-            Reflect.apply(native, self, args.map((u) =>
+            nR.apply(native, self, args.map((u) =>
                 (isTrustedValue(u) ? trusted(scope, "ScriptURL", rewriteOne(String(u))) : rewriteOne(String(u))))) as void);
     }
     // self.location is a WorkerLocation; its accessors report the worker's

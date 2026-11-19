@@ -16,6 +16,7 @@
 // delegates them; under the proxy they stay on (document.featurePolicy,
 // permissions.query, screen.isExtended show it).
 
+import { SafeSet, SafeWeakSet, nR, ncall } from "../native/intrinsics";
 import { internalsOf } from "../native/internals";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 
@@ -31,7 +32,7 @@ export function framedByAnotherOrigin(win: Window, own: () => string): boolean {
     }
 }
 
-const DENIED_NAMES = new Set(["notifications", "push"]);
+const DENIED_NAMES = new SafeSet(["notifications", "push"]);
 
 export function patchEmbeddedContext(targetWindow: Window, own: () => string): void {
     const g = targetWindow as unknown as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -39,10 +40,10 @@ export function patchEmbeddedContext(targetWindow: Window, own: () => string): v
 
     const Notif = g["Notification"] as { requestPermission?: unknown } | undefined;
     if (Notif) {
-        wrapAccessor<string>(Notif, "permission", { get: (get, self) => (embedded() ? "denied" : get.call(self)) });
+        wrapAccessor<string>(Notif, "permission", { get: (get, self) => (embedded() ? "denied" : ncall(get, self)) });
         if (typeof Notif.requestPermission === "function") {
             wrapMethod<(...a: unknown[]) => unknown>(Notif, "requestPermission", (native, self, args) => {
-                if (!embedded()) return Reflect.apply(native, self, args);
+                if (!embedded()) return nR.apply(native, self, args);
                 const cb = args[0];
                 if (typeof cb === "function") { try { (cb as (p: string) => void)("denied"); } catch { /* the page's callback */ } }
                 return (g["Promise"] as PromiseConstructor).resolve("denied");
@@ -55,20 +56,20 @@ export function patchEmbeddedContext(targetWindow: Window, own: () => string): v
     const P = g["Permissions"]?.prototype as object | undefined;
     const S = g["PermissionStatus"]?.prototype as object | undefined;
     if (P && S && "query" in P) {
-        const denied = new WeakSet<object>();
+        const denied = new SafeWeakSet<object>();
         const then = (g["Promise"] as PromiseConstructor).prototype.then;
         wrapMethod<(...a: unknown[]) => unknown>(P, "query", (native, self, args) => {
-            const result = Reflect.apply(native, self, args);
+            const result = nR.apply(native, self, args);
             let name: unknown;
             try { name = (args[0] as { name?: unknown } | undefined)?.name; } catch { return result; }
             if (typeof name !== "string" || !DENIED_NAMES.has(name) || !embedded()) return result;
-            return Reflect.apply(then, result, [(status: unknown) => {
+            return nR.apply(then, result, [(status: unknown) => {
                 if (typeof status === "object" && status !== null) denied.add(status);
                 return status;
             }]);
         });
         wrapAccessor<string>(S, "state", {
-            get: (get, self) => (typeof self === "object" && self !== null && denied.has(self) ? "denied" : get.call(self)),
+            get: (get, self) => (typeof self === "object" && self !== null && denied.has(self) ? "denied" : ncall(get, self)),
         });
     }
 }

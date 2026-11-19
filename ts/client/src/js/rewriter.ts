@@ -14,6 +14,7 @@
 // Failure policy: a script that does not parse is returned unchanged, as
 // is one already rewritten (it carries `$rewriter.wrap_`).
 
+import { SafeWeakSet } from "../native/intrinsics";
 import { Parser } from "acorn";
 import { isUrlLikeSpecifier } from "../url/containment";
 import { canMark, fragment } from "./marks";
@@ -222,6 +223,17 @@ type Ctx =
 
 const SET_LOCATION = "$rewriter.wrap_set_location(location, function(v){location=v;}).value";
 
+/**
+ * R13: the global object, whatever names a with object claims. A sloppy
+ * function's `this`; in a strict function nested in the with (where `this`
+ * is undefined and no name is safe) a function compiled from "return this",
+ * reached from a literal's constructor.
+ */
+const WITH_GLOBAL = '((function(){return this})()||(function(){}).constructor("return this")()).';
+function inWith(ins: string): string {
+    return ins.replace(/\$rewriter\./g, WITH_GLOBAL + "$rewriter.").replace(/\$__crn_key__/g, WITH_GLOBAL + "$__crn_key__");
+}
+
 /** R1: a bare identifier read → the helper its value goes through. */
 function identHelper(name: string, o: JsRewriteOptions): string | null {
     switch (name) {
@@ -273,6 +285,10 @@ function memberHelper(name: string, called: boolean, o: JsRewriteOptions): strin
  *  R11 new C…, where C now starts with a call  →  new (C)…
  *  R12 debugger;  →  ;     (a no-op unless DevTools is open, where scripts
  *      use it to detect and stall an inspector)
+ *  R13 inside a `with` body, the edits reach the runtime through the global
+ *      object, not by name: `$rewriter` → `((function(){return this})()||…).$rewriter`,
+ *      and so `$__crn_key__` — a with object may claim every name (Vue's
+ *      compiled templates run in `with(_ctx)`, whose Proxy does)
  *
  * `super` is never wrapped. Nothing else in the script changes.
  */
@@ -280,13 +296,17 @@ class Splicer {
     readonly edits: Edit[] = [];
     private seq = 0;
     /** Nodes an edit now wraps in a call (for R11). */
-    private readonly wrapped = new WeakSet<object>();
+    private readonly wrapped = new SafeWeakSet<object>();
 
     constructor(private readonly src: string, private readonly o: JsRewriteOptions) {}
 
-    private open(pos: number, ins: string): void { this.edits.push({ pos, del: 0, ins, kind: Kind.Open, seq: this.seq++ }); }
-    private close(pos: number, ins: string): void { this.edits.push({ pos, del: 0, ins, kind: Kind.Close, seq: this.seq++ }); }
-    private replace(pos: number, del: number, ins: string): void { this.edits.push({ pos, del, ins, kind: Kind.Replace, seq: this.seq++ }); }
+    /** Inside a `with` body: the runtime's names would resolve through its object (R13). */
+    private withDepth = 0;
+
+    private open(pos: number, ins: string): void { this.edits.push({ pos, del: 0, ins: this.rt(ins), kind: Kind.Open, seq: this.seq++ }); }
+    private close(pos: number, ins: string): void { this.edits.push({ pos, del: 0, ins: this.rt(ins), kind: Kind.Close, seq: this.seq++ }); }
+    private replace(pos: number, del: number, ins: string): void { this.edits.push({ pos, del, ins: this.rt(ins), kind: Kind.Replace, seq: this.seq++ }); }
+    private rt(ins: string): string { return this.withDepth > 0 ? inWith(ins) : ins; }
 
     private all(nodes: Array<N | null> | undefined, ctx: Ctx): void {
         if (nodes) for (const n of nodes) if (n) this.visit(n, ctx, false);
@@ -479,6 +499,13 @@ class Splicer {
             case "TemplateElement":
             case "PrivateIdentifier":
             case "EmptyStatement":
+                return;
+
+            case "WithStatement": // R13
+                this.visit(n["object"] as N, "expr", false);
+                this.withDepth++;
+                this.visit(n["body"] as N, "expr", false);
+                this.withDepth--;
                 return;
 
             case "DebuggerStatement": // R12

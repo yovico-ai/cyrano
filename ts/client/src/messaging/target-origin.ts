@@ -8,6 +8,7 @@
 // origin is the proxy's, so the comparison is made between the windows'
 // original origins, and a delivery goes to the native with the proxy origin.
 
+import { SafeSet, SafeWeakMap, nO, nR, napply, nqueueMicrotask } from "../native/intrinsics";
 import { realWindow } from "../native/cross-origin";
 import { rawStackUrls } from "../native/error-stack";
 
@@ -75,7 +76,7 @@ export function installSender(internals: Internals, native: (...a: unknown[]) =>
     internals.nativePostMessage = native;
     internals.send = function send(recipient, args) {
         const n = nativeOf(recipient);
-        return n ? n.apply(recipient, args) : (recipient as { postMessage: (...a: unknown[]) => unknown }).postMessage(...args);
+        return n ? napply(n, recipient, args) : (recipient as { postMessage: (...a: unknown[]) => unknown }).postMessage(...args);
     } satisfies Send;
 }
 
@@ -104,7 +105,7 @@ export function sendAs(sender: unknown, recipient: unknown, args: unknown[], fal
  * creator's copy of the runtime. The native postMessage is therefore called
  * from a function compiled in the sender's own realm.
  */
-const trampolines = new WeakMap<object, (f: unknown, self: unknown, args: unknown[]) => unknown>();
+const trampolines = new SafeWeakMap<object, (f: unknown, self: unknown, args: unknown[]) => unknown>();
 export const NOT_SENT = Symbol("not sent");
 export function callInRealmOf(sender: unknown, fn: unknown, self: unknown, args: unknown[]): unknown {
     if (typeof sender !== "object" || sender === null) return NOT_SENT;
@@ -113,7 +114,11 @@ export function callInRealmOf(sender: unknown, fn: unknown, self: unknown, args:
         try {
             const F = nativeFunctionOf(sender);
             if (!F) return NOT_SENT;
-            t = Reflect.construct(F, ["f", "t", "a", "return Reflect.apply(f, t, a)"]) as (f: unknown, self: unknown, args: unknown[]) => unknown;
+            // The saved apply is handed in: the compiled body never looks up
+            // the page-writable Reflect.apply. (A built-in does not change the
+            // incumbent realm: the trampoline stays the calling function.)
+            const make = nR.construct(F, ["ap", "return function (f, t, a) { return ap(f, t, a); }"]) as (ap: typeof nR.apply) => (f: unknown, self: unknown, args: unknown[]) => unknown;
+            t = make(nR.apply);
             trampolines.set(sender, t);
         } catch {
             return NOT_SENT; // really cross-origin, or a realm that refuses
@@ -125,7 +130,7 @@ export function callInRealmOf(sender: unknown, fn: unknown, self: unknown, args:
 /** A window's native Function constructor (the runtime's stand-in compiles through it too). */
 function nativeFunctionOf(win: object): FunctionConstructor | undefined {
     try {
-        const fp = Object.getPrototypeOf((win as { Object: { prototype: object } }).Object.prototype.constructor) as { constructor?: FunctionConstructor } | null;
+        const fp = nO.getPrototypeOf((win as { Object: { prototype: object } }).Object.prototype.constructor) as { constructor?: FunctionConstructor } | null;
         const F = fp?.constructor;
         return typeof F === "function" ? F : (win as { Function?: FunctionConstructor }).Function;
     } catch {
@@ -149,7 +154,7 @@ export function markSender(recipient: unknown, sender: Window): void {
     if (!i) return;
     i.pendingSender = sender;
     const mark = i;
-    try { queueMicrotask(() => { if (mark.pendingSender === sender) mark.pendingSender = undefined; }); } catch { /* cleared on use */ }
+    try { nqueueMicrotask(() => { if (mark.pendingSender === sender) mark.pendingSender = undefined; }); } catch { /* cleared on use */ }
 }
 
 /** The sender noted for this window's next postMessage, once. */
@@ -166,7 +171,7 @@ export const callerUrls = rawStackUrls;
 
 /** Every same-origin window reachable from `from`: the frame tree, openers, and every registered window. */
 export function reachableWindows(from: Window): Window[] {
-    const seen = new Set<Window>();
+    const seen = new SafeSet<Window>();
     const visit = (w: Window | null | undefined): void => {
         if (!w || seen.has(w)) return;
         try {

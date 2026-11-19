@@ -18,6 +18,7 @@
 //   * ancestorOrigins is a Proxy of the real DOMStringList, answering the
 //     ancestors' original origins.
 
+import { SafeSet, nO, nOP, nR, ncall } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
 import { rewriteUrl, unwrapProxiedUrl } from "../url/containment";
 import { maskAs, standIn } from "../native/surface";
@@ -52,7 +53,7 @@ export function makeLocationView(real: Location, o: LocationViewOptions): Locati
         }
         navigate("assign", next.href);
     };
-    const own = (o2: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o2, k);
+    const own = (o2: object, k: string): boolean => ncall(nOP.hasOwnProperty, o2, k);
     // An about:blank or about:srcdoc document's URL is its own: only its
     // base URL (and its origin) come from the document that created it.
     // `location.href` there is "about:blank" and `location.origin` "null".
@@ -76,11 +77,11 @@ export function makeLocationView(real: Location, o: LocationViewOptions): Locati
         toString: () => (local() ? real.href : o.base().href),
     };
 
-    const view = Object.create(Object.getPrototypeOf(real) as object) as Record<PropertyKey, unknown>;
-    const known = new Set<PropertyKey>([...Object.keys(getters), ...Object.keys(methods)]);
-    const keys = new Set<PropertyKey>([...Reflect.ownKeys(real), ...known]);
+    const view = nO.create(nO.getPrototypeOf(real) as object) as Record<PropertyKey, unknown>;
+    const known = new SafeSet<PropertyKey>([...nO.keys(getters), ...nO.keys(methods)]);
+    const keys = new SafeSet<PropertyKey>([...nR.ownKeys(real), ...known]);
     for (const k of keys) {
-        const d = Object.getOwnPropertyDescriptor(real, k);
+        const d = nO.getOwnPropertyDescriptor(real, k);
         const name = typeof k === "string" ? k : "";
         const next: PropertyDescriptor = {
             enumerable: d ? d.enumerable === true : true,
@@ -101,17 +102,17 @@ export function makeLocationView(real: Location, o: LocationViewOptions): Locati
             // its functions acting on the real object.
             if ("value" in d) {
                 next.value = typeof d.value === "function" && k !== "valueOf"
-                    ? maskAs(standIn(d.value as (...a: unknown[]) => unknown, { apply: (t, _self, a: unknown[]) => Reflect.apply(t, real, a) }), d.value as object)
+                    ? maskAs(standIn(d.value as (...a: unknown[]) => unknown, { apply: (t, _self, a: unknown[]) => nR.apply(t, real, a) }), d.value as object)
                     : d.value;
                 next.writable = d.writable === true;
             } else {
-                if (d.get) next.get = maskAs(standIn(d.get, { apply: (t) => Reflect.apply(t, real, []) }), d.get);
-                if (d.set) next.set = maskAs(standIn(d.set, { apply: (t, _self, a: unknown[]) => Reflect.apply(t, real, a) }), d.set);
+                if (d.get) next.get = maskAs(standIn(d.get, { apply: (t) => nR.apply(t, real, []) }), d.get);
+                if (d.set) next.set = maskAs(standIn(d.set, { apply: (t, _self, a: unknown[]) => nR.apply(t, real, a) }), d.set);
             }
         } else {
             continue;
         }
-        Object.defineProperty(view, k, next);
+        nO.defineProperty(view, k, next);
     }
     return view as unknown as Location;
 }
@@ -163,7 +164,7 @@ function ancestorOriginsView(real: Location, o: LocationViewOptions): unknown {
             if (w === w.top) break;
         }
     } catch { /* no ancestor access */ }
-    const proto = Object.getPrototypeOf(native) as Record<PropertyKey, unknown>;
+    const proto = nO.getPrototypeOf(native) as Record<PropertyKey, unknown>;
     const item = proto["item"] as object | undefined;
     const contains = proto["contains"] as object | undefined;
     const iter = proto[Symbol.iterator] as object | undefined;
@@ -177,11 +178,11 @@ function ancestorOriginsView(real: Location, o: LocationViewOptions): unknown {
             if (k === "item" && item) return maskAs(standIn(item as (...a: unknown[]) => unknown, { apply: (_t, _s, a: unknown[]) => list[Number(a[0])] ?? null }), item);
             if (k === "contains" && contains) return maskAs(standIn(contains as (...a: unknown[]) => unknown, { apply: (_t, _s, a: unknown[]) => list.includes(String(a[0])) }), contains);
             if (k === Symbol.iterator && iter) return maskAs(standIn(iter as (...a: unknown[]) => unknown, { apply: () => list[Symbol.iterator]() }), iter);
-            return Reflect.get(t, k, t);
+            return nR.get(t, k, t);
         },
         has(t, k) {
             const i = index(k);
-            return i !== null ? i < list.length : Reflect.has(t, k);
+            return i !== null ? i < list.length : nR.has(t, k);
         },
         ownKeys() {
             return list.map((_, i) => String(i));

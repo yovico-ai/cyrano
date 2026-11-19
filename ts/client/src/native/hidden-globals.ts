@@ -12,15 +12,16 @@
 // it (`window.$rewriter`, `"$rewriter" in window`). This is the heuristic
 // limit REQUIREMENTS.md describes.
 
+import { SafeSet, nO, nR } from "./intrinsics";
 import { wrapMethod } from "./surface";
 
 export const HIDDEN = ["$rewriter", "$rewriter_init", "$rewriter_init_worker", "$__crn_key__"];
-const hidden = new Set<PropertyKey>(HIDDEN);
+const hidden = new SafeSet<PropertyKey>(HIDDEN);
 
 /** Defines a runtime global: writable, configurable, not enumerable. */
 export function defineHidden(scope: object, name: string, value: unknown): void {
     try {
-        Object.defineProperty(scope, name, { value, writable: true, configurable: true, enumerable: false });
+        nO.defineProperty(scope, name, { value, writable: true, configurable: true, enumerable: false });
     } catch {
         (scope as Record<string, unknown>)[name] = value;
     }
@@ -43,25 +44,25 @@ export function patchReflection(realm: object): void {
     const R = g.Reflect;
     if (!O || !R) return;
     const withoutHidden = (native: (...a: unknown[]) => unknown, self: unknown, args: unknown[]): unknown => {
-        const out = Reflect.apply(native, self, args) as unknown;
+        const out = nR.apply(native, self, args) as unknown;
         return Array.isArray(out) && isGlobal(args[0]) ? out.filter((k) => !hidden.has(k as PropertyKey)) : out;
     };
     wrapMethod<(...a: unknown[]) => unknown>(O, "getOwnPropertyNames", withoutHidden);
     wrapMethod<(...a: unknown[]) => unknown>(R, "ownKeys", withoutHidden);
     const noDescriptor = (native: (...a: unknown[]) => unknown, self: unknown, args: unknown[]): unknown =>
-        hidden.has(args[1] as PropertyKey) && isGlobal(args[0]) ? undefined : Reflect.apply(native, self, args);
+        hidden.has(args[1] as PropertyKey) && isGlobal(args[0]) ? undefined : nR.apply(native, self, args);
     wrapMethod<(...a: unknown[]) => unknown>(O, "getOwnPropertyDescriptor", noDescriptor);
     wrapMethod<(...a: unknown[]) => unknown>(R, "getOwnPropertyDescriptor", noDescriptor);
     wrapMethod<(...a: unknown[]) => unknown>(O, "getOwnPropertyDescriptors", (native, self, args) => {
-        const out = Reflect.apply(native, self, args) as Record<string, unknown>;
+        const out = nR.apply(native, self, args) as Record<string, unknown>;
         if (out && isGlobal(args[0])) for (const k of HIDDEN) delete out[k];
         return out;
     });
     const notOwn = (native: (...a: unknown[]) => unknown, self: unknown, args: unknown[]): unknown =>
-        hidden.has(args[0] as PropertyKey) && isGlobal(self) ? false : Reflect.apply(native, self, args);
+        hidden.has(args[0] as PropertyKey) && isGlobal(self) ? false : nR.apply(native, self, args);
     wrapMethod<(...a: unknown[]) => unknown>(O.prototype, "hasOwnProperty", notOwn);
     if ("hasOwn" in O) {
         wrapMethod<(...a: unknown[]) => unknown>(O, "hasOwn", (native, self, args) =>
-            hidden.has(args[1] as PropertyKey) && isGlobal(args[0]) ? false : Reflect.apply(native, self, args));
+            hidden.has(args[1] as PropertyKey) && isGlobal(args[0]) ? false : nR.apply(native, self, args));
     }
 }

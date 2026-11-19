@@ -117,11 +117,14 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
   (`spec/js-rewrite/README.md`). Open: stack-trace columns are the
   rewritten text's; a server-rewritten inline script's text is restored
   only through the read-back paths (not CSS attribute selectors etc.).
-- **CSP** is weakened, not translated (`urlrewrite/csp.go`,
-  `html-rewriter.ts`) — source lists gain the proxy origin; Trusted Types
-  directives are kept and enforced;
-  a faithful translation (host-sources → proxied path prefixes, rehashed
-  inline scripts) is not done. CSS `url()` handling still differs between
+- **CSP** is weakened, not translated — spec/Csp.agda (both runtimes
+  checked against it; `csp-vs-chromium`: whatever loads directly loads
+  proxied, and the bootstrap runs): source lists gain the proxy origin,
+  Trusted Types directives are kept and enforced; framing (frame-ancestors,
+  X-Frame-Options) is judged by the proxy for the real embedder, checked
+  against Chromium (`framing-vs-chromium`). A faithful translation
+  (host-sources → proxied path prefixes, rehashed inline scripts) is not
+  done: a proxied page is allowed more than direct. CSS `url()` handling still differs between
   Go (lexer) and TS (regex).
 - **Referrer policy** set by `<meta name=referrer>`, a `referrerpolicy`
   attribute or `fetch({referrerPolicy})` is not applied (only the header).
@@ -250,10 +253,34 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
   Dropbox renders ~400 fewer elements; Notion API call gets an HTML error;
   Slack never fires `load`; publishers that block headless Chromium not
   yet checked in real Chrome.
+- **Runtime vs page-hooked built-ins** (rugerforum.net / Ad-Shield,
+  2026-11-18): its integrity checks replace natives with their own
+  (rewritten) code; R5's `$__crn_key__` was overwritten by such a hook
+  running inside `wrap_member_expression` (a regexp's `exec`), so
+  `window["Array"]["from"]` read the wrong key. Now the R5 wrapper reads
+  nothing of the object (`native/brand.ts`: native brand checks, no Proxy
+  trap fires), uses no regexp, and puts the key back before returning.
+  The runtime calls built-ins saved at load (`native/intrinsics.ts`:
+  `nR`/`nO`/`nOP`, `ncall`/`napply`/`nbind`, `Safe{Weak,}{Map,Set}`,
+  `nqueueMicrotask`), never the page-writable globals — keep it so in new
+  code. Still live (a page that replaces them sees the runtime call them):
+  Array/String/RegExp methods and iteration (for…of, spread), and the
+  bundled third-party code (acorn, run whenever the runtime rewrites JS
+  source; the public-suffix list). Bisecting such a site:
+  `CYRANO_DEBUG_JS_OFF` (rules), `CYRANO_DEBUG_NO_JS=<url re>`,
+  `CYRANO_DEBUG_R5="[!]<url re> <lo> <hi> …; …"` (R5 by offset), and
+  V8 coverage / pause-on-caught-exceptions over CDP, direct vs proxied.
 - **Browser-level requests** the page cannot intercept escape the proxy
   (FedCM `navigator.credentials.get`, seen on theguardian.com).
-- **Not wrapped yet**: `AsyncFunction`/`GeneratorFunction` constructors,
-  the Navigation API (`navigation.currentEntry.url`). DOM insertion by any
+- **Not wrapped yet**: `AsyncFunction`/`GeneratorFunction` constructors;
+  an SVG element's `href.baseVal` (SVGAnimatedString; setAttribute /
+  setAttributeNS are rewritten); `<a ping>` in TS (Go rewrites it). The
+  Navigation API is wrapped (`patches/navigation.ts`; Shopify). Open from
+  random-site testing (2026-11-18): `location` / `top` / `parent` read by
+  destructuring (`const {location: L} = globalThis`, parameter patterns)
+  leaks the proxy URL; an element's `referrerPolicy` drops the Referer;
+  `fetchLater` fails over the http proxy and shares one quota over TLS; a
+  document whose CSP is `default-src 'none'` still gets the runtime. DOM insertion by any
   method gives inserted empty frames the runtime (`dynamic-iframe.ts`); the
   URL fix-up before insert is still only appendChild/insertBefore/replaceChild.
 - Live check: `ts/e2e/tools/live-compare.cjs` (direct vs proxied, same

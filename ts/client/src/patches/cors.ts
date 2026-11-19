@@ -1,3 +1,4 @@
+import { SafeSet, SafeWeakMap } from "../native/intrinsics";
 // Cross-origin requests, as the Fetch standard has a page see them.
 //
 // Under the proxy every request the browser makes is same-origin (to the
@@ -29,24 +30,53 @@
 export const INITIATOR = "Crn-I";
 export const CREDENTIALS = "Crn-C";
 
-const SAFELISTED = new Set([
+const SAFELISTED = new SafeSet([
     "cache-control", "content-language", "content-length", "content-type", "expires", "last-modified", "pragma",
 ]);
 
 /** Tells whether a response header (lowercase name) is shown to the script. */
 export type Exposed = (name: string) => boolean;
 
-/** The headers a cross-origin response shows, given its Access-Control-Expose-Headers. */
+/** Whether a request with this credentials mode carries credentials (spec/Fetch.agda includesCredentials). */
+export function includesCredentials(mode: string, sameOrigin: boolean): boolean {
+    return mode === "include" || (mode === "same-origin" && sameOrigin);
+}
+
+const isTchar = (c: number): boolean =>
+    (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a) || "!#$%&'*+-.^_`|~".includes(String.fromCharCode(c));
+
+/**
+ * The headers a cross-origin response shows, given its
+ * Access-Control-Expose-Headers as Headers.get gives it (its field lines
+ * joined by ", "). As spec/Fetch.agda exposed, checked against Chromium:
+ * items split on ",", trimmed of space and tab, empty ones skipped; one
+ * item that is not a header name (a token) and nothing is listed. Set-Cookie
+ * is never shown.
+ */
 export function exposedBy(exposeHeaders: string | null, credentialed: boolean): Exposed {
-    const listed = new Set<string>();
-    let all = false;
+    const listed = new SafeSet<string>();
+    let ok = true;
     for (const part of (exposeHeaders ?? "").split(",")) {
-        const name = part.trim().toLowerCase();
-        if (name === "*" && !credentialed) all = true;
-        else if (name) listed.add(name);
+        let a = 0, b = part.length;
+        while (a < b && (part.charCodeAt(a) === 0x20 || part.charCodeAt(a) === 0x09)) a++;
+        while (b > a && (part.charCodeAt(b - 1) === 0x20 || part.charCodeAt(b - 1) === 0x09)) b--;
+        if (a === b) continue;
+        let name = "";
+        for (let i = a; i < b; i++) {
+            const c = part.charCodeAt(i);
+            if (!isTchar(c)) { ok = false; break; }
+            name += String.fromCharCode(c >= 0x41 && c <= 0x5a ? c + 32 : c);
+        }
+        if (!ok) break;
+        listed.add(name);
     }
-    if (all) return (n) => n !== "set-cookie" && n !== "set-cookie2";
-    return (n) => SAFELISTED.has(n) || listed.has(n);
+    if (!ok) listed.clear();
+    const all = !credentialed && listed.has("*");
+    return (n) => {
+        const name = n.toLowerCase();
+        if (name === "set-cookie" || name === "set-cookie2") return false;
+        return all || SAFELISTED.has(name) || listed.has(name);
+    };
 }
 
 /** The CORS check (Fetch §4.9) for a response to `origin`'s request. */
@@ -80,9 +110,9 @@ export interface CorsContext {
 }
 
 /** XHRs opened to another origin → the requesting origin. */
-export const crossOriginXhr = new WeakMap<object, string>();
+export const crossOriginXhr = new SafeWeakMap<object, string>();
 /** XHRs whose request must name its context (CorsContext.always, or cross-origin) → [document URL, cross-origin]. */
-export const initiatorOfXhr = new WeakMap<object, { href: string; cross: boolean }>();
+export const initiatorOfXhr = new SafeWeakMap<object, { href: string; cross: boolean }>();
 
 /** A document URL as the initiator header carries it: no fragment, no credentials. */
 export function initiatorValue(href: string): string {

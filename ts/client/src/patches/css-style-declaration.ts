@@ -28,6 +28,7 @@
 // Recursion safety: rewriteCssText is pure (no DOM callbacks), so calling
 // it inside the patched setter is recursion-free.
 
+import { SafeSet, SafeWeakMap, SafeWeakSet, nO, nOP, nR, ncall } from "../native/intrinsics";
 import { rewriteCssText } from "../css/rewriter";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 
@@ -56,7 +57,7 @@ const URL_BEARING_CAMEL = [
     "mask",
 ] as const;
 
-const URL_BEARING_KEBAB_SET = new Set<string>(
+const URL_BEARING_KEBAB_SET = new SafeSet<string>(
     URL_BEARING_CAMEL.map(camelToKebab),
 );
 
@@ -65,7 +66,7 @@ function camelToKebab(s: string): string {
 }
 
 // Prototypes already patched, per realm (see css-rules.ts).
-const done = new WeakSet<object>();
+const done = new SafeWeakSet<object>();
 
 export function patchCssStyleDeclaration(
     targetWindow: Window,
@@ -73,8 +74,8 @@ export function patchCssStyleDeclaration(
 ): void {
     const ctor = (targetWindow as unknown as { CSSStyleDeclaration?: { prototype: object } }).CSSStyleDeclaration;
     let proto: object | null = null;
-    for (let p: object | null = ctor?.prototype ?? null; p; p = Object.getPrototypeOf(p) as object | null) {
-        const d = Object.getOwnPropertyDescriptor(p, "setProperty");
+    for (let p: object | null = ctor?.prototype ?? null; p; p = nO.getPrototypeOf(p) as object | null) {
+        const d = nO.getOwnPropertyDescriptor(p, "setProperty");
         if (d && typeof d.value === "function") { proto = p; break; }
     }
     if (!proto && !ctor) proto = findCssStyleDeclarationPrototype();
@@ -94,7 +95,7 @@ export function patchCssStyleDeclaration(
     let named: object = proto;
     try {
         const style = targetWindow.document.createElement("div").style as object;
-        named = Object.getPrototypeOf(style) as object;
+        named = nO.getPrototypeOf(style) as object;
     } catch { /* keep proto */ }
     patchNamedSetters(named, rewriteOne);
 
@@ -114,8 +115,8 @@ function findCssStyleDeclarationPrototype(): object | null {
         const decl = host.style;
         // Find the prototype that has setProperty (every conformant browser
         // exposes it there).
-        for (let p: object | null = Object.getPrototypeOf(decl); p; p = Object.getPrototypeOf(p)) {
-            const desc = Object.getOwnPropertyDescriptor(p, "setProperty");
+        for (let p: object | null = nO.getPrototypeOf(decl); p; p = nO.getPrototypeOf(p)) {
+            const desc = nO.getOwnPropertyDescriptor(p, "setProperty");
             if (desc && typeof desc.value === "function") return p;
         }
         return null;
@@ -138,10 +139,10 @@ function patchSetProperty(
             if (URL_BEARING_KEBAB_SET.has(name.toLowerCase()) || /url\s*\(|@import/i.test(value)) {
                 const next = args.slice();
                 next[1] = rewriteCssText(value, rewriteOne);
-                return Reflect.apply(native, self, next) as void;
+                return nR.apply(native, self, next) as void;
             }
         }
-        return Reflect.apply(native, self, args) as void;
+        return nR.apply(native, self, args) as void;
     });
 }
 
@@ -150,7 +151,7 @@ function patchCssTextSetter(
     rewriteOne: (url: string) => string,
 ): void {
     wrapAccessor<unknown>(proto, "cssText", {
-        set: (set, self, value) => set.call(self, typeof value === "string" ? rewriteCssText(value, rewriteOne) : value),
+        set: (set, self, value) => ncall(set, self, typeof value === "string" ? rewriteCssText(value, rewriteOne) : value),
     });
 }
 
@@ -160,7 +161,7 @@ function patchNamedSetters(
 ): void {
     for (const propName of URL_BEARING_CAMEL) {
         wrapAccessor<unknown>(proto, propName, {
-            set: (set, self, value) => set.call(self, typeof value === "string" ? rewriteCssText(value, rewriteOne) : value),
+            set: (set, self, value) => ncall(set, self, typeof value === "string" ? rewriteCssText(value, rewriteOne) : value),
         });
     }
 }
@@ -181,8 +182,8 @@ function patchNamedSetters(
 // Known gap: the property reads back proxified (as setProperty's always
 // has); the element's style attribute reads back as written.
 
-const views = new WeakMap<object, object>(); // declaration → view
-const reals = new WeakMap<object, object>(); // view → declaration
+const views = new SafeWeakMap<object, object>(); // declaration → view
+const reals = new SafeWeakMap<object, object>(); // view → declaration
 
 /** The declaration behind a view, or the value itself. */
 const unview = (x: unknown): unknown => (typeof x === "object" && x !== null && reals.get(x)) || x;
@@ -199,14 +200,14 @@ function viewOf(decl: unknown, rewriteOne: (url: string) => string): unknown {
             set: (target, p, value, receiver) => {
                 if (typeof p === "string" && typeof value === "string" && isUrlBearing(p)) value = rewriteCssText(value, rewriteOne);
                 // Assignments land on the declaration itself (the engine's setter).
-                return Reflect.set(target, p, value, receiver === v ? target : receiver);
+                return nR.set(target, p, value, receiver === v ? target : receiver);
             },
-            get: (target, p, receiver) => Reflect.get(target, p, receiver === v ? target : receiver),
+            get: (target, p, receiver) => nR.get(target, p, receiver === v ? target : receiver),
             defineProperty: (target, p, d) => {
                 if (typeof p === "string" && "value" in d && typeof d.value === "string" && isUrlBearing(p)) {
                     d = { ...d, value: rewriteCssText(d.value, rewriteOne) };
                 }
-                return Reflect.defineProperty(target, p, d);
+                return nR.defineProperty(target, p, d);
             },
         });
         views.set(decl, v);
@@ -217,16 +218,16 @@ function viewOf(decl: unknown, rewriteOne: (url: string) => string): unknown {
 
 /** Every method and accessor of `proto` called on a view acts on the declaration. */
 function acceptViews(proto: object): void {
-    for (const key of Reflect.ownKeys(proto)) {
+    for (const key of nR.ownKeys(proto)) {
         if (key === "constructor") continue;
-        const d = Object.getOwnPropertyDescriptor(proto, key);
+        const d = nO.getOwnPropertyDescriptor(proto, key);
         if (!d || !d.configurable) continue;
         if (typeof d.value === "function") {
-            wrapMethod<(...a: unknown[]) => unknown>(proto, key, (native, self, args) => Reflect.apply(native, unview(self), args));
+            wrapMethod<(...a: unknown[]) => unknown>(proto, key, (native, self, args) => nR.apply(native, unview(self), args));
         } else if (d.get || d.set) {
             wrapAccessor<unknown>(proto, key, {
-                ...(d.get ? { get: (get: (this: unknown) => unknown, self: unknown) => get.call(unview(self)) } : {}),
-                ...(d.set ? { set: (set: (this: unknown, v: unknown) => void, self: unknown, value: unknown) => set.call(unview(self), value) } : {}),
+                ...(d.get ? { get: (get: (this: unknown) => unknown, self: unknown) => ncall(get, unview(self)) } : {}),
+                ...(d.set ? { set: (set: (this: unknown, v: unknown) => void, self: unknown, value: unknown) => ncall(set, unview(self), value) } : {}),
             });
         }
     }
@@ -237,13 +238,13 @@ function patchStyleViews(targetWindow: Window, rewriteOne: (url: string) => stri
     const g = targetWindow as unknown as Record<string, { prototype: object } | undefined>;
     for (const name of ["HTMLElement", "SVGElement", "MathMLElement", "CSSStyleRule", "CSSPageRule", "CSSFontFaceRule", "CSSKeyframeRule", "CSSNestedDeclarations"]) {
         const proto = g[name]?.prototype;
-        if (!proto || !Object.prototype.hasOwnProperty.call(proto, "style")) continue;
-        const d = Object.getOwnPropertyDescriptor(proto, "style");
+        if (!proto || !ncall(nOP.hasOwnProperty, proto, "style")) continue;
+        const d = nO.getOwnPropertyDescriptor(proto, "style");
         if (!d?.get) continue;
         wrapAccessor<unknown>(proto, "style", {
-            get: (get, self) => viewOf(get.call(self), rewriteOne),
+            get: (get, self) => viewOf(ncall(get, self), rewriteOne),
             ...(d.set ? { set: (set: (this: unknown, v: unknown) => void, self: unknown, value: unknown) =>
-                set.call(self, typeof value === "string" ? rewriteCssText(value, rewriteOne) : value) } : {}),
+                ncall(set, self, typeof value === "string" ? rewriteCssText(value, rewriteOne) : value) } : {}),
         });
     }
 }

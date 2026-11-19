@@ -25,9 +25,10 @@
 // (relative here, absolute there) now matches where natively it would not.
 // Selectors in stylesheets are not covered.
 
+import { SafeSet, nOP, nR, ncall } from "../native/intrinsics";
 import { wrapMethod } from "../native/surface";
 
-const URL_ATTRS = new Set([
+const URL_ATTRS = new SafeSet([
     "src", "href", "action", "formaction", "poster", "data", "background", "cite", "manifest", "ping",
 ]);
 
@@ -127,12 +128,12 @@ export function patchSelectors(targetWindow: Window, rewriteOne: (url: string) =
         return wide === args[0] ? args : [wide, ...args.slice(1)];
     };
     const wrap = (proto: object | undefined, key: string): void => {
-        if (!proto || !Object.prototype.hasOwnProperty.call(proto, key)) return;
+        if (!proto || !ncall(nOP.hasOwnProperty, proto, key)) return;
         wrapMethod<(...a: unknown[]) => unknown>(proto, key, (native, self, args) => {
             const next = widen(args);
-            if (next === args) return Reflect.apply(native, self, args);
+            if (next === args) return nR.apply(native, self, args);
             // A selector the native refuses is refused in the page's own words.
-            try { return Reflect.apply(native, self, next); } catch { return Reflect.apply(native, self, args); }
+            try { return nR.apply(native, self, next); } catch { return nR.apply(native, self, args); }
         });
     };
     for (const name of ["Document", "DocumentFragment", "Element"]) {

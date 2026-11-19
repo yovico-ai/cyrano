@@ -13,6 +13,7 @@
 // constructors, reachable as (async () => {}).constructor etc., are not
 // wrapped yet.
 
+import { SafeWeakSet, nO, nR } from "../native/intrinsics";
 import { defaultJsRewriteOptions, rewriteJsSource } from "../js/rewriter";
 import { maskAs, replaceValue } from "../native/surface";
 import { isTrustedValue, trusted } from "../native/trusted";
@@ -27,12 +28,12 @@ export function patchFunctionConstructor(targetWindow: Window): void {
         // A TrustedScript body (Trusted Types) is rewritten like a string, and stays trusted.
         const wasTrusted = isTrustedValue(body);
         if (wasTrusted) body = String(body);
-        if (typeof body !== "string") return Reflect.construct(NativeFunction, args, (newTarget ?? NativeFunction) as FunctionConstructor);
-        const twin = Reflect.construct(NativeFunction, args) as object; // the page's own source; throws as natively
+        if (typeof body !== "string") return nR.construct(NativeFunction, args, (newTarget ?? NativeFunction) as FunctionConstructor);
+        const twin = nR.construct(NativeFunction, args) as object; // the page's own source; throws as natively
         const rewritten = args.slice();
         const code = rewriteJsSource(body, defaultJsRewriteOptions());
         rewritten[rewritten.length - 1] = wasTrusted ? trusted(targetWindow, "Script", code) : code;
-        const fn = Reflect.construct(NativeFunction, rewritten, (newTarget ?? NativeFunction) as FunctionConstructor) as object;
+        const fn = nR.construct(NativeFunction, rewritten, (newTarget ?? NativeFunction) as FunctionConstructor) as object;
         return maskAs(fn, twin);
     };
     // A real function, named Function: where a script's object inherits
@@ -47,12 +48,12 @@ export function patchFunctionConstructor(targetWindow: Window): void {
             return make(args, nt === undefined || nt === wrapper ? undefined : nt);
         },
     }).Function as unknown as FunctionConstructor;
-    Object.defineProperty(wrapper, "length", { value: NativeFunction.length, writable: false, enumerable: false, configurable: true });
-    Object.defineProperty(wrapper, "prototype", { value: NativeFunction.prototype, writable: false, enumerable: false, configurable: false });
-    Object.setPrototypeOf(wrapper, Object.getPrototypeOf(NativeFunction) as object);
+    nO.defineProperty(wrapper, "length", { value: NativeFunction.length, writable: false, enumerable: false, configurable: true });
+    nO.defineProperty(wrapper, "prototype", { value: NativeFunction.prototype, writable: false, enumerable: false, configurable: false });
+    nO.setPrototypeOf(wrapper, nO.getPrototypeOf(NativeFunction) as object);
     maskAs(wrapper, NativeFunction);
     replaceValue(NativeFunction.prototype, "constructor", wrapper);
     replaceValue(targetWindow, "Function", wrapper);
 }
 
-const maskedRealms = new WeakSet<object>();
+const maskedRealms = new SafeWeakSet<object>();

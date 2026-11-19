@@ -6,9 +6,11 @@
 // stay narrow. Adding a new wrapper means: write the module, import it here,
 // expose it on the returned RewriterApi.
 
+import { nO } from "../native/intrinsics";
 import { crossOriginView } from "../native/cross-origin";
 import { markSender } from "../messaging/target-origin";
 import { isView } from "../native/cross-origin";
+import { isDocumentObject, isWindowObject } from "../native/brand";
 import { buildBootstrapHtml } from "./bootstrap-html";
 import { honourOptionalChains } from "./optional";
 import type { ClientConfig } from "../config";
@@ -40,11 +42,21 @@ import { injectIntoIframe } from "./iframe-injection";
  * here (it would run twice, and its own rewritten code would overwrite the
  * `$__crn_key__` temporary of the access in progress — Ad-Shield's traps).
  */
+/** "0", "1", … — by character, never through RegExp (page code can hook its exec). */
+function isIndex(s: string): boolean {
+    if (s.length === 0 || (s.length > 1 && s.charCodeAt(0) === 48)) return false;
+    for (let i = 0; i < s.length; i++) {
+        const c = s.charCodeAt(i);
+        if (c < 48 || c > 57) return false;
+    }
+    return true;
+}
+
 function frameHolder(win: Window, prop: string | number): unknown {
-    if (!(typeof prop === "number" ? Number.isInteger(prop) && prop >= 0 : /^(0|[1-9]\d*)$/.test(prop))) return win;
+    if (!(typeof prop === "number" ? Number.isInteger(prop) && prop >= 0 : isIndex(prop))) return win;
     let value: unknown;
     try {
-        const d = Object.getOwnPropertyDescriptor(win, prop);
+        const d = nO.getOwnPropertyDescriptor(win, prop);
         if (!d || !("value" in d)) return win;
         value = d.value;
     } catch {
@@ -78,29 +90,49 @@ export function createRewriterApi(
     // property for anything else (a router's `this.location`). Writing
     // navigates a window through containment, and for anything else assigns
     // to the object itself — the page's `this.location = url` must land.
-    const isWindowLike = (obj: unknown): boolean => {
-        if (obj === targetWindow || obj === targetWindow.document) return true;
-        try {
-            const o = obj as { window?: unknown; defaultView?: unknown; nodeType?: unknown };
-            return (typeof o === "object" && o !== null) && (o.window === o || (o.nodeType === 9 && "defaultView" in o));
-        } catch {
-            return true; // a cross-origin window
-        }
+    // Told apart without reading the object (native/brand.ts); anything
+    // else is handed back as it is, so `obj.location` / `obj["location"]`
+    // is the object's own property — read, called (with obj as `this`) or
+    // assigned exactly as written.
+    const isWindowLike = (obj: unknown): boolean =>
+        obj === targetWindow || obj === targetWindow.document || isWindowObject(obj) || isDocumentObject(obj) || isView(obj);
+    const locationHolder = (obj: unknown): { location: unknown } => {
+        if (!isWindowLike(obj)) return obj as { location: unknown };
+        return {
+            get location(): unknown {
+                return locationOf(obj);
+            },
+            set location(v: unknown) {
+                (locationOf(obj) as { href: string }).href = String(v);
+            },
+        };
     };
-    const locationHolder = (obj: unknown): { location: unknown } => ({
-        get location(): unknown {
-            if (obj === null || obj === undefined) return (obj as unknown as { location: unknown }).location; // the native TypeError
-            if (!isWindowLike(obj)) return (obj as { location: unknown }).location;
-            return locationOf(obj);
-        },
-        set location(v: unknown) {
-            if (obj === null || obj === undefined || !isWindowLike(obj)) {
-                (obj as { location: unknown }).location = v;
-                return;
-            }
-            (locationOf(obj) as { href: string }).href = String(v);
-        },
-    });
+    const memberHolder = (obj: unknown, prop: PropertyKey): unknown => {
+        switch (prop) {
+            case "location":
+                return locationHolder(obj);
+            case "top":
+                return wrapTopWindow({ obj }, targetWindow);
+            case "parent":
+                return wrapParentWindow({ obj }, targetWindow);
+            case "write":
+            case "writeln":
+                return wrapDocumentWrite({ obj }, rewriteOne, buildBootstrap, initialBaseUrl.origin);
+            case "postMessage":
+                markSender(obj, targetWindow);
+                return wrapPostMessage({ obj }, initialBaseUrl.origin, () => baseUrlState.get().origin, (h) => unwrapProxiedUrl(h, config));
+            case "eval":
+                return wrapEvalMemexp(obj);
+        }
+        // window[i]: a child frame of another origin is
+        // the same object page code gets from the iframe's contentWindow
+        // or a message's source — natively one WindowProxy (PayPal finds
+        // the window a callback came from by enumerating frames).
+        if (obj === targetWindow && (typeof prop === "number" || typeof prop === "string")) {
+            return frameHolder(obj as Window, prop);
+        }
+        return obj;
+    };
     const locationOf = (obj: unknown): unknown => {
         if (obj === targetWindow || obj === targetWindow.document) return wrappedLocation;
         // A cross-origin window's location is its view's: settable, not readable.
@@ -176,31 +208,16 @@ export function createRewriterApi(
         // Computed member access obj[expr] — mirror what the static-access
         // wrappers return so that obj["location"], obj["write"], etc. go
         // through the same interceptors as obj.location, obj.write, etc.
+        // R5: `obj[key]` is `wrap_member_expression(obj, $__crn_key__ = (key))[$__crn_key__]`.
+        // Whatever runs in here can reach page code (a hooked native, a
+        // getter), and page code is rewritten too: its own accesses set
+        // `$__crn_key__`. The key is put back on the way out, so the access
+        // reads the key the page wrote (Ad-Shield hooks natives in its
+        // integrity checks; its `window["Array"]["from"]` read "call").
         wrap_member_expression: (obj: unknown, prop: PropertyKey): unknown => {
-            switch (prop) {
-                case "location":
-                    return locationHolder(obj);
-                case "top":
-                    return wrapTopWindow({ obj }, targetWindow);
-                case "parent":
-                    return wrapParentWindow({ obj }, targetWindow);
-                case "write":
-                case "writeln":
-                    return wrapDocumentWrite({ obj }, rewriteOne, buildBootstrap, initialBaseUrl.origin);
-                case "postMessage":
-                    markSender(obj, targetWindow);
-                    return wrapPostMessage({ obj }, initialBaseUrl.origin, () => baseUrlState.get().origin, (h) => unwrapProxiedUrl(h, config));
-                case "eval":
-                    return wrapEvalMemexp(obj);
-            }
-            // window[i]: a child frame of another origin is
-            // the same object page code gets from the iframe's contentWindow
-            // or a message's source — natively one WindowProxy (PayPal finds
-            // the window a callback came from by enumerating frames).
-            if (obj === targetWindow && (typeof prop === "number" || typeof prop === "string")) {
-                return frameHolder(obj as Window, prop);
-            }
-            return obj;
+            const holder = memberHolder(obj, prop);
+            (targetWindow as unknown as { $__crn_key__: unknown }).$__crn_key__ = prop;
+            return holder;
         },
         wrap_eval: wrapEval,
         wrap_eval_arg: wrapEvalArg,

@@ -22,6 +22,7 @@
 // Known gaps: `window[0]` / `frames[0]` give the real child window;
 // document.domain relaxation is not modelled.
 
+import { SafeWeakMap, SafeWeakSet, nO, ncall } from "./intrinsics";
 import { internalsOf } from "./internals";
 
 // Per viewing window: the runtime is one module shared by a page and the
@@ -35,27 +36,27 @@ interface Viewer {
     /** Windows page code of this realm already holds as themselves. */
     handedOut: WeakSet<object>;
 }
-const viewers = new WeakMap<object, Viewer>();
+const viewers = new SafeWeakMap<object, Viewer>();
 let nativeContentWindow: ((this: unknown) => Window | null) | undefined;
 
-const reals = new WeakMap<object, Window>();
+const reals = new SafeWeakMap<object, Window>();
 
 /** Sets up `win`'s views: its original origin, and how it proxifies a URL it navigates to. */
 export function initCrossOrigin(win: Window, origin: () => string, rewriteOne: (url: string) => string): void {
     viewers.set(win, {
-        win, origin, navigate: rewriteOne, views: new WeakMap(), handedOut: new WeakSet(),
-        opener: Object.getOwnPropertyDescriptor(win, "opener")?.get as Viewer["opener"],
+        win, origin, navigate: rewriteOne, views: new SafeWeakMap(), handedOut: new SafeWeakSet(),
+        opener: nO.getOwnPropertyDescriptor(win, "opener")?.get as Viewer["opener"],
     });
     if (!nativeContentWindow) {
         const F = (win as unknown as { HTMLIFrameElement?: { prototype: object } }).HTMLIFrameElement?.prototype;
-        nativeContentWindow = F ? (Object.getOwnPropertyDescriptor(F, "contentWindow")?.get as typeof nativeContentWindow) : undefined;
+        nativeContentWindow = F ? (nO.getOwnPropertyDescriptor(F, "contentWindow")?.get as typeof nativeContentWindow) : undefined;
     }
 }
 
 /** An iframe's real window, whatever page code is shown. */
 export function contentWindowOf(frame: unknown): Window | null {
     try {
-        return nativeContentWindow ? nativeContentWindow.call(frame) : ((frame as HTMLIFrameElement).contentWindow as Window | null);
+        return nativeContentWindow ? ncall(nativeContentWindow, frame) : ((frame as HTMLIFrameElement).contentWindow as Window | null);
     } catch {
         return null;
     }
@@ -148,7 +149,7 @@ function makeView(t: Window, v: Viewer): object {
             case "window": case "self": case "frames": return view;
             case "parent": return crossOriginView(t.parent, null, v.win);
             case "top": return crossOriginView(t.top, null, v.win);
-            case "opener": return crossOriginView(v.opener ? v.opener.call(t) : t.opener, null, v.win);
+            case "opener": return crossOriginView(v.opener ? ncall(v.opener, t) : t.opener, null, v.win);
             case "length": return t.length;
             case "closed": return t.closed;
             case "location": return location;

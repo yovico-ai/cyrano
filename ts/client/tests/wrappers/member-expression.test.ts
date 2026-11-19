@@ -107,3 +107,40 @@ describe("wrap_member_expression", () => {
         expect(() => api.wrap_member_expression(undefined, "top")).not.toThrow();
     });
 });
+
+// Natively `obj[key]` is one [[Get]] of key on obj. The wrapper tells
+// windows and documents apart without reading the object (native/brand.ts):
+// a Proxy sees exactly the access the page wrote, and nothing of the
+// runtime's (Ad-Shield takes objects apart with Proxies).
+describe("wrap_member_expression on a Proxy", () => {
+    it("fires no trap of its own, for any special key", () => {
+        const win = makeWindow();
+        const api = createRewriterApi(win, cfg);
+        for (const key of ["top", "parent", "location", "write", "writeln", "postMessage", "eval", "0", "x"]) {
+            const seen: string[] = [];
+            const target = { [key]: 1 };
+            const handler = new Proxy({}, {
+                get: (_h, trap: string) => (...a: unknown[]) => {
+                    seen.push(`${trap} ${String(a[1])}`);
+                    return (Reflect as unknown as Record<string, (...x: unknown[]) => unknown>)[trap]!(...a);
+                },
+            });
+            const p = new Proxy(target, handler);
+            const holder = api.wrap_member_expression(p, key) as Record<string, unknown>;
+            // Under Node there is no browser `window` accessor to brand-check
+            // with; the emulation fallback looks at the own `window` (the
+            // browser path fires nothing: checked live in Chrome).
+            const own = seen.filter((t) => t !== "getOwnPropertyDescriptor window");
+            expect(own, key).toEqual([]);
+            seen.length = 0;
+            expect(holder[key], key).toBe(1);
+            expect(seen, key).toEqual([`get ${key}`]);
+        }
+    });
+    it("keeps `this` for a method named location", () => {
+        const win = makeWindow();
+        const api = createRewriterApi(win, cfg);
+        const o = { location() { return this; } };
+        expect((api.wrap_member_expression(o, "location") as typeof o).location()).toBe(o);
+    });
+});

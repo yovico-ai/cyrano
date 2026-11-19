@@ -13,11 +13,12 @@
 // proxified URLs across runtimes is a hard requirement so server-rewritten
 // HTML and client-side dynamic rewrites agree on the URL of every resource.
 
+import { SafeSet } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
 
 // Schemes whose URLs we proxify. Anything else (data:, blob:, javascript:,
 // mailto:, tel:, about:, fragment-only, etc.) passes through unchanged.
-export const PROXIFIABLE_SCHEMES = new Set(["http:", "https:", "ws:", "wss:"]);
+export const PROXIFIABLE_SCHEMES = new SafeSet(["http:", "https:", "ws:", "wss:"]);
 
 // Schemes we must explicitly NOT touch — passed through verbatim. Listed for
 // clarity; the proxifiable check above already filters them out implicitly.

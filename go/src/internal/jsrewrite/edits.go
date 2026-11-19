@@ -3,6 +3,7 @@ package jsrewrite
 import (
 	"bytes"
 	"sort"
+	"strings"
 )
 
 // An edit is one change to the source: at byte offset pos, del bytes are
@@ -24,18 +25,36 @@ const (
 )
 
 func (p *parser) open(pos int, ins string) {
-	p.edits = append(p.edits, edit{pos: pos, ins: ins, kind: editOpen, seq: p.seq})
+	p.edits = append(p.edits, edit{pos: pos, ins: p.rt(ins), kind: editOpen, seq: p.seq})
 	p.seq++
 }
 
 func (p *parser) close(pos int, ins string) {
-	p.edits = append(p.edits, edit{pos: pos, ins: ins, kind: editClose, seq: p.seq})
+	p.edits = append(p.edits, edit{pos: pos, ins: p.rt(ins), kind: editClose, seq: p.seq})
 	p.seq++
 }
 
 func (p *parser) replace(pos, del int, ins string) {
-	p.edits = append(p.edits, edit{pos: pos, del: del, ins: ins, kind: editReplace, seq: p.seq})
+	p.edits = append(p.edits, edit{pos: pos, del: del, ins: p.rt(ins), kind: editReplace, seq: p.seq})
 	p.seq++
+}
+
+// withGlobal is the global object whatever names a with object claims: a
+// sloppy function's this, or — in a strict function nested in the with,
+// where this is undefined and no name is safe — a function compiled from
+// "return this", reached from a literal's constructor. R13 (TS: WITH_GLOBAL
+// in ts/client/src/js/rewriter.ts).
+const withGlobal = `((function(){return this})()||(function(){}).constructor("return this")()).`
+
+// rt is an edit's text as written where it lands: inside a with body the
+// runtime's names go through the global object (Vue's compiled templates
+// run in with(_ctx), whose Proxy claims every name).
+func (p *parser) rt(ins string) string {
+	if p.withDepth == 0 {
+		return ins
+	}
+	ins = strings.ReplaceAll(ins, "$rewriter.", withGlobal+"$rewriter.")
+	return strings.ReplaceAll(ins, "$__crn_key__", withGlobal+"$__crn_key__")
 }
 
 // Edit is an edit as the conformance tests compare it.

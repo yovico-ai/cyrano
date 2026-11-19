@@ -28,48 +28,43 @@ type framedByKey struct{}
 func originOf(u *url.URL) string { return u.Scheme + "://" + u.Host }
 
 // judgeFraming rewrites resp's framing restrictions for the embedder of
-// the document it answers; a response that is not a framed document, or
-// whose embedder is unknown, is left as it is.
+// the document it answers (spec/Csp.agda frameAncestors, xfoAllows); a
+// response that is not a framed document, or whose embedder is unknown, is
+// left as it is.
 func judgeFraming(resp *http.Response, target *url.URL) {
 	parent, _ := resp.Request.Context().Value(framedByKey{}).(*url.URL)
 	if parent == nil || target == nil {
 		return
 	}
-	self, embedder := originOf(target), originOf(parent)
-	governed := false // a frame-ancestors directive makes X-Frame-Options moot
-	if vals := resp.Header.Values("Content-Security-Policy"); len(vals) > 0 {
-		resp.Header.Del("Content-Security-Policy")
-		for _, header := range vals {
-			var out []string
-			for _, policy := range strings.Split(header, ",") {
-				present, allowed := urlrewrite.FrameAncestors(policy, embedder, self)
-				if present {
-					governed = true
-					verdict := "frame-ancestors 'self'"
-					if !allowed {
-						verdict = "frame-ancestors 'none'"
-					}
-					var dirs []string
-					for _, d := range strings.Split(policy, ";") {
-						if f := strings.Fields(d); len(f) > 0 && strings.EqualFold(f[0], "frame-ancestors") {
-							dirs = append(dirs, " "+verdict)
-							continue
-						}
-						dirs = append(dirs, d)
-					}
-					policy = strings.TrimPrefix(strings.Join(dirs, ";"), " ")
-				}
-				out = append(out, policy)
-			}
-			resp.Header.Add("Content-Security-Policy", strings.Join(out, ","))
+	self, embedder := target.String(), originOf(parent)+"/"
+	// Every enforced policy that has frame-ancestors must admit the embedder.
+	vals := resp.Header.Values("Content-Security-Policy")
+	governed, allowed := false, true
+	for _, header := range vals {
+		if present, ok := urlrewrite.FrameAncestors(header, embedder, self); present {
+			governed = true
+			allowed = allowed && ok
 		}
 	}
-	if xfo := resp.Header.Get("X-Frame-Options"); xfo != "" && !governed {
-		switch strings.ToUpper(strings.TrimSpace(strings.Split(xfo, ",")[0])) {
-		case "SAMEORIGIN":
-			if !strings.EqualFold(self, embedder) {
-				resp.Header.Set("X-Frame-Options", "DENY")
-			}
+	if governed {
+		verdict := "'self'"
+		if !allowed {
+			verdict = "'none'"
 		}
+		resp.Header.Del("Content-Security-Policy")
+		for _, header := range vals {
+			if present, _ := urlrewrite.FrameAncestors(header, embedder, self); present {
+				header = urlrewrite.WithFrameAncestors(header, verdict)
+			}
+			resp.Header.Add("Content-Security-Policy", header)
+		}
+		return // frame-ancestors makes X-Frame-Options moot
+	}
+	// The browser judges X-Frame-Options against the proxy origin, where
+	// every embedder is same-origin: where the origin's verdict (for the
+	// real embedder) is to block, the browser is told DENY.
+	if xfo := resp.Header.Values("X-Frame-Options"); len(xfo) > 0 &&
+		!urlrewrite.XFrameOptionsAllows(xfo, strings.EqualFold(originOf(target), originOf(parent))) {
+		resp.Header.Set("X-Frame-Options", "DENY")
 	}
 }

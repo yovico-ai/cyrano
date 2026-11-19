@@ -84,7 +84,7 @@ type Config struct {
 // URL rewriting. Order within the inner slice doesn't matter — every attr
 // in the slice gets rewritten if present on the tag.
 var externalResourceAttrs = map[string][]string{
-	"a":     {"href", "ping"},
+	"a":     {"href", "ping", "xlink:href"},
 	"area":  {"href"},
 	"audio": {"src"},
 	// <base href> names the proxied directory: the browser then resolves
@@ -101,7 +101,7 @@ var externalResourceAttrs = map[string][]string{
 	"input":  {"formaction", "src"},
 	"link":   {"href"},
 	"object": {"data"},
-	"script": {"src"},
+	"script": {"src", "href", "xlink:href"}, // an SVG script refers by href
 	"source": {"src"},
 	"table":  {"background"},
 	"tbody":  {"background"},
@@ -112,7 +112,11 @@ var externalResourceAttrs = map[string][]string{
 	"tr":     {"background"},
 	"track":  {"src"},
 	"use":    {"href", "xlink:href"},
-	"video":  {"src", "poster"},
+	// SVG elements that refer by href / xlink:href (TS: svgUrlAttrs in
+	// ts/client/src/patches/url-attribute-map.ts).
+	"image":   {"href", "xlink:href"},
+	"feimage": {"href", "xlink:href"},
+	"video":   {"src", "poster"},
 }
 
 // tagsWithRestUrls receive REST-formatted (`/load/<b64>/`) proxified URLs

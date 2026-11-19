@@ -12,6 +12,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/andybalholm/brotli"
@@ -65,6 +66,35 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				return func(src []byte) []byte { return src }
 			}
 		}
+		// Development aid: CYRANO_DEBUG_R5="[!]<url regexp> <lo> <hi> [<lo> <hi> …][; …]"
+		// limits R5 in matching scripts to the accesses whose `[` is in one
+		// of the [lo, hi) ranges; a leading "!" applies it to the scripts
+		// not matching.
+		// The first spec that applies wins.
+		for _, spec := range strings.Split(os.Getenv("CYRANO_DEBUG_R5"), ";") {
+			f := strings.Fields(spec)
+			if len(f) < 3 || len(f)%2 == 0 || scriptURL == nil {
+				continue
+			}
+			pat, invert := strings.CutPrefix(f[0], "!")
+			if re, err := regexp.Compile(pat); err == nil && re.MatchString(scriptURL.String()) != invert {
+				var ranges [][2]int
+				for i := 1; i+1 < len(f); i += 2 {
+					lo, _ := strconv.Atoi(f[i])
+					hi, _ := strconv.Atoi(f[i+1])
+					ranges = append(ranges, [2]int{lo, hi})
+				}
+				opts.DebugR5At = func(pos int) bool {
+					for _, r := range ranges {
+						if pos >= r[0] && pos < r[1] {
+							return true
+						}
+					}
+					return false
+				}
+				break
+			}
+		}
 		return func(src []byte) []byte { return jsrewrite.Rewrite(src, opts) }
 	}
 
@@ -78,6 +108,13 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 	}
 
 	return func(resp *http.Response, target *url.URL) error {
+		// A response that has no body — 1xx, 204, 304, or the answer to a
+		// HEAD — passes as it is: its Content-Type and Content-Encoding
+		// describe a body it does not carry (a CDN's 304 with gzip made
+		// the decompressor fail on the empty body: a 502 on reload).
+		if !bodyAllowed(resp) {
+			return nil
+		}
 		fixContentType(resp, target)
 		ct := resp.Header.Get("Content-Type")
 		sniffed := sniffedHTML(resp)
@@ -138,7 +175,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				// page's own scripts are rewritten like any other (below).
 				InjectBootstrap:   true,
 				ClientPassthrough: pageConfig(clientPassthrough, resp),
-				ScriptNonce:       proxy.ScriptNonce(resp.Header.Values("Content-Security-Policy")),
+				ScriptNonce:       proxy.ScriptNonce(originalPolicies(resp)),
 				ExternalBootstrap: !urlrewrite.InlineScriptAllowed(originalPolicies(resp)),
 			}
 			cfg.OnReferrerPolicy = func(content string) bool { return proxy.RecordMetaPolicy(target, content) }
@@ -443,6 +480,14 @@ func (c *countingReader) Read(p []byte) (int, error) {
 
 // readDecompressedBody reads the whole body, decoded, and notes its
 // original sizes on the response (OriginalSizesMetric) the first time.
+// bodyAllowed reports whether the response can carry a body (RFC 9110 §6.4.1).
+func bodyAllowed(resp *http.Response) bool {
+	if resp.Request != nil && resp.Request.Method == http.MethodHead {
+		return false
+	}
+	return resp.StatusCode >= 200 && resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotModified
+}
+
 func readDecompressedBody(resp *http.Response) ([]byte, error) {
 	raw := &countingReader{r: resp.Body}
 	body, err := readDecoded(resp, raw)
@@ -567,7 +612,7 @@ func pageConfig(base map[string]any, resp *http.Response) map[string]any {
 	cp["referrer"] = referrer
 	// The nonce the page's CSP asks of scripts, for bootstraps the client
 	// writes itself (document.write'd documents).
-	if n := proxy.ScriptNonce(resp.Header.Values("Content-Security-Policy")); n != "" {
+	if n := proxy.ScriptNonce(originalPolicies(resp)); n != "" {
 		cp["nonce"] = n
 	}
 	return cp

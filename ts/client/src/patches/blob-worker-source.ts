@@ -28,6 +28,7 @@
 //
 // Known gap: the object URL's origin is the proxy's (blob:http://proxy/…)
 // where natively it is the site's; translating blob: URLs is a follow-up.
+import { SafeMap, SafeWeakMap, nR } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
 import { rewriteJsSource, defaultJsRewriteOptions } from "../js/rewriter";
 import { wrapConstructor, wrapMethod } from "../native/surface";
@@ -40,11 +41,11 @@ export function patchBlobWorkerSource(
     getCurrentBaseUrl: () => URL,
 ): WorkerScriptFor {
     const w = targetWindow as unknown as { URL?: typeof URL; Blob?: typeof Blob };
-    const sources = new WeakMap<object, { source: string; type: string }>();
-    const byUrl = new Map<string, { source: string; type: string }>();
-    const privateUrl = new Map<string, string>();
+    const sources = new SafeWeakMap<object, { source: string; type: string }>();
+    const byUrl = new SafeMap<string, { source: string; type: string }>();
+    const privateUrl = new SafeMap<string, string>();
     const NativeBlob = wrapConstructor<typeof Blob>(targetWindow, "Blob", (Native, args, newTarget) => {
-        const blob = Reflect.construct(Native, args, newTarget as typeof Blob);
+        const blob = nR.construct(Native, args, newTarget as typeof Blob);
         const [parts, options] = args as [unknown, BlobPropertyBag | undefined];
         const type = options?.type;
         if (isJsLikeType(type) && Array.isArray(parts) && parts.every((p) => typeof p === "string")) {
@@ -55,14 +56,14 @@ export function patchBlobWorkerSource(
     const URLs = w.URL;
     if (!NativeBlob || !URLs) return () => undefined;
     const nativeCreate = wrapMethod<(o: object) => string>(URLs, "createObjectURL", (native, self, args) => {
-        const url = Reflect.apply(native, self, args) as string;
+        const url = nR.apply(native, self, args) as string;
         const src = sources.get(args[0]);
         if (src) byUrl.set(url, src);
         return url;
     });
     wrapMethod<(u: string) => void>(URLs, "revokeObjectURL", (native, self, args) => {
         byUrl.delete(String(args[0]));
-        return Reflect.apply(native, self, args) as void;
+        return nR.apply(native, self, args) as void;
     });
     return (url, module) => {
         const src = byUrl.get(url) ?? readScript(targetWindow, url);
@@ -72,7 +73,7 @@ export function patchBlobWorkerSource(
         if (!priv) {
             const body = buildWorkerPreamble(config, getCurrentBaseUrl().href, module) +
                 rewriteJsSource(src.source, defaultJsRewriteOptions());
-            priv = Reflect.apply(nativeCreate, URLs, [new NativeBlob([body], { type: src.type })]) as string;
+            priv = nR.apply(nativeCreate, URLs, [new NativeBlob([body], { type: src.type })]) as string;
             privateUrl.set(key, priv);
         }
         return priv;

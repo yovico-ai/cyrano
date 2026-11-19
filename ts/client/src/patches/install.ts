@@ -8,6 +8,7 @@
 //
 // A window is patched once: runtime/bootstrap.ts checks before calling.
 
+import { SafeSet, nO, nOP, nR, ncall } from "../native/intrinsics";
 import { initTrusted } from "../native/trusted";
 import type { ClientConfig } from "../config";
 import { rewriteUrl, unwrapProxiedUrl } from "../url/containment";
@@ -33,13 +34,14 @@ import { patchWebSocket } from "./websocket";
 import { patchEventSource } from "./event-source";
 import { patchWorker } from "./worker";
 import { patchBlobWorkerSource } from "./blob-worker-source";
-import { patchUrlAttributes, patchAnchorUrlReflection, patchAudioConstructor } from "./url-attributes";
+import { patchUrlAttributes, patchAnchorUrlReflection, patchAudioConstructor, patchFontFaceConstructor } from "./url-attributes";
 import { patchDynamicHtml } from "./dynamic-html";
 import { patchCssRules } from "./css-rules";
 import { patchCssStyleDeclaration } from "./css-style-declaration";
 import { patchFunctionConstructor } from "./function-ctor";
 import { patchDynamicIframeAppend } from "./dynamic-iframe";
 import { patchHistory } from "./history";
+import { patchNavigation } from "./navigation";
 import { patchSendBeacon } from "./beacon";
 import { patchWindowOpen } from "./window-open";
 import { patchServiceWorker } from "./service-worker";
@@ -61,11 +63,11 @@ export function installPatches(
     // proxied; its original is the document's base. (Read with the native
     // accessor, captured before location.ts wraps it.)
     const nodeProto = (targetWindow as unknown as { Node?: { prototype: object } }).Node?.prototype;
-    const nativeBaseURI = nodeProto ? Object.getOwnPropertyDescriptor(nodeProto, "baseURI")?.get as ((this: unknown) => string) | undefined : undefined;
+    const nativeBaseURI = nodeProto ? nO.getOwnPropertyDescriptor(nodeProto, "baseURI")?.get as ((this: unknown) => string) | undefined : undefined;
     const documentBase = (): URL => {
         try {
             const doc = (targetWindow as unknown as { document?: Document }).document;
-            const raw = doc && nativeBaseURI ? nativeBaseURI.call(doc) : "";
+            const raw = doc && nativeBaseURI ? ncall(nativeBaseURI, doc) : "";
             const original = raw ? unwrapProxiedUrl(raw, config) : raw;
             if (original && original !== raw) return new URL(original);
         } catch { /* the page's location */ }
@@ -87,7 +89,7 @@ export function installPatches(
     // navigator.serviceWorker and document.cookie throw on access.
     // (config.skip, a development aid: patches left out, by name — for
     // finding which of them a site tells the runtime by.)
-    const skip = new Set(config.skip ?? []);
+    const skip = new SafeSet(config.skip ?? []);
     const step = (name: string, patch: () => void): void => {
         if (skip.has(name) || skip.has("*")) return;
         try { patch(); } catch { /* that surface stays native */ }
@@ -115,16 +117,18 @@ export function installPatches(
     // patches: dynamic-html captures Element.prototype.setAttribute as the
     // "original", and the property-setter patch later in this list works on
     // descendant constructors' descriptors which don't include setAttribute.
-    step("patchDynamicHtml", () => patchDynamicHtml(targetWindow, rewriteOne, unwrapOne));
+    step("patchDynamicHtml", () => patchDynamicHtml(targetWindow, rewriteOne, unwrapOne, new URL(config.apiBaseURL).origin));
     step("patchDocumentWrite", () => patchDocumentWrite(targetWindow, rewriteOne,
         () => buildBootstrapHtml(config, getCurrentBaseUrl().href), new URL(config.apiBaseURL).origin));
     step("patchUrlAttributes", () => patchUrlAttributes(targetWindow, rewriteOne, unwrapOne));
     step("patchAudioConstructor", () => patchAudioConstructor(targetWindow, rewriteOne));
+    step("patchFontFaceConstructor", () => patchFontFaceConstructor(targetWindow, rewriteOne));
     step("patchCssRules", () => patchCssRules(targetWindow, rewriteOne));
     step("patchCssStyleDeclaration", () => patchCssStyleDeclaration(targetWindow, rewriteOne));
     step("patchFunctionConstructor", () => patchFunctionConstructor(targetWindow));
     step("patchDynamicIframeAppend", () => patchDynamicIframeAppend(targetWindow, config, () => getCurrentBaseUrl().href, rewriteOne));
     step("patchHistory", () => patchHistory(targetWindow, rewriteOne, setBaseUrl, unwrapOne, getCurrentBaseUrl));
+    step("patchNavigation", () => patchNavigation(targetWindow, rewriteOne, unwrapOne, setBaseUrl));
     step("patchSendBeacon", () => patchSendBeacon(targetWindow, rewriteOne));
     step("patchWindowOpen", () => patchWindowOpen(targetWindow, rewriteOne));
     // (Not with the page on its own origins — config.identity: the
@@ -160,7 +164,7 @@ export function installPatches(
     step("patchReadBack", () => patchReadBack(targetWindow, (el) => {
         if (el.tagName !== "IFRAME" || !nativeListen) return;
         const inject = (): void => injectIntoIframe(el as HTMLIFrameElement, targetWindow, config, getCurrentBaseUrl().href);
-        nativeListen.call(el, "load", inject);
+        ncall(nativeListen, el, "load", inject);
     }));
 }
 
@@ -182,14 +186,14 @@ function patchPerformanceEntryNames(
     const g = targetWindow as unknown as Record<string, { prototype: object } | undefined>;
     const PE = g["PerformanceEntry"];
     if (!PE?.prototype) return;
-    const nativeName = Object.getOwnPropertyDescriptor(PE.prototype, "name")?.get as ((this: unknown) => string) | undefined;
-    wrapAccessor<string>(PE.prototype, "name", { get: (get, self) => unwrapOne(get.call(self)) });
+    const nativeName = nO.getOwnPropertyDescriptor(PE.prototype, "name")?.get as ((this: unknown) => string) | undefined;
+    wrapAccessor<string>(PE.prototype, "name", { get: (get, self) => unwrapOne(ncall(get, self)) });
     // The runtime's own requests (its script, on the proxy's origin but not
     // a proxied URL) are not the page's: no timing entry of theirs is shown.
     if (nativeName) {
         const own = (e: unknown): boolean => {
             try {
-                const n = nativeName.call(e);
+                const n = ncall(nativeName, e);
                 if (identityRuntimeUrl) return n === identityRuntimeUrl;
                 return n.startsWith(proxyOrigin + "/") && unwrapOne(n) === n;
             } catch {
@@ -197,7 +201,7 @@ function patchPerformanceEntryNames(
             }
         };
         const filtered = (native: (...a: unknown[]) => unknown, self: unknown, args: unknown[]): unknown => {
-            const list = Reflect.apply(native, self, args) as unknown;
+            const list = nR.apply(native, self, args) as unknown;
             return Array.isArray(list) && list.some(own) ? list.filter((e) => !own(e)) : list;
         };
         for (const holder of [g["Performance"]?.prototype, g["PerformanceObserverEntryList"]?.prototype]) {
@@ -213,7 +217,7 @@ function patchPerformanceEntryNames(
     const hop = (entry: unknown, reported: string): string => {
         if (reported !== "http/1.1" || !nativeName) return reported;
         try {
-            const n = nativeName.call(entry);
+            const n = ncall(nativeName, entry);
             const original = unwrapOne(n);
             return original !== n && original.startsWith("https:") ? "h2" : reported;
         } catch {
@@ -222,8 +226,8 @@ function patchPerformanceEntryNames(
     };
     for (const key of ["PerformanceResourceTiming", "PerformanceNavigationTiming"]) {
         const proto = g[key]?.prototype;
-        if (proto && Object.getOwnPropertyDescriptor(proto, "nextHopProtocol")) {
-            wrapAccessor<string>(proto, "nextHopProtocol", { get: (get, self) => hop(self, get.call(self)) });
+        if (proto && nO.getOwnPropertyDescriptor(proto, "nextHopProtocol")) {
+            wrapAccessor<string>(proto, "nextHopProtocol", { get: (get, self) => hop(self, ncall(get, self)) });
         }
     }
     // Body sizes, as the origin sent them. The proxy rewrites documents,
@@ -236,13 +240,13 @@ function patchPerformanceEntryNames(
     // frame and scripts.)
     const RT = g["PerformanceResourceTiming"]?.prototype;
     const nativeOf = <T>(key: string): ((this: unknown) => T) | undefined =>
-        RT ? Object.getOwnPropertyDescriptor(RT, key)?.get as ((this: unknown) => T) | undefined : undefined;
+        RT ? nO.getOwnPropertyDescriptor(RT, key)?.get as ((this: unknown) => T) | undefined : undefined;
     const nativeServerTiming = nativeOf<ReadonlyArray<{ name: string; description: string }>>("serverTiming");
     const nativeEncoded = nativeOf<number>("encodedBodySize");
     const sizesOf = (entry: unknown): { encoded: number; decoded: number } | null => {
         if (!nativeServerTiming) return null;
         try {
-            for (const m of nativeServerTiming.call(entry)) {
+            for (const m of ncall(nativeServerTiming, entry)) {
                 if (m.name !== SIZES_METRIC) continue;
                 const [encoded, decoded] = String(m.description).split("-").map(Number);
                 if (Number.isFinite(encoded) && Number.isFinite(decoded)) return { encoded: encoded!, decoded: decoded! };
@@ -255,29 +259,29 @@ function patchPerformanceEntryNames(
         const sizes = sizesOf(entry);
         if (!sizes || reported === 0 || !nativeEncoded) return reported;
         let measured = 0;
-        try { measured = nativeEncoded.call(entry); } catch { return reported; }
+        try { measured = ncall(nativeEncoded, entry); } catch { return reported; }
         return sizes.encoded + Math.max(0, reported - measured);
     };
     if (RT && nativeServerTiming) {
-        wrapAccessor<number>(RT, "encodedBodySize", { get: (get, self) => sizesOf(self)?.encoded ?? get.call(self) });
-        wrapAccessor<number>(RT, "decodedBodySize", { get: (get, self) => sizesOf(self)?.decoded ?? get.call(self) });
-        wrapAccessor<number>(RT, "transferSize", { get: (get, self) => transfer(self, get.call(self)) });
+        wrapAccessor<number>(RT, "encodedBodySize", { get: (get, self) => sizesOf(self)?.encoded ?? ncall(get, self) });
+        wrapAccessor<number>(RT, "decodedBodySize", { get: (get, self) => sizesOf(self)?.decoded ?? ncall(get, self) });
+        wrapAccessor<number>(RT, "transferSize", { get: (get, self) => transfer(self, ncall(get, self)) });
         wrapAccessor<ReadonlyArray<{ name: string }>>(RT, "serverTiming", {
             get: (get, self) => {
-                const list = get.call(self);
-                return list.some((m) => m.name === SIZES_METRIC) ? Object.freeze(list.filter((m) => m.name !== SIZES_METRIC)) : list;
+                const list = ncall(get, self);
+                return list.some((m) => m.name === SIZES_METRIC) ? nO.freeze(list.filter((m) => m.name !== SIZES_METRIC)) : list;
             },
         });
     }
     // toJSON() serializes the entry's own fields: its name must be the
     // original too (Turnstile sends its script's timing entry, as JSON, to
     // Cloudflare). Subclasses define their own.
-    for (const key of Object.getOwnPropertyNames(targetWindow)) {
+    for (const key of nO.getOwnPropertyNames(targetWindow)) {
         if (!/^Performance|^LargestContentfulPaint$|^LayoutShift$|^TaskAttributionTiming$/.test(key)) continue;
         const proto = g[key]?.prototype;
-        if (!proto || !Object.prototype.hasOwnProperty.call(proto, "toJSON")) continue;
+        if (!proto || !ncall(nOP.hasOwnProperty, proto, "toJSON")) continue;
         wrapMethod<(...a: unknown[]) => unknown>(proto, "toJSON", (native, self, args) => {
-            const json = Reflect.apply(native, self, args) as Record<string, unknown> | null;
+            const json = nR.apply(native, self, args) as Record<string, unknown> | null;
             if (json && typeof json["nextHopProtocol"] === "string") json["nextHopProtocol"] = hop(self, json["nextHopProtocol"]);
             if (json && typeof json["name"] === "string") json["name"] = unwrapOne(json["name"]);
             const sizes = json ? sizesOf(self) : null;
@@ -296,10 +300,10 @@ function patchPerformanceEntryNames(
     const perf = g["Performance"]?.prototype;
     if (perf && "getEntriesByName" in perf) {
         wrapMethod<(...a: unknown[]) => unknown[]>(perf, "getEntriesByName", (native, self, args) => {
-            const found = Reflect.apply(native, self, args) as unknown[];
+            const found = nR.apply(native, self, args) as unknown[];
             if (found.length || typeof args[0] !== "string") return found;
             const proxied = rewriteOne(args[0]);
-            return proxied === args[0] ? found : (Reflect.apply(native, self, [proxied, ...args.slice(1)]) as unknown[]);
+            return proxied === args[0] ? found : (nR.apply(native, self, [proxied, ...args.slice(1)]) as unknown[]);
         });
     }
 }
@@ -313,12 +317,12 @@ function patchCspViolationEvents(targetWindow: Window, unwrapOne: (url: string) 
     const proto = (targetWindow as unknown as { SecurityPolicyViolationEvent?: { prototype: object } }).SecurityPolicyViolationEvent?.prototype;
     if (!proto) return;
     for (const key of ["documentURI", "blockedURI", "sourceFile", "referrer"]) {
-        if (!Object.getOwnPropertyDescriptor(proto, key)) continue;
-        wrapAccessor<string>(proto, key, { get: (get, self) => unwrapOne(get.call(self)) });
+        if (!nO.getOwnPropertyDescriptor(proto, key)) continue;
+        wrapAccessor<string>(proto, key, { get: (get, self) => unwrapOne(ncall(get, self)) });
     }
-    if (Object.getOwnPropertyDescriptor(proto, "originalPolicy")) {
+    if (nO.getOwnPropertyDescriptor(proto, "originalPolicy")) {
         wrapAccessor<string>(proto, "originalPolicy", {
-            get: (get, self) => get.call(self).split(" " + proxyOrigin).join(""),
+            get: (get, self) => ncall(get, self).split(" " + proxyOrigin).join(""),
         });
     }
 }

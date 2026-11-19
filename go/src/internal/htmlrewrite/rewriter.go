@@ -201,7 +201,7 @@ func applyAttrRules(tag string, attrs []html.Attribute, cfg *Config) []html.Attr
 	if tag == "meta" {
 		if eq, ok := getAttr(attrs, "http-equiv"); ok && strings.EqualFold(strings.TrimSpace(eq), "content-security-policy") {
 			if v, ok := getAttr(attrs, "content"); ok && cfg.Proxy.PublicURL != nil {
-				attrs = setAttr(attrs, "content", urlrewrite.RewriteCSP(v, cfg.Proxy.PublicURL.Scheme+"://"+cfg.Proxy.PublicURL.Host))
+				attrs = setAttr(attrs, "content", urlrewrite.RewriteMetaCSP(v, cfg.Proxy.PublicURL.Scheme+"://"+cfg.Proxy.PublicURL.Host))
 			}
 		}
 		// <meta name="referrer">: the page's Referrer-Policy. As with the

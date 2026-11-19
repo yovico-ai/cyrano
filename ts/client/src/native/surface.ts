@@ -20,15 +20,16 @@
 // This is heuristic, not a guarantee (owner, 2026-11-17): page code can
 // capture natives before cyrano runs, or probe in ways no wrapper hides.
 
+import { SafeWeakMap, SafeWeakSet, nO, nOP, nR, ncall } from "./intrinsics";
 import { original } from "../js/marks";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyFn = (...args: any[]) => unknown;
 
 /** wrapper → the native it stands for (what toString reports). */
-const masks = new WeakMap<object, object>();
+const masks = new SafeWeakMap<object, object>();
 
-const installedRealms = new WeakSet<object>();
+const installedRealms = new SafeWeakSet<object>();
 
 /**
  * Makes Function.prototype.toString of `realm` report natives for wrappers.
@@ -47,7 +48,7 @@ export function installToStringMask(realm: typeof globalThis): void {
                 : thisArg;
             // A function from a rewritten script shows the source the page
             // wrote: the rewriters' edits are taken out again (js/marks.ts).
-            const text = Reflect.apply(target, shown, args) as unknown;
+            const text = nR.apply(target, shown, args) as unknown;
             return typeof text === "string" ? original(text) : text;
         },
     });
@@ -94,32 +95,32 @@ export function standIn<F extends object>(
             [name]: function (this: unknown, ...args: unknown[]): unknown {
                 if (new.target === undefined) {
                     // Called as a function: a DOM constructor refuses in its own words.
-                    return call ? call(native, this, args) : Reflect.apply(native as unknown as AnyFn, this, args);
+                    return call ? call(native, this, args) : nR.apply(native as unknown as AnyFn, this, args);
                 }
                 return construct(native, args, new.target);
             },
         })[name] as object;
         // The native's static members (WebSocket.OPEN, URL.createObjectURL …).
-        for (const key of Reflect.ownKeys(native)) {
+        for (const key of nR.ownKeys(native)) {
             if (key === "length" || key === "name" || key === "prototype" || key === "arguments" || key === "caller") continue;
-            const d = Object.getOwnPropertyDescriptor(native, key);
-            if (d) { try { Object.defineProperty(wrapper, key, d); } catch { /* stays absent */ } }
+            const d = nO.getOwnPropertyDescriptor(native, key);
+            if (d) { try { nO.defineProperty(wrapper, key, d); } catch { /* stays absent */ } }
         }
-        const proto = Object.getOwnPropertyDescriptor(native, "prototype");
-        if (proto) Object.defineProperty(wrapper, "prototype", proto);
+        const proto = nO.getOwnPropertyDescriptor(native, "prototype");
+        if (proto) nO.defineProperty(wrapper, "prototype", proto);
     } else {
         // A method definition: no `prototype`, not a constructor.
         wrapper = ({
             [name](this: unknown, ...args: unknown[]): unknown {
-                return call ? call(native, this, args) : Reflect.apply(native as unknown as AnyFn, this, args);
+                return call ? call(native, this, args) : nR.apply(native as unknown as AnyFn, this, args);
             },
         })[name] as object;
     }
     for (const key of ["length", "name"] as const) {
-        const d = Object.getOwnPropertyDescriptor(native, key);
-        if (d) Object.defineProperty(wrapper, key, d); else delete (wrapper as Record<string, unknown>)[key];
+        const d = nO.getOwnPropertyDescriptor(native, key);
+        if (d) nO.defineProperty(wrapper, key, d); else delete (wrapper as Record<string, unknown>)[key];
     }
-    Object.setPrototypeOf(wrapper, Object.getPrototypeOf(native) as object | null);
+    nO.setPrototypeOf(wrapper, nO.getPrototypeOf(native) as object | null);
     return wrapper as F;
 }
 
@@ -131,15 +132,15 @@ export function maskAs<T extends object>(wrapper: T, native: object): T {
 
 /** Where `key` is defined: `owner` or the nearest prototype that has it. */
 function holderOf(owner: object, key: PropertyKey): object | null {
-    for (let o: object | null = owner; o; o = Object.getPrototypeOf(o) as object | null) {
-        if (Object.prototype.hasOwnProperty.call(o, key)) return o;
+    for (let o: object | null = owner; o; o = nO.getPrototypeOf(o) as object | null) {
+        if (ncall(nOP.hasOwnProperty, o, key)) return o;
     }
     return null;
 }
 
 /** Redefines `key` on `holder`, keeping the native descriptor's attributes. */
 function defineLike(holder: object, key: PropertyKey, change: PropertyDescriptor): void {
-    const native = Object.getOwnPropertyDescriptor(holder, key);
+    const native = nO.getOwnPropertyDescriptor(holder, key);
     if (!native) return;
     const next: PropertyDescriptor = { configurable: native.configurable === true, enumerable: native.enumerable === true };
     if ("value" in change || "value" in native) {
@@ -151,7 +152,7 @@ function defineLike(holder: object, key: PropertyKey, change: PropertyDescriptor
         if (get) next.get = get;
         if (set) next.set = set;
     }
-    Object.defineProperty(holder, key, next);
+    nO.defineProperty(holder, key, next);
 }
 
 /** Replaces the value of `key` where it lives, keeping its descriptor. */
@@ -174,7 +175,7 @@ export function wrapMethod<F extends AnyFn>(
 ): F | undefined {
     const holder = holderOf(owner, key);
     if (!holder) return undefined;
-    const native = Object.getOwnPropertyDescriptor(holder, key)?.value as F | undefined;
+    const native = nO.getOwnPropertyDescriptor(holder, key)?.value as F | undefined;
     if (typeof native !== "function") return undefined;
     const wrapper = standIn(native, {
         apply(target, self: unknown, args: unknown[]) {
@@ -201,7 +202,7 @@ export function wrapAccessor<T>(
 ): PropertyDescriptor | undefined {
     const holder = holderOf(owner, key);
     if (!holder) return undefined;
-    const native = Object.getOwnPropertyDescriptor(holder, key);
+    const native = nO.getOwnPropertyDescriptor(holder, key);
     if (!native || (!native.get && !native.set)) return undefined;
     const change: PropertyDescriptor = {};
     if (hooks.get && native.get) {
@@ -230,7 +231,7 @@ export function wrapConstructor<C extends abstract new (...args: never[]) => obj
 ): C | undefined {
     const holder = holderOf(realm, key);
     if (!holder) return undefined;
-    const native = Object.getOwnPropertyDescriptor(holder, key)?.value as C | undefined;
+    const native = nO.getOwnPropertyDescriptor(holder, key)?.value as C | undefined;
     if (typeof native !== "function") return undefined;
     const wrapper: C = standIn(native, {
         construct(target, args: unknown[], newTarget: unknown): object {
@@ -241,7 +242,7 @@ export function wrapConstructor<C extends abstract new (...args: never[]) => obj
     });
     maskAs(wrapper, native);
     const proto = (native as unknown as { prototype?: object }).prototype;
-    if (proto && Object.getOwnPropertyDescriptor(proto, "constructor")?.value === native) {
+    if (proto && nO.getOwnPropertyDescriptor(proto, "constructor")?.value === native) {
         defineLike(proto, "constructor", { value: wrapper });
     }
     defineLike(holder, key, { value: wrapper });
