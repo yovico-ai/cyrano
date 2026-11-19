@@ -9,6 +9,7 @@
 // everything else is the page's own text. Text that is not a JSON object
 // is left as written.
 
+import { sIncludes, sPadStart } from "../native/intrinsics";
 import { isUrlLikeSpecifier } from "./containment";
 
 type TK = "ws" | "punct" | "string" | "lit";
@@ -40,7 +41,7 @@ function tokenize(src: string): Tok[] | null {
             while (j < s.length && isWS(s[j]!)) j++;
             out.push({ kind: "ws", text: s.slice(i, j).join(""), value: "" });
             i = j;
-        } else if ("{}[]:,".includes(c)) {
+        } else if (sIncludes("{}[]:,", c)) {
             out.push({ kind: "punct", text: c, value: "" });
             i++;
         } else if (c === '"') {
@@ -159,9 +160,9 @@ function stringify(s: string): string {
         const n = c.charCodeAt(0);
         const esc: Record<string, string> = { '"': '\\"', "\\": "\\\\", "\b": "\\b", "\f": "\\f", "\n": "\\n", "\r": "\\r", "\t": "\\t" };
         if (c in esc) out += esc[c];
-        else if (n < 32) out += "\\u" + n.toString(16).padStart(4, "0");
+        else if (n < 32) out += "\\u" + sPadStart(n.toString(16), 4, "0");
         else if (isHigh(n) && isLow(s.charCodeAt(k + 1))) { out += c + s[k + 1]; k++; }
-        else if (isHigh(n) || isLow(n)) out += "\\u" + n.toString(16).padStart(4, "0");
+        else if (isHigh(n) || isLow(n)) out += "\\u" + sPadStart(n.toString(16), 4, "0");
         else out += c;
     }
     return out + '"';

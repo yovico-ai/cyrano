@@ -71,9 +71,11 @@ type Config struct {
 
 	// baseSeen: a <base href> was met (only the first counts).
 	baseSeen bool
+	// bootstrapText, when set, stands for the bootstrap (tests).
+	bootstrapText string
 
 	// NoOriginals suppresses the originals attribute (OriginalsAttr): for
-	// markup no runtime will read (a <noscript> body, re-parsed as text).
+	// markup no runtime will read.
 	NoOriginals bool
 
 	// Prettify, when true, runs JS and CSS content through a formatter before

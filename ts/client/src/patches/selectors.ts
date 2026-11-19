@@ -25,7 +25,7 @@
 // (relative here, absolute there) now matches where natively it would not.
 // Selectors in stylesheets are not covered.
 
-import { SafeSet, nOP, nR, ncall } from "../native/intrinsics";
+import { SafeSet, nOP, nR, ncall, sStarts } from "../native/intrinsics";
 import { wrapMethod } from "../native/surface";
 
 const URL_ATTRS = new SafeSet([
@@ -90,7 +90,7 @@ function widenAttribute(whole: string, rewriteOne: (url: string) => string, prox
     const raw = m[3] ?? m[4] ?? m[5] ?? "";
     const value = raw.replace(/\\([0-9a-fA-F]{1,6}\s?|[\s\S])/g, (_e, x: string) =>
         /^[0-9a-fA-F]/.test(x) ? String.fromCodePoint(parseInt(x.trim(), 16)) : x);
-    if (value === "" || value.startsWith("#") || /^(data|blob|javascript|mailto|tel|about):/i.test(value)) return whole;
+    if (value === "" || sStarts(value, "#") || /^(data|blob|javascript|mailto|tel|about):/i.test(value)) return whole;
     const alternatives: string[] = [];
     if (op === "*=") {
         // Only a value naming a host after "//": "https://h/p", "//h/p".
@@ -106,7 +106,7 @@ function widenAttribute(whole: string, rewriteOne: (url: string) => string, prox
         }
     } else if (op === "^=" && /^https?:?\/?\/?$/i.test(value)) {
         // A bare scheme prefix ("http", "https://"): every proxied URL of that scheme.
-        const scheme = value.toLowerCase().startsWith("https") ? ["https"] : ["http", "https"];
+        const scheme = sStarts(value.toLowerCase(), "https") ? ["https"] : ["http", "https"];
         for (const s of scheme) alternatives.push(`${proxyBase}/cyrano/${s}/`);
     } else {
         let proxied: string;

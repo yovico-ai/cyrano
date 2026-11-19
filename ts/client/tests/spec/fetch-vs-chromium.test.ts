@@ -85,6 +85,26 @@ describe.skipIf(!wanted || located.skip !== "")("fetch / CORS: the spec is Chrom
         server?.close();
     });
 
+    it("a RequestInit's referrer is read as Chromium reads it (spec initref)", async () => {
+        const origin = `http://a.localhost:${port}`;
+        const pieces = ["", "about:client", "ABOUT:CLIENT", "about:blank", "/x", "x#h", "../up?q", `${origin}/y`, `${origin}`, "http://b.localhost/",
+            `https://a.localhost:${port}/`, `http://a.localhost:${port + 1}/`, "data:,x", "javascript:1", " /sp", "http://[", "//a.localhost:" + port + "/n",
+            "?only", "#only", "%zz", "\\back"];
+        const ctx = await browser.newContext();
+        const page = await ctx.newPage();
+        await page.goto(`${origin}/dir/page?q=1#f`);
+        const got = await page.evaluate((vs: string[]) => vs.map((v) => {
+            try { return new Request("/t", { referrer: v }).referrer; } catch (e) { return (e as Error).name; }
+        }), pieces);
+        await ctx.close();
+        const bad: string[] = [];
+        for (let k = 0; k < pieces.length; k++) {
+            const want = await oracle.ask("initref", [`${origin}/dir/page?q=1#f`, `${origin}/dir/page?q=1#f`, pieces[k]!]);
+            if (want !== got[k]) bad.push(`${JSON.stringify(pieces[k])}: Chromium ${JSON.stringify(got[k])}, spec ${JSON.stringify(want)}`);
+        }
+        expect(bad).toEqual([]);
+    });
+
     it("credentials, the CORS check and the exposed headers are Chromium's", async () => {
         const origin = `http://a.localhost:${port}`;
         // A field value as written after "Name:" (the leading space is ours).

@@ -16,7 +16,7 @@
 // must pass the CORS check, shows only its exposed headers and has type
 // "cors".
 
-import { SafeWeakMap, nO, nOP, nR, ncall } from "../native/intrinsics";
+import { SafeWeakMap, nO, nOP, nR, ncall, sStarts } from "../native/intrinsics";
 import { patchFetchLater } from "./fetch-later";
 import { wrapAccessor, wrapConstructor, wrapMethod } from "../native/surface";
 import { CREDENTIALS, INITIATOR, includesCredentials, initiatorValue, corsAllows, exposedBy, isCrossOrigin, type CorsContext, type Exposed } from "./cors";
@@ -48,6 +48,35 @@ function policyOf(init: unknown): string | null {
 /** The page's init, its referrerPolicy read as unsafe-url (its other members its own, read once each). */
 function unsafeUrlInit(init: object): object {
     return new Proxy(init, { get: (t, k, r) => (k === "referrerPolicy" ? "unsafe-url" : nR.get(t, k, r)) });
+}
+
+/**
+ * A RequestInit's referrer as the browser must get it (spec/Referrer.agda
+ * initReferrer, checked against Chromium): "" stays; a URL of the context's
+ * origin — parsed against its base — is the request's referrer, handed to
+ * the browser proxified (on the proxy's origin, so honoured; the proxy
+ * reads it back and applies the policy to the original); anything else is
+ * the context's own (about:client). A value that does not parse is left
+ * for the native to refuse. Mapbox's worker names its page so: unmapped,
+ * the browser dropped it and the tiles' URL-restricted token was refused.
+ */
+export function initReferrer(v: string, base: URL, contextOrigin: string, rewriteOne: (u: string) => string): string {
+    if (v === "") return "";
+    let u: URL;
+    try { u = new URL(v, base); } catch { return v; }
+    if ((u.protocol !== "http:" && u.protocol !== "https:") || u.origin !== contextOrigin) return "about:client";
+    return rewriteOne(u.href);
+}
+
+/** The page's init with its referrer (if it names one) as initReferrer maps it; the init itself otherwise. */
+function referrerInit(init: unknown, base: () => URL, contextOrigin: (() => string) | undefined, rewriteOne: (u: string) => string): unknown {
+    if (typeof init !== "object" || init === null) return init;
+    let v: unknown;
+    try { v = (init as { referrer?: unknown }).referrer; } catch { return init; }
+    if (v === undefined) return init;
+    const own = contextOrigin?.() ?? base().origin;
+    const mapped = initReferrer(String(v), base(), own, rewriteOne);
+    return new Proxy(init, { get: (t, k, r) => (k === "referrer" ? mapped : nR.get(t, k, r)) });
 }
 
 export function patchFetch(
@@ -88,6 +117,7 @@ export function patchFetch(
         // page carries it already.
         const policy = policyOf(rest[0]);
         if (policy !== null) rest[0] = unsafeUrlInit(rest[0] as object);
+        if (rest.length) rest[0] = referrerInit(rest[0], baseUrl, cors?.origin, rewriteOne) as RequestInit | undefined;
         const rewritten = policy !== null && rewriteOne.withPolicy ? rewriteOne.withPolicy(original, policy) : rewriteOne(original);
         // The page's own Request goes to the native as it is wherever it
         // already names the proxied URL (the Request constructor below
@@ -107,7 +137,7 @@ export function patchFetch(
         // page's own origin.
         const target = unwrapOne(rewritten);
         const cross = own !== undefined && isCrossOrigin(target, baseUrl(), own) &&
-            !(cors!.proxy && target.startsWith(cors!.proxy + "/"));
+            !(cors!.proxy && sStarts(target, cors!.proxy + "/"));
         if (own === undefined || (!cross && !cors?.always)) return plain();
 
         const init = (typeof rest[0] === "object" && rest[0] !== null ? rest[0] : undefined) as RequestInit | undefined;
@@ -195,6 +225,7 @@ export function patchFetch(
         const next = args.slice();
         const policy = policyOf(next[1]);
         if (policy !== null) next[1] = unsafeUrlInit(next[1] as object);
+        if (next.length > 1) next[1] = referrerInit(next[1], baseUrl, cors?.origin, rewriteOne);
         if (next.length && !isRequest(next[0])) {
             const raw = String(next[0]);
             if (!nativeRefuses(raw, baseUrl)) next[0] = policy !== null && rewriteOne.withPolicy ? rewriteOne.withPolicy(raw, policy) : rewriteOne(raw);
@@ -212,5 +243,14 @@ export function patchFetch(
     for (const Ctor of [w.Request, w.Response]) {
         if (!Ctor?.prototype) continue;
         wrapAccessor<string>(Ctor.prototype, "url", { get: (get, self) => unwrapOne(ncall(get, self)) });
+    }
+    // A Request's referrer reads the original (about:client and "" as they are).
+    if (NativeRequest?.prototype && nO.getOwnPropertyDescriptor(NativeRequest.prototype, "referrer")) {
+        wrapAccessor<string>(NativeRequest.prototype, "referrer", {
+            get: (get, self) => {
+                const v = ncall(get, self);
+                return v === "" || v === "about:client" ? v : unwrapOne(v);
+            },
+        });
     }
 }

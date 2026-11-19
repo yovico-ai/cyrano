@@ -14,7 +14,7 @@
 // Failure policy: a script that does not parse is returned unchanged, as
 // is one already rewritten (it carries `$rewriter.wrap_`).
 
-import { SafeWeakSet } from "../native/intrinsics";
+import { SafeWeakSet, sIncludes } from "../native/intrinsics";
 import { Parser } from "acorn";
 import { isUrlLikeSpecifier } from "../url/containment";
 import { canMark, fragment } from "./marks";
@@ -79,7 +79,7 @@ export function defaultJsRewriteOptions(): JsRewriteOptions {
 
 /** Cheap check: input that already calls into our runtime should not be re-wrapped. */
 function alreadyRewritten(src: string): boolean {
-    return src.includes("$rewriter.wrap_") || src.includes("$rewriter_init(");
+    return sIncludes(src, "$rewriter.wrap_") || sIncludes(src, "$rewriter_init(");
 }
 
 /**
@@ -140,7 +140,7 @@ export function rewriteJsSource(src: string, opts: JsRewriteOptions): string {
 
     // The preamble goes wherever the code references our runtime — freshly
     // rewritten or already rewritten by the server.
-    if (result.includes("$rewriter.") || result.includes("$__crn_key__")) {
+    if (sIncludes(result, "$rewriter.") || sIncludes(result, "$__crn_key__")) {
         return withEvalPreamble(result);
     }
     return result;

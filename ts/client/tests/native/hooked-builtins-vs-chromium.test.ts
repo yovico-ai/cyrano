@@ -115,4 +115,28 @@ describe.skipIf(!wanted)("a page that replaces built-ins, in Chromium", () => {
             hits: [],
         });
     }, 60_000);
+
+    // mountaineers.org (Plone): its bundle makes startsWith a RegExp —
+    // "[" throws in it — and the runtime's cookie setter called it: every
+    // cookie write threw, and GA and the Facebook pixel never set theirs.
+    it("cookies work under a page's RegExp startsWith polyfill", async () => {
+        const page = await browser.newPage();
+        await page.goto(`${origin}/cyrano/https/site.example/page`);
+        const out = await page.evaluate(() => {
+            const sp = String.prototype as unknown as Record<string, unknown>;
+            const own = sp["startsWith"];
+            sp["startsWith"] = function (this: string, s: string) { return !!this.match(new RegExp("^" + s)); };
+            sp["endsWith"] = function (this: string, s: string) { return !!this.match(new RegExp(s + "$")); };
+            try {
+                document.cookie = "_ga=GA1.2.1; path=/; domain=site.example";
+                document.cookie = "t=1; path=/";
+                return document.cookie.split("; ").sort().join("; ");
+            } catch (e) {
+                return "threw " + (e as Error).message + " " + String((e as Error).stack).split("\n").slice(1, 6).join(" | ");
+            } finally {
+                sp["startsWith"] = own;
+            }
+        });
+        expect(out).toBe("_ga=GA1.2.1; t=1");
+    }, 60_000);
 });

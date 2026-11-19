@@ -21,13 +21,14 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 	if cfg.BaseURL == nil {
 		return errors.New("htmlrewrite: Config.BaseURL required")
 	}
-	z := html.NewTokenizer(r)
+	st := newTokenStream(r)
+	z := st.z
 	bootstrapDone := false // guard against multiple <head> (e.g. nested srcdoc)
 	inScript := false      // currently inside <script>...</script> with rewritable content
 	inImportMap := false   // currently inside <script type="importmap">
 	inStyle := false       // currently inside <style>...</style>
 	inNoscript := false    // currently inside <noscript>...</noscript>
-	var ns nsTracker       // which elements are SVG
+	foreignText := false   // the script/style is SVG's: its text is markup text (entities decoded)
 	emitted := bytes.Buffer{}
 
 	flush := func() error {
@@ -59,17 +60,21 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 			token := z.Token()
 			tag := token.Data
 			written := append([]html.Attribute(nil), token.Attr...)
-			svg := ns.start(tag, tt == html.SelfClosingTagToken, func(a string) bool { _, ok := getAttr(token.Attr, a); return ok })
-			attrs := applyAttrRules(tag, svg, token.Attr, &cfg)
+			elNs := st.startTag(token, tt == html.SelfClosingTagToken)
+			attrs := applyAttrRules(tag, elNs == NsSVG, token.Attr, &cfg)
 			if !cfg.NoOriginals {
 				attrs = withOriginals(written, attrs)
 			}
 
-			// A document with no <head> or <body> tag (a fragment-like page,
-			// common in ad frames): the bootstrap goes before its first
-			// element, so its scripts — rewritten to call $rewriter — find it.
-			if !bootstrapDone && cfg.InjectBootstrap && tag != "html" && tag != "head" && tag != "body" {
-				emitRaw([]byte(bootstrapScript(&cfg)))
+			// The bootstrap: after the first <head> or <body>, or before
+			// the first element of any other name (a fragment-like page,
+			// common in ad frames) — before every script of the page
+			// (spec/HtmlTok.agda bootstrapAt).
+			before, after := bootstrapPlace(tag)
+			if !bootstrapDone && before {
+				if cfg.InjectBootstrap {
+					emitRaw([]byte(bootstrapScript(&cfg)))
+				}
 				bootstrapDone = true
 			}
 
@@ -80,27 +85,26 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 			// is the script body — pipe it through the JS rewriter.
 			if tt == html.StartTagToken && tag == "script" && cfg.RewriteInlineJS != nil {
 				inScript = isJSScript(attrs)
+				foreignText = elNs != NsHTML
 			}
 			// An import map: JSON whose URLs must match the proxified module
 			// specifiers.
 			if tt == html.StartTagToken && tag == "script" {
 				_, hasSrc := getAttr(attrs, "src")
-				inImportMap = !hasSrc && scriptKindOf(attrs) == ScriptImportMap
+				inImportMap = elNs == NsHTML && !hasSrc && scriptKindOf(attrs) == ScriptImportMap
 			}
 			// Same idea for <style> — the body is CSS.
 			if tt == html.StartTagToken && tag == "style" && cfg.RewriteInlineCSS != nil {
 				inStyle = true
+				foreignText = elNs != NsHTML
 			}
 			// <noscript> content is emitted by the tokenizer as a single raw
-			// text token (the tokenizer assumes scripting is enabled). We need
-			// to re-parse and rewrite it ourselves.
-			if tt == html.StartTagToken && tag == "noscript" {
+			// text token (scripting is on): kept as written.
+			if tt == html.StartTagToken && tag == "noscript" && elNs == NsHTML {
 				inNoscript = true
 			}
 
-			// Inject the bootstrap chain immediately after <head> opens,
-			// so it runs before any other inline script in the document.
-			if !bootstrapDone && (tag == "head" || tag == "body") {
+			if !bootstrapDone && after {
 				if cfg.InjectBootstrap {
 					emitRaw([]byte(bootstrapScript(&cfg)))
 				}
@@ -110,7 +114,7 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 		case html.EndTagToken:
 			tn, _ := z.TagName()
 			fmt.Fprintf(&emitted, "</%s>", string(tn))
-			ns.end(string(tn))
+			st.endTag(string(tn))
 			switch string(tn) {
 			case "script":
 				inScript = false
@@ -125,6 +129,17 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 			switch {
 			case inImportMap:
 				emitRaw(urlrewrite.RewriteImportMap(append([]byte(nil), z.Text()...), cfg.BaseURL, cfg.Proxy))
+			case foreignText && (inScript && cfg.RewriteInlineJS != nil || inStyle && cfg.RewriteInlineCSS != nil):
+				// An SVG <script> / <style>: its text is ordinary markup
+				// text, character references decoded — the script is the
+				// decoded text, written back escaped.
+				src := []byte(z.Token().Data)
+				if inScript {
+					src = cfg.RewriteInlineJS(src)
+				} else {
+					src = cfg.RewriteInlineCSS(src)
+				}
+				emitRaw([]byte(html.EscapeString(string(src))))
 			case inScript && cfg.RewriteInlineJS != nil:
 				// CRITICAL: copy z.Text() before handing it to the JS rewriter.
 				// z.Text() returns a slice that aliases the html tokenizer's
@@ -139,18 +154,12 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 				// tdewolff/parse) — copy defensively.
 				emitRaw(cfg.RewriteInlineCSS(append([]byte(nil), z.Text()...)))
 			case inNoscript:
-				// The tokenizer emits the entire content of <noscript> as one
-				// raw text token (it assumes scripting is enabled). Re-parse it
-				// as an HTML fragment so its URL-bearing attributes get rewritten.
-				fragCfg := cfg
-				fragCfg.InjectBootstrap = false
-				fragCfg.NoOriginals = true // inert text: nothing consumes them
-				var fragBuf bytes.Buffer
-				if err := Rewrite(&fragBuf, bytes.NewReader(z.Raw()), fragCfg); err == nil {
-					emitRaw(fragBuf.Bytes())
-				} else {
-					emitRaw(z.Raw())
-				}
+				// A <noscript>'s content is text to a page with scripting on
+				// (the tokenizer reads it as one raw text token): the page's
+				// own text, as written. Script that turns it into markup
+				// (lazy loaders) hands it to innerHTML and the like, which
+				// the runtime rewrites.
+				emitRaw(z.Raw())
 			default:
 				emitRaw(z.Raw())
 			}

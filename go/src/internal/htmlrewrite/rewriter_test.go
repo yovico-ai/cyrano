@@ -449,32 +449,17 @@ func TestRewrite_InlineStyle_NoNULStompFromRewriter(t *testing.T) {
 	}
 }
 
-// ── <noscript> content rewriting ─────────────────────────────────────────
+// ── <noscript> content: the page's text ──────────────────────────────────
 
-func TestRewrite_Noscript_URLsRewritten(t *testing.T) {
-	in := `<html><head><noscript><link rel="stylesheet" href="//example.com/noscript.css"></noscript></head></html>`
+// With scripting on, a noscript's content is a text node the page reads
+// back (lazy loaders turn it into markup through innerHTML, which the
+// runtime rewrites): it is left as written.
+func TestRewrite_Noscript_ContentAsWritten(t *testing.T) {
+	inner := `<link rel="stylesheet" href="//example.com/noscript.css"><img src="https://example.com/a.png" data-x=1>`
+	in := `<html><head><noscript>` + inner + `</noscript><title>T</title></head></html>`
 	got := rewrite(t, in)
-	if strings.Contains(got, "//example.com/") {
-		t.Errorf("noscript link href was not rewritten:\n%s", got)
-	}
-	if !strings.Contains(got, "localhost:9081") {
-		t.Errorf("noscript link href not proxified:\n%s", got)
-	}
-}
-
-func TestRewrite_Noscript_AbsoluteURLRewritten(t *testing.T) {
-	in := `<html><head><noscript><link rel="stylesheet" href="https://example.com/a.css"></noscript></head></html>`
-	got := rewrite(t, in)
-	if strings.Contains(got, "https://example.com/") {
-		t.Errorf("absolute URL inside noscript was not rewritten:\n%s", got)
-	}
-}
-
-func TestRewrite_Noscript_StructurePreserved(t *testing.T) {
-	in := `<html><head><noscript><link rel="stylesheet" href="//example.com/a.css"></noscript><title>T</title></head></html>`
-	got := rewrite(t, in)
-	if !strings.Contains(got, "<noscript>") || !strings.Contains(got, "</noscript>") {
-		t.Errorf("<noscript> tags not preserved:\n%s", got)
+	if !strings.Contains(got, "<noscript>"+inner+"</noscript>") {
+		t.Errorf("noscript content changed:\n%s", got)
 	}
 	if !strings.Contains(got, "<title>T</title>") {
 		t.Errorf("content after </noscript> missing:\n%s", got)

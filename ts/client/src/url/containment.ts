@@ -13,7 +13,7 @@
 // proxified URLs across runtimes is a hard requirement so server-rewritten
 // HTML and client-side dynamic rewrites agree on the URL of every resource.
 
-import { SafeSet } from "../native/intrinsics";
+import { SafeSet, sStarts } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
 
 // Schemes whose URLs we proxify. Anything else (data:, blob:, javascript:,
@@ -63,7 +63,7 @@ function effectiveHost(u: URL): string {
  * /cyrano/ path prefix). Used to avoid double-wrapping.
  */
 function isAlreadyProxified(url: URL, config: ClientConfig): boolean {
-    return isProxyOrigin(url, config) && url.pathname.startsWith("/cyrano/");
+    return isProxyOrigin(url, config) && sStarts(url.pathname, "/cyrano/");
 }
 
 /** WHATWG URL parser preprocessing (spec/Url.agda `preprocess`). */
@@ -165,9 +165,9 @@ export function rewriteUrl(
     // In-page anchor, judged after the browser's own preprocessing (leading
     // and trailing C0/space stripped, tab/CR/LF removed) — " \x01#top" is
     // still "#top" to the browser.
-    if (browserPreprocess(rawUrl).startsWith("#")) return rawUrl;
+    if (sStarts(browserPreprocess(rawUrl), "#")) return rawUrl;
     for (const prefix of PASSTHROUGH_PREFIXES) {
-        if (rawUrl.startsWith(prefix)) return rawUrl;
+        if (sStarts(rawUrl, prefix)) return rawUrl;
     }
 
     // Protocol-relative URL: prefix with the page's protocol so URL parsing
@@ -175,7 +175,7 @@ export function rewriteUrl(
     // the *base*'s protocol, which is what we want, but the cleaner form lets
     // us short-circuit on parse failures uniformly below.
     let normalized = rawUrl;
-    if (normalized.startsWith("//")) {
+    if (sStarts(normalized, "//")) {
         normalized = pageBaseUrl.protocol + normalized;
     }
 
@@ -263,7 +263,7 @@ export function unwrapProxiedUrl(
 export function isUrlLikeSpecifier(s: string): boolean {
     // spec/ImportMap.agda urlLike: or an absolute URL, as the URL parser
     // reads it ("http:" alone is none; Go: urlrewrite.IsURLLikeSpecifier).
-    if (s.startsWith("/") || s.startsWith("./") || s.startsWith("../")) return true;
+    if (sStarts(s, "/") || sStarts(s, "./") || sStarts(s, "../")) return true;
     try {
         new URL(s);
         return true;

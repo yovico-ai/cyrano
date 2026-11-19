@@ -1,3 +1,4 @@
+import { sEnds } from "../native/intrinsics";
 // Spec-compliant srcset rewriter: a port of spec/Srcset.agda, which is the
 // authority. Algorithm mirrors go/src/internal/htmlrewrite/srcset.go — keep
 // all three in step.
@@ -33,7 +34,7 @@ export function rewriteSrcsetAttribute(
         let start = i;
         while (i < cs.length && !isWS(cs[i]!)) i++;
         const u = cs.slice(start, i).join("");
-        if (u.endsWith(",")) {
+        if (sEnds(u, ",")) {
             emit(u.replace(/,+$/, ""), "");
             continue;
         }

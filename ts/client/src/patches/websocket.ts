@@ -9,15 +9,15 @@
 // last query parameter (Go urlrewrite.WSOriginParam), which the server
 // strips before the upstream sees the URL and which url never shows.
 
-import { nR, ncall } from "../native/intrinsics";
+import { nR, ncall, sIncludes } from "../native/intrinsics";
 import { wrapAccessor, wrapConstructor } from "../native/surface";
 
 export const WS_ORIGIN_PARAM = "__cyrano_ws_origin";
 
 /** Appends the origin marker to a proxied WebSocket URL. */
 export function withPageOrigin(proxied: string, pageOrigin: string): string {
-    if (proxied.includes("#")) return proxied; // the native rejects a fragment itself
-    const sep = proxied.includes("?") ? "&" : "?";
+    if (sIncludes(proxied, "#")) return proxied; // the native rejects a fragment itself
+    const sep = sIncludes(proxied, "?") ? "&" : "?";
     return `${proxied}${sep}${WS_ORIGIN_PARAM}=${encodeURIComponent(pageOrigin)}`;
 }
 

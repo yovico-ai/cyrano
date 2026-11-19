@@ -5,76 +5,188 @@ import (
 	"strings"
 )
 
-// RewriteLinkHeader rewrites the target of every link-value in a Link
-// header (RFC 8288: `<uri>; param, <uri>; param`), so a preload,
-// modulepreload or prefetch hint is fetched through the proxy like the
-// resource it announces. Everything else is left as written.
+// RewriteLinkHeader rewrites a Link header (RFC 8288) as spec/Link.agda
+// does, which is the authority (checked against Chromium:
+// link-vs-chromium). Every link-value the browser reads (OWS "<" target
+// ">" and ";"-parameters, split at commas outside quoted strings and
+// <…>) is edited where it stands: the target proxified, imagesrcset
+// rewritten as a srcset, integrity taken out (the proxied bytes are not
+// the ones it names: Shop Pay's modulepreload was blocked), crossorigin
+// made use-credentials as the <link>'s attribute is (not on a font
+// preload/prefetch). A link-value the browser ignores is left as written.
 func RewriteLinkHeader(v string, base *url.URL, cfg ProxyConfig) string {
-	var b strings.Builder
-	inQuotes := false
-	atValueStart := true // only a '<' that starts a link-value opens a target
-	for i := 0; i < len(v); i++ {
-		c := v[i]
+	values := linkSplit(v, true, ',')
+	for i, lv := range values {
+		values[i] = rewriteLinkValue(lv, func(u string) string { return Rewrite(u, base, cfg) })
+	}
+	return strings.Join(values, ",")
+}
+
+func linkOWS(c byte) bool { return c == ' ' || c == '\t' }
+
+func linkTrim(s string) string { return strings.Trim(s, " \t") }
+
+// linkSplit splits at sep outside quoted strings (and, with angle, <…>).
+func linkSplit(s string, angle bool, sep byte) []string {
+	var out []string
+	q, e, a := false, false, false
+	start := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
 		switch {
-		case inQuotes:
-			if c == '\\' && i+1 < len(v) {
-				b.WriteByte(c)
-				i++
-				c = v[i]
+		case e:
+			e = false
+		case q:
+			if c == '\\' {
+				e = true
 			} else if c == '"' {
-				inQuotes = false
+				q = false
 			}
+		case a:
+			a = c != '>'
 		case c == '"':
-			inQuotes = true
-		case c == ',':
-			atValueStart = true
-			b.WriteByte(c)
+			q = true
+		case angle && c == '<':
+			a = true
+		case c == sep:
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	return append(out, s[start:])
+}
+
+type linkParam struct {
+	name   string // lowercase
+	value  string
+	quoted bool
+	has    bool // a value was given
+}
+
+func linkTokenChar(c byte) bool {
+	return !(linkOWS(c) || c == '=' || c == '"' || c == ';' || c == ',')
+}
+
+// readLinkParam reads a parameter's text: ok=false when the link-value is
+// invalid; empty when the parameter is empty.
+func readLinkParam(raw string) (p linkParam, empty, ok bool) {
+	s := linkTrim(raw)
+	if s == "" {
+		return p, true, true
+	}
+	n := 0
+	for n < len(s) && linkTokenChar(s[n]) {
+		n++
+	}
+	if n == 0 {
+		return p, false, false
+	}
+	p.name = strings.ToLower(s[:n])
+	rest := strings.TrimLeft(s[n:], " \t")
+	if rest == "" {
+		return p, false, true
+	}
+	if rest[0] != '=' {
+		return p, false, false
+	}
+	p.has = true
+	val := strings.TrimLeft(rest[1:], " \t")
+	if val == "" || val[0] != '"' {
+		p.value = strings.TrimRight(val, " \t")
+		return p, false, true
+	}
+	var b strings.Builder
+	for i := 1; i < len(val); i++ {
+		c := val[i]
+		if c == '\\' && i+1 < len(val) {
+			i++
+			b.WriteByte(val[i])
 			continue
-		case c == '<' && atValueStart:
-			if end := strings.IndexByte(v[i:], '>'); end > 0 {
-				b.WriteByte('<')
-				b.WriteString(Rewrite(v[i+1:i+end], base, cfg))
-				b.WriteByte('>')
-				i += end
-				atValueStart = false
-				continue
-			}
 		}
-		// A preload's imagesrcset parameter holds URLs too (srcset syntax).
-		if c == ';' && !inQuotes {
-			rest := v[i+1:]
-			trimmed := strings.TrimLeft(rest, " \t")
-			if len(trimmed) >= 12 && strings.EqualFold(trimmed[:12], "imagesrcset=") {
-				skip := len(rest) - len(trimmed) + 12
-				b.WriteByte(';')
-				b.WriteString(rest[:skip])
-				val := rest[skip:]
-				rewriteOne := func(u string) string { return Rewrite(u, base, cfg) }
-				if strings.HasPrefix(val, "\"") {
-					if end := strings.IndexByte(val[1:], '"'); end >= 0 {
-						b.WriteByte('"')
-						b.WriteString(RewriteSrcset(val[1:1+end], rewriteOne))
-						b.WriteByte('"')
-						i += 1 + skip + end + 2 - 1
-						atValueStart = false
-						continue
-					}
-				} else {
-					end := strings.IndexAny(val, ";,")
-					if end < 0 {
-						end = len(val)
-					}
-					b.WriteString(RewriteSrcset(val[:end], rewriteOne))
-					i += skip + end
-					atValueStart = false
-					continue
-				}
+		if c == '"' {
+			if linkTrim(val[i+1:]) != "" {
+				return p, false, false
 			}
-		}
-		if c != ' ' && c != '\t' {
-			atValueStart = false
+			p.value, p.quoted = b.String(), true
+			return p, false, true
 		}
 		b.WriteByte(c)
+	}
+	return p, false, false // unterminated
+}
+
+func rewriteLinkValue(v string, rw func(string) string) string {
+	lead := 0
+	for lead < len(v) && linkOWS(v[lead]) {
+		lead++
+	}
+	if lead == len(v) || v[lead] != '<' {
+		return v
+	}
+	gt := strings.IndexByte(v[lead+1:], '>')
+	if gt < 0 {
+		return v
+	}
+	target := v[lead+1 : lead+1+gt]
+	parts := linkSplit(v[lead+1+gt+1:], false, ';')
+	if linkTrim(parts[0]) != "" {
+		return v
+	}
+	var params []linkParam
+	for _, p := range parts[1:] {
+		lp, empty, ok := readLinkParam(p)
+		if !ok {
+			return v
+		}
+		if !empty {
+			params = append(params, lp)
+		}
+	}
+	first := func(n string) (string, bool) {
+		for _, p := range params {
+			if p.name == n {
+				return p.value, true
+			}
+		}
+		return "", false
+	}
+	rels := map[string]bool{}
+	if r, ok := first("rel"); ok {
+		for _, t := range strings.Fields(strings.ToLower(r)) {
+			rels[t] = true
+		}
+	}
+	as, _ := first("as")
+	fontHint := strings.EqualFold(as, "font") && (rels["preload"] || rels["prefetch"])
+
+	var b strings.Builder
+	b.WriteString(v[:lead])
+	b.WriteByte('<')
+	b.WriteString(rw(linkTrim(target)))
+	b.WriteByte('>')
+	b.WriteString(parts[0])
+	for _, raw := range parts[1:] {
+		lp, empty, _ := readLinkParam(raw)
+		nameEq := func() string {
+			if i := strings.IndexByte(raw, '='); i >= 0 {
+				return raw[:i+1]
+			}
+			return raw + "="
+		}
+		switch {
+		case !empty && lp.name == "integrity":
+			continue
+		case !empty && lp.name == "crossorigin" && !fontHint:
+			b.WriteString(";" + nameEq() + "use-credentials")
+		case !empty && lp.name == "imagesrcset" && lp.has:
+			out := RewriteSrcset(lp.value, rw)
+			if lp.quoted {
+				out = `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(out) + `"`
+			}
+			b.WriteString(";" + nameEq() + out)
+		default:
+			b.WriteString(";" + raw)
+		}
 	}
 	return b.String()
 }

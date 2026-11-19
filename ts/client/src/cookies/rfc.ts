@@ -1,3 +1,4 @@
+import { sEnds, sIncludes, sPadStart, sStarts } from "../native/intrinsics";
 // Cookies as a direct browser keeps them (spec/Cookies.agda: RFC 6265bis
 // with Chromium's choices): reading a Set-Cookie string, deciding whether
 // and under what scope it is stored, choosing the cookies for a URL, and
@@ -57,8 +58,8 @@ export function parseSetCookie(s: string): SetCookie | null {
             case "expires": c.expires = val; break;
             // Chromium: the last Max-Age wins even when it is not a number.
             case "max-age": c.maxAge = /^(\d|-\d)\d*$/.test(val) ? val : null; break;
-            case "domain": c.domain = lowerASCII(val.startsWith(".") ? val.slice(1) : val); break;
-            case "path": c.path = val.startsWith("/") ? val : null; break;
+            case "domain": c.domain = lowerASCII(sStarts(val, ".") ? val.slice(1) : val); break;
+            case "path": c.path = sStarts(val, "/") ? val : null; break;
             case "secure": c.secure = true; break;
             case "httponly": c.httpOnly = true; break;
             case "samesite": {
@@ -82,15 +83,15 @@ function endsInNumber(h: string): boolean {
     return /^\d+$/.test(last) || /^0[xX][0-9a-fA-F]*$/.test(last);
 }
 
-const isIPHost = (h: string): boolean => h.startsWith("[") || endsInNumber(h);
+const isIPHost = (h: string): boolean => sStarts(h, "[") || endsInNumber(h);
 
 export function domainMatch(host: string, d: string): boolean {
-    return host === d || (d !== "" && host.endsWith(`.${d}`) && !isIPHost(host));
+    return host === d || (d !== "" && sEnds(host, `.${d}`) && !isIPHost(host));
 }
 
 export function pathMatch(req: string, cp: string): boolean {
     if (req === cp) return true;
-    return req.startsWith(cp) && (cp.endsWith("/") || req.charAt(cp.length) === "/");
+    return sStarts(req, cp) && (sEnds(cp, "/") || req.charAt(cp.length) === "/");
 }
 
 function defaultPath(u: URL): string {
@@ -102,7 +103,7 @@ function defaultPath(u: URL): string {
 export function trustworthy(u: URL): boolean {
     if (u.protocol === "https:" || u.protocol === "wss:") return true;
     const h = hostOf(u);
-    if (h === "localhost" || h.endsWith(".localhost") || h === "[::1]") return true;
+    if (h === "localhost" || sEnds(h, ".localhost") || h === "[::1]") return true;
     const p = h.split(".");
     return p.length === 4 && p[0] === "127";
 }
@@ -113,7 +114,7 @@ export function trustworthy(u: URL): boolean {
  * Domain attribute is a public suffix (public-suffix data is outside the spec).
  */
 export function storeCookie(api: boolean, publicSuffix: boolean, url: URL, c: SetCookie): StoredCookie | null {
-    const prefixed = (p: string, s: string): boolean => lowerASCII(s).startsWith(p);
+    const prefixed = (p: string, s: string): boolean => sStarts(lowerASCII(s), p);
     const host = hostOf(url);
     let hostOnly = true;
     let domain = host;
@@ -152,7 +153,7 @@ function esc(s: string): string {
     let out = "";
     for (const ch of s) {
         if (/^[A-Za-z0-9.-]$/.test(ch)) { out += ch; continue; }
-        for (const b of new TextEncoder().encode(ch)) out += `%${b.toString(16).toUpperCase().padStart(2, "0")}`;
+        for (const b of new TextEncoder().encode(ch)) out += `%${sPadStart(b.toString(16).toUpperCase(), 2, "0")}`;
     }
     return out;
 }
@@ -171,7 +172,7 @@ export function wireValue(c: StoredCookie): string {
 
 /** Reads a jar entry back; null when cyrano did not write it. */
 export function unwire(name: string, value: string): StoredCookie | null {
-    if (!name.startsWith(WIRE_PREFIX)) return null;
+    if (!sStarts(name, WIRE_PREFIX)) return null;
     const rest = name.slice(WIRE_PREFIX.length);
     const f: string[] = [];
     let from = 0;
@@ -183,7 +184,7 @@ export function unwire(name: string, value: string): StoredCookie | null {
     }
     f.push(rest.slice(from));
     if (f[0] !== "h" && f[0] !== "d") return null;
-    if (value.length < 3 || value[2] !== ":" || !"si".includes(value[0]!) || !"nltu".includes(value[1]!)) return null;
+    if (value.length < 3 || value[2] !== ":" || !sIncludes("si", value[0]!) || !sIncludes("nltu", value[1]!)) return null;
     return {
         hostOnly: f[0] === "h", domain: pctDecode(f[1]!), path: pctDecode(f[2]!), name: f[3]!,
         value: value.slice(3), secure: value[0] === "s", httpOnly: false, sameSite: value[1] as SameSite,

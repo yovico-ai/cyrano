@@ -21,7 +21,7 @@
 // document — deferred bodies beyond that are lost (the native's are not);
 // beacons are small. A proxy-side store fired by a small beacon would lift it.
 
-import { SafeMap, SafeWeakMap, nO, nR, ncall } from "../native/intrinsics";
+import { SafeMap, SafeWeakMap, nO, nR, ncall, sStarts } from "../native/intrinsics";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 
 const PER_ORIGIN = 65536;
@@ -108,7 +108,7 @@ export function patchFetchLater(
     const proxysRefusal = (e: unknown, proxied: string): boolean => {
         const name = typeof e === "object" && e !== null ? (e as { name?: unknown }).name : undefined;
         return name === "QuotaExceededError" || name === "SecurityError" ||
-            (name === "TypeError" && proxied.startsWith("http:"));
+            (name === "TypeError" && sStarts(proxied, "http:"));
     };
     const defer = (url: string, init: Init | undefined): object => {
         const result = nO.create(FLR ?? Object.prototype) as object;

@@ -4,7 +4,7 @@
 // original URL. A request to another origin names the requesting origin
 // to the proxy (cors.ts).
 
-import { nO, nR, ncall } from "../native/intrinsics";
+import { nO, nR, ncall, sStarts } from "../native/intrinsics";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 import { CREDENTIALS, INITIATOR, crossOriginXhr, includesCredentials, initiatorValue, initiatorOfXhr, isCrossOrigin, type CorsContext } from "./cors";
 
@@ -27,7 +27,7 @@ export function patchXmlHttpRequest(
         if (cors && baseUrl && typeof self === "object" && self !== null) {
             const own = cors.origin();
             const target = unwrapOne(String(next[1]));
-            const cross = isCrossOrigin(target, baseUrl(), own) && !(cors.proxy && target.startsWith(cors.proxy + "/"));
+            const cross = isCrossOrigin(target, baseUrl(), own) && !(cors.proxy && sStarts(target, cors.proxy + "/"));
             if (cross) crossOriginXhr.set(self, own); else crossOriginXhr.delete(self);
             if (cross || cors.always) initiatorOfXhr.set(self, { href: initiatorValue(cors.href()), cross });
             else initiatorOfXhr.delete(self);

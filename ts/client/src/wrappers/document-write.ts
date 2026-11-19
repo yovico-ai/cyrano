@@ -23,6 +23,7 @@ import { SafeSet, SafeWeakMap, SafeWeakSet, nO, nOP, nR, napply, ncall } from ".
 import { isDocumentObject } from "../native/brand";
 import { isTrustedValue, trusted } from "../native/trusted";
 import { rewriteHtmlString } from "../patches/html-rewriter";
+import { withBootstrap } from "../patches/html-tokens";
 import { sinkText } from "../patches/dynamic-html";
 import { injectFramesIn } from "../patches/dynamic-iframe";
 import { wrapMethod } from "../native/surface";
@@ -50,12 +51,12 @@ function isDocumentLike(obj: unknown): obj is WriteCapable {
 // Mirrors what the server's inject.go does for static HTML; applied here to
 // HTML written via document.write at runtime.
 //
-// Two cases:
-//   <head> present  → inject right after the opening <head> tag (full-document write)
-//   <script> present, no <head> → prepend bootstrap (fragment with scripts, e.g. GPT ads)
+// Placed as the server places it (spec/HtmlTok.agda bootstrapAt): after the
+// first <head> or <body>, else before the first other element (a fragment
+// with scripts, e.g. GPT ads); nowhere when the markup has no element.
 function maybeInjectBootstrap(
     target: WriteCapable,
-    originalHtml: string,
+    _originalHtml: string,
     rewrittenHtml: string,
     getBootstrapHtml: () => string,
 ): string {
@@ -63,16 +64,9 @@ function maybeInjectBootstrap(
     const win = target.defaultView;
     if (!win || win.$rewriter) return rewrittenHtml;
 
-    if (/<head[\s>]/i.test(originalHtml)) {
-        // Full-document write — inject right after the <head> opening tag.
-        return rewrittenHtml.replace(/(<head(?:\s[^>]*)?>)/i, (match) => match + getBootstrapHtml());
-    }
-    if (/<script[\s>]/i.test(originalHtml)) {
-        // Script-fragment write (e.g. GPT ad slots) — prepend bootstrap so
-        // any server-rewritten external scripts see window.$rewriter.
-        return getBootstrapHtml() + rewrittenHtml;
-    }
-    return rewrittenHtml;
+    // Where the server puts it (spec/HtmlTok.agda bootstrapAt): after the
+    // first <head> or <body>, else before the first other element.
+    return withBootstrap(rewrittenHtml, getBootstrapHtml());
 }
 
 // One pair of writers per document: `document.write === document.write`.
@@ -117,7 +111,8 @@ export function wrapDocumentWrite(
             const native = target[name] as (...a: unknown[]) => unknown;
             if (!allStrings(args)) return napply(native, target, args);
             const joined = args.map((a) => sinkText(a) ?? "").join("");
-            let rewritten = rewriteHtmlString(joined, rewriteOne, proxyOrigin);
+            const ctx = { scripting: (self as unknown as Document).defaultView !== null };
+            let rewritten = rewriteHtmlString(joined, rewriteOne, proxyOrigin, undefined, ctx);
             if (getBootstrapHtml) rewritten = maybeInjectBootstrap(target, joined, rewritten, getBootstrapHtml);
             return ncall(native, target, args.some(isTrustedValue) ? trusted(globalThis, "HTML", rewritten) : rewritten);
         };
@@ -172,7 +167,9 @@ export function patchDocumentWrite(
         wrapMethod<(...a: unknown[]) => unknown>(holder, key, (native, self, args) => {
             if (!isDocumentLike(self) || !allStrings(args)) return nR.apply(native, self, args);
             const joined = args.map((a) => sinkText(a) ?? "").join("");
-            let rewritten = rewriteHtmlString(joined, rewriteOne, proxyOrigin, bootstrap);
+            // Markup for the document's parser, where it stands.
+            const ctx = { scripting: (self as unknown as Document).defaultView !== null };
+            let rewritten = rewriteHtmlString(joined, rewriteOne, proxyOrigin, bootstrap, ctx);
             rewritten = maybeInjectBootstrap(self, joined, rewritten, bootstrap);
             const out = nR.apply(native, self, [args.some(isTrustedValue) ? trusted(targetWindow, "HTML", rewritten) : rewritten]);
             // Frames the written markup made: the page may write into them next.

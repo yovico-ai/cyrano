@@ -22,7 +22,7 @@
 // Known gaps: `window[0]` / `frames[0]` give the real child window;
 // document.domain relaxation is not modelled.
 
-import { SafeWeakMap, SafeWeakSet, nO, ncall } from "./intrinsics";
+import { SafeWeakMap, SafeWeakSet, nO, ncall, aIncludes } from "./intrinsics";
 import { internalsOf } from "./internals";
 
 // Per viewing window: the runtime is one module shared by a page and the
@@ -132,6 +132,21 @@ const isIndex = (p: string): boolean => /^(0|[1-9]\d*)$/.test(p);
 /** Symbols a cross-origin object answers `undefined` to instead of throwing. */
 const quietSymbol = (p: symbol): boolean => p === Symbol.toStringTag || p === Symbol.hasInstance || p === Symbol.isConcatSpreadable;
 
+/** The child frame of t whose name is `name`, if any (the first, in order). */
+function childNamed(t: Window, name: string): Window | undefined {
+    if (name === "") return undefined;
+    try {
+        const n = t.length;
+        for (let k = 0; k < n; k++) {
+            const c = (t as unknown as Record<number, Window>)[k];
+            let cn: string;
+            try { cn = c!.name; } catch { continue; }
+            if (cn === name) return c;
+        }
+    } catch { /* none */ }
+    return undefined;
+}
+
 function makeView(t: Window, v: Viewer): object {
     const location = makeLocationView(t, v);
     const fns: Record<string, (...a: unknown[]) => unknown> = {
@@ -160,10 +175,17 @@ function makeView(t: Window, v: Viewer): object {
             const child = (t as unknown as Record<string, unknown>)[p];
             return child === undefined ? undefined : crossOriginView(child, null, v.win);
         }
+        // A child frame by its name (HTML "document-tree child navigable
+        // target name property set"): reCAPTCHA's challenge frame finds its
+        // anchor frame as parent.frames["a-…"].
+        const named = childNamed(t, p);
+        if (named !== undefined) return crossOriginView(named, null, v.win);
         throw securityError(v);
     };
     const known = (p: string | symbol): boolean =>
-        typeof p === "string" ? WINDOW_KEYS.includes(p) || p === "then" || (isIndex(p) && Number(p) < t.length) : quietSymbol(p);
+        typeof p === "string"
+            ? aIncludes(WINDOW_KEYS, p) || p === "then" || (isIndex(p) && Number(p) < t.length) || childNamed(t, p) !== undefined
+            : quietSymbol(p);
     const view: object = new Proxy({}, {
         get: (_o, p) => get(p),
         set: (_o, p, value) => {

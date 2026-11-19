@@ -6,6 +6,7 @@
 // written document's base URL is its creator's, so the builder of the
 // window that writes it is the right one.
 
+import { sPadStart } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
 
 export function buildBootstrapHtml(config: ClientConfig, href: string): string {
@@ -42,7 +43,7 @@ function jsStringLiteral(s: string): string {
         else if (c === "\r") { out += "\\r"; }
         else if (c === "\t") { out += "\\t"; }
         else if (c === "<") { out += "\\x3c"; }
-        else if (code < 0x20) { out += "\\u00" + code.toString(16).padStart(2, "0"); }
+        else if (code < 0x20) { out += "\\u00" + sPadStart(code.toString(16), 2, "0"); }
         else { out += c; }
     }
     return out + '"';

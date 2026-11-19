@@ -1,89 +1,56 @@
-// Client-side HTML mini-rewriter.
+// Client-side HTML rewriter: markup a page hands to the parser —
+// innerHTML / outerHTML / insertAdjacentHTML, document.write, srcdoc,
+// DOMParser and the other HTML parsers (dynamic-html.ts, document-write.ts).
 //
-// Used by the prototype overloads for `innerHTML` / `outerHTML` /
-// `insertAdjacentHTML` and by the `document.write` wrapper to rewrite
-// URL-bearing attributes in arbitrary HTML payloads before they reach the
-// document parser.
-//
-// Strategy: leverage the browser's own HTML parser via an HTMLTemplateElement.
-// Setting `template.innerHTML = html` parses the input into a DocumentFragment
-// without running any scripts (template content is inert per spec). We walk
-// the resulting tree, rewrite every URL-bearing attribute we recognise, and
-// serialize back with `template.innerHTML`.
-//
-// Why this approach:
-//   - Mirrors the server's HTML rewriter at the same level of granularity
-//     (token-level attribute rewriting). The browser's parser is closer to
-//     spec-compliant than anything we could ship in the bundle.
-//   - Zero parser dependency.
-//   - Inline `<script>` bodies are passed through the JS source rewriter;
-//     inline `<style>` / `style=""` is passed through the CSS rewriter —
-//     same as the server-side rewriter does for static HTML.
-//
-// Recursion safety: this module is the implementation behind the patched
-// `innerHTML` / `setAttribute` overloads, so it MUST avoid going through
-// those overloads while doing its own work. We capture the *original*
-// descriptors at module-init time (lazily, on first call) and bypass the
-// patches by calling the originals directly.
+// The markup is edited where it stands, as the server edits a document:
+// tokenized as the browser will (spec/HtmlTok.agda; html-tokens.ts), each
+// start tag's URL attributes (spec/Attrs.agda), style attribute, srcdoc,
+// <meta> CSP, integrity and crossorigin edited at their spans, inline
+// script and style text rewritten, the originals recorded in crn-o; every
+// other character is the page's own. Nothing is parsed and serialized
+// again: the parser that gets the markup builds the tree the page's markup
+// builds, in whatever mode and context it is in — a chunk of
+// document.write that leaves an element open leaves it open — and a
+// noscript's content (text, scripting on) stays as written.
 
-import { rewriteFor, type RewriteOne } from "./referrer-policy";
-import { scriptKindOf } from "./script-kind";
+import { type RewriteOne } from "./referrer-policy";
+import { scriptKind } from "./script-kind";
 import { rewriteImportMap } from "./dynamic-html";
-import { SafeMap, SafeSet, nO, ncall } from "../native/intrinsics";
+import { SafeSet, nO, ncall, aIncludes, sStarts } from "../native/intrinsics";
 import { trusted, trustedPolicyName } from "../native/trusted";
 import { rewriteCssText } from "../css/rewriter";
 import { ORIGINALS_ATTR } from "../native/originals";
 import { defaultJsRewriteOptions, rewriteJsSource } from "../js/rewriter";
 import { rewriteSrcsetAttribute } from "./srcset";
-import { kindOf, rewriteByKind, urlAttrsOf } from "./url-attribute-map";
+import { rewriteByKind, urlAttrKind } from "./url-attribute-map";
+import { tokenize, withBootstrap, type Ns, type Tok, type TokAttr } from "./html-tokens";
+import { isReferrerPolicy } from "../url/containment";
 
 interface CapturedNatives {
-    innerHTMLGet: (this: Element) => string;
     innerHTMLSet: (this: Element, value: string) => void;
-    setAttribute: (this: Element, name: string, value: string) => void;
+    getAttribute: (this: Element, name: string) => string | null;
 }
 
-// Captured exactly once on first use, before any of our overloads have a
-// chance to be installed (or, if installed, we still get the original by
-// capturing from the spec-defined Element.prototype descriptor we cached).
+// The browser's own methods, saved before the runtime wraps them (the
+// wrappers would come back here).
 let captured: CapturedNatives | null = null;
+const nativeParse = typeof DOMParser === "function" ? DOMParser.prototype.parseFromString : null;
 
-/**
- * Public hook: lets the patches/install module hand us the *original*
- * descriptors *before* it patches Element.prototype. Calling this is
- * optional — if not called, we'll lazily capture descriptors at first use,
- * which is safe as long as nobody has already monkey-patched the prototype
- * before our installer runs.
- */
+/** Lets install.ts save the natives before it wraps Element.prototype. */
 export function captureNativeElementOps(): void {
     if (captured) return;
-    captured = readCurrentDescriptors();
-}
-
-function readCurrentDescriptors(): CapturedNatives {
-    const innerHTMLDesc = nO.getOwnPropertyDescriptor(Element.prototype, "innerHTML");
-    if (!innerHTMLDesc?.set || !innerHTMLDesc?.get) {
-        throw new Error("Element.prototype.innerHTML descriptor missing — environment unsupported");
-    }
-    return {
-        innerHTMLGet: innerHTMLDesc.get as CapturedNatives["innerHTMLGet"],
-        innerHTMLSet: innerHTMLDesc.set as CapturedNatives["innerHTMLSet"],
-        setAttribute: Element.prototype.setAttribute as CapturedNatives["setAttribute"],
-    };
-}
-
-function ensureCaptured(): CapturedNatives {
-    if (!captured) captured = readCurrentDescriptors();
-    return captured;
+    const d = nO.getOwnPropertyDescriptor(Element.prototype, "innerHTML");
+    if (!d?.set) return;
+    captured = { innerHTMLSet: d.set as CapturedNatives["innerHTMLSet"], getAttribute: Element.prototype.getAttribute };
 }
 
 /**
  * An iframe's srcdoc as the frame must get it: its markup rewritten like
- * any other, and the runtime first — the frame's scripts run as it is
- * parsed, before anything could be injected from outside. The bootstrap
- * goes after a doctype, which must stay first (or the frame is in quirks
- * mode). The frame's base URL is its parent's, so the parent's rewriteOne
- * resolves its URLs.
+ * any other, and the runtime where the server puts it (spec/HtmlTok.agda
+ * bootstrapAt: after the first <head> or <body>, else before the first
+ * other element) — the frame's scripts run as it is parsed, before
+ * anything could be injected from outside. The frame's base URL is its
+ * parent's, so the parent's rewriteOne resolves its URLs.
  */
 export function rewriteSrcdoc(
     html: string,
@@ -91,292 +58,246 @@ export function rewriteSrcdoc(
     proxyOrigin: string = "",
     bootstrap?: () => string,
 ): string {
-    const rewritten = rewriteHtmlString(html, rewriteOne, proxyOrigin, bootstrap);
-    if (!bootstrap) return rewritten;
-    const doctype = /^\s*<!doctype[^>]*>/i.exec(rewritten);
-    const at = doctype ? doctype[0].length : 0;
-    return rewritten.slice(0, at) + bootstrap() + rewritten.slice(at);
+    const rewritten = rewriteHtmlString(html, rewriteOne, proxyOrigin, bootstrap, { scripting: true });
+    return bootstrap ? withBootstrap(rewritten, bootstrap()) : rewritten;
 }
 
 /**
- * Rewrites every URL-bearing attribute in the given HTML string and returns
- * the rewritten serialization. Returns the input unchanged when:
- *   - input is empty / not a string,
- *   - we can't capture native descriptors (missing `Element.prototype`),
- *   - parsing fails (which shouldn't happen — the browser tolerates broken
- *     HTML by inserting recovery nodes, and the result still serializes).
+ * How the markup's destination parses it: `scripting` (a document with a
+ * browsing context: a noscript's content is text); `within`, the element
+ * it is parsed in (innerHTML's context; none for a whole document).
+ */
+export interface ParseContext { scripting?: boolean; within?: { ns: Ns; name: string; encoding?: string | null } }
+
+const NS: Record<string, Ns> = { "http://www.w3.org/2000/svg": "svg", "http://www.w3.org/1998/Math/MathML": "math" };
+
+/** The parse context of markup inserted under `node` (innerHTML and the like). */
+export function contextOf(node: unknown): ParseContext {
+    try {
+        const n = node as Node | null | undefined;
+        if (!n) return {};
+        const doc = n.nodeType === 9 ? (n as Document) : n.ownerDocument;
+        const scripting = !!doc && doc.defaultView !== null;
+        // A shadow root parses in its host.
+        const el = n.nodeType === 11 ? ((n as ShadowRoot).host ?? null) : n.nodeType === 1 ? (n as Element) : null;
+        if (!el) return { scripting };
+        const ns = NS[el.namespaceURI ?? ""] ?? "html";
+        const name = ns === "html" ? el.localName : el.localName.toLowerCase();
+        return { scripting, within: { ns, name, encoding: el.getAttribute("encoding") } };
+    } catch {
+        return {};
+    }
+}
+
+// ── Attribute values ────────────────────────────────────────────────────
+
+let inert: Document | null | undefined;
+function inertReady(): boolean {
+    if (!captured) captureNativeElementOps();
+    if (inert === undefined) {
+        try {
+            inert = nativeParse ? (ncall(nativeParse, new DOMParser(), trusted(globalThis, "HTML", "") as string, "text/html") as Document) : null;
+        } catch {
+            inert = null;
+        }
+    }
+    return !!inert && !!captured;
+}
+/** An attribute's value as the parser reads it (character references decoded). */
+function decoded(raw: string, a: TokAttr): string {
+    if (a.value.indexOf("&") < 0) return a.value;
+    try {
+        if (!inertReady()) return a.value;
+        const holder = inert!.createElement("div");
+        ncall(captured!.innerHTMLSet, holder, trusted(globalThis, "HTML", "<x " + raw.slice(a.from, a.vto) + ">") as string);
+        const v = holder.firstElementChild ? ncall(captured!.getAttribute, holder.firstElementChild, a.name) : null;
+        return v ?? a.value;
+    } catch {
+        return a.value;
+    }
+}
+
+/** A value written as a double-quoted attribute value. */
+function quoted(v: string): string {
+    let o = "\"";
+    for (let k = 0; k < v.length; k++) {
+        const c = v[k]!;
+        o += c === "&" ? "&amp;" : c === "\"" ? "&quot;" : c;
+    }
+    return o + "\"";
+}
+
+/** Text written as markup text (an SVG script's or style's content). */
+function escapedText(v: string): string {
+    let o = "";
+    for (let k = 0; k < v.length; k++) {
+        const c = v[k]!;
+        o += c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === "\u00a0" ? "&nbsp;" : c;
+    }
+    return o;
+}
+
+const POLICY_TAGS = new SafeSet(["a", "area", "img", "iframe", "link", "script"]);
+
+type Edit = [number, number, string];
+
+/**
+ * A start tag's edits: each attribute's new value at its span (the first
+ * of each name: the parser drops later ones), removed ones cut out, new
+ * ones (crn-o, referrerpolicy) added at the tag's end.
+ */
+function editStartTag(src: string, t: Extract<Tok, { kind: "start" }>, rewriteOne: RewriteOne, proxyOrigin: string,
+    bootstrap: (() => string) | undefined, edits: Edit[]): void {
+    if (t.ns === "math") return;
+    const html = t.ns === "html";
+    const first: TokAttr[] = [];
+    const seen = new SafeSet<string>();
+    for (const a of t.attrs) if (!seen.has(a.name)) { seen.add(a.name); first[first.length] = a; }
+    const value = (n: string): string | null => {
+        for (const a of first) if (a.name === n) return decoded(src, a);
+        return null;
+    };
+    const set = new Map<string, string | null>();   // name → new value (null: removed)
+    const originals: Record<string, string | null> = {};
+    let changed = false;
+    const change = (a: TokAttr | null, name: string, v: string | null): void => {
+        const was = a ? decoded(src, a) : null;
+        if (v === was) return;
+        set.set(name, v);
+        originals[name] = was;
+        changed = true;
+    };
+    const attr = (n: string): TokAttr | null => {
+        for (const a of first) if (a.name === n) return a;
+        return null;
+    };
+
+    // An element's own referrer policy: its URLs carry it, and the browser
+    // is told unsafe-url (patches/referrer-policy.ts; Go:
+    // htmlrewrite elementReferrerPolicy).
+    let rw: (u: string) => string = rewriteOne;
+    if (html && POLICY_TAGS.has(t.name)) {
+        const p = value("referrerpolicy");
+        const lp = p === null ? null : p.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+        if (lp !== null && isReferrerPolicy(lp) && rewriteOne.withPolicy) {
+            const withPolicy = rewriteOne.withPolicy;
+            rw = (u) => withPolicy(u, lp);
+            change(attr("referrerpolicy"), "referrerpolicy", "unsafe-url");
+        }
+    }
+    const T = (kind: "HTML" | "Script" | "ScriptURL", text: string): string => trusted(globalThis, kind, text) as string;
+
+    for (const a of first) {
+        const v = decoded(src, a);
+        if (a.name === "integrity") { change(a, "integrity", null); continue; }   // SRI cannot match rewritten content
+        if (v === "") continue;
+        if (a.name === "style") { change(a, "style", rewriteCssText(v, rewriteOne)); continue; }
+        if (html && t.name === "iframe" && a.name === "srcdoc") { change(a, "srcdoc", T("HTML", rewriteSrcdoc(v, rewriteOne, proxyOrigin, bootstrap))); continue; }
+        if (html && t.name === "meta" && a.name === "content" && proxyOrigin.length > 0 &&
+            (value("http-equiv") ?? "").toLowerCase() === "content-security-policy") {
+            change(a, "content", rewriteCspContent(v, proxyOrigin, trustedPolicyName()));
+            continue;
+        }
+        // HTML_CROSSORIGIN: use-credentials so cookies follow the proxied
+        // request, alike for a resource and its preload (a preload left
+        // "anonymous" is discarded and fetched twice); a font preload stays,
+        // to match the anonymous @font-face fetch.
+        if (html && a.name === "crossorigin") {
+            const rel = (value("rel") ?? "").toLowerCase(), as = (value("as") ?? "").toLowerCase();
+            const fontPreload = t.name === "link" && (rel === "preload" || rel === "prefetch") && as === "font";
+            if (!fontPreload) change(a, "crossorigin", "use-credentials");
+            continue;
+        }
+        const kind = urlAttrKind(!html, t.name, a.name);
+        if (kind === "none" || kind === "reflected") continue;
+        change(a, a.name, rewriteByKind(kind, v, rw, rewriteSrcsetAttribute));
+    }
+    if (!changed) return;
+    set.set(ORIGINALS_ATTR, JSON.stringify(originals));
+
+    const mine: Edit[] = [];
+    let tail = "";
+    for (const [name, v] of set) {
+        const a = attr(name);
+        if (a && v === null) mine[mine.length] = [a.from, a.vto, ""];
+        else if (a && a.vfrom === a.vto) mine[mine.length] = [a.to, a.to, "=" + quoted(v!)];
+        else if (a) mine[mine.length] = [a.vfrom, a.vto, quoted(v!)];
+        else if (v !== null) tail += " " + name + "=" + quoted(v);
+    }
+    mine.sort((x, y) => x[0] - y[0]);
+    for (const e of mine) edits[edits.length] = e;
+    if (tail) {
+        const at = t.selfClosing ? t.to - 2 : t.to - 1;
+        edits[edits.length] = [at, at, tail];
+    }
+}
+
+/**
+ * The markup with its URLs proxified and its inline scripts and styles
+ * rewritten (see the head of this file). `context`: how its destination
+ * parses it.
  */
 export function rewriteHtmlString(
     html: string,
     rewriteOne: (url: string) => string,
     proxyOrigin: string = "",
     bootstrap?: () => string,
+    context: ParseContext = {},
 ): string {
     if (typeof html !== "string" || html.length === 0) return html;
-
-    let natives: CapturedNatives;
+    let toks: Tok[];
     try {
-        natives = ensureCaptured();
+        toks = tokenize(html, context.scripting !== false, context.within);
     } catch {
-        // Environment doesn't expose Element.prototype.innerHTML — pass through.
         return html;
     }
-
-    // A <template> drops the document's own tags (doctype, html, head,
-    // body): kept aside here and put back as written after serialization.
-    const structural: string[] = [];
-    const parsed = hideStyleAttributes(holdStructuralTags(html, structural));
-
-    // Style attributes are parsed under another name: parsing one, anywhere,
-    // is checked against the page's CSP (a nonce policy refuses it) and
-    // reported as a violation — the page's own insertion of the result is
-    // the one parse the page causes natively (reCAPTCHA's innerHTML on
-    // my.jumpapp.com reported twice).
-    const template = document.createElement("template");
-    // (Trusted values for the sinks written below: under Trusted Types
-    // the runtime's own policy makes them — native/trusted.ts.)
-    const T = (kind: "HTML" | "Script" | "ScriptURL", text: string): string => trusted(globalThis, kind, text) as string;
-    ncall(natives.innerHTMLSet, template, T("HTML", parsed));
-
-    // The template content is a DocumentFragment; walk all element descendants.
-    // querySelectorAll('*') matches all elements, in document order.
-    const elements = template.content.querySelectorAll("*");
-    // Each element's attributes as the page wrote them, to record what the
-    // rewriting below changes (native/originals.ts).
-    const written = new SafeMap<Element, Map<string, string>>();
-    for (const element of elements) {
-        const m = new SafeMap<string, string>();
-        for (const a of Array.from(element.attributes)) m.set(a.name === HIDDEN_STYLE ? "style" : a.name, a.value);
-        written.set(element, m);
+    const edits: Edit[] = [];
+    const rw = rewriteOne as RewriteOne;
+    for (let k = 0; k < toks.length; k++) {
+        const t = toks[k]!;
+        if (t.kind !== "start") continue;
+        editStartTag(html, t, rw, proxyOrigin, bootstrap, edits);
+        if (t.selfClosing && t.ns !== "html") continue;
+        if (t.name !== "script" && t.name !== "style") continue;
+        if (t.ns === "math") continue;
+        // The content: raw text up to the end tag (HTML); markup text with no
+        // element in it (SVG). Left as written when its end is not in this
+        // markup (a document.write chunk; the rest comes later).
+        const next = toks[k + 1];
+        if (!next || next.kind !== "end" || next.name !== t.name) continue;
+        let text = html.slice(t.to, next.from);
+        if (text.length === 0) continue;
+        if (t.ns === "svg") text = decodedText(text);
+        let out: string;
+        if (t.name === "style") out = rewriteCssText(text, rewriteOne);
+        else {
+            const attrOf = (n: string): string | null => { for (const a of t.attrs) if (a.name === n) return decoded(html, a); return null; };
+            if (attrOf(t.ns === "svg" ? "href" : "src") !== null || (t.ns === "svg" && attrOf("xlink:href") !== null)) continue;
+            const kind = scriptKind(attrOf("type"), attrOf("language"));
+            if (kind === "classic" || kind === "module") out = rewriteJsSource(text, defaultJsRewriteOptions());
+            else if (kind === "importmap" && t.ns === "html") out = rewriteImportMap(text, rewriteOne);
+            else continue;
+        }
+        edits[edits.length] = [t.to, next.from, t.ns === "svg" ? escapedText(out) : out];
     }
-    for (const element of elements) {
-        // 1a. Inline <style> content — rewrite as a CSS source string.
-        if (element.tagName === "STYLE") {
-            const cssText = element.textContent ?? "";
-            if (cssText.length > 0) {
-                element.textContent = rewriteCssText(cssText, rewriteOne);
-            }
-        }
-
-        // 1b. Inline <script> content (no `src` attribute — body is the
-        // source). Run it through the JS source rewriter so `wrap_*` calls
-        // are injected the same way the server-side rewriter would have
-        // done it for a static <script>.
-        // What it is decides (spec/Html.agda scriptKind): JavaScript is
-        // rewritten as such, an import map as one, a data block not at all.
-        if (element.tagName === "SCRIPT" && !element.hasAttribute("src")) {
-            const jsText = element.textContent ?? "";
-            const kind = scriptKindOf(element);
-            if (jsText.length > 0 && (kind === "classic" || kind === "module")) {
-                element.textContent = T("Script", rewriteJsSource(jsText, defaultJsRewriteOptions()));
-            } else if (jsText.length > 0 && kind === "importmap") {
-                element.textContent = rewriteImportMap(jsText, rewriteOne);
-            }
-        }
-
-        // 1c. <meta http-equiv="Content-Security-Policy"> — rewrite the CSP
-        // content attribute to add the proxy origin to all *-src directives,
-        // same as the server's rewriteCSP does for response headers. Without
-        // this, ad scripts that document.write full HTML with an inline CSP
-        // would block rewritten resource URLs (e.g. script-src only allowing
-        // https://cdn.ampproject.org/ would block our proxied copies).
-        if (
-            proxyOrigin.length > 0 &&
-            element.tagName === "META" &&
-            /^content-security-policy$/i.test(element.getAttribute("http-equiv") ?? "")
-        ) {
-            const content = element.getAttribute("content") ?? "";
-            if (content.length > 0) {
-                ncall(natives.setAttribute, element, "content", rewriteCspContent(content, proxyOrigin, trustedPolicyName()));
-            }
-        }
-
-        // 2. HTML_INTEGRITY — SRI hashes won't match rewritten content; drop.
-        element.removeAttribute("integrity");
-
-        // 3. HTML_CROSSORIGIN — normalize to use-credentials so cookies follow
-        // the rewritten same-origin request, consistently across a resource and
-        // its <link rel=preload>. A script preload left at "anonymous" mismatches
-        // the forced use-credentials <script>, so the browser discards the
-        // preload and double-fetches the bundle (wedging the coalesced HTTP/2
-        // connection). Exception: a font preload stays anonymous to match the
-        // non-credentialed @font-face fetch — forcing it double-fetches the font.
-        if (element.hasAttribute("crossorigin")) {
-            const rel = (element.getAttribute("rel") || "").toLowerCase();
-            const as = (element.getAttribute("as") || "").toLowerCase();
-            const isFontPreload =
-                element.tagName === "LINK" &&
-                (rel === "preload" || rel === "prefetch") &&
-                as === "font";
-            if (!isFontPreload) {
-                ncall(natives.setAttribute, element, "crossorigin", "use-credentials");
-            }
-        }
-
-        // 3b. <iframe srcdoc>: a whole document in an attribute.
-        if (element.tagName === "IFRAME") {
-            const srcdoc = element.getAttribute("srcdoc");
-            if (srcdoc !== null) ncall(natives.setAttribute, element, "srcdoc", T("HTML", rewriteSrcdoc(srcdoc, rewriteOne, proxyOrigin, bootstrap)));
-        }
-
-        // 4. Global `style="..."` attribute — applies to every element
-        // (held under HIDDEN_STYLE while parsed here).
-        const styleAttr = element.getAttribute(HIDDEN_STYLE);
-        if (styleAttr !== null && styleAttr.length > 0) {
-            ncall(natives.setAttribute, element, HIDDEN_STYLE, rewriteCssText(styleAttr, rewriteOne));
-        }
-
-        // 5. Type-specific URL-bearing attributes (img.src, a.href, ...),
-        // carrying the element's own referrer policy, if it states one; the
-        // browser is then told unsafe-url (as the server's markup:
-        // htmlrewrite elementReferrerPolicy).
-        const attrs = urlAttrsOf(element);
-        if (!attrs.length) continue;
-        const rw = rewriteFor(element, rewriteOne as RewriteOne);
-        if (rw !== rewriteOne) ncall(natives.setAttribute, element, "referrerpolicy", "unsafe-url");
-        for (const attrName of attrs) {
-            const value = element.getAttribute(attrName);
-            if (value === null || value.length === 0) continue;
-            const rewritten = rewriteByKind(kindOf(element, attrName), value, rw, rewriteSrcsetAttribute);
-            // Use the captured native setAttribute so we don't recurse through
-            // our own setAttribute patch (which would rewrite again).
-            ncall(natives.setAttribute, element, attrName, attrName === "src" && (element.tagName === "SCRIPT" || element.tagName === "EMBED") ? T("ScriptURL", rewritten) : rewritten);
-        }
-    }
-
-    // The originals attribute, as the server writes it: what changed.
-    for (const [element, was] of written) {
-        const o: Record<string, string | null> = {};
-        let changed = false;
-        const now = new SafeMap<string, string>();
-        for (const a of Array.from(element.attributes)) now.set(a.name === HIDDEN_STYLE ? "style" : a.name, a.value);
-        for (const [name, value] of was) if (now.get(name) !== value) { o[name] = value; changed = true; }
-        for (const name of now.keys()) if (!was.has(name)) { o[name] = null; changed = true; }
-        if (changed) ncall(natives.setAttribute, element, ORIGINALS_ATTR, JSON.stringify(o));
-    }
-
-    const out = showStyleAttributes(ncall(natives.innerHTMLGet, template));
-    return structural.length === 0 ? out : restoreStructuralTags(out, structural);
-}
-
-// ── Style attributes, under another name while parsed ──────────────────
-
-const HIDDEN_STYLE = "data-crn-hs";
-
-/** `style` attribute names in start tags renamed HIDDEN_STYLE (quotes, comments and raw text respected). */
-function hideStyleAttributes(html: string): string {
-    if (!/style/i.test(html)) return html;
+    if (edits.length === 0) return html;
     let out = "";
-    let from = 0;
-    let i = 0;
-    while ((i = html.indexOf("<", i)) !== -1) {
-        if (html.startsWith("<!--", i)) {
-            const end = html.indexOf("-->", i + 4);
-            i = end === -1 ? html.length : end + 3;
-            continue;
-        }
-        const m = /^<([A-Za-z][^\s/>]*)/.exec(html.slice(i, i + 64));
-        if (!m) { i++; continue; }
-        const close = tagEnd(html, i);
-        // Attributes: name [= value], after the tag name.
-        let j = i + 1 + m[1]!.length;
-        while (j < close) {
-            const c = html[j]!;
-            if (c === ">" || c === "/" || /\s/.test(c)) { j++; continue; }
-            let k = j;
-            while (k < close && !/[\s=>]/.test(html[k]!) && !(html[k] === "/" && html[k + 1] === ">")) k++;
-            if (html.slice(j, k).toLowerCase() === "style") {
-                out += html.slice(from, j) + HIDDEN_STYLE;
-                from = k;
-            }
-            j = k;
-            while (j < close && /\s/.test(html[j]!)) j++;
-            if (html[j] === "=") {
-                j++;
-                while (j < close && /\s/.test(html[j]!)) j++;
-                const q = html[j];
-                if (q === '"' || q === "'") {
-                    const e = html.indexOf(q, j + 1);
-                    j = e === -1 ? close : e + 1;
-                } else {
-                    while (j < close && !/[\s>]/.test(html[j]!)) j++;
-                }
-            }
-        }
-        i = close;
-        if (RAW_TEXT.test(m[1]!)) {
-            const end = html.toLowerCase().indexOf("</" + m[1]!.toLowerCase(), i);
-            i = end === -1 ? html.length : end;
-        }
+    let at = 0;
+    for (const [f, t, r] of edits) { out += html.slice(at, f) + r; at = t; }
+    return out + html.slice(at);
+}
+
+/** Markup text as the parser reads it (character references decoded). */
+function decodedText(raw: string): string {
+    if (raw.indexOf("&") < 0) return raw;
+    try {
+        if (!inertReady()) return raw;
+        const holder = inert!.createElement("div");
+        ncall(captured!.innerHTMLSet, holder, trusted(globalThis, "HTML", raw) as string);
+        return holder.textContent ?? raw;
+    } catch {
+        return raw;
     }
-    return from === 0 ? html : out + html.slice(from);
-}
-
-/** The serialization's HIDDEN_STYLE attributes named style again. */
-function showStyleAttributes(html: string): string {
-    return html.includes(HIDDEN_STYLE) ? html.split(" " + HIDDEN_STYLE + "=").join(" style=") : html;
-}
-
-// ── The document's own tags ─────────────────────────────────────────────
-//
-// `<html><body><script>…document.body…</script></body></html>` written into
-// an empty frame (DoubleVerify does exactly this) must reach the frame's
-// parser with its <body>: without it the script runs in <head> and
-// document.body is null. A template parses markup as a fragment and drops
-// these tags, so each is replaced by a comment holding its index before
-// parsing (a comment stays where it is) and written back afterwards.
-// Script, style and other raw-text bodies and comments are skipped: a
-// "<body>" inside them is text.
-
-const HOLD = "\u007fcrn-tag-";
-const RAW_TEXT = /^(script|style|textarea|title|xmp|iframe|noembed|noframes|plaintext)$/i;
-
-function holdStructuralTags(html: string, held: string[]): string {
-    let out = "";
-    let i = 0;
-    let from = 0;
-    while ((i = html.indexOf("<", i)) !== -1) {
-        if (html.startsWith("<!--", i)) {
-            const end = html.indexOf("-->", i + 4);
-            i = end === -1 ? html.length : end + 3;
-            continue;
-        }
-        const m = /^<(\/?)([A-Za-z][^\s/>]*)|^<!doctype/i.exec(html.slice(i, i + 64));
-        if (!m) { i++; continue; }
-        const close = tagEnd(html, i);
-        if (m[2] === undefined || /^(html|head|body)$/i.test(m[2])) {
-            out += html.slice(from, i) + "<!--" + HOLD + held.length + "-->";
-            held.push(html.slice(i, close));
-            from = i = close;
-            continue;
-        }
-        i = close;
-        if (!m[1] && RAW_TEXT.test(m[2])) {
-            const end = html.toLowerCase().indexOf("</" + m[2].toLowerCase(), i);
-            i = end === -1 ? html.length : end;
-        }
-    }
-    return held.length === 0 ? html : out + html.slice(from);
-}
-
-/** Where the tag starting at `at` ends: after its `>`, quotes respected. */
-function tagEnd(html: string, at: number): number {
-    let quote = "";
-    for (let j = at + 1; j < html.length; j++) {
-        const c = html[j]!;
-        if (quote) { if (c === quote) quote = ""; continue; }
-        if (c === '"' || c === "'") {
-            // Quotes only open an attribute value (after "=").
-            if (/=\s*$/.test(html.slice(Math.max(at, j - 8), j))) quote = c;
-            continue;
-        }
-        if (c === ">") return j + 1;
-    }
-    return html.length;
-}
-
-function restoreStructuralTags(html: string, held: string[]): string {
-    return html.replace(/<!--\u007fcrn-tag-(\d+)-->/g, (_, n: string) => held[Number(n)] ?? "");
 }
 
 // A <meta http-equiv="Content-Security-Policy"> content, translated for the
@@ -400,7 +321,7 @@ const hasCI = (vals: string[], t: string): boolean => vals.some((v) => asciiLowe
 const appendIfAbsent = (vals: string[], t: string): string[] => (hasCI(vals, t) ? vals : [...vals, t]);
 
 export function rewriteCspContent(csp: string, proxyOrigin: string, ttPolicy?: string): string {
-    const plainHttp = asciiLower(proxyOrigin).startsWith("http://");
+    const plainHttp = sStarts(asciiLower(proxyOrigin), "http://");
     const seen = new SafeSet<string>();
     const out: string[] = [];
     for (const tok of csp.split(";")) {
@@ -414,10 +335,10 @@ export function rewriteCspContent(csp: string, proxyOrigin: string, ttPolicy?: s
         if (plainHttp && (name === "upgrade-insecure-requests" || name === "block-all-mixed-content")) continue;
         if (name === "trusted-types") {
             vals = vals.filter((t) => asciiLower(t) !== "'none'");
-            if (ttPolicy && !vals.includes(ttPolicy) && !vals.includes("*")) vals.push(ttPolicy);
+            if (ttPolicy && !aIncludes(vals, ttPolicy) && !aIncludes(vals, "*")) vals.push(ttPolicy);
         } else if (CSP_FETCH.has(name)) {
             if (CSP_SCRIPT_STYLE.has(name) && vals.some(isHashSource)) {
-                vals = vals.filter((t) => { const l = asciiLower(t); return !isHashSource(t) && !l.startsWith("'nonce-") && l !== "'strict-dynamic'"; });
+                vals = vals.filter((t) => { const l = asciiLower(t); return !isHashSource(t) && !sStarts(l, "'nonce-") && l !== "'strict-dynamic'"; });
                 vals = appendIfAbsent(appendIfAbsent(vals, "'unsafe-inline'"), "'self'");
             }
             if (proxyOrigin !== "" && !(vals.length === 1 && asciiLower(vals[0]!) === "'none'")) vals = appendIfAbsent(vals, proxyOrigin);

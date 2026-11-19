@@ -1,3 +1,4 @@
+import { sIncludes } from "../native/intrinsics";
 // Invertible edits.
 //
 // The JS rewriters do not re-print a script: they splice their changes into
@@ -35,7 +36,7 @@ const CLOSE = OPEN + "*/";
 
 /** Whether `src` can carry marked fragments: it has nothing that reads as one. */
 export function canMark(src: string): boolean {
-    return !src.includes(OPEN) && !src.includes("*" + MARK + "/");
+    return !sIncludes(src, OPEN) && !sIncludes(src, "*" + MARK + "/");
 }
 
 /**

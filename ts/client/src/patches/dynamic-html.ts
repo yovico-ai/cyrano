@@ -31,10 +31,10 @@
 //     2. Using the originals (saved in module-local vars) directly inside
 //        our patched implementations.
 
-import { SafeWeakMap, SafeWeakSet, nO, nOP, nR, ncall } from "../native/intrinsics";
+import { SafeWeakMap, SafeWeakSet, nO, nOP, nR, ncall, sStarts } from "../native/intrinsics";
 import { rewriteCssText } from "../css/rewriter";
 import { defaultJsRewriteOptions, rewriteJsSource } from "../js/rewriter";
-import { captureNativeElementOps, rewriteHtmlString, rewriteSrcdoc } from "./html-rewriter";
+import { captureNativeElementOps, contextOf, rewriteHtmlString, rewriteSrcdoc, type ParseContext } from "./html-rewriter";
 import { internalsOf } from "../native/internals";
 
 /** The bootstrap builder of the window `node` belongs to (each window has its own base URL). */
@@ -76,7 +76,7 @@ export function sinkText(v: unknown): string | null {
 function sinkKind(el: Element, name: string): "HTML" | "Script" | "ScriptURL" | null {
     const n = name.toLowerCase();
     if (n === "srcdoc" && el.tagName === "IFRAME") return "HTML";
-    if (n.startsWith("on")) return "Script";
+    if (sStarts(n, "on")) return "Script";
     if (n === "src" && (el.tagName === "SCRIPT" || el.tagName === "EMBED")) return "ScriptURL";
     if ((n === "data" || n === "codebase") && el.tagName === "OBJECT") return "ScriptURL";
     return null;
@@ -133,7 +133,7 @@ export function patchDynamicHtml(
             // page gave one — native/trusted.ts.)
             ncall(set, self, raw !== null
                 ? trustedLike(targetWindow, (self as Element).tagName === "SCRIPT" ? "Script" : "HTML", value, raw)
-                : trustedLike(targetWindow, "HTML", value, rewriteHtmlString(text, rewriteOne, proxyOrigin)));
+                : trustedLike(targetWindow, "HTML", value, rewriteHtmlString(text, rewriteOne, proxyOrigin, undefined, contextOf(self))));
             if (raw !== null) recordText(self as Element, raw, text);
             else { consume(self); injectFramesIn(targetWindow, self); }
         },
@@ -143,7 +143,7 @@ export function patchDynamicHtml(
         set: (set, self, value) => {
             const text = sinkText(value);
             const parent = (self as Node).parentNode;
-            ncall(set, self, text === null ? value : trustedLike(targetWindow, "HTML", value, rewriteHtmlString(text, rewriteOne, proxyOrigin)));
+            ncall(set, self, text === null ? value : trustedLike(targetWindow, "HTML", value, rewriteHtmlString(text, rewriteOne, proxyOrigin, undefined, contextOf(parent ?? self))));
             consume(parent);
             injectFramesIn(targetWindow, parent);
         },
@@ -154,7 +154,7 @@ export function patchDynamicHtml(
     wrapMethod<(...a: unknown[]) => void>(proto, "insertAdjacentHTML", (native, self, args) => {
         const next = args.slice();
         const text = sinkText(next[1]);
-        if (text !== null) next[1] = trustedLike(targetWindow, "HTML", args[1], rewriteHtmlString(text, rewriteOne, proxyOrigin));
+        if (text !== null) next[1] = trustedLike(targetWindow, "HTML", args[1], rewriteHtmlString(text, rewriteOne, proxyOrigin, undefined, contextOf(self)));
         nR.apply(native, self, next);
         consume((self as Node).parentNode ?? self);
         injectFramesIn(targetWindow, (self as Node).parentNode ?? self);
@@ -211,15 +211,18 @@ export function patchDynamicHtml(
  */
 function patchHtmlParsers(targetWindow: Window, rewriteOne: (url: string) => string, proxyOrigin = ""): void {
     const g = targetWindow as unknown as Record<string, ({ prototype: object } & Record<string, unknown>) | undefined>;
-    const html = (v: unknown): unknown => {
+    const html = (v: unknown, ctx: (text: string) => ParseContext): unknown => {
         const text = sinkText(v);
-        return text === null ? v : trustedLike(targetWindow, "HTML", v, rewriteHtmlString(text, rewriteOne, proxyOrigin));
+        return text === null ? v : trustedLike(targetWindow, "HTML", v, rewriteHtmlString(text, rewriteOne, proxyOrigin, undefined, ctx(text)));
     };
-    const firstArg = (proto: object | undefined, key: string, when: (args: unknown[]) => boolean = () => true): void => {
+    // How each parses (html-rewriter ParseContext): DOMParser and
+    // parseHTMLUnsafe make a document with no browsing context (scripting
+    // off); the others parse under a node.
+    const firstArg = (proto: object | undefined, key: string, ctx: (self: unknown, text: string) => ParseContext, when: (args: unknown[]) => boolean = () => true): void => {
         if (!proto || !(key in proto)) return;
         save(proto, key);
         wrapMethod<(...a: unknown[]) => unknown>(proto, key, (native, self, args) => {
-            const out = nR.apply(native, self, args.length && when(args) ? [html(args[0]), ...args.slice(1)] : args);
+            const out = nR.apply(native, self, args.length && when(args) ? [html(args[0], (t) => ctx(self, t)), ...args.slice(1)] : args);
             // What was parsed: the returned document or fragment, or the
             // element / shadow root written into.
             consume(typeof out === "object" && out !== null ? out : self);
@@ -227,15 +230,16 @@ function patchHtmlParsers(targetWindow: Window, rewriteOne: (url: string) => str
             return out;
         });
     };
-    firstArg(g["DOMParser"]?.prototype, "parseFromString", (a) => String(a[1]).toLowerCase() === "text/html");
-    firstArg(g["Range"]?.prototype, "createContextualFragment");
-    firstArg(g["Element"]?.prototype, "setHTMLUnsafe");
-    firstArg(g["ShadowRoot"]?.prototype, "setHTMLUnsafe");
-    firstArg(g["Document"] as unknown as object | undefined, "parseHTMLUnsafe");
+    const newDocument = (): ParseContext => ({ scripting: false });
+    firstArg(g["DOMParser"]?.prototype, "parseFromString", newDocument, (a) => String(a[1]).toLowerCase() === "text/html");
+    firstArg(g["Range"]?.prototype, "createContextualFragment", (self) => contextOf((self as Range).startContainer));
+    firstArg(g["Element"]?.prototype, "setHTMLUnsafe", (self) => contextOf(self));
+    firstArg(g["ShadowRoot"]?.prototype, "setHTMLUnsafe", (self) => contextOf(self));
+    firstArg(g["Document"] as unknown as object | undefined, "parseHTMLUnsafe", newDocument);
     const SR = g["ShadowRoot"]?.prototype;
     if (SR && ncall(nOP.hasOwnProperty, SR, "innerHTML")) {
         save(SR, "innerHTML");
-        wrapAccessor<unknown>(SR, "innerHTML", { set: (set, self, value) => { ncall(set, self, html(value)); consume(self); injectFramesIn(targetWindow, self); } });
+        wrapAccessor<unknown>(SR, "innerHTML", { set: (set, self, value) => { ncall(set, self, html(value, () => contextOf(self))); consume(self); injectFramesIn(targetWindow, self); } });
     }
 }
 

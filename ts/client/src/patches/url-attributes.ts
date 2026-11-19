@@ -15,7 +15,7 @@
 
 import { rewriteFor, type RewriteOne } from "./referrer-policy";
 import { rewriteCssText } from "../css/rewriter";
-import { nO, nR, ncall } from "../native/intrinsics";
+import { nO, nR, ncall, aIncludes } from "../native/intrinsics";
 import { isTrustedValue, trusted } from "../native/trusted";
 import { rewriteSrcsetAttribute } from "./srcset";
 import { URL_BEARING_ELEMENTS, isSrcsetAttr, kindOf, rewriteByKind, rewriteUrlList } from "./url-attribute-map";
@@ -148,7 +148,7 @@ export function patchAnchorUrlReflection(
             try { return new URL(o); } catch { return null; }
         };
         for (const part of [...PARTS_RW, ...PARTS_RO]) {
-            const readOnly = (PARTS_RO as readonly string[]).includes(part);
+            const readOnly = aIncludes((PARTS_RO as readonly string[]), part);
             wrapAccessor<string>(proto, part, {
                 get: (get, self) => {
                     const u = original(self);

@@ -8,7 +8,7 @@
 //
 // A window is patched once: runtime/bootstrap.ts checks before calling.
 
-import { SafeSet, nO, nOP, nR, ncall } from "../native/intrinsics";
+import { SafeSet, nO, nOP, nR, ncall, sStarts } from "../native/intrinsics";
 import { initTrusted } from "../native/trusted";
 import type { ClientConfig } from "../config";
 import { rewriteUrl, unwrapProxiedUrl } from "../url/containment";
@@ -201,7 +201,7 @@ function patchPerformanceEntryNames(
             try {
                 const n = ncall(nativeName, e);
                 if (identityRuntimeUrl) return n === identityRuntimeUrl;
-                return n.startsWith(proxyOrigin + "/") && unwrapOne(n) === n;
+                return sStarts(n, proxyOrigin + "/") && unwrapOne(n) === n;
             } catch {
                 return false;
             }
@@ -225,7 +225,7 @@ function patchPerformanceEntryNames(
         try {
             const n = ncall(nativeName, entry);
             const original = unwrapOne(n);
-            return original !== n && original.startsWith("https:") ? "h2" : reported;
+            return original !== n && sStarts(original, "https:") ? "h2" : reported;
         } catch {
             return reported;
         }

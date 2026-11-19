@@ -22,7 +22,7 @@
 // at the microtask checkpoint the parser performs before running each
 // script, so no page script sees the attribute.
 
-import { SafeMap, SafeWeakMap, nO, ncall } from "./intrinsics";
+import { SafeMap, SafeWeakMap, nO, ncall, sIncludes, sStarts } from "./intrinsics";
 import { trusted } from "./trusted";
 import { MARK, original } from "../js/marks";
 
@@ -144,7 +144,7 @@ export function originalText(el: unknown): string | undefined {
         if ((el as Element).tagName !== "SCRIPT") return undefined;
         let now: string | null;
         try { now = ncall(nat.textGet, el as Node); } catch { return undefined; }
-        return now !== null && now.includes(MARK) ? original(now) : undefined;
+        return now !== null && sIncludes(now, MARK) ? original(now) : undefined;
     }
     let current: string | null;
     try { current = ncall(nat.textGet, el as Node); } catch { return undefined; }
@@ -291,16 +291,16 @@ export function textAsWritten(node: unknown, raw: string): string {
             const parent = n.parentNode as Element | null;
             if (!parent || parent.nodeType !== 1 || (parent.tagName !== "SCRIPT" && parent.tagName !== "STYLE")) return raw;
             if (!n.previousSibling && !n.nextSibling) return originalText(parent) ?? raw;
-            return raw.includes(MARK) ? original(raw) : raw;
+            return sIncludes(raw, MARK) ? original(raw) : raw;
         }
-        if (raw.includes(MARK) && !any) return original(raw);
-        if (!any && !raw.includes(MARK)) return raw;
+        if (sIncludes(raw, MARK) && !any) return original(raw);
+        if (!any && !sIncludes(raw, MARK)) return raw;
         // Texts kept in the store: read them off the as-written clone.
         const el = n as Element;
         if (typeof el.querySelector !== "function" || !el.querySelector("script,style")) return raw;
         const clone = asWritten(n);
         const text = clone === n ? raw : ncall(nat.textGet, clone);
-        return text === null ? raw : (text.includes(MARK) ? original(text) : text);
+        return text === null ? raw : (sIncludes(text, MARK) ? original(text) : text);
     } catch {
         return raw;
     }
@@ -313,13 +313,13 @@ export function inertDocument(): Document | null {
 
 /** Whether `serialized` (native markup or text) may differ from what the page wrote. */
 export function mayDiffer(serialized: unknown): boolean {
-    return any || (typeof serialized === "string" && serialized.includes(MARK));
+    return any || (typeof serialized === "string" && sIncludes(serialized, MARK));
 }
 
 /** `value` for attribute `name` of `el`, trusted where the attribute is a Trusted Types sink. */
 function trustedForAttr(el: Element, name: string, value: string): string {
     const n = name.toLowerCase();
-    const kind = n === "srcdoc" ? "HTML" : n.startsWith("on") ? "Script"
+    const kind = n === "srcdoc" ? "HTML" : sStarts(n, "on") ? "Script"
         : (n === "src" && (el.tagName === "SCRIPT" || el.tagName === "EMBED")) || ((n === "data" || n === "codebase") && el.tagName === "OBJECT") ? "ScriptURL" : null;
     return (kind ? trusted(globalThis, kind, value) : value) as string;
 }

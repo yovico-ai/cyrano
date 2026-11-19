@@ -130,10 +130,19 @@ describe("wrapDocumentWrite — head bootstrap injection", () => {
         expect(written).not.toContain(BOOTSTRAP);
     });
 
-    it("does not inject when HTML has no <head> and no <script>", () => {
+    it("puts it before the first element when there is no <head> or <body> (spec bootstrapAt)", () => {
         const doc = fakeDocument();
         const wrapper = wrapDocumentWrite({ obj: doc }, tag, getBootstrapHtml);
         wrapper.write("<div><p>fragment</p></div>");
+
+        const written = doc.write.mock.calls[0]?.[0] as string;
+        expect(written).toBe(BOOTSTRAP + "<div><p>fragment</p></div>");
+    });
+
+    it("does not inject into text alone (no element, so no script)", () => {
+        const doc = fakeDocument();
+        const wrapper = wrapDocumentWrite({ obj: doc }, tag, getBootstrapHtml);
+        wrapper.write("just text <!-- <head> -->");
 
         const written = doc.write.mock.calls[0]?.[0] as string;
         expect(written).not.toContain(BOOTSTRAP);
@@ -184,12 +193,12 @@ describe("wrapDocumentWrite — script-fragment bootstrap injection", () => {
         expect(written).not.toContain(BOOTSTRAP);
     });
 
-    it("does not prepend for plain HTML fragment with no <script>", () => {
+    it("puts it after a doctype and comments, after <head> (as the server)", () => {
         const doc = fakeDocument();
         const wrapper = wrapDocumentWrite({ obj: doc }, tag, getBootstrapHtml);
-        wrapper.write("<div>ad content</div>");
+        wrapper.write("<!doctype html><!--c--><html><head><title>t</title>");
 
         const written = doc.write.mock.calls[0]?.[0] as string;
-        expect(written).not.toContain(BOOTSTRAP);
+        expect(written).toBe("<!doctype html><!--c--><html><head>" + BOOTSTRAP + "<title>t</title>");
     });
 });

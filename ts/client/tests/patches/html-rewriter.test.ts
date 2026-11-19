@@ -242,22 +242,58 @@ describe("rewriteHtmlString — the document's own tags stay", () => {
 // Style attributes are parsed under another name (a parse of `style`
 // anywhere is checked against the page's CSP and reported), then named
 // style again: what comes out is as before.
-describe("rewriteHtmlString — style attributes, renamed while parsed", () => {
+describe("rewriteHtmlString — style attributes, edited where they stand", () => {
     it("rewrites url() in a style attribute and names it style", () => {
         const got = rewriteHtmlString('<div style="background:url(/a.png)">x</div>', tag);
         expect(got).toBe('<div style="background:url(&quot;/a.png?proxified=1&quot;)" crn-o="{&quot;style&quot;:&quot;background:url(/a.png)&quot;}">x</div>');
     });
     it("leaves other attributes, quoted text and raw text alone", () => {
         const html = `<p title="style=x" data-style='y' STYLE=color:red class=a>style="z"</p><script>var s = '<b style=q>';</script>`;
-        const got = rewriteHtmlString(html, tag);
-        expect(got).toContain('title="style=x"');
-        expect(got).toContain('data-style="y"');
-        expect(got).toContain('style="color:red"');
-        expect(got).toContain('>style="z"</p>');
-        expect(got).toContain("var s = '<b style=q>';");
-        expect(got).not.toContain("data-crn-hs");
+        // Nothing in it to rewrite: the page's markup, character for character.
+        expect(rewriteHtmlString(html, tag)).toBe(html);
     });
     it("keeps a valueless style attribute", () => {
-        expect(rewriteHtmlString("<b style>x</b>", tag)).toBe('<b style="">x</b>');
+        expect(rewriteHtmlString("<b style>x</b>", tag)).toBe("<b style>x</b>");
+    });
+});
+
+// Found by the tokenization spec (spec/HtmlTok.agda) and
+// tests/native/written-markup-vs-chromium: markup is edited where it
+// stands, tokenized as the browser will.
+describe("rewriteHtmlString — the page's markup, edited where it stands", () => {
+    it("foreign content is markup: an SVG <style>'s and <title>'s elements are rewritten", () => {
+        expect(rewriteHtmlString('<svg><style><image href="/i.png"/></style></svg>', tag)).toContain('href="/i.png?proxified=1"');
+        expect(rewriteHtmlString('<svg><title><a href="/t">t</a></title></svg>', tag)).toContain('href="/t?proxified=1"');
+        // </foreignObject> while an HTML element is open is ignored: the
+        // <style> after it is HTML's, raw text.
+        const mis = '<svg><foreignObject><b>x</foreignObject><style><img src="/f.png"></style></svg>';
+        expect(rewriteHtmlString(mis, tag)).toBe(mis);
+        // …while an HTML <style> is raw text.
+        expect(rewriteHtmlString('<style>a{}</style><b>x', tag)).toBe('<style>a{}</style><b>x');
+    });
+    it("a held tag's URL is rewritten: <body background>, <frame src>", () => {
+        expect(rewriteHtmlString('<body background="/b.png"><p>x', tag)).toContain('background="/b.png?proxified=1"');
+        expect(rewriteHtmlString('<frameset><frame src="/f"></frameset>', tag)).toContain('<frame src="/f?proxified=1"');
+    });
+    it("leaves an element a chunk opens open", () => {
+        expect(rewriteHtmlString('<div id="a">', tag)).toBe('<div id="a">');
+        expect(rewriteHtmlString("<p><table><tr><td>c", tag)).toBe("<p><table><tr><td>c");
+    });
+    it("a noscript's content is the page's text (scripting on), markup with it off", () => {
+        expect(rewriteHtmlString('<noscript><img src="/n.png"></noscript>', tag)).toBe('<noscript><img src="/n.png"></noscript>');
+        expect(rewriteHtmlString('<noscript><img src="/n.png"></noscript>', tag, "", undefined, { scripting: false })).toContain('src="/n.png?proxified=1"');
+    });
+    it("parses in its context: no tag in a <textarea>, SVG in an <svg>", () => {
+        expect(rewriteHtmlString('<img src="/x">', tag, "", undefined, { within: { ns: "html", name: "textarea" } })).toBe('<img src="/x">');
+        expect(rewriteHtmlString('<image href="/s.png"/>', tag, "", undefined, { within: { ns: "svg", name: "svg" } })).toContain('href="/s.png?proxified=1"');
+        // In HTML, <image> is an <img>: its href is not a URL.
+        expect(rewriteHtmlString('<image href="/s.png">', tag)).toBe('<image href="/s.png">');
+    });
+    it("reads a value as the parser does, and writes it back escaped", () => {
+        expect(rewriteHtmlString('<img src="/a?x=1&amp;y=2">', tag)).toContain('src="/a?x=1&amp;y=2&amp;proxified=1"');
+        expect(rewriteHtmlString("<a href=/u title='keep'>", tag)).toMatch(/^<a href="\/u\?proxified=1" title='keep' crn-o=/);
+    });
+    it("leaves a script whose end is not in the chunk as written", () => {
+        expect(rewriteHtmlString("<script>location.href", tag)).toBe("<script>location.href");
     });
 });

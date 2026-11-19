@@ -15,7 +15,7 @@ The rules both runtimes must follow byte for byte, written once:
 | `Url.agda` | how a URL string is read (WHATWG basic URL parser, Node 22 flavour) | `go/src/internal/urlrewrite/whatwg.go`; the browser's `URL` in TS |
 | `Containment.agda` | rewrite (proxify, remap, keep) and unwrap | `urlrewrite.Rewrite`/`Unwrap`; `rewriteUrl`/`unwrapProxiedUrl` in `ts/client/src/url/containment.ts` |
 | `Srcset.agda` | where each srcset candidate's URL starts and ends | `htmlrewrite/srcset.go`; `ts/client/src/patches/srcset.ts` |
-| `Referrer.agda` | Referer, Origin and Sec-Fetch-Site as a direct browser sends them (Referrer Policy, Fetch, Fetch Metadata) | `urlrewrite/referrer.go`, applied in `proxy/fetch_headers.go` |
+| `Referrer.agda` | Referer, Origin and Sec-Fetch-Site as a direct browser sends them (Referrer Policy, Fetch, Fetch Metadata); a RequestInit's referrer as Chromium reads it (`initReferrer`; the runtime hands it over proxified) | `urlrewrite/referrer.go`, applied in `proxy/fetch_headers.go`; `ts/client/src/patches/fetch.ts` (`initReferrer`) |
 | `Cookies.agda` | reading Set-Cookie, storing, choosing cookies for a URL, SameSite, and the wire form of a cookie in the browser's jar (RFC 6265bis) | `urlrewrite/cookies.go`, `proxy/cookies.go`; `ts/client/src/cookies/rfc.ts` |
 | `Fetch.agda` | a page's cross-origin fetch/XHR: whether it carries credentials (and so cookies), the CORS check of its response, the response headers a script sees (Access-Control-Expose-Headers) | `proxy/cors.go`, `proxy/cookies.go`; `ts/client/src/patches/cors.ts` (fetch, XHR) |
 | `Csp.agda` | reading a Content-Security-Policy (CSP3 §2.2), translating it for the proxy (header and `<meta>`), the bootstrap's nonce and inline-or-external choice, and framing: frame-ancestors source matching and X-Frame-Options | `urlrewrite/csp.go`, `proxy/frame_ancestors.go`; `ts/client/src/patches/html-rewriter.ts` (`<meta>`) |
@@ -23,6 +23,8 @@ The rules both runtimes must follow byte for byte, written once:
 | `Html.agda` | what a `<script>` is (classic, module, import map, speculation rules, data block) and the document base URL (the first `<base href>`) | `htmlrewrite.ScriptKindFor`, `urlrewrite.DocumentBase`; `ts/client/src/patches/script-kind.ts` |
 | `ImportMap.agda` | import maps edited as text (URL-like specifiers, addresses, scope prefixes proxified; integrity emptied), the JSON they are read as, and HTML's URL-like specifier rule | `urlrewrite/importmap.go`, `IsURLLikeSpecifier`; `ts/client/src/url/import-map.ts`, `isUrlLikeSpecifier` |
 | `Attrs.agda` | which (namespace, element, attribute) holds a URL, a URL list (ping, attributionsrc), a srcset, or a reflected-only URL (cite, longdesc); URL lists rewritten token by token | `htmlrewrite/attrs.go` (`URLAttrKind`, `RewriteURLList`, SVG namespace tracking); `ts/client/src/patches/url-attribute-map.ts` |
+| `HtmlTok.agda` | HTML tokenization (§13.2.5's boundary-deciding states, raw text only for HTML elements) and the namespace of each start tag (svg/math foreign content, integration points, breakouts); where the bootstrap goes; the attribute spans the client edits markup at | `htmlrewrite/stream.go` (x/net/html told raw text and CDATA from the tree), `nsTracker`; `ts/client/src/patches/html-tokens.ts`, `html-rewriter.ts` |
+| `Link.agda` | the Link response header (RFC 8288) as Chromium reads it, and as the proxy rewrites it: targets proxified, imagesrcset, integrity taken out, crossorigin as the `<link>`'s | `urlrewrite.RewriteLinkHeader` |
 | `Oracle.agda` | wire format only (one request line → one JSON line) | — |
 | `Main.agda` | the IO loop (spec-oracle skill's file, unchanged) | — |
 
@@ -64,7 +66,7 @@ host, IDNA, an invalid last `Max-Age`): a URL or cookie the user's browser
 accepts and cyrano does not would escape containment. `make browser-check`
 runs the spec against real Chromium (URLs: `spec-vs-chromium`, cookies:
 `cookies-vs-chromium`, CORS: `fetch-vs-chromium`, framing:
-`framing-vs-chromium`, CSS URLs: `css-vs-chromium`, script kinds and the base URL: `html-vs-chromium`, the JSON import maps are read as: `json-vs-chromium`; what Chromium fetches from and which IDL properties resolve URLs: `attrs-vs-chromium`; and for the CSP translation, which is cyrano's own
+`framing-vs-chromium`, CSS URLs: `css-vs-chromium`, script kinds and the base URL: `html-vs-chromium`, the JSON import maps are read as: `json-vs-chromium`; what Chromium fetches from and which IDL properties resolve URLs: `attrs-vs-chromium`; which start tags make elements in which namespace, and that the bootstrap placed by the spec runs first and leaves the document as direct: `html-tok-vs-chromium`; what a Link header makes Chromium fetch, direct and rewritten: `link-vs-chromium`; and for the CSP translation, which is cyrano's own
 rule, the page-cannot-tell property: what loads directly loads proxied,
 `csp-vs-chromium`) and the runtime's native surface, `postMessage` and
 workers in it (`tests/native`). IDNA, outside the spec, is checked by a
@@ -102,13 +104,10 @@ both runtimes (owner, 2026-11-18: "Agda completeness … super important for
 upkeep"). What remains, by priority (inventory of 2026-11-18; remove an
 entry when its module lands):
 
-  `url-attribute-map.ts`: `a ping`, `frame src`, `background`, … differ).
-- Bootstrap placement and the TS tag scanners (`holdStructuralTags`,
-  `tagEnd`, `hideStyleAttributes`) — HTML tokenization.
 - WebSocket origin marker (Go `SplitWSOrigin`; TS `withPageOrigin`).
 - `Crn-H` original-headers JSON and the Server-Timing `crnb` entry (Go
   writers, TS readers).
-- Link header (RFC 8288) and Refresh / `<meta http-equiv=refresh>` (Go).
+- Refresh / `<meta http-equiv=refresh>` (Go).
 - Query values unproxified upstream (Go `UnproxyQueryValues`).
 - Client hints: Accept-CH / Critical-CH (RFC 8941 lists), which hints go
   where; the synthesized Sec-CH-UA (Go `proxy/client_hints.go`,

@@ -239,3 +239,32 @@ secFetchSite init initSite target targetSite =
   registrable (just a) (just b) = eqStr a b
   registrable nothing  nothing  = eqStr (hostOf init) (hostOf target)
   registrable _        _        = false
+
+------------------------------------------------------------------------
+-- A RequestInit's referrer (Fetch, new Request(input, init): init's
+-- "referrer"), as Chromium reads it (checked: fetch-vs-chromium): "" is no
+-- referrer; otherwise the value is parsed against the API base URL — a
+-- failure throws a TypeError — and is the context's own referrer
+-- ("about:client") unless it is a URL of the context's origin, which is
+-- then the request's referrer (fragment and all). about:client itself, any
+-- other about: URL, data:, blob: …: the context's own.
+--
+-- Under cyrano the context is on the proxy origin and the page names its
+-- original URLs: the runtime hands the browser the proxified URL of a
+-- referrer it would honour directly, so the browser sends it and the
+-- proxy, reading it back, applies the policy to the original
+-- (ts/client/src/patches/fetch.ts). Mapbox's worker names its page so, for
+-- its tokens' URL restriction.
+
+data InitReferrer : Set where
+  initNone initClient initError initOutside : InitReferrer
+  initUrl : Abs → InitReferrer
+
+-- base: the API base URL; ctx: a URL of the context's origin (its document's).
+initReferrer : Abs → Abs → Str → InitReferrer
+initReferrer base ctx [] = initNone
+initReferrer base ctx v with parse (just base) (preprocess v)
+... | url a       = if sameOriginOf a ctx then initUrl a else initClient
+... | invalid     = initError
+... | otherScheme = initClient
+... | outside     = initOutside

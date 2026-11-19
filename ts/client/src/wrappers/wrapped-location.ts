@@ -18,7 +18,7 @@
 //   * ancestorOrigins is a Proxy of the real DOMStringList, answering the
 //     ancestors' original origins.
 
-import { SafeSet, nO, nOP, nR, ncall } from "../native/intrinsics";
+import { SafeSet, nO, nOP, nR, ncall, aIncludes } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
 import { rewriteUrl, unwrapProxiedUrl } from "../url/containment";
 import { maskAs, standIn } from "../native/surface";
@@ -176,7 +176,7 @@ function ancestorOriginsView(real: Location, o: LocationViewOptions): unknown {
             const i = index(k);
             if (i !== null) return list[i];
             if (k === "item" && item) return maskAs(standIn(item as (...a: unknown[]) => unknown, { apply: (_t, _s, a: unknown[]) => list[Number(a[0])] ?? null }), item);
-            if (k === "contains" && contains) return maskAs(standIn(contains as (...a: unknown[]) => unknown, { apply: (_t, _s, a: unknown[]) => list.includes(String(a[0])) }), contains);
+            if (k === "contains" && contains) return maskAs(standIn(contains as (...a: unknown[]) => unknown, { apply: (_t, _s, a: unknown[]) => aIncludes(list, String(a[0])) }), contains);
             if (k === Symbol.iterator && iter) return maskAs(standIn(iter as (...a: unknown[]) => unknown, { apply: () => list[Symbol.iterator]() }), iter);
             return nR.get(t, k, t);
         },

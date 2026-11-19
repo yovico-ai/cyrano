@@ -221,6 +221,14 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
   the calling function's realm (reCAPTCHA, PayPal); a frame handed out as
   itself stays itself after it becomes cross-origin (one WindowProxy).
   Not ours: sites whose own server fails (Cloudflare 525 on fpi-inc).
+  From the 2026-11-19 run: the Link header's integrity / crossorigin
+  (spec/Link.agda; Shop Pay's modulepreload was blocked); a RequestInit's
+  referrer (spec/Referrer.agda initReferrer; Mapbox's worker names its
+  page, its URL-restricted token was refused); a cross-origin window's
+  child frames by name (`parent.frames["a-…"]`, reCAPTCHA). Not ours
+  there: stamped.io's own init race, artfund's origin alternating 301 and
+  a meta-refresh page, readthedocs' and 1stdibs' challenges (direct too,
+  once the IP is flagged).
   Known: blob: URLs carry the proxy's origin.
 - **Measuring pages with many requests (ads): serve the proxy over TLS.**
   Over plain HTTP the browser keeps 6 connections to the proxy for every
@@ -265,11 +273,14 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
   trap fires), uses no regexp, and puts the key back before returning.
   The runtime calls built-ins saved at load (`native/intrinsics.ts`:
   `nR`/`nO`/`nOP`, `ncall`/`napply`/`nbind`, `Safe{Weak,}{Map,Set}`,
-  `nqueueMicrotask`), never the page-writable globals — keep it so in new
-  code. Still live (a page that replaces them sees the runtime call them):
-  Array/String/RegExp methods and iteration (for…of, spread), and the
-  bundled third-party code (acorn, run whenever the runtime rewrites JS
-  source; the public-suffix list). Bisecting such a site:
+  `nqueueMicrotask`, and the methods polyfills replace: `sStarts`,
+  `sEnds`, `sIncludes`, `sPadStart`, `aIncludes` — mountaineers.org's
+  Plone bundle made startsWith a RegExp and every cookie write threw),
+  never the page-writable globals — keep it so in new code (write
+  `sStarts(s, p)`, not `s.startsWith(p)`). tldts (the public-suffix list)
+  is routed to them by a Vite transform (`vite.config.ts`); acorn calls
+  none of them. Still live: the other Array/String/RegExp methods and
+  iteration (for…of, spread). Bisecting such a site:
   `CYRANO_DEBUG_JS_OFF` (rules), `CYRANO_DEBUG_NO_JS=<url re>`,
   `CYRANO_DEBUG_R5="[!]<url re> <lo> <hi> …; …"` (R5 by offset), and
   V8 coverage / pause-on-caught-exceptions over CDP, direct vs proxied.
@@ -280,8 +291,22 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
   setAttributeNS are rewritten). URL-bearing attributes are one table in
   both runtimes (spec/Attrs.agda, checked against what Chromium fetches):
   `ping` / `attributionsrc` are URL lists; `cite` / `longdesc` / `lowsrc` /
-  `codebase` stay as written, their getters unwrapped. Go tracks the SVG
-  namespace over the token stream (simplified tree construction). The
+  `codebase` stay as written, their getters unwrapped. Markup is tokenized
+  as the browser does (spec/HtmlTok.agda, checked against Chromium): raw
+  text only for HTML elements (`<svg><style>` holds markup), the
+  namespace from a simplified tree construction; Go feeds that back to
+  x/net/html (`htmlrewrite/stream.go`), the client ports it
+  (`patches/html-tokens.ts`). The client edits markup a page writes where
+  it stands, at token spans (`patches/html-rewriter.ts`; no template parse
+  and re-serialization: a `document.write` chunk that opens an element
+  leaves it open; `tests/native/written-markup-vs-chromium`); the
+  bootstrap goes where the server's goes (after the first `<head>` /
+  `<body>`, else before the first other element) for documents, srcdoc
+  and writes into empty frames. A `<noscript>`'s content is kept as
+  written (text with scripting on). Open: an inline script or a start tag
+  split across `document.write` chunks is left unrewritten (each chunk
+  is tokenized from the data state); a page's parse inside
+  `<select>` or after `<frameset>` is not modelled. The
   Navigation API is wrapped (`patches/navigation.ts`; Shopify). Open from
   random-site testing (2026-11-18): `location` / `top` / `parent` read by
   destructuring is handled where the pattern has a source (R14:

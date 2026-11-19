@@ -12,6 +12,8 @@
 --   srcset  <value>                     → {"out":"…"}  (each URL u written as [u])
 --   direct  <base> <url>                → {"kind":"shownDirect","out":"…"}
 --                                         (what the browser shows, no cyrano)
+--   initref <base> <context URL> <value> → {"out":""|"about:client"|"TypeError"|"<url>"}
+--                                         (a RequestInit's referrer, Chromium's reading)
 --   policy  <Referrer-Policy value>     → {"out":"strict-origin"} / {"out":""}
 --   referrer <policy> <from> <to>       → {"out":"…"} / {"none":true}
 --   origin  <mode> <safe|unsafe> <policy> <from> <to>
@@ -47,6 +49,17 @@
 --   urllist <proxy> <base> <text>       → {"out":"<each token proxified>"}
 --   urllike <specifier>                 → {"out":"yes"} / {"out":"no"}
 --   jsonobject <text>                   → {"out":"yes"} / {"out":"no"} (a JSON object)
+--   link    <proxy> <base> <Link header> → {"out":"<rewritten header>"}
+--   linkpreloads <Link header>          → {"out":"target\tas\trel types\n…"} (the link-values that read)
+--   htmltags <0|1> <text>             → {"out":"name ns id\n…"} (each start tag:
+--                                         its namespace, its data-i or "-";
+--                                         1: scripting on)
+--   htmltagsin <0|1> <html|svg|math> <context element> <encoding|-> <text>
+--                                       → as htmltags, parsed in that element
+--   htmlspans <text>                    → {"out":"name from to[ attr nf nt vf vt]…\n…"}
+--                                         (each start tag's attribute spans)
+--   bootat  <marker> <text>             → {"out":"<text with the marker where
+--                                         the bootstrap goes>"}
 --   css     <proxy> <base> <css text>  → {"out":"<rewritten css>"}
 --   cssurls <css text>                  → {"out":"<url>\n<url>…"} (the URLs it names)
 --   frameanc <CSP header value> <embedder URL> <document URL>
@@ -69,6 +82,7 @@ open import Data.Bool.Base using (Bool; true; false; _∨_; if_then_else_)
 open import Data.Char.Base using (Char; toℕ; fromℕ)
 open import Data.List.Base using (List; []; _∷_; _++_; reverse; concatMap)
 open import Data.Maybe.Base using (Maybe; just; nothing)
+open import Data.Product.Base using (_×_; _,_)
 open import Data.Nat.Base using (ℕ; zero; suc; _+_; _∸_; _*_; _<ᵇ_; _/_; _%_)
 import Data.String.Base
 open import Data.String.Base using (String; toList; fromList)
@@ -84,6 +98,8 @@ open import Csp
 open import Css using (rewriteCss; cssUrls)
 import ImportMap
 import Attrs
+import HtmlTok
+import Link
 open import Html using (ScriptKind; scriptClassic; scriptModule; scriptImportMap; scriptSpeculation; scriptData; scriptKind; documentBase; BaseURL; baseOf′; aboutBlank; beyond)
 
 ------------------------------------------------------------------------
@@ -229,6 +245,7 @@ dispatch op args =
   else if eqStr op (toList "unwrap") then unwrapReq args
   else if eqStr op (toList "srcset") then srcsetReq args
   else if eqStr op (toList "direct") then directReq args
+  else if eqStr op (toList "initref") then initRefReq args
   else if eqStr op (toList "policy") then policyReq args
   else if eqStr op (toList "referrer") then referrerReq args
   else if eqStr op (toList "origin") then originReq args
@@ -249,6 +266,12 @@ dispatch op args =
   else if eqStr op (toList "attrkind") then attrKindReq args
   else if eqStr op (toList "urllist") then urlListReq args
   else if eqStr op (toList "jsonobject") then jsonObjectReq args
+  else if eqStr op (toList "link") then linkReq args
+  else if eqStr op (toList "linkpreloads") then linkPreloadsReq args
+  else if eqStr op (toList "htmltags") then htmlTagsReq args
+  else if eqStr op (toList "htmlspans") then htmlSpansReq args
+  else if eqStr op (toList "htmltagsin") then htmlTagsInReq args
+  else if eqStr op (toList "bootat") then bootAtReq args
   else if eqStr op (toList "css") then cssReq args
   else if eqStr op (toList "cssurls") then cssUrlsReq args
   else if eqStr op (toList "frameanc") then frameAncReq args
@@ -284,6 +307,20 @@ dispatch op args =
 
   out : Str → Str
   out v = toList "{\"out\":" ++ jsonString v ++ toList "}"
+
+  initRefReq : List Str → Str
+  initRefReq (b ∷ c ∷ v ∷ []) with baseOf b | baseOf c
+  ... | just base | just ctx = answer (initReferrer base ctx v)
+    where
+    answer : InitReferrer → Str
+    answer initNone    = out []
+    answer initClient  = out (toList "about:client")
+    answer initError   = out (toList "TypeError")
+    answer initOutside = errorReply "OutOfModel"
+    answer (initUrl a) = out (href a)
+  ... | _ | _ = errorReply "BadBase"
+  initRefReq _ = errorReply "BadRequest"
+
 
   maybeOut : Maybe Str → Str
   maybeOut (just v) = out v
@@ -516,6 +553,68 @@ dispatch op args =
     joinLF (u ∷ [])     = u
     joinLF (u ∷ v ∷ us) = u ++ nl ∷ joinLF (v ∷ us)
   cssUrlsReq _ = errorReply "BadRequest"
+
+  linkReq : List Str → Str
+  linkReq (p ∷ b ∷ h ∷ []) with proxyOf p | baseOf b
+  ... | just px | just base = out (Link.rewriteLink rw (rewriteSrcset (λ u → keepOr u (rw u))) h)
+    where
+    rw : Str → Maybe Str
+    rw u with rewriteUrl px base u
+    ... | emit _ v = just v
+    ... | _        = nothing
+    keepOr : Str → Maybe Str → Str
+    keepOr u (just v) = v
+    keepOr u nothing  = u
+  ... | nothing | _ = errorReply "BadProxy"
+  ... | just _  | nothing = errorReply "BadBase"
+  linkReq _ = errorReply "BadRequest"
+
+  linkPreloadsReq : List Str → Str
+  linkPreloadsReq (h ∷ []) = out (joinP (Link.links h))
+    where
+    one : Str × Str × List Str → Str
+    one (t , a , rs) = t ++ fromℕ 9 ∷ a ++ fromℕ 9 ∷ Link.joinWith (fromℕ 32) rs
+    joinP : List (Str × Str × List Str) → Str
+    joinP []       = []
+    joinP (x ∷ []) = one x
+    joinP (x ∷ y ∷ xs) = one x ++ nl ∷ joinP (y ∷ xs)
+  linkPreloadsReq _ = errorReply "BadRequest"
+
+  htmlTagsReq : List Str → Str
+  htmlTagsReq (f ∷ text ∷ []) = out (joinL (HtmlTok.startTags (eqStr f (toList "1")) text))
+    where
+    joinL : List Str → Str
+    joinL []           = []
+    joinL (u ∷ [])     = u
+    joinL (u ∷ v ∷ us) = u ++ nl ∷ joinL (v ∷ us)
+  htmlTagsReq _ = errorReply "BadRequest"
+
+  htmlTagsInReq : List Str → Str
+  htmlTagsInReq (f ∷ n ∷ nm ∷ e ∷ text ∷ []) =
+    out (joinT (HtmlTok.startTagsOf (HtmlTok.tokensIn (eqStr f (toList "1")) ns nm enc text)))
+    where
+    ns : HtmlTok.Ns3
+    ns = if eqStr n (toList "svg") then HtmlTok.nsSvg else if eqStr n (toList "math") then HtmlTok.nsMath else HtmlTok.nsHtml
+    enc : Maybe Str
+    enc = if eqStr e (toList "-") then nothing else just e
+    joinT : List Str → Str
+    joinT []           = []
+    joinT (u ∷ [])     = u
+    joinT (u ∷ v ∷ us) = u ++ nl ∷ joinT (v ∷ us)
+  htmlTagsInReq _ = errorReply "BadRequest"
+
+  htmlSpansReq : List Str → Str
+  htmlSpansReq (text ∷ []) = out (joinS (HtmlTok.startSpans text))
+    where
+    joinS : List Str → Str
+    joinS []           = []
+    joinS (u ∷ [])     = u
+    joinS (u ∷ v ∷ us) = u ++ nl ∷ joinS (v ∷ us)
+  htmlSpansReq _ = errorReply "BadRequest"
+
+  bootAtReq : List Str → Str
+  bootAtReq (m ∷ text ∷ []) = out (HtmlTok.withBootstrap m text)
+  bootAtReq _ = errorReply "BadRequest"
 
   frameAncReq : List Str → Str
   frameAncReq (h ∷ a ∷ d ∷ []) with baseOf a | baseOf d

@@ -28,7 +28,7 @@
 //
 // Known gap: the object URL's origin is the proxy's (blob:http://proxy/…)
 // where natively it is the site's; translating blob: URLs is a follow-up.
-import { SafeMap, SafeWeakMap, nR } from "../native/intrinsics";
+import { SafeMap, SafeWeakMap, nR, sIncludes } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
 import { rewriteJsSource, defaultJsRewriteOptions } from "../js/rewriter";
 import { wrapConstructor, wrapMethod } from "../native/surface";
@@ -104,7 +104,7 @@ function readScript(targetWindow: Window, url: string): { source: string; type: 
 function isJsLikeType(type: string | undefined): boolean {
     if (!type) return false;
     const t = type.toLowerCase();
-    return t.includes("javascript") || t.includes("ecmascript");
+    return sIncludes(t, "javascript") || sIncludes(t, "ecmascript");
 }
 
 /**

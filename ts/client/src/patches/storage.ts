@@ -23,7 +23,7 @@
 // Known gaps: SharedWorker names and Web Locks names are shared; data
 // stored before this existed stays, invisible, under its bare names.
 
-import { SafeWeakMap, nO, nR, ncall } from "../native/intrinsics";
+import { SafeWeakMap, nO, nR, ncall, sStarts } from "../native/intrinsics";
 import { internalsOf } from "../native/internals";
 import { wrapAccessor, wrapConstructor, wrapMethod } from "../native/surface";
 
@@ -52,7 +52,7 @@ export function patchStorageNames(scope: object, prefix: Prefix): void {
     const mine = (name: unknown): string => prefix() + String(name);
     const shown = (name: string): string | null => {
         const p = prefix();
-        return name.startsWith(p) ? name.slice(p.length) : null;
+        return sStarts(name, p) ? name.slice(p.length) : null;
     };
 
     const F = g["IDBFactory"]?.prototype as object | undefined;
@@ -144,7 +144,7 @@ export function patchWebStorage(targetWindow: Window, prefix: Prefix, unwrapOne:
         const n = ncall(nativeLength, real);
         for (let i = 0; i < n; i++) {
             const k = ncall(nat.key, real, i);
-            if (k !== null && k.startsWith(p)) keys.push(k.slice(p.length));
+            if (k !== null && sStarts(k, p)) keys.push(k.slice(p.length));
         }
         lists.set(real, { prefix: p, keys });
         return keys;
@@ -252,13 +252,13 @@ export function patchWebStorage(targetWindow: Window, prefix: Prefix, unwrapOne:
             const area = areaGet ? ncall(areaGet, e) : null;
             if (area) forget(area);
             // (key null: a clear() — the native clear is never called by a proxied page.)
-            if (k === null || !k.startsWith(prefix())) e.stopImmediatePropagation();
+            if (k === null || !sStarts(k, prefix())) e.stopImmediatePropagation();
         }, true);
         wrapAccessor<string | null>(SE, "key", {
             get: (get, self) => {
                 const k = ncall(get, self);
                 const p = prefix();
-                return k !== null && k.startsWith(p) ? k.slice(p.length) : k;
+                return k !== null && sStarts(k, p) ? k.slice(p.length) : k;
             },
         });
         if (nO.getOwnPropertyDescriptor(SE, "url")) {

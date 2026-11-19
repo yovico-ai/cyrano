@@ -1,4 +1,4 @@
-import { SafeSet, SafeWeakMap } from "../native/intrinsics";
+import { SafeSet, SafeWeakMap, sIncludes } from "../native/intrinsics";
 // Cross-origin requests, as the Fetch standard has a page see them.
 //
 // Under the proxy every request the browser makes is same-origin (to the
@@ -43,7 +43,7 @@ export function includesCredentials(mode: string, sameOrigin: boolean): boolean 
 }
 
 const isTchar = (c: number): boolean =>
-    (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a) || "!#$%&'*+-.^_`|~".includes(String.fromCharCode(c));
+    (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a) || sIncludes("!#$%&'*+-.^_`|~", String.fromCharCode(c));
 
 /**
  * The headers a cross-origin response shows, given its

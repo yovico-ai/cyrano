@@ -85,62 +85,290 @@ func RewriteURLList(v string, rw func(string) string) string {
 	return b.String()
 }
 
-// nsTracker follows, over the token stream, which elements are SVG (HTML
-// tree construction, simplified: <svg> enters, its foreignObject / desc /
-// title hold HTML, an HTML breakout tag leaves foreign content).
-type nsTracker struct {
-	open []nsEntry
+// The namespace of each element, from a simplified tree construction over
+// the token stream: spec/HtmlTok.agda (startT, endT), checked against
+// Chromium (html-tok-vs-chromium). Svg and math open foreign content;
+// SVG foreignObject / desc / title and MathML annotation-xml (encoding
+// text/html or application/xhtml+xml) are HTML integration points, mi mo
+// mn ms mtext MathML text integration points; a breakout tag in foreign
+// content leaves it; an end tag pops to the nearest open element of its
+// name (</p> and </br> leave foreign content first).
+type Ns int
+
+const (
+	NsHTML Ns = iota
+	NsSVG
+	NsMath
+)
+
+func (n Ns) String() string {
+	switch n {
+	case NsSVG:
+		return "svg"
+	case NsMath:
+		return "math"
+	}
+	return "html"
 }
+
+type ipKind int
+
+const (
+	noIP ipKind = iota
+	htmlIP
+	textIP
+)
 
 type nsEntry struct {
 	tag string
-	svg bool
+	ns  Ns
+	ip  ipKind
 }
 
-var svgBreakout = map[string]bool{}
+type nsTracker struct {
+	open []nsEntry // the current node last
+}
 
-func init() {
-	for _, t := range strings.Fields("b big blockquote body br center code dd div dl dt em embed h1 h2 h3 h4 h5 h6 head hr i img li listing menu meta nobr ol p pre ruby s small span strong strike sub sup table tt u ul var") {
-		svgBreakout[t] = true
+func fieldSet(s string) map[string]bool {
+	m := map[string]bool{}
+	for _, t := range strings.Fields(s) {
+		m[t] = true
 	}
+	return m
 }
 
-var htmlVoid = map[string]bool{}
+var (
+	foreignBreakout = fieldSet("b big blockquote body br center code dd div dl dt em embed h1 h2 h3 h4 h5 h6 head hr i img li listing menu meta nobr ol p pre ruby s small span strong strike sub sup table tt u ul var")
+	htmlVoid        = fieldSet("area base basefont bgsound br col embed frame hr img input keygen link meta param source track wbr")
+)
 
-func init() {
-	for _, t := range strings.Fields("area base br col embed hr img input link meta source track wbr param keygen frame") {
-		htmlVoid[t] = true
-	}
-}
-
-func (n *nsTracker) inSVG() bool {
+func (n *nsTracker) top() (nsEntry, bool) {
 	if len(n.open) == 0 {
+		return nsEntry{}, false
+	}
+	return n.open[len(n.open)-1], true
+}
+
+// foreignFor: whether a start tag is processed by the rules for foreign content.
+func (n *nsTracker) foreignFor(tag string) bool {
+	e, ok := n.top()
+	if !ok || e.ns == NsHTML {
 		return false
 	}
-	top := n.open[len(n.open)-1]
-	return top.svg && top.tag != "foreignobject" && top.tag != "desc" && top.tag != "title"
-}
-
-// start reports whether the element is SVG and records it as open.
-func (n *nsTracker) start(tag string, selfClosing bool, attrs func(string) bool) bool {
-	svg := tag == "svg" || n.inSVG()
-	if svg && n.inSVG() && (svgBreakout[tag] || tag == "font" && (attrs("color") || attrs("face") || attrs("size"))) {
-		for len(n.open) > 0 && n.open[len(n.open)-1].svg {
-			n.open = n.open[:len(n.open)-1]
+	switch e.ip {
+	case htmlIP:
+		return false
+	case textIP:
+		if tag != "mglyph" && tag != "malignmark" {
+			return false
 		}
-		svg = false
 	}
-	if !selfClosing && !(!svg && htmlVoid[tag]) {
-		n.open = append(n.open, nsEntry{tag, svg})
-	}
-	return svg
+	return !(e.tag == "annotation-xml" && tag == "svg")
 }
 
+func (n *nsTracker) popForeign() {
+	for len(n.open) > 0 {
+		e := n.open[len(n.open)-1]
+		if e.ns == NsHTML || e.ip != noIP {
+			return
+		}
+		n.open = n.open[:len(n.open)-1]
+	}
+}
+
+func htmlNsOf(tag string) Ns {
+	switch tag {
+	case "svg":
+		return NsSVG
+	case "math":
+		return NsMath
+	}
+	return NsHTML
+}
+
+// start records a start tag and reports its element's namespace. attr
+// gives the tag's attribute values (the first of each name).
+func (n *nsTracker) start(tag string, selfClosing bool, attr func(string) (string, bool)) Ns {
+	has := func(a string) bool { _, ok := attr(a); return ok }
+	ns := htmlNsOf(tag)
+	if n.foreignFor(tag) {
+		if foreignBreakout[tag] || tag == "font" && (has("color") || has("face") || has("size")) {
+			n.popForeign()
+			ns = NsHTML
+		} else {
+			e, _ := n.top()
+			ns = e.ns
+		}
+	}
+	// In HTML, an <image> is an <img> (the tree builder renames it).
+	el := tag
+	if ns == NsHTML && tag == "image" {
+		el = "img"
+	}
+	pushed := !htmlVoid[el]
+	if ns != NsHTML {
+		pushed = !selfClosing
+	}
+	if pushed {
+		ip := noIP
+		switch {
+		case ns == NsSVG && (tag == "foreignobject" || tag == "desc" || tag == "title"):
+			ip = htmlIP
+		case ns == NsMath && (tag == "mi" || tag == "mo" || tag == "mn" || tag == "ms" || tag == "mtext"):
+			ip = textIP
+		case ns == NsMath && tag == "annotation-xml":
+			if v, ok := attr("encoding"); ok {
+				if l := strings.ToLower(v); l == "text/html" || l == "application/xhtml+xml" {
+					ip = htmlIP
+				}
+			}
+		}
+		n.open = append(n.open, nsEntry{el, ns, ip})
+	}
+	return ns
+}
+
+// end records an end tag (spec endT): the tree builder's end-tag rules,
+// as far as the stack goes.
 func (n *nsTracker) end(tag string) {
-	for i := len(n.open) - 1; i >= 0; i-- {
-		if n.open[i].tag == tag {
-			n.open = n.open[:i]
+	if e, ok := n.top(); ok && e.ns != NsHTML {
+		if tag == "p" || tag == "br" {
+			n.popForeign()
+			n.htmlEnd(tag)
+			return
+		}
+		// Foreign content: to the nearest foreign element of the name,
+		// until an HTML element is reached.
+		for k := len(n.open) - 1; k >= 0; k-- {
+			x := n.open[k]
+			if x.ns == NsHTML {
+				break
+			}
+			if x.tag == tag {
+				n.open = n.open[:k]
+				return
+			}
+		}
+	}
+	n.htmlEnd(tag)
+}
+
+var (
+	endHeadings   = fieldSet("h1 h2 h3 h4 h5 h6")
+	endScoped     = fieldSet("address article aside blockquote button center details dialog dir div dl fieldset figcaption figure footer header hgroup listing main menu nav ol pre search section summary ul applet marquee object dd dt form")
+	endTableParts = fieldSet("table tbody thead tfoot tr td th caption colgroup template select")
+	formattingEl  = fieldSet("a b big code em font i nobr s small strike strong tt u")
+	specialHTML   = fieldSet("address applet area article aside base basefont bgsound blockquote body br button caption center col colgroup dd details dir div dl dt embed fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hgroup hr html iframe img input keygen li link listing main marquee menu meta nav noembed noframes noscript object ol p param plaintext pre script search section select source style summary table tbody td template textarea tfoot th thead title tr track ul wbr xmp")
+	scopeHTML     = fieldSet("applet caption html table td th marquee object template")
+	ipSVG         = fieldSet("foreignobject desc title")
+	ipMath        = fieldSet("mi mo mn ms mtext annotation-xml")
+)
+
+func ipName(x nsEntry) bool {
+	switch x.ns {
+	case NsSVG:
+		return ipSVG[x.tag]
+	case NsMath:
+		return ipMath[x.tag]
+	}
+	return false
+}
+
+func namedHTML(x nsEntry, t string) bool { return x.ns == NsHTML && x.tag == t }
+func specialEl(x nsEntry) bool {
+	if x.ns == NsHTML {
+		return specialHTML[x.tag]
+	}
+	return ipName(x)
+}
+func scopeBoundary(x nsEntry) bool {
+	if x.ns == NsHTML {
+		return scopeHTML[x.tag]
+	}
+	return ipName(x)
+}
+
+// popUntil pops through the first entry m picks (from the current node
+// down), unless a boundary b comes first.
+func (n *nsTracker) popUntil(m, b func(nsEntry) bool) {
+	for k := len(n.open) - 1; k >= 0; k-- {
+		x := n.open[k]
+		if m(x) {
+			n.open = n.open[:k]
+			return
+		}
+		if b(x) {
 			return
 		}
 	}
+}
+
+func (n *nsTracker) htmlEnd(t string) {
+	named := func(x nsEntry) bool { return namedHTML(x, t) }
+	switch {
+	case t == "body" || t == "html" || t == "br":
+	case t == "p":
+		n.popUntil(named, func(x nsEntry) bool { return scopeBoundary(x) || namedHTML(x, "button") })
+	case t == "li":
+		n.popUntil(named, func(x nsEntry) bool { return scopeBoundary(x) || namedHTML(x, "ol") || namedHTML(x, "ul") })
+	case endHeadings[t]:
+		n.popUntil(func(x nsEntry) bool { return x.ns == NsHTML && endHeadings[x.tag] }, scopeBoundary)
+	case endScoped[t]:
+		n.popUntil(named, scopeBoundary)
+	case endTableParts[t]:
+		n.popUntil(named, func(x nsEntry) bool { return namedHTML(x, "html") || namedHTML(x, "table") || namedHTML(x, "template") })
+	case formattingEl[t]:
+		n.adoption(t)
+	default:
+		n.popUntil(named, specialEl)
+	}
+}
+
+// adoption: the adoption agency, as far as the stack goes (spec adoption).
+func (n *nsTracker) adoption(t string) {
+	for round := 0; round < 8; round++ {
+		f := -1
+		for k := len(n.open) - 1; k >= 0; k-- {
+			if namedHTML(n.open[k], t) {
+				f = k
+				break
+			}
+		}
+		if f < 0 {
+			n.popUntil(func(x nsEntry) bool { return namedHTML(x, t) }, specialEl)
+			return
+		}
+		for k := f + 1; k < len(n.open); k++ {
+			if scopeBoundary(n.open[k]) {
+				return
+			}
+		}
+		fb := -1
+		for k := f + 1; k < len(n.open); k++ {
+			if specialEl(n.open[k]) {
+				fb = k
+				break
+			}
+		}
+		if fb < 0 {
+			n.open = n.open[:f]
+			return
+		}
+		next := append([]nsEntry(nil), n.open[:f]...)
+		for k := f + 1; k < fb; k++ {
+			if x := n.open[k]; x.ns == NsHTML && formattingEl[x.tag] {
+				next = append(next, x)
+			}
+		}
+		next = append(next, n.open[fb], n.open[f])
+		next = append(next, n.open[fb+1:]...)
+		n.open = next
+	}
+}
+
+// cdataAllowed: a CDATA section is one only where the next token is
+// foreign content (not at an integration point; Chromium).
+func (n *nsTracker) cdataAllowed() bool {
+	e, ok := n.top()
+	return ok && e.ns != NsHTML && e.ip == noIP
 }

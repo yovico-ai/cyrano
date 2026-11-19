@@ -32,6 +32,9 @@ import (
 // (the proxy origin), producing on-proxy URLs that bypass the rewriter.
 // Inlining makes set_location run at the right moment in the parser.
 func bootstrapScript(cfg *Config) string {
+	if cfg.bootstrapText != "" {
+		return cfg.bootstrapText
+	}
 	configJSON, err := json.Marshal(cfg.ClientPassthrough)
 	if err != nil {
 		// ClientPassthrough is a plain map; marshal can't fail in practice.

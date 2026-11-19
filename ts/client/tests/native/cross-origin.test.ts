@@ -28,6 +28,24 @@ function viewer(origin: string): Window {
 }
 
 describe("crossOriginView", () => {
+    // reCAPTCHA's challenge frame finds its anchor frame by name in its
+    // cross-origin parent: parent.frames["a-…"] (uncaught SecurityError, the
+    // challenge never wired up, on mountaineers.org).
+    it("a cross-origin window's child frames by name, as by index", () => {
+        const page = viewer("https://page.example");
+        const other = fakeWindow("https://other.example").win as unknown as Record<string | number, unknown>;
+        const anchor = fakeWindow("https://other.example").win as unknown as Record<string, unknown>;
+        const plain = fakeWindow("https://other.example").win as unknown as Record<string, unknown>;
+        anchor["name"] = "a-xyz"; plain["name"] = "";
+        other["length"] = 2; other[0] = plain; other[1] = anchor;
+        const view = crossOriginView(other as unknown as Window, null, page) as unknown as Record<string, unknown>;
+        const frames = view["frames"] as Record<string, unknown>;
+        expect(realWindow(frames["a-xyz"])).toBe(anchor);
+        expect(realWindow(frames[1])).toBe(anchor);
+        expect("a-xyz" in frames).toBe(true);
+        expect(() => frames["b-none"]).toThrow(/Blocked a frame/);
+    });
+
     it("a same-origin frame is itself; a cross-origin one is a view", () => {
         const page = viewer("https://page.example");
         const same = fakeWindow("https://page.example").win;
