@@ -316,10 +316,34 @@ func ensureClientHints(h fhttp.Header, ua string) {
 	if m == nil {
 		return
 	}
-	major := m[1]
-	h.Set("Sec-Ch-Ua", `"Not)A;Brand";v="8", "Chromium";v="`+major+`", "Google Chrome";v="`+major+`"`)
+	major, err := strconv.Atoi(m[1])
+	if err != nil {
+		return
+	}
+	h.Set("Sec-Ch-Ua", SecChUa(major, "Google Chrome"))
 	h.Set("Sec-Ch-Ua-Mobile", "?0")
 	h.Set("Sec-Ch-Ua-Platform", `"`+chromePlatform(ua)+`"`)
+}
+
+// SecChUa is the low-entropy Sec-CH-UA a Chrome of this major version
+// sends (spec/Hints.agda secChUa, as Chromium makes it: the GREASE brand,
+// its version and the brands' order all follow from the version; checked
+// against Chromium). A fixed GREASE brand matched only some versions.
+func SecChUa(major int, product string) string {
+	chars := []string{" ", "(", ":", "-", ".", "/", ")", ";", "=", "?", "_"}
+	versions := []string{"8", "99", "24"}
+	orders := [6][3]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}}
+	v := strconv.Itoa(major)
+	entries := [3]string{
+		`"Not` + chars[major%11] + "A" + chars[(major+1)%11] + `Brand";v="` + versions[major%3] + `"`,
+		`"Chromium";v="` + v + `"`,
+		`"` + product + `";v="` + v + `"`,
+	}
+	var out [3]string
+	for i, pos := range orders[major%6] {
+		out[pos] = entries[i]
+	}
+	return out[0] + ", " + out[1] + ", " + out[2]
 }
 
 // chromePlatform maps common UA platform tokens to the string real Chrome

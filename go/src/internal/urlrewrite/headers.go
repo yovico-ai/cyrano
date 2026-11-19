@@ -214,57 +214,82 @@ func rewriteLinkValue(v string, rwd func(string, Dest) string) string {
 }
 
 // RewriteRefresh rewrites the URL of a Refresh header or a
-// <meta http-equiv=refresh content=…> value (HTML, "shared declarative
-// refresh steps": `<time>[;|,] [url=]['|"]<url>`), so the refresh navigates
-// through the proxy. A value with no URL (a plain reload) is unchanged.
+// <meta http-equiv=refresh content=…> value as spec/Refresh.agda reads it,
+// which is Chromium's reading (refresh-vs-chromium): the time is the
+// leading run of digits and "." and holds a digit; then ";" / "," /
+// whitespace, whitespace, one optional ";" or ","; "url" *WS "=" *WS is
+// skipped (only with the "="); a quoted URL runs to the last matching
+// quote; the URL is trimmed. Only the URL is edited; a value that is not
+// a refresh, or a reload, is left as written.
 func RewriteRefresh(v string, base *url.URL, cfg ProxyConfig) string {
-	isWS := func(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r' }
-	i := 0
-	for i < len(v) && isWS(v[i]) {
-		i++
-	}
-	for i < len(v) && ((v[i] >= '0' && v[i] <= '9') || v[i] == '.') {
-		i++
-	}
-	if i >= len(v) || !(v[i] == ';' || v[i] == ',' || isWS(v[i])) {
+	pre, u, post, ok := refreshURL(v)
+	if !ok {
 		return v
 	}
-	for i < len(v) && isWS(v[i]) {
+	return pre + Rewrite(u, base, cfg) + post
+}
+
+func refreshWS(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r' }
+
+// refreshURL splits a refresh value around its URL (spec read: navigate).
+func refreshURL(v string) (pre, u, post string, ok bool) {
+	i := 0
+	for i < len(v) && refreshWS(v[i]) {
+		i++
+	}
+	if i == len(v) {
+		return "", "", "", false
+	}
+	digit := false
+	for i < len(v) && (v[i] >= '0' && v[i] <= '9' || v[i] == '.') {
+		digit = digit || v[i] != '.'
+		i++
+	}
+	if !digit || i == len(v) {
+		return "", "", "", false // not a refresh, or a reload
+	}
+	if !(v[i] == ';' || v[i] == ',' || refreshWS(v[i])) {
+		return "", "", "", false
+	}
+	for i < len(v) && refreshWS(v[i]) {
 		i++
 	}
 	if i < len(v) && (v[i] == ';' || v[i] == ',') {
 		i++
 	}
-	for i < len(v) && isWS(v[i]) {
+	for i < len(v) && refreshWS(v[i]) {
 		i++
 	}
-	if i >= len(v) {
-		return v
-	}
-	// Optional "url" *WS "=" *WS.
-	j := i
-	if len(v)-j >= 3 && strings.EqualFold(v[j:j+3], "url") {
-		k := j + 3
-		for k < len(v) && isWS(v[k]) {
+	start := i
+	if len(v)-i >= 3 && strings.EqualFold(v[i:i+3], "url") {
+		k := i + 3
+		for k < len(v) && refreshWS(v[k]) {
 			k++
 		}
 		if k < len(v) && v[k] == '=' {
 			k++
-			for k < len(v) && isWS(v[k]) {
+			for k < len(v) && refreshWS(v[k]) {
 				k++
 			}
-			j = k
+			start = k
 		}
 	}
-	start, end := j, len(v)
-	if j < len(v) && (v[j] == '\'' || v[j] == '"') {
-		start = j + 1
-		if q := strings.IndexByte(v[start:], v[j]); q >= 0 {
-			end = start + q
+	end := len(v)
+	if start < len(v) && (v[start] == '\'' || v[start] == '"') {
+		q := v[start]
+		start++
+		if j := strings.LastIndexByte(v[start:], q); j >= 0 {
+			end = start + j
 		}
 	}
-	if start >= end {
-		return v
+	for start < end && refreshWS(v[start]) {
+		start++
 	}
-	return v[:start] + Rewrite(v[start:end], base, cfg) + v[end:]
+	for end > start && refreshWS(v[end-1]) {
+		end--
+	}
+	if start == end {
+		return "", "", "", false // a reload
+	}
+	return v[:start], v[start:end], v[end:], true
 }

@@ -25,6 +25,11 @@ The rules both runtimes must follow byte for byte, written once:
 | `Attrs.agda` | which (namespace, element, attribute) holds a URL, a URL list (ping, attributionsrc), a srcset, or a reflected-only URL (cite, longdesc); URL lists rewritten token by token | `htmlrewrite/attrs.go` (`URLAttrKind`, `RewriteURLList`, SVG namespace tracking); `ts/client/src/patches/url-attribute-map.ts` |
 | `HtmlTok.agda` | HTML tokenization (§13.2.5's boundary-deciding states, raw text only for HTML elements) and the namespace of each start tag (svg/math foreign content, integration points, breakouts); where the bootstrap goes; the attribute spans the client edits markup at | `htmlrewrite/stream.go` (x/net/html told raw text and CDATA from the tree), `nsTracker`; `ts/client/src/patches/html-tokens.ts`, `html-rewriter.ts` |
 | `Link.agda` | the Link response header (RFC 8288) as Chromium reads it, and as the proxy rewrites it: targets proxified, imagesrcset, integrity taken out, crossorigin as the `<link>`'s | `urlrewrite.RewriteLinkHeader` |
+| `Refresh.agda` | a Refresh header and `<meta http-equiv=refresh>` as Chromium reads them (it departs from HTML's steps), and their URL rewritten | `urlrewrite.RewriteRefresh`; `ts/client/src/url/refresh.ts` (written markup, `setAttribute`) |
+| `WsOrigin.agda` | the page origin a proxied WebSocket URL carries (a last query parameter), and the server's reading of it | `urlrewrite.SplitWSOrigin`; `ts/client/src/patches/websocket.ts` |
+| `Carry.agda` | what the proxy carries to the runtime: `Crn-H` (the origin's header values, byte for byte) and the Server-Timing `crnb` sizes | `proxy.CrnHValue`; `patches/response-headers.ts`, `install.ts` (`crnbSizes`) |
+| `Query.agda` | query values unproxified on the way upstream (form decoding, Go's QueryEscape) | `urlrewrite.UnproxyQueryValues` |
+| `Hints.agda` | client hints: Accept-CH as Chromium reads it (an RFC 8941 list of tokens; invalid counts for nothing), how a set is replaced, which hints go where, and the Sec-CH-UA a Chrome of a version sends | `proxy/client_hints.go`; `upstream.SecChUa` |
 | `Disposition.agda` | what the proxy rewrites a response's body as — JavaScript, CSS, HTML or nothing — by its URL's mark, else Sec-Fetch-Dest, never by changing the Content-Type | `server/bodyrewriter.go` (`responseKind`) |
 | `Oracle.agda` | wire format only (one request line → one JSON line) | — |
 | `Main.agda` | the IO loop (spec-oracle skill's file, unchanged) | — |
@@ -67,7 +72,7 @@ host, IDNA, an invalid last `Max-Age`): a URL or cookie the user's browser
 accepts and cyrano does not would escape containment. `make browser-check`
 runs the spec against real Chromium (URLs: `spec-vs-chromium`, cookies:
 `cookies-vs-chromium`, CORS: `fetch-vs-chromium`, framing:
-`framing-vs-chromium`, CSS URLs: `css-vs-chromium`, script kinds and the base URL: `html-vs-chromium`, the JSON import maps are read as: `json-vs-chromium`; what Chromium fetches from and which IDL properties resolve URLs: `attrs-vs-chromium`; which start tags make elements in which namespace, and that the bootstrap placed by the spec runs first and leaves the document as direct: `html-tok-vs-chromium`; what a Link header makes Chromium fetch, direct and rewritten: `link-vs-chromium`; and for the CSP translation, which is cyrano's own
+`framing-vs-chromium`, CSS URLs: `css-vs-chromium`, script kinds and the base URL: `html-vs-chromium`, the JSON import maps are read as: `json-vs-chromium`; what Chromium fetches from and which IDL properties resolve URLs: `attrs-vs-chromium`; which start tags make elements in which namespace, and that the bootstrap placed by the spec runs first and leaves the document as direct: `html-tok-vs-chromium`; what a Link header makes Chromium fetch, direct and rewritten: `link-vs-chromium`; what a refresh does: `refresh-vs-chromium`; a carried header and crnb metric as Chromium shows them: `carry-vs-chromium`; which client hints Chromium sends, and its Sec-CH-UA: `hints-vs-chromium`; and for the CSP translation, which is cyrano's own
 rule, the page-cannot-tell property: what loads directly loads proxied,
 `csp-vs-chromium`) and the runtime's native surface, `postMessage` and
 workers in it (`tests/native`). IDNA, outside the spec, is checked by a
@@ -105,14 +110,6 @@ both runtimes (owner, 2026-11-18: "Agda completeness … super important for
 upkeep"). What remains, by priority (inventory of 2026-11-18; remove an
 entry when its module lands):
 
-- WebSocket origin marker (Go `SplitWSOrigin`; TS `withPageOrigin`).
-- `Crn-H` original-headers JSON and the Server-Timing `crnb` entry (Go
-  writers, TS readers).
-- Refresh / `<meta http-equiv=refresh>` (Go).
-- Query values unproxified upstream (Go `UnproxyQueryValues`).
-- Client hints: Accept-CH / Critical-CH (RFC 8941 lists), which hints go
-  where; the synthesized Sec-CH-UA (Go `proxy/client_hints.go`,
-  `upstream`).
 - HTTPS-Upgrades (Go `proxy/https_upgrades.go`).
 - Permissions-Policy / Feature-Policy translation (Go `proxy/permissions.go`).
 - Sec-Fetch-Storage-Access (Go `proxy/storage_access.go`).

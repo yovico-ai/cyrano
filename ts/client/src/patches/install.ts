@@ -185,6 +185,12 @@ export function installPatches(
 /** The Server-Timing metric carrying a body's original sizes (Go: server.OriginalSizesMetric). */
 const SIZES_METRIC = "crnb";
 
+/** A crnb description, "<encoded>-<decoded>" in decimal (spec/Carry.agda crnbRead), or null. */
+export function crnbSizes(desc: string): { encoded: number; decoded: number } | null {
+    const m = /^([0-9]+)-([0-9]+)$/.exec(desc);
+    return m ? { encoded: Number(m[1]), decoded: Number(m[2]) } : null;
+}
+
 function patchPerformanceEntryNames(
     targetWindow: Window,
     unwrapOne: (url: string) => string,
@@ -257,8 +263,8 @@ function patchPerformanceEntryNames(
         try {
             for (const m of ncall(nativeServerTiming, entry)) {
                 if (m.name !== SIZES_METRIC) continue;
-                const [encoded, decoded] = String(m.description).split("-").map(Number);
-                if (Number.isFinite(encoded) && Number.isFinite(decoded)) return { encoded: encoded!, decoded: decoded! };
+                const sizes = crnbSizes(String(m.description));
+                if (sizes) return sizes;
             }
         } catch { /* not a resource entry */ }
         return null;

@@ -297,3 +297,14 @@ describe("rewriteHtmlString — the page's markup, edited where it stands", () =
         expect(rewriteHtmlString("<script>location.href", tag)).toBe("<script>location.href");
     });
 });
+
+// A refresh navigates like a link: written markup's <meta> went straight
+// to the origin (spec/Refresh.agda).
+describe("rewriteHtmlString — <meta http-equiv=refresh>", () => {
+    it("proxifies the refresh's URL, the rest as written", () => {
+        expect(rewriteHtmlString('<meta http-equiv="Refresh" content="0; url=\'/next\'">', tag))
+            .toMatch(/^<meta http-equiv="Refresh" content="0; url='\/next\?proxified=1'" crn-o=/);
+        expect(rewriteHtmlString('<meta http-equiv=refresh content="5">', tag)).toBe('<meta http-equiv=refresh content="5">');
+        expect(rewriteHtmlString('<meta name=refresh content="0;url=/x">', tag)).toBe('<meta name=refresh content="0;url=/x">');
+    });
+});

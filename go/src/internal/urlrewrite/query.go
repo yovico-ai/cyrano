@@ -17,8 +17,10 @@ const WSOriginParam = "__cyrano_ws_origin"
 // ("" when absent or not an http(s) origin), and whether the page's URL
 // had a query at all.
 func SplitWSOrigin(rawQuery string) (rest, origin string, hadQuery bool) {
-	i := strings.LastIndex(rawQuery, WSOriginParam+"=")
-	if i < 0 || (i > 0 && rawQuery[i-1] != '&') || strings.ContainsAny(rawQuery[i:], "&") {
+	// The last parameter (after the last "&", or the whole query) is the
+	// marker when it is "<name>=…" (spec/WsOrigin.agda split).
+	i := strings.LastIndexByte(rawQuery, '&') + 1
+	if !strings.HasPrefix(rawQuery[i:], WSOriginParam+"=") {
 		return rawQuery, "", true
 	}
 	v, err := url.QueryUnescape(rawQuery[i+len(WSOriginParam)+1:])

@@ -89,19 +89,183 @@ func (s *hintStore) get(key string) map[string]bool {
 	return s.m[key]
 }
 
-// parseAcceptCH is the set of hint names (lowercase) an Accept-CH header
-// lists: a structured-field list of tokens; parameters are ignored.
-func parseAcceptCH(values []string) map[string]bool {
-	out := map[string]bool{}
-	for _, v := range values {
-		for _, item := range strings.Split(v, ",") {
-			item, _, _ = strings.Cut(item, ";")
-			if item = strings.ToLower(strings.TrimSpace(item)); item != "" {
-				out[item] = true
+// parseAcceptCH is the set of hint names (lowercase) an Accept-CH (or
+// Critical-CH) asks for, as Chromium reads it (spec/Hints.agda acceptCH):
+// a Structured Fields list whose members are tokens or one-token inner
+// lists, parameters ignored. ok is false when it counts for nothing — the
+// list does not parse, or a member is anything else.
+func parseAcceptCH(values []string) (names map[string]bool, ok bool) {
+	members, ok := sfList(strings.Join(values, ", "))
+	if !ok {
+		return nil, false
+	}
+	names = map[string]bool{}
+	for _, m := range members {
+		if len(m) != 1 || m[0] == "" {
+			return nil, false
+		}
+		names[strings.ToLower(m[0])] = true
+	}
+	return names, true
+}
+
+// sfList reads an RFC 8941 list (§4.2.1): each member as its bare items —
+// one for an item, those of an inner list — a token as its text, any
+// other kind of bare item as "".
+func sfList(s string) ([][]string, bool) {
+	s = strings.Trim(s, " ")
+	var out [][]string
+	for len(s) > 0 {
+		var m []string
+		var ok bool
+		if s[0] == '(' {
+			m, s, ok = sfInner(s[1:])
+		} else {
+			var b string
+			b, s, ok = sfBare(s)
+			if ok {
+				s, ok = sfParams(s)
+			}
+			m = []string{b}
+		}
+		if !ok {
+			return nil, false
+		}
+		out = append(out, m)
+		s = strings.TrimLeft(s, " \t")
+		if s == "" {
+			return out, true
+		}
+		if s[0] != ',' {
+			return nil, false
+		}
+		s = strings.TrimLeft(s[1:], " \t")
+		if s == "" {
+			return nil, false // a trailing comma
+		}
+	}
+	return out, true
+}
+
+func sfTchar(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0
+}
+
+// sfBare reads a bare item: a token's text, or "" for any other kind.
+func sfBare(s string) (string, string, bool) {
+	if s == "" {
+		return "", s, false
+	}
+	c := s[0]
+	switch {
+	case c == '-' || c >= '0' && c <= '9':
+		i := 0
+		if c == '-' {
+			i = 1
+		}
+		j := i
+		for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+			j++
+		}
+		if j == i {
+			return "", s, false
+		}
+		if j < len(s) && s[j] == '.' {
+			k := j + 1
+			for k < len(s) && s[k] >= '0' && s[k] <= '9' {
+				k++
+			}
+			if k == j+1 {
+				return "", s, false
+			}
+			j = k
+		}
+		return "", s[j:], true
+	case c == '"':
+		for i := 1; i < len(s); i++ {
+			switch {
+			case s[i] == '"':
+				return "", s[i+1:], true
+			case s[i] == '\\':
+				if i+1 >= len(s) || (s[i+1] != '"' && s[i+1] != '\\') {
+					return "", s, false
+				}
+				i++
+			case s[i] < 0x20 || s[i] > 0x7e:
+				return "", s, false
+			}
+		}
+		return "", s, false
+	case c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '*':
+		i := 1
+		for i < len(s) && (sfTchar(s[i]) || s[i] == ':' || s[i] == '/') {
+			i++
+		}
+		return s[:i], s[i:], true
+	case c == ':':
+		i := 1
+		for i < len(s) && (s[i] >= 'a' && s[i] <= 'z' || s[i] >= 'A' && s[i] <= 'Z' || s[i] >= '0' && s[i] <= '9' || s[i] == '+' || s[i] == '/' || s[i] == '=') {
+			i++
+		}
+		if i < len(s) && s[i] == ':' {
+			return "", s[i+1:], true
+		}
+		return "", s, false
+	case c == '?':
+		if len(s) >= 2 && (s[1] == '0' || s[1] == '1') {
+			return "", s[2:], true
+		}
+	}
+	return "", s, false
+}
+
+// sfParams skips parameters: *( ";" *SP key [ "=" bare ] ).
+func sfParams(s string) (string, bool) {
+	for len(s) > 0 && s[0] == ';' {
+		s = strings.TrimLeft(s[1:], " ")
+		if s == "" || !(s[0] >= 'a' && s[0] <= 'z' || s[0] == '*') {
+			return s, false
+		}
+		i := 1
+		for i < len(s) && (s[i] >= 'a' && s[i] <= 'z' || s[i] >= '0' && s[i] <= '9' || strings.IndexByte("_-.*", s[i]) >= 0) {
+			i++
+		}
+		s = s[i:]
+		if len(s) > 0 && s[0] == '=' {
+			var ok bool
+			if _, s, ok = sfBare(s[1:]); !ok {
+				return s, false
 			}
 		}
 	}
-	return out
+	return s, true
+}
+
+// sfInner reads an inner list after its "(".
+func sfInner(s string) ([]string, string, bool) {
+	var items []string
+	for {
+		t := strings.TrimLeft(s, " ")
+		if t == "" {
+			return nil, s, false
+		}
+		if t[0] == ')' {
+			rest, ok := sfParams(t[1:])
+			return items, rest, ok
+		}
+		if len(items) > 0 && len(t) == len(s) {
+			return nil, s, false // items are separated by SP
+		}
+		b, rest, ok := sfBare(t)
+		if !ok {
+			return nil, s, false
+		}
+		if rest, ok = sfParams(rest); !ok {
+			return nil, s, false
+		}
+		items = append(items, b)
+		s = rest
+	}
 }
 
 // filterClientHints removes from req the hints a direct browser would not
@@ -115,10 +279,12 @@ func (h *Handler) filterClientHints(req *http.Request, target *url.URL, sessionI
 	if strings.EqualFold(target.Scheme, "https") && (dest == "document" || sameOrigin) {
 		allowed = acceptedHints.get(hintKey(sessionID, target))
 	}
+	navigation := dest == "document"
+	secure := strings.EqualFold(target.Scheme, "https")
 	withheld := http.Header{}
 	for name, vs := range req.Header {
 		l := strings.ToLower(name)
-		if isHint(l) && !lowEntropy[l] && !allowed[l] {
+		if isHint(l) && !hintSent(l, allowed, secure, navigation, sameOrigin) {
 			withheld[name] = vs
 			delete(req.Header, name)
 		}
@@ -127,6 +293,14 @@ func (h *Handler) filterClientHints(req *http.Request, target *url.URL, sessionI
 		// Kept for a Critical-CH restart (restartForCriticalCH).
 		*req = *req.WithContext(context.WithValue(req.Context(), withheldHintsKey{}, withheld))
 	}
+}
+
+// hintSent: whether a direct browser sends this hint (spec/Hints.agda):
+// the low-entropy ones always; another when the target is secure, its
+// origin asked for it, and the request is a top-level navigation or to
+// the page's own origin.
+func hintSent(hint string, set map[string]bool, secure, navigation, samePage bool) bool {
+	return lowEntropy[hint] || secure && (navigation || samePage) && set[hint]
 }
 
 type withheldHintsKey struct{}
@@ -149,8 +323,8 @@ func (h *Handler) restartForCriticalCH(resp *http.Response) {
 		return
 	}
 	withheld, _ := req.Context().Value(withheldHintsKey{}).(http.Header)
-	critical := parseAcceptCH(resp.Header.Values("Critical-CH"))
-	asked := parseAcceptCH(resp.Header.Values("Accept-CH"))
+	critical, _ := parseAcceptCH(resp.Header.Values("Critical-CH"))
+	asked, _ := parseAcceptCH(resp.Header.Values("Accept-CH"))
 	if len(withheld) == 0 || len(critical) == 0 {
 		return
 	}
@@ -211,9 +385,14 @@ func recordAcceptCH(resp *http.Response, target *url.URL, sessionID string) {
 	}
 	secure := strings.EqualFold(target.Scheme, "https")
 	key := hintKey(sessionID, target)
+	// A valid Accept-CH replaces the origin's set (an empty one clears
+	// it); an invalid one changes nothing, as for Chromium
+	// (spec/Hints.agda updateSet) — and the browser is then given the set.
 	if vs := resp.Header.Values("Accept-CH"); len(vs) > 0 && secure {
-		acceptedHints.set(key, parseAcceptCH(vs))
-		return // the browser gets the origin's own header, as sent
+		if names, ok := parseAcceptCH(vs); ok {
+			acceptedHints.set(key, names)
+			return // the browser gets the origin's own header, as sent
+		}
 	}
 	var names []string
 	if secure {

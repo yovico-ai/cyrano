@@ -1,8 +1,8 @@
 package proxy
 
 import (
-	"encoding/json"
 	"net/http"
+	"sort"
 	"strings"
 )
 
@@ -50,9 +50,66 @@ func carryOriginalHeaders(now, sent http.Header) {
 	if len(orig) == 0 {
 		return
 	}
-	if b, err := json.Marshal(orig); err == nil {
-		now.Set(OriginalHeadersName, string(b))
+	now.Set(OriginalHeadersName, CrnHValue(orig))
+}
+
+// CrnHValue writes the Crn-H object (spec/Carry.agda crnH): names in
+// ascending order, null for a header the origin did not send, each value
+// byte for byte — a script reads a header natively one character per
+// byte, and json.Marshal turned invalid UTF-8 into U+FFFD.
+func CrnHValue(orig map[string][]string) string {
+	names := make([]string, 0, len(orig))
+	for n := range orig {
+		names = append(names, n)
 	}
+	sort.Strings(names)
+	var b strings.Builder
+	b.WriteByte('{')
+	for i, n := range names {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		writeJSONBytes(&b, n)
+		b.WriteByte(':')
+		vs := orig[n]
+		if vs == nil {
+			b.WriteString("null")
+			continue
+		}
+		b.WriteByte('[')
+		for j, v := range vs {
+			if j > 0 {
+				b.WriteByte(',')
+			}
+			writeJSONBytes(&b, v)
+		}
+		b.WriteByte(']')
+	}
+	b.WriteByte('}')
+	return b.String()
+}
+
+// writeJSONBytes writes v's bytes as a JSON string (spec jsonBytes): every
+// byte outside printable ASCII, and " and \, escaped as \u00XX.
+func writeJSONBytes(b *strings.Builder, v string) {
+	const hex = "0123456789abcdef"
+	b.WriteByte('"')
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		switch {
+		case c == '"':
+			b.WriteString(`\"`)
+		case c == '\\':
+			b.WriteString(`\\`)
+		case c < 0x20 || c > 0x7e:
+			b.WriteString(`\u00`)
+			b.WriteByte(hex[c>>4])
+			b.WriteByte(hex[c&15])
+		default:
+			b.WriteByte(c)
+		}
+	}
+	b.WriteByte('"')
 }
 
 func sameValues(a, b []string) bool {

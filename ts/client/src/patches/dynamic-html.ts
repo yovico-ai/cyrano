@@ -49,12 +49,13 @@ export function bootstrapOf(node: unknown): (() => string) | undefined {
 import { rewriteSrcsetAttribute } from "./srcset";
 import { XLINK_NS, kindOf, rewriteByKind } from "./url-attribute-map";
 import { remark, rewriteFor, type RewriteOne } from "./referrer-policy";
+import { isRefreshEquiv, rewriteRefresh } from "../url/refresh";
 import { scriptKindOf } from "./script-kind";
 import { isReferrerPolicy } from "../url/containment";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 import { injectFramesIn } from "./dynamic-iframe";
 import { rewriteImportMapText } from "../url/import-map";
-import { consume, recordAttr, recordText } from "../native/originals";
+import { consume, heldAttr, originalAttr, recordAttr, recordText } from "../native/originals";
 import { trustedLike } from "../native/trusted";
 
 /**
@@ -196,6 +197,16 @@ export function patchDynamicHtml(
         recordAttr(self as Element, args[0], v, given);
         // Its referrer policy changed: its URLs carry the new one.
         if (args[0].toLowerCase() === "referrerpolicy") remark(self as Element, rewriteOne);
+        // It became a refresh: its content's URL goes through the proxy.
+        if (args[0].toLowerCase() === "http-equiv" && isRefreshMeta(self as Element)) {
+            const el = self as Element;
+            const o = originalAttr(el, "content");
+            const was = o ? o.value : heldAttr(el, "content");
+            if (was !== null) {
+                const now = rewriteRefresh(was, rewriteOne);
+                if (now !== was) { nR.apply(native, el, ["content", now]); recordAttr(el, "content", now, was); }
+            }
+        }
         return;
     });
     patchIntegrityProperty(targetWindow);
@@ -370,6 +381,11 @@ export function unpatchDynamicHtml(): void {
  *   style — CSS rewritten;
  *   a URL attribute of the element — proxified (srcset: each URL).
  */
+/** An HTML <meta> whose http-equiv is refresh. */
+function isRefreshMeta(el: Element): boolean {
+    return el.namespaceURI === "http://www.w3.org/1999/xhtml" && el.localName === "meta" && isRefreshEquiv(heldAttr(el, "http-equiv"));
+}
+
 function attributeValue(el: Element, name: string, value: string, rewriteOne: (url: string) => string, proxyOrigin = ""): string | null {
     const lowerName = name.toLowerCase();
     if (lowerName === "integrity") return null;
@@ -380,6 +396,8 @@ function attributeValue(el: Element, name: string, value: string, rewriteOne: (u
         return isFontPreload ? value : "use-credentials";
     }
     if (lowerName === "style") return rewriteCssText(value, rewriteOne);
+    // A declarative refresh navigates like a link: through the proxy (spec/Refresh.agda).
+    if (lowerName === "content" && isRefreshMeta(el)) return rewriteRefresh(value, rewriteOne);
     if (lowerName === "srcdoc" && el.tagName === "IFRAME") return rewriteSrcdoc(value, rewriteOne, proxyOrigin, bootstrapOf(el));
     // An element's own referrer policy: the browser is told unsafe-url, its
     // URLs carry the policy (patches/referrer-policy.ts).

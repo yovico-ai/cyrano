@@ -57,3 +57,95 @@ func TestRewriteLinkHeader_IntegrityAndCrossorigin(t *testing.T) {
 		t.Errorf("\n got  %s\n want %s", got, want)
 	}
 }
+
+// Conformance of RewriteRefresh with spec/Refresh.agda (the spec against
+// Chromium: ts/client/tests/spec/refresh-vs-chromium).
+func TestSpecConformance_Refresh(t *testing.T) {
+	oracle := specoracle.Need(t)
+	times := []string{"0", "0.", ".", "0.7", " 0", "00", "", "x", "0x", "-0", ".5", "0.5.5", "+0", "\f0", "5"}
+	seps := []string{"", ";", ",", " ", " ; ", ";;", "\t,", "; ,"}
+	urls := []string{"url=/t/a", "URL = '/t/b' tail", "ux/t/c", "url /t/e", "'/t/f'", "\"/t/g", "/t/h\"x", "urL=\"/t/i\"", "",
+		"  ", "url=", "url='", "url=?q", "//other.example/k", "'/t/l'x'", "''", "url\f=/t/n", "https://x.example/p q", "url=\"https://y.example/\""}
+	rapid.Check(t, func(rt *rapid.T) {
+		proxy := rapid.SampledFrom(specoracle.Proxies).Draw(rt, "proxy")
+		base := rapid.SampledFrom(specoracle.Bases).Draw(rt, "base")
+		v := rapid.SampledFrom(times).Draw(rt, "t") + rapid.SampledFrom(seps).Draw(rt, "s") + rapid.SampledFrom(urls).Draw(rt, "u")
+		want, _, err := oracle.Ask("refresh", proxy, base, v)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		baseURL, _ := url.Parse(base)
+		if got := RewriteRefresh(v, baseURL, proxyConfig(rt, proxy)); got != want {
+			rt.Fatalf("RewriteRefresh(%q) on %s\n got  %q\n spec %q", v, base, got, want)
+		}
+	})
+}
+
+// Conformance of SplitWSOrigin with spec/WsOrigin.agda split (TS:
+// tests/spec/ws-origin-conformance.test.ts checks the runtime's marker,
+// and the round trip on the spec itself).
+func TestSpecConformance_WSOrigin(t *testing.T) {
+	oracle := specoracle.Need(t)
+	pieces := []string{"a=1", "&", "b=", "__cyrano_ws_origin=", "__cyrano_ws_origin=https%3A%2F%2Fs.example", "x__cyrano_ws_origin=1",
+		"https%3A%2F%2Fo.example%3A8443", "%26", "=", "c", "__cyrano_ws_origin", "__cyrano_ws_origin=ftp%3A%2F%2Fx", "__cyrano_ws_origin=%zz"}
+	rapid.Check(t, func(rt *rapid.T) {
+		q := strings.Join(rapid.SliceOfN(rapid.SampledFrom(pieces), 0, 5).Draw(rt, "pieces"), "")
+		want, _, err := oracle.Ask("wssplit", q)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		rest, origin, had := SplitWSOrigin(q)
+		if want == "none" {
+			if rest != q || origin != "" || !had {
+				rt.Fatalf("SplitWSOrigin(%q) = %q %q %v, spec: no marker", q, rest, origin, had)
+			}
+			return
+		}
+		f := strings.SplitN(want, "\t", 3)
+		wantOrigin := ""
+		if v, err := url.QueryUnescape(f[2]); err == nil {
+			if a, res := parseRef(nil, v); res == parsedURL && (a.scheme == "http" || a.scheme == "https") {
+				wantOrigin = a.originText()
+			}
+		}
+		if rest != f[1] || had != (f[0] == "1") || origin != wantOrigin {
+			rt.Fatalf("SplitWSOrigin(%q) = %q %q %v, spec %q", q, rest, origin, had, want)
+		}
+	})
+}
+
+// Conformance of UnproxyQueryValues with spec/Query.agda.
+func TestSpecConformance_UnproxyQuery(t *testing.T) {
+	oracle := specoracle.Need(t)
+	rapid.Check(t, func(rt *rapid.T) {
+		proxy := rapid.SampledFrom(specoracle.Proxies).Draw(rt, "proxy")
+		enc := func(s string) string { return url.QueryEscape(s) }
+		values := []string{
+			enc(proxy + "/cyrano/https/a.example/p?q=1"), proxy + "/cyrano/https/a.example/x", enc(proxy + "/cyrano/https!js/b.example/s.js"),
+			enc(proxy + "/cyrano/http/c.example/%C3%A9"), enc(proxy + "/cyrano/https/d.example/é"), "plain", "a+b", "%zz", "%", "",
+			enc("https://e.example/cyrano/https/f.example/"), enc(proxy + "/other"), enc(proxy + "/cyrano/https/"), "cyrano",
+			strings.ReplaceAll(enc(proxy+"/cyrano/https/g.example/a b"), "+", "%20"),
+		}
+		var parts []string
+		for k := rapid.IntRange(0, 4).Draw(rt, "n"); k > 0; k-- {
+			switch rapid.IntRange(0, 3).Draw(rt, "form") {
+			case 0:
+				parts = append(parts, "u="+rapid.SampledFrom(values).Draw(rt, "v"))
+			case 1:
+				parts = append(parts, rapid.SampledFrom(values).Draw(rt, "bare"))
+			case 2:
+				parts = append(parts, "")
+			default:
+				parts = append(parts, "n="+rapid.SampledFrom(values).Draw(rt, "v2")+"="+rapid.SampledFrom(values).Draw(rt, "v3"))
+			}
+		}
+		q := strings.Join(parts, "&")
+		want, _, err := oracle.Ask("unproxyquery", proxy, q)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		if got := UnproxyQueryValues(q, proxyConfig(rt, proxy)); got != want {
+			rt.Fatalf("UnproxyQueryValues(%q)\n got  %q\n spec %q", q, got, want)
+		}
+	})
+}

@@ -13,6 +13,17 @@
 --                                       → as rewrite, the URL marked so
 --   disposition <js|css|-> <0|1> <Sec-Fetch-Dest> <0|1> <Content-Type> <0|1 sniffed>
 --                                       → {"out":"js|css|html|none"} (what the proxy does with the body)
+--   acceptch <field lines>              → {"out":"<names, space-separated>"|"none"} (none: counts for nothing)
+--   hintsent <hint> <set> <0|1> <0|1> <0|1> → {"out":"yes"|"no"}
+--   secchua <major> <brand>             → {"out":"<the Sec-CH-UA value>"}
+--   unproxyquery <proxy> <query>        → {"out":"<query, proxified values unwrapped>"}
+--   jsonbytes <value as bytes>          → {"out":"<JSON string, byte for byte>"}
+--   crnh <entries>                      → {"out":"<the Crn-H object>"} (lines "name\tn" or "name\tv\tvalue…")
+--   crnbread <description>              → {"out":"<encoded> <decoded>"|"none"}
+--   wsmark <0|1> <query> <origin>       → {"out":"?<query>&__cyrano_ws_origin=<enc>"} (the runtime's marker)
+--   wssplit <query>                     → {"out":"none"|"<1|0>\t<page query>\t<enc origin>"} (the server's reading)
+--   refreshread <value>                 → {"out":"none"|"reload"|"url\t<url>"} (a Refresh's reading)
+--   refresh <proxy> <base> <value>      → {"out":"<value, its URL proxified>"}
 --   targetdest <proxied URL>            → {"out":"js"|"css"} / {"none":true}
 --   srcset  <value>                     → {"out":"…"}  (each URL u written as [u])
 --   direct  <base> <url>                → {"kind":"shownDirect","out":"…"}
@@ -107,6 +118,11 @@ import Attrs
 import HtmlTok
 import Link
 import Disposition
+import Refresh
+import WsOrigin
+import Carry
+import Query
+import Hints
 open import Html using (ScriptKind; scriptClassic; scriptModule; scriptImportMap; scriptSpeculation; scriptData; scriptKind; documentBase; BaseURL; baseOf′; aboutBlank; beyond)
 
 ------------------------------------------------------------------------
@@ -252,6 +268,17 @@ dispatch op args =
   else if eqStr op (toList "targetdest") then targetDestReq args
   else if eqStr op (toList "rewritemark") then rewriteMarkReq args
   else if eqStr op (toList "disposition") then dispositionReq args
+  else if eqStr op (toList "refreshread") then refreshReadReq args
+  else if eqStr op (toList "wsmark") then wsMarkReq args
+  else if eqStr op (toList "jsonbytes") then jsonBytesReq args
+  else if eqStr op (toList "unproxyquery") then unproxyQueryReq args
+  else if eqStr op (toList "acceptch") then acceptCHReq args
+  else if eqStr op (toList "hintsent") then hintSentReq args
+  else if eqStr op (toList "secchua") then secChUaReq args
+  else if eqStr op (toList "crnh") then crnHReq args
+  else if eqStr op (toList "crnbread") then crnbReadReq args
+  else if eqStr op (toList "wssplit") then wsSplitReq args
+  else if eqStr op (toList "refresh") then refreshReq args
   else if eqStr op (toList "unwrap") then unwrapReq args
   else if eqStr op (toList "srcset") then srcsetReq args
   else if eqStr op (toList "direct") then directReq args
@@ -380,6 +407,90 @@ dispatch op args =
     opt : Str → Str → Maybe Str
     opt p v = if eqStr p (toList "1") then just v else nothing
   dispositionReq _ = errorReply "BadRequest"
+
+  joinSp : List Str → Str
+  joinSp []       = []
+  joinSp (x ∷ []) = x
+  joinSp (x ∷ xs) = x ++ fromℕ 32 ∷ joinSp xs
+
+  -- acceptch <field lines, LF-separated>
+  acceptCHReq : List Str → Str
+  acceptCHReq (ls ∷ []) with Hints.acceptCH (splitOn (is 10) ls)
+  ... | just ns = out (joinSp ns)
+  ... | nothing = out (toList "none")
+  acceptCHReq _ = errorReply "BadRequest"
+
+  -- hintsent <hint> <set, space-separated> <secure 0|1> <navigation 0|1> <same page 0|1>
+  hintSentReq : List Str → Str
+  hintSentReq (h ∷ set ∷ s₁ ∷ n₁ ∷ p₁ ∷ []) =
+    out (if Hints.hintSent h (splitOn (is 32) set) (eqStr s₁ (toList "1")) (eqStr n₁ (toList "1")) (eqStr p₁ (toList "1")) then toList "yes" else toList "no")
+  hintSentReq _ = errorReply "BadRequest"
+
+  -- secchua <major> <product brand>
+  secChUaReq : List Str → Str
+  secChUaReq (m ∷ p ∷ []) = out (Hints.secChUa (digitsValue m) p)
+  secChUaReq _ = errorReply "BadRequest"
+
+  unproxyQueryReq : List Str → Str
+  unproxyQueryReq (p ∷ q ∷ []) with proxyOf p
+  ... | just px = out (Query.unproxyQuery px q)
+  ... | nothing = errorReply "BadProxy"
+  unproxyQueryReq _ = errorReply "BadRequest"
+
+  jsonBytesReq : List Str → Str
+  jsonBytesReq (v ∷ []) = out (Carry.jsonBytes v)
+  jsonBytesReq _ = errorReply "BadRequest"
+
+  -- crnh <entries>: one per line, "name\tn" (null) or "name\tv\tvalue\tvalue…"
+  crnHReq : List Str → Str
+  crnHReq (e ∷ []) = out (Carry.crnH (entries (splitOn (is 10) e)))
+    where
+    entries : List Str → List (Str × Maybe (List Str))
+    entries [] = []
+    entries (l ∷ ls) with splitOn (is 9) l
+    ... | n ∷ k ∷ vs = (n , (if eqStr k (toList "n") then nothing else just vs)) ∷ entries ls
+    ... | _          = entries ls
+  crnHReq _ = errorReply "BadRequest"
+
+  crnbReadReq : List Str → Str
+  crnbReadReq (d ∷ []) with Carry.crnbRead d
+  ... | just (e , x) = out (showN e ++ fromℕ 32 ∷ showN x)
+  ... | nothing      = out (toList "none")
+  crnbReadReq _ = errorReply "BadRequest"
+
+  -- wsmark <0|1 the URL has a query> <query> <origin>
+  wsMarkReq : List Str → Str
+  wsMarkReq (h ∷ q ∷ o ∷ []) = out (WsOrigin.marked (if eqStr h (toList "1") then just q else nothing) o)
+  wsMarkReq _ = errorReply "BadRequest"
+
+  -- wssplit <query, without its "?"> → "none" / "<1|0>\t<page query>\t<encoded origin>"
+  wsSplitReq : List Str → Str
+  wsSplitReq (q ∷ []) with WsOrigin.split q
+  ... | just (just r , v)  = out (toList "1" ++ fromℕ 9 ∷ r ++ fromℕ 9 ∷ v)
+  ... | just (nothing , v) = out (toList "0" ++ fromℕ 9 ∷ [] ++ fromℕ 9 ∷ v)
+  ... | nothing            = out (toList "none")
+  wsSplitReq _ = errorReply "BadRequest"
+
+  refreshReadReq : List Str → Str
+  refreshReadReq (v ∷ []) = out (shown (Refresh.read v))
+    where
+    shown : Refresh.Reading → Str
+    shown Refresh.notRefresh         = toList "none"
+    shown Refresh.reload             = toList "reload"
+    shown (Refresh.navigate _ u _)   = toList "url" ++ fromℕ 9 ∷ u
+  refreshReadReq _ = errorReply "BadRequest"
+
+  refreshReq : List Str → Str
+  refreshReq (p ∷ b ∷ v ∷ []) with proxyOf p | baseOf b
+  ... | just px | just base = out (Refresh.rewriteRefresh rw v)
+    where
+    rw : Str → Maybe Str
+    rw u with rewriteUrl px base u
+    ... | emit _ x = just x
+    ... | _        = nothing
+  ... | nothing | _ = errorReply "BadProxy"
+  ... | just _  | nothing = errorReply "BadBase"
+  refreshReq _ = errorReply "BadRequest"
 
   targetDestReq : List Str → Str
   targetDestReq (u ∷ []) with parse nothing (preprocess u)

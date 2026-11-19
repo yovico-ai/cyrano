@@ -148,6 +148,7 @@ describe.skipIf(!wanted)("written markup makes the direct tree, in Chromium", ()
                 `<table><td background="${E}w-td.png">c</td></table>`,
                 `<img src="${E}w-a&amp;b.png" srcset="${E}w-s1.png 1x, ${E}w-s2.png 2x">`,
                 `<noscript><img src="${E}w-noscript.png"></noscript><p>after`,
+                `<meta http-equiv="refresh" content="0; url=${E}w-refresh">`,
             ];
             for (const d of docs) {
                 const f = document.createElement("iframe");
@@ -158,10 +159,19 @@ describe.skipIf(!wanted)("written markup makes the direct tree, in Chromium", ()
                 const g = document.createElement("iframe");
                 g.srcdoc = d;
                 document.body.appendChild(g);
+                // (A refresh in this page itself would navigate it away.)
+                if (d.includes("refresh")) continue;
                 const div = document.createElement("div");
                 div.innerHTML = d;
                 document.body.appendChild(div);
             }
+            // A refresh built through the DOM, content before http-equiv.
+            const rf = document.createElement("iframe");
+            document.body.appendChild(rf);
+            const rm = rf.contentDocument!.createElement("meta");
+            rm.setAttribute("content", `0;url=${E}w-refresh-dom`);
+            rm.setAttribute("http-equiv", "refresh");
+            rf.contentDocument!.head.appendChild(rm);
             // The SVG context: innerHTML of an svg element.
             const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
             document.body.appendChild(svg);

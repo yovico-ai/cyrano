@@ -28,6 +28,7 @@ const lowerAscii = (s: string): string => s.replace(/[A-Z]/g, (c) => String.from
 const relOf = (v: string | null): string[] => (v === null ? [] : lowerAscii(v).split(/[\t\n\f\r ]+/).filter((t) => t !== ""));
 import { tokenize, withBootstrap, type Ns, type Tok, type TokAttr } from "./html-tokens";
 import { isReferrerPolicy } from "../url/containment";
+import { isRefreshEquiv, rewriteRefresh } from "../url/refresh";
 
 interface CapturedNatives {
     innerHTMLSet: (this: Element, value: string) => void;
@@ -198,6 +199,12 @@ function editStartTag(src: string, t: Extract<Tok, { kind: "start" }>, rewriteOn
         if (v === "") continue;
         if (a.name === "style") { change(a, "style", rewriteCssText(v, rewriteOne)); continue; }
         if (html && t.name === "iframe" && a.name === "srcdoc") { change(a, "srcdoc", T("HTML", rewriteSrcdoc(v, rewriteOne, proxyOrigin, bootstrap))); continue; }
+        // A declarative refresh navigates like a link: through the proxy
+        // (spec/Refresh.agda; Go: htmlrewrite's <meta>).
+        if (html && t.name === "meta" && a.name === "content" && isRefreshEquiv(value("http-equiv"))) {
+            change(a, "content", rewriteRefresh(v, rewriteOne));
+            continue;
+        }
         if (html && t.name === "meta" && a.name === "content" && proxyOrigin.length > 0 &&
             (value("http-equiv") ?? "").toLowerCase() === "content-security-policy") {
             change(a, "content", rewriteCspContent(v, proxyOrigin, trustedPolicyName()));
