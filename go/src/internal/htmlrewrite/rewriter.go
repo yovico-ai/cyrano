@@ -27,6 +27,7 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 	inImportMap := false   // currently inside <script type="importmap">
 	inStyle := false       // currently inside <style>...</style>
 	inNoscript := false    // currently inside <noscript>...</noscript>
+	var ns nsTracker       // which elements are SVG
 	emitted := bytes.Buffer{}
 
 	flush := func() error {
@@ -58,7 +59,8 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 			token := z.Token()
 			tag := token.Data
 			written := append([]html.Attribute(nil), token.Attr...)
-			attrs := applyAttrRules(tag, token.Attr, &cfg)
+			svg := ns.start(tag, tt == html.SelfClosingTagToken, func(a string) bool { _, ok := getAttr(token.Attr, a); return ok })
+			attrs := applyAttrRules(tag, svg, token.Attr, &cfg)
 			if !cfg.NoOriginals {
 				attrs = withOriginals(written, attrs)
 			}
@@ -108,6 +110,7 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 		case html.EndTagToken:
 			tn, _ := z.TagName()
 			fmt.Fprintf(&emitted, "</%s>", string(tn))
+			ns.end(string(tn))
 			switch string(tn) {
 			case "script":
 				inScript = false
@@ -173,7 +176,7 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 // might emit a <meta> of its own (none currently do, but preserve the
 // invariant). cfg is by pointer so HTML_BASETAG can shift BaseURL for
 // subsequent tags in the same document.
-func applyAttrRules(tag string, attrs []html.Attribute, cfg *Config) []html.Attribute {
+func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) []html.Attribute {
 	// An element's own referrer policy: its requests carry it in their
 	// proxified URLs (urlrewrite.RewriteWithPolicy) and the browser is told
 	// unsafe-url, so the proxy learns the page and applies the policy
@@ -260,22 +263,6 @@ func applyAttrRules(tag string, attrs []html.Attribute, cfg *Config) []html.Attr
 		}
 	}
 
-	// HTML_SRCSET — comma-separated URL list with descriptors: img and
-	// source srcset, and a preload link's imagesrcset (TS: isSrcsetAttr).
-	srcsetAttr := ""
-	switch tag {
-	case "img", "source":
-		srcsetAttr = "srcset"
-	case "link":
-		srcsetAttr = "imagesrcset"
-	}
-	if srcsetAttr != "" {
-		if v, ok := getAttr(attrs, srcsetAttr); ok {
-			attrs = setAttr(attrs, srcsetAttr,
-				rewriteSrcset(v, func(u string) string { return rewriteOne(u, urlOpts{}) }))
-		}
-	}
-
 	// HTML_STYLE — inline `style="..."` is a declaration list, not a full
 	// stylesheet. The CSS rewriter is grammar-tolerant enough to handle a
 	// raw declaration block (it just sees the same url()/string tokens).
@@ -308,15 +295,21 @@ func applyAttrRules(tag string, attrs []html.Attribute, cfg *Config) []html.Attr
 		}
 	}
 
-	// HTML_EXTERNAL_RESOURCE_ATTRS — the main URL containment loop.
-	if attrList, ok := externalResourceAttrs[tag]; ok {
-		for _, a := range attrList {
-			v, exists := getAttr(attrs, a)
-			if !exists {
-				continue
-			}
-			rewritten := rewriteOne(v, urlOpts{tag: tag, attr: a})
-			attrs = setAttr(attrs, a, rewritten)
+	// The URL-bearing attributes (spec/Attrs.agda attrKind): a URL, a URL
+	// list, a srcset; reflected ones (cite, longdesc) stay as written.
+	for _, at := range append([]html.Attribute(nil), attrs...) {
+		key := at.Key
+		if at.Namespace != "" {
+			key = at.Namespace + ":" + key
+		}
+		one := func(u string) string { return rewriteOne(u, urlOpts{tag: tag, attr: key}) }
+		switch URLAttrKind(svg, tag, key) {
+		case AttrURL:
+			attrs = setAttr(attrs, key, one(at.Val))
+		case AttrURLList:
+			attrs = setAttr(attrs, key, RewriteURLList(at.Val, one))
+		case AttrSrcset:
+			attrs = setAttr(attrs, key, rewriteSrcset(at.Val, one))
 		}
 	}
 

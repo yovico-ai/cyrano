@@ -83,44 +83,7 @@ type Config struct {
 	Prettify bool
 }
 
-// externalResourceAttrs is the (tagName → attribute names) map that drives
-// URL rewriting. Order within the inner slice doesn't matter — every attr
-// in the slice gets rewritten if present on the tag.
-var externalResourceAttrs = map[string][]string{
-	"a":     {"href", "ping", "xlink:href"},
-	"area":  {"href"},
-	"audio": {"src"},
-	// <base href> names the proxied directory: the browser then resolves
-	// the page's relative URLs under it, and a `base-uri 'self'` policy
-	// is met (accounts.google.com has both).
-	"base":   {"href"},
-	"body":   {"background"},
-	"button": {"formaction"},
-	"embed":  {"src"},
-	"form":   {"action"},
-	"frame":  {"src"},
-	"iframe": {"src"},
-	"img":    {"src"},
-	"input":  {"formaction", "src"},
-	"link":   {"href"},
-	"object": {"data"},
-	"script": {"src", "href", "xlink:href"}, // an SVG script refers by href
-	"source": {"src"},
-	"table":  {"background"},
-	"tbody":  {"background"},
-	"td":     {"background"},
-	"tfoot":  {"background"},
-	"th":     {"background"},
-	"thead":  {"background"},
-	"tr":     {"background"},
-	"track":  {"src"},
-	"use":    {"href", "xlink:href"},
-	// SVG elements that refer by href / xlink:href (TS: svgUrlAttrs in
-	// ts/client/src/patches/url-attribute-map.ts).
-	"image":   {"href", "xlink:href"},
-	"feimage": {"href", "xlink:href"},
-	"video":   {"src", "poster"},
-}
+// The URL-bearing attributes are in attrs.go (spec/Attrs.agda).
 
 // tagsWithRestUrls receive REST-formatted (`/load/<b64>/`) proxified URLs
 // instead of query-form (`/?goto=<b64>`). Form POSTs and button submits land

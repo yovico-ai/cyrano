@@ -1,0 +1,84 @@
+package htmlrewrite
+
+// Conformance of the URL-attribute table and URL lists with
+// spec/Attrs.agda, asked live; the namespace tracking the table is applied
+// with (TS: tests/spec/attrs-conformance.test.ts).
+
+import (
+	"bytes"
+	"net/url"
+	"strings"
+	"testing"
+
+	"github.com/yovico/cyrano/internal/specoracle"
+	"github.com/yovico/cyrano/internal/urlrewrite"
+	"pgregory.net/rapid"
+)
+
+// AttrTags and AttrNames: the vocabulary both runtimes' tables are compared
+// with the spec's over (every pair the spec names, and more).
+var AttrTags = strings.Fields("a area audio base blockquote body button del embed form frame iframe image img input ins link object q script source table tbody td tfoot th thead tr track video use feimage svg div span p meta html applet portal fencedframe")
+var AttrNames = strings.Fields("src href xlink:href action formaction data poster background ping attributionsrc srcset imagesrcset cite longdesc lowsrc codebase manifest archive classid usemap style id content dynsrc itemid")
+
+func TestSpecConformance_AttrKind(t *testing.T) {
+	oracle := specoracle.Need(t)
+	for _, ns := range []string{"html", "svg"} {
+		for _, tag := range AttrTags {
+			for _, a := range AttrNames {
+				want, _, err := oracle.Ask("attrkind", ns, tag, a)
+				if err != nil {
+					t.Fatalf("oracle: %v", err)
+				}
+				if got := URLAttrKind(ns == "svg", tag, a).String(); got != want {
+					t.Errorf("URLAttrKind(%s, %s, %s) = %s, spec says %s", ns, tag, a, got, want)
+				}
+			}
+		}
+	}
+}
+
+func TestSpecConformance_URLList(t *testing.T) {
+	oracle := specoracle.Need(t)
+	pieces := []string{" ", "\t", "\n", "\f", "\r", "  ", "/a", "b/c", "https://x.example/p", "//h.example/", "?q", "#f", "http://[::1", "%zz", "é", "data:,x"}
+	rapid.Check(t, func(rt *rapid.T) {
+		proxy := rapid.SampledFrom(specoracle.Proxies).Draw(rt, "proxy")
+		base := rapid.SampledFrom(specoracle.Bases).Draw(rt, "base")
+		v := strings.Join(rapid.SliceOfN(rapid.SampledFrom(pieces), 0, 8).Draw(rt, "pieces"), "")
+		want, _, err := oracle.Ask("urllist", proxy, base, v)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		pu, _ := url.Parse(proxy)
+		bu, _ := url.Parse(base)
+		cfg := urlrewrite.ProxyConfig{PublicURL: pu}
+		if got := RewriteURLList(v, func(u string) string { return urlrewrite.Rewrite(u, bu, cfg) }); got != want {
+			rt.Fatalf("RewriteURLList(%q) = %q, spec says %q", v, got, want)
+		}
+	})
+}
+
+// Which elements the server takes for SVG: the table is applied by namespace.
+func TestAttrNamespaces(t *testing.T) {
+	base, _ := url.Parse("https://site.example/d/")
+	cfg := Config{BaseURL: base, Proxy: urlrewrite.ProxyConfig{PublicURL: &url.URL{Scheme: "http", Host: "p:1"}}, NoOriginals: true}
+	P := "http://p:1/cyrano/https/site.example/"
+	for _, c := range []struct{ in, want string }{
+		{`<svg><image href="/i.png"></image></svg>`, `<svg><image href="` + P + `i.png"></image></svg>`},
+		{`<svg><a xlink:href="/x">x</a></svg>`, `<svg><a xlink:href="` + P + `x">x</a></svg>`},
+		{`<a xlink:href="/x">x</a>`, `<a xlink:href="/x">x</a>`},                  // HTML: not a URL
+		{`<image src="/i.png">`, `<image src="` + P + `i.png">`},                  // HTML: an img
+		{`<svg><img src="/i.png"></svg>`, `<svg><img src="` + P + `i.png"></svg>`}, // breaks out
+		{`<svg><foreignObject><iframe src="/f"></iframe></foreignObject></svg>`, `<svg><foreignobject><iframe src="` + P + `f"></iframe></foreignobject></svg>`},
+		{`<svg><use href="/u#x"/></svg><use href="/v">`, `<svg><use href="` + P + `u#x" /></svg><use href="/v">`},
+		{`<a ping="/p1 /p2" attributionsrc="/r">a</a>`, `<a ping="` + P + `p1 ` + P + `p2" attributionsrc="` + P + `r">a</a>`},
+		{`<q cite="c">q</q><td background="/b.png">`, `<q cite="c">q</q><td background="` + P + `b.png">`},
+	} {
+		var out bytes.Buffer
+		if err := Rewrite(&out, strings.NewReader(c.in), cfg); err != nil {
+			t.Fatal(err)
+		}
+		if out.String() != c.want {
+			t.Errorf("%s\n got %s\nwant %s", c.in, out.String(), c.want)
+		}
+	}
+}

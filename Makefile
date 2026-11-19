@@ -6,7 +6,7 @@
 .PHONY: typecheck oracle spec-check browser-check
 
 AGDA ?= agda
-SAFE_MODULES := Scheme Url Containment Srcset Referrer Cookies Fetch Csp Css Html Oracle
+SAFE_MODULES := Scheme Url Containment Srcset Referrer Cookies Fetch Csp Css Html ImportMap Attrs Oracle
 ORACLE := $(CURDIR)/spec/build/Main
 
 # Every rule module is checked under --safe on its own; Main.agda (the IO
@@ -36,4 +36,4 @@ spec-check: oracle
 browser-check: oracle
 	cd ts/client && npm run build
 	cd ts/client && CYRANO_ORACLE=$(ORACLE) CYRANO_REQUIRE_ORACLE=1 CYRANO_BROWSER=1 \
-		npx vitest run tests/spec/spec-vs-chromium.test.ts tests/spec/cookies-vs-chromium.test.ts tests/spec/fetch-vs-chromium.test.ts tests/spec/csp-vs-chromium.test.ts tests/spec/framing-vs-chromium.test.ts tests/spec/css-vs-chromium.test.ts tests/spec/html-vs-chromium.test.ts tests/native
+		npx vitest run tests/spec/spec-vs-chromium.test.ts tests/spec/cookies-vs-chromium.test.ts tests/spec/fetch-vs-chromium.test.ts tests/spec/csp-vs-chromium.test.ts tests/spec/framing-vs-chromium.test.ts tests/spec/css-vs-chromium.test.ts tests/spec/html-vs-chromium.test.ts tests/spec/json-vs-chromium.test.ts tests/spec/attrs-vs-chromium.test.ts tests/native

@@ -42,13 +42,14 @@ describe("raw-text elements", () => {
         s.setAttribute("type", "application/ld+json");
         expect(rawText(s, '{"url":"location"}', tag)).toBe('{"url":"location"}');
     });
-    it("an import map's URLs are proxified, bare specifiers kept, integrity dropped", () => {
+    it("an import map's URLs are proxified, bare specifiers kept, integrity emptied", () => {
         const s = document.createElement("script");
         s.setAttribute("type", "importmap");
         const out = JSON.parse(rawText(s, '{"imports":{"react":"https://cdn.example/react.js","/x.js":"./y.js"},"scopes":{"/a/":{"b":"/c.js"}},"integrity":{"k":"v"}}', tag)!) as Record<string, unknown>;
         expect(out).toEqual({
             imports: { react: "P(https://cdn.example/react.js)", "P(/x.js)": "P(./y.js)" },
             scopes: { "P(/a/)": { b: "P(/c.js)" } },
+            integrity: {}, // its hashes cannot match rewritten modules (spec/ImportMap.agda)
         });
     });
     it("other elements are untouched by the raw-text path", () => {

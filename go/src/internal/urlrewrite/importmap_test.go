@@ -30,8 +30,9 @@ func TestRewriteImportMap(t *testing.T) {
 	if s, ok := scopes[P+"site.example/admin/"].(map[string]any); !ok || s["react"] != P+"cdn.example/react-admin.js" {
 		t.Errorf("scopes = %v", scopes)
 	}
-	if _, has := got["integrity"]; has {
-		t.Error("integrity kept: its hashes cannot match rewritten modules")
+	// Its hashes cannot match rewritten modules: emptied (spec/ImportMap.agda).
+	if in, ok := got["integrity"].(map[string]any); !ok || len(in) != 0 {
+		t.Errorf("integrity = %v, want {}", got["integrity"])
 	}
 	if out := RewriteImportMap([]byte("not json"), base, cfg); string(out) != "not json" {
 		t.Errorf("non-JSON changed: %q", out)

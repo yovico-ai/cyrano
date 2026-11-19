@@ -277,7 +277,11 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
   (FedCM `navigator.credentials.get`, seen on theguardian.com).
 - **Not wrapped yet**: `AsyncFunction`/`GeneratorFunction` constructors;
   an SVG element's `href.baseVal` (SVGAnimatedString; setAttribute /
-  setAttributeNS are rewritten); `<a ping>` in TS (Go rewrites it). The
+  setAttributeNS are rewritten). URL-bearing attributes are one table in
+  both runtimes (spec/Attrs.agda, checked against what Chromium fetches):
+  `ping` / `attributionsrc` are URL lists; `cite` / `longdesc` / `lowsrc` /
+  `codebase` stay as written, their getters unwrapped. Go tracks the SVG
+  namespace over the token stream (simplified tree construction). The
   Navigation API is wrapped (`patches/navigation.ts`; Shopify). Open from
   random-site testing (2026-11-18): `location` / `top` / `parent` read by
   destructuring is handled where the pattern has a source (R14:

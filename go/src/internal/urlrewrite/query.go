@@ -71,6 +71,8 @@ func IsURLLikeSpecifier(s string) bool {
 	if strings.HasPrefix(s, "/") || strings.HasPrefix(s, "./") || strings.HasPrefix(s, "../") {
 		return true
 	}
-	_, _, ok := schemeSplit([]rune(s))
-	return ok
+	// spec/ImportMap.agda urlLike: an absolute URL, as the URL parser reads
+	// it ("http:" alone is none). TS: url/containment.ts isUrlLikeSpecifier.
+	_, res := parseRef(nil, preprocess(s))
+	return res == parsedURL || res == otherScheme
 }

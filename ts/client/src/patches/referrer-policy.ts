@@ -19,7 +19,7 @@ import { heldAttr, holdAttr, originalAttr, recordAttr } from "../native/original
 import { wrapAccessor, wrapMethod } from "../native/surface";
 import { isReferrerPolicy } from "../url/containment";
 import { rewriteSrcsetAttribute } from "./srcset";
-import { isSrcsetAttr, urlAttrsForTagName } from "./url-attribute-map";
+import { kindOf, rewriteByKind, urlAttrsOf } from "./url-attribute-map";
 
 /** A rewriter of URLs that can also mark the request's referrer policy. */
 export interface RewriteOne {
@@ -56,14 +56,13 @@ export function rewriteFor(el: Element, rewriteOne: RewriteOne): (url: string) =
 
 /** The element's URL attributes rewritten again from what the page wrote (its policy changed). */
 export function remark(el: Element, rewriteOne: RewriteOne): void {
-    const attrs = urlAttrsForTagName(el.tagName);
-    if (!attrs) return;
+    const attrs = urlAttrsOf(el);
     const rw = rewriteFor(el, rewriteOne);
     for (const name of attrs) {
         const o = originalAttr(el, name);
         const was = o ? o.value : heldAttr(el, name);
         if (was === null || was === "") continue;
-        const now = isSrcsetAttr(name) ? rewriteSrcsetAttribute(was, rw) : rw(was);
+        const now = rewriteByKind(kindOf(el, name), was, rw, rewriteSrcsetAttribute);
         holdAttr(el, name, now);
         recordAttr(el, name, now, was);
     }

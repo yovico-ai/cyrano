@@ -47,13 +47,13 @@ export function bootstrapOf(node: unknown): (() => string) | undefined {
     }
 }
 import { rewriteSrcsetAttribute } from "./srcset";
-import { SVG_NS, XLINK_NS, isSrcsetAttr, svgUrlAttrs, urlAttrsForTagName } from "./url-attribute-map";
+import { XLINK_NS, kindOf, rewriteByKind } from "./url-attribute-map";
 import { remark, rewriteFor } from "./referrer-policy";
 import { scriptKindOf } from "./script-kind";
 import { isReferrerPolicy } from "../url/containment";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 import { injectFramesIn } from "./dynamic-iframe";
-import { isUrlLikeSpecifier } from "../url/containment";
+import { rewriteImportMapText } from "../url/import-map";
 import { consume, recordAttr, recordText } from "../native/originals";
 import { trustedLike } from "../native/trusted";
 
@@ -285,28 +285,7 @@ export function rawText(el: Element, text: string, rewriteOne: (url: string) => 
  * hashes are of the original modules). Mirrors Go urlrewrite.RewriteImportMap.
  */
 export function rewriteImportMap(text: string, rewriteOne: (url: string) => string): string {
-    let m: Record<string, unknown>;
-    try {
-        m = JSON.parse(text) as Record<string, unknown>;
-    } catch {
-        return text;
-    }
-    if (typeof m !== "object" || m === null || Array.isArray(m)) return text;
-    const re = (s: string): string => (isUrlLikeSpecifier(s) ? rewriteOne(s) : s);
-    const specifiers = (o: unknown): unknown => {
-        if (typeof o !== "object" || o === null) return o;
-        const out: Record<string, unknown> = {};
-        for (const [k, v] of nO.entries(o)) out[re(k)] = typeof v === "string" ? re(v) : v;
-        return out;
-    };
-    if ("imports" in m) m["imports"] = specifiers(m["imports"]);
-    if (typeof m["scopes"] === "object" && m["scopes"] !== null) {
-        const out: Record<string, unknown> = {};
-        for (const [prefix, sm] of nO.entries(m["scopes"])) out[rewriteOne(prefix)] = specifiers(sm);
-        m["scopes"] = out;
-    }
-    delete m["integrity"];
-    return JSON.stringify(m);
+    return rewriteImportMapText(text, rewriteOne);
 }
 
 /**
@@ -394,10 +373,9 @@ function attributeValue(el: Element, name: string, value: string, rewriteOne: (u
     // An element's own referrer policy: the browser is told unsafe-url, its
     // URLs carry the policy (patches/referrer-policy.ts).
     if (lowerName === "referrerpolicy" && isReferrerPolicy(value.replace(/[A-Z]/g, (c) => c.toLowerCase())) && elementPolicyCapable(el)) return "unsafe-url";
-    const attrs = el.namespaceURI === SVG_NS ? svgUrlAttrs(el.localName) : urlAttrsForTagName(el.tagName);
-    if (!attrs || !attrs.includes(lowerName)) return value;
-    const rw = rewriteFor(el, rewriteOne);
-    return isSrcsetAttr(lowerName) ? rewriteSrcsetAttribute(value, rw) : rw(value);
+    const kind = kindOf(el, lowerName);
+    if (kind === "none" || kind === "reflected") return value;
+    return rewriteByKind(kind, value, rewriteFor(el, rewriteOne), rewriteSrcsetAttribute);
 }
 
 // The integrity the page set on each element (never applied).

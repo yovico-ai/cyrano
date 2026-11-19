@@ -29,7 +29,7 @@ import { SafeSet, nOP, nR, ncall } from "../native/intrinsics";
 import { wrapMethod } from "../native/surface";
 
 const URL_ATTRS = new SafeSet([
-    "src", "href", "action", "formaction", "poster", "data", "background", "cite", "manifest", "ping",
+    "src", "href", "action", "formaction", "poster", "data", "background", "cite", "manifest", "ping", "attributionsrc", "xlink:href",
 ]);
 
 /** `selector` with URL-attribute tests widened to the proxied values; the same string when there is none. */

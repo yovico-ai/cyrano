@@ -261,5 +261,13 @@ export function unwrapProxiedUrl(
  * Mirrors Go urlrewrite.IsURLLikeSpecifier.
  */
 export function isUrlLikeSpecifier(s: string): boolean {
-    return s.startsWith("/") || s.startsWith("./") || s.startsWith("../") || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(s);
+    // spec/ImportMap.agda urlLike: or an absolute URL, as the URL parser
+    // reads it ("http:" alone is none; Go: urlrewrite.IsURLLikeSpecifier).
+    if (s.startsWith("/") || s.startsWith("./") || s.startsWith("../")) return true;
+    try {
+        new URL(s);
+        return true;
+    } catch {
+        return false;
+    }
 }

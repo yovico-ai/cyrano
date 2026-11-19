@@ -18,9 +18,9 @@ import { rewriteCssText } from "../css/rewriter";
 import { nO, nR, ncall } from "../native/intrinsics";
 import { isTrustedValue, trusted } from "../native/trusted";
 import { rewriteSrcsetAttribute } from "./srcset";
-import { URL_BEARING_ELEMENTS, isSrcsetAttr } from "./url-attribute-map";
+import { URL_BEARING_ELEMENTS, isSrcsetAttr, kindOf, rewriteByKind, rewriteUrlList } from "./url-attribute-map";
 import { wrapConstructor, wrapAccessor } from "../native/surface";
-import { originalAttr, recordAttr } from "../native/originals";
+import { heldAttr, originalAttr, recordAttr } from "../native/originals";
 
 type ProtoLike = { prototype: object };
 
@@ -30,18 +30,45 @@ export function patchUrlAttributes(
     unwrapOne: (url: string) => string = (u) => u,
 ): void {
     const globals = targetWindow as unknown as Record<string, ProtoLike | undefined>;
-    for (const { ctorName, attrs, idlNames } of URL_BEARING_ELEMENTS) {
+    // Saved at load: the page may replace them.
+    const NURL = (targetWindow as unknown as { URL: typeof URL }).URL;
+    const nodeProto = globals["Node"]?.prototype;
+    const baseGet = nodeProto ? nO.getOwnPropertyDescriptor(nodeProto, "baseURI")?.get : undefined;
+    for (const { ctorName, attrs, idlNames, getters } of URL_BEARING_ELEMENTS) {
         const proto = globals[ctorName]?.prototype;
         if (!proto) continue;
         for (const attribute of attrs) {
             const srcset = isSrcsetAttr(attribute);
-            wrapAccessor<unknown>(proto, idlNames?.[attribute] ?? attribute, {
+            const getter = srcset ? "text" : getters?.[attribute] ?? "url";
+            const idl = idlNames?.[attribute] ?? attribute;
+            if (getter === "reflected") {
+                // Kept as written; the native getter resolves it against the
+                // proxy's URL. The page's resolution: its text against the
+                // page's base (an invalid one: the text, natively too).
+                wrapAccessor<unknown>(proto, idl, { get: (get, self) => {
+                    const v = ncall(get, self);
+                    const text = heldAttr(self as Element, attribute);
+                    if (typeof v !== "string" || text === null || !baseGet) return v;
+                    try {
+                        return new NURL(text, unwrapOne(ncall(baseGet, self) as string)).href;
+                    } catch {
+                        return v;
+                    }
+                } });
+                continue;
+            }
+            wrapAccessor<unknown>(proto, idl, {
                 get: (get, self) => {
                     const v = ncall(get, self);
                     if (typeof v !== "string") return v;
-                    // srcset reflects the attribute's text: the page's own.
-                    // The others are resolved URLs: the original's.
-                    if (srcset) return originalAttr(self, attribute)?.value ?? rewriteSrcsetAttribute(v, unwrapOne);
+                    // srcset, ping, background reflect the attribute's text:
+                    // the page's own. The others are resolved URLs: the original's.
+                    if (getter === "text") {
+                        const o = originalAttr(self, attribute);
+                        if (o) return o.value;
+                        return srcset ? rewriteSrcsetAttribute(v, unwrapOne)
+                            : kindOf(self as Element, attribute) === "urllist" ? rewriteUrlList(v, unwrapOne) : unwrapOne(v);
+                    }
                     return unwrapOne(v);
                 },
                 set: (set, self, value) => {
@@ -50,7 +77,7 @@ export function patchUrlAttributes(
                     if (value == null) return ncall(set, self, value);
                     const s = String(value);
                     const rw = rewriteFor(self as Element, rewriteOne);
-                    const now = srcset ? rewriteSrcsetAttribute(s, rw) : rw(s);
+                    const now = rewriteByKind(kindOf(self as Element, attribute), s, rw, rewriteSrcsetAttribute);
                     // A TrustedScriptURL (script.src under Trusted Types) stays trusted.
                     ncall(set, self, isTrustedValue(value) ? trusted(targetWindow, "ScriptURL", now) : now);
                     recordAttr(self as Element, attribute, now, s);

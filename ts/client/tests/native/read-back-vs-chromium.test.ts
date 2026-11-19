@@ -102,4 +102,35 @@ window.early={href:a.getAttribute("href"),resolved:a.href,src:i.getAttribute("sr
         expect(r.serialized).toContain('href="../rel"');
         expect(r.getAttributeText).toBe("function getAttribute() { [native code] }");
     }, 60_000);
+
+    // URL attributes that never fetch (spec/Attrs.agda reflected) keep the
+    // page's text; natively their getters resolve it against the page, not
+    // the proxy. URL lists (ping) and background read back as written.
+    it("reflected URL getters and URL lists read as direct", async () => {
+        const page = await browser.newPage();
+        await page.goto(`${origin}/cyrano/https/site.example/dir/page`);
+        const r = await page.evaluate(() => {
+            const q = document.createElement("q");
+            q.setAttribute("cite", "rel/c");
+            const q2 = document.createElement("blockquote");
+            q2.cite = "../c2";
+            const img = document.createElement("img");
+            img.setAttribute("longdesc", "ld");
+            img.setAttribute("lowsrc", "/lo");
+            const o = document.createElement("object");
+            o.setAttribute("codebase", "cb/");
+            const a = document.createElement("a");
+            a.ping = "/p1  p2";
+            const td = document.createElement("td");
+            td.setAttribute("background", "b.png");
+            (document.body as HTMLBodyElement).background = "bg.png";
+            return { cite: q.cite, cite2: q2.cite, longDesc: img.longDesc, lowsrc: img.lowsrc, codeBase: o.codeBase, ping: a.ping,
+                pingAttr: a.getAttribute("ping"), td: td.getAttribute("background"), bg: (document.body as HTMLBodyElement).background };
+        });
+        expect(r).toEqual({
+            cite: "https://site.example/dir/rel/c", cite2: "https://site.example/c2", longDesc: "https://site.example/dir/ld",
+            lowsrc: "https://site.example/lo", codeBase: "https://site.example/dir/cb/", ping: "/p1  p2", pingAttr: "/p1  p2",
+            td: "b.png", bg: "bg.png",
+        });
+    }, 60_000);
 });

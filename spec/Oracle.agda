@@ -42,6 +42,11 @@
 --                                       → {"out":"classic|module|importmap|speculationrules|data"}
 --   docbase <document URL> <href>…      → {"out":"<base URL>"} (the hrefs of
 --                                         the document's <base> elements)
+--   importmap <proxy> <base> <text>     → {"out":"<rewritten import map>"}
+--   attrkind <html|svg> <tag> <attr>    → {"out":"url|urllist|srcset|reflected|none"}
+--   urllist <proxy> <base> <text>       → {"out":"<each token proxified>"}
+--   urllike <specifier>                 → {"out":"yes"} / {"out":"no"}
+--   jsonobject <text>                   → {"out":"yes"} / {"out":"no"} (a JSON object)
 --   css     <proxy> <base> <css text>  → {"out":"<rewritten css>"}
 --   cssurls <css text>                  → {"out":"<url>\n<url>…"} (the URLs it names)
 --   frameanc <CSP header value> <embedder URL> <document URL>
@@ -77,6 +82,8 @@ open import Cookies
 open import Fetch
 open import Csp
 open import Css using (rewriteCss; cssUrls)
+import ImportMap
+import Attrs
 open import Html using (ScriptKind; scriptClassic; scriptModule; scriptImportMap; scriptSpeculation; scriptData; scriptKind; documentBase; BaseURL; baseOf′; aboutBlank; beyond)
 
 ------------------------------------------------------------------------
@@ -237,6 +244,11 @@ dispatch op args =
   else if eqStr op (toList "cspinline") then cspInlineReq args
   else if eqStr op (toList "scriptkind") then scriptKindReq args
   else if eqStr op (toList "docbase") then docBaseReq args
+  else if eqStr op (toList "importmap") then importMapReq args
+  else if eqStr op (toList "urllike") then urlLikeReq args
+  else if eqStr op (toList "attrkind") then attrKindReq args
+  else if eqStr op (toList "urllist") then urlListReq args
+  else if eqStr op (toList "jsonobject") then jsonObjectReq args
   else if eqStr op (toList "css") then cssReq args
   else if eqStr op (toList "cssurls") then cssUrlsReq args
   else if eqStr op (toList "frameanc") then frameAncReq args
@@ -438,6 +450,51 @@ dispatch op args =
     byBase beyond      = errorReply "OutOfModel"
   ... | nothing  = errorReply "OutOfModel"
   docBaseReq _ = errorReply "BadRequest"
+
+  importMapReq : List Str → Str
+  importMapReq (p ∷ b ∷ text ∷ []) with proxyOf p | baseOf b
+  ... | just px | just base = out (ImportMap.rewriteImportMap rw text)
+    where
+    rw : Str → Maybe Str
+    rw u with rewriteUrl px base u
+    ... | emit _ v = just v
+    ... | _        = nothing
+  ... | nothing | _ = errorReply "BadProxy"
+  ... | just _  | nothing = errorReply "BadBase"
+  importMapReq _ = errorReply "BadRequest"
+
+  jsonObjectReq : List Str → Str
+  jsonObjectReq (t ∷ []) = yesNo (isObj (ImportMap.tokenize t))
+    where
+    isObj : Maybe (List ImportMap.Tok) → Bool
+    isObj nothing = false
+    isObj (just ts) with ImportMap.roles ts
+    ... | just _  = true
+    ... | nothing = false
+  jsonObjectReq _ = errorReply "BadRequest"
+
+  attrKindReq : List Str → Str
+  attrKindReq (n ∷ t ∷ a ∷ []) =
+    if eqStr n (toList "svg") then out (Attrs.kindName (Attrs.attrKind Attrs.svgNs t a))
+    else if eqStr n (toList "html") then out (Attrs.kindName (Attrs.attrKind Attrs.htmlNs t a))
+    else errorReply "BadRequest"
+  attrKindReq _ = errorReply "BadRequest"
+
+  urlListReq : List Str → Str
+  urlListReq (p ∷ b ∷ text ∷ []) with proxyOf p | baseOf b
+  ... | just px | just base = out (Attrs.rewriteUrlList rw text)
+    where
+    rw : Str → Maybe Str
+    rw u with rewriteUrl px base u
+    ... | emit _ v = just v
+    ... | _        = nothing
+  ... | nothing | _ = errorReply "BadProxy"
+  ... | just _  | nothing = errorReply "BadBase"
+  urlListReq _ = errorReply "BadRequest"
+
+  urlLikeReq : List Str → Str
+  urlLikeReq (v ∷ []) = yesNo (ImportMap.urlLike v)
+  urlLikeReq _ = errorReply "BadRequest"
 
   cssReq : List Str → Str
   cssReq (p ∷ b ∷ text ∷ []) with proxyOf p | baseOf b

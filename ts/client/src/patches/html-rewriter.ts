@@ -35,7 +35,7 @@ import { rewriteCssText } from "../css/rewriter";
 import { ORIGINALS_ATTR } from "../native/originals";
 import { defaultJsRewriteOptions, rewriteJsSource } from "../js/rewriter";
 import { rewriteSrcsetAttribute } from "./srcset";
-import { urlAttrsForTagName, isSrcsetAttr } from "./url-attribute-map";
+import { kindOf, rewriteByKind, urlAttrsOf } from "./url-attribute-map";
 
 interface CapturedNatives {
     innerHTMLGet: (this: Element) => string;
@@ -230,16 +230,14 @@ export function rewriteHtmlString(
         // carrying the element's own referrer policy, if it states one; the
         // browser is then told unsafe-url (as the server's markup:
         // htmlrewrite elementReferrerPolicy).
-        const attrs = urlAttrsForTagName(element.tagName);
-        if (!attrs) continue;
+        const attrs = urlAttrsOf(element);
+        if (!attrs.length) continue;
         const rw = rewriteFor(element, rewriteOne as RewriteOne);
         if (rw !== rewriteOne) ncall(natives.setAttribute, element, "referrerpolicy", "unsafe-url");
         for (const attrName of attrs) {
             const value = element.getAttribute(attrName);
             if (value === null || value.length === 0) continue;
-            const rewritten = isSrcsetAttr(attrName)
-                ? rewriteSrcsetAttribute(value, rw)
-                : rw(value);
+            const rewritten = rewriteByKind(kindOf(element, attrName), value, rw, rewriteSrcsetAttribute);
             // Use the captured native setAttribute so we don't recurse through
             // our own setAttribute patch (which would rewrite again).
             ncall(natives.setAttribute, element, attrName, attrName === "src" && (element.tagName === "SCRIPT" || element.tagName === "EMBED") ? T("ScriptURL", rewritten) : rewritten);

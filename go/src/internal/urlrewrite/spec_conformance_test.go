@@ -226,3 +226,42 @@ func TestSpecConformance_TargetPolicy(t *testing.T) {
 		}
 	})
 }
+
+var importMapPieces = []string{"{", "}", "[", "]", ":", ",", " ", "\n", `"imports"`, `"scopes"`, `"integrity"`, `"react"`, `"./a.js"`,
+	`"/b/"`, `"https://cdn.example/c.js"`, `"../d"`, `"lodash/"`, `"http:"`, `"foo:bar"`, `"é.js"`, `"\ud800"`, `"x\"y"`, "1", "null",
+	"true", `"sha384-abc"`, `"\/e.js"`, `" /f.js"`}
+
+func drawImportMap(rt *rapid.T) string {
+	switch rapid.IntRange(0, 2).Draw(rt, "shape") {
+	case 0:
+		return strings.Join(rapid.SliceOfN(rapid.SampledFrom(importMapPieces), 0, 14).Draw(rt, "pieces"), "")
+	case 1:
+		k := rapid.SampledFrom([]string{`"react"`, `"./a.js"`, `"/b/"`, `"https://cdn.example/c.js"`, `"lodash/"`, `" /f.js"`}).Draw(rt, "k")
+		v := rapid.SampledFrom([]string{`"./x.js"`, `"/y.js"`, `"https://cdn.example/z.js"`, `"bare"`, "null", "3"}).Draw(rt, "v")
+		return `{"imports":{` + k + ":" + v + `},"scopes":{"/s/":{` + k + ":" + v + `}},"integrity":{` + v + `:"sha"}}`
+	default:
+		return `{"imports":` + strings.Join(rapid.SliceOfN(rapid.SampledFrom(importMapPieces), 0, 10).Draw(rt, "inner"), "") + "}"
+	}
+}
+
+func TestSpecConformance_ImportMap(t *testing.T) {
+	oracle := specoracle.Need(t)
+	rapid.Check(t, func(rt *rapid.T) {
+		proxy := rapid.SampledFrom(specoracle.Proxies).Draw(rt, "proxy")
+		base := rapid.SampledFrom(specoracle.Bases).Draw(rt, "base")
+		text := drawImportMap(rt)
+		want, _, err := oracle.Ask("importmap", proxy, base, text)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		baseURL, _ := url.Parse(base)
+		if got := string(RewriteImportMap([]byte(text), baseURL, proxyConfig(rt, proxy))); got != want {
+			rt.Fatalf("RewriteImportMap(%q) on %s = %q, spec says %q", text, base, got, want)
+		}
+		s := rapid.SampledFrom([]string{"react", "/x", "./x", "../x", "https://a/", "foo:bar", "http:", "x/y", " https://a/", "a:", "1a:b", "data:,x"}).Draw(rt, "spec")
+		ul, _, _ := oracle.Ask("urllike", s)
+		if got := IsURLLikeSpecifier(s); got != (ul == "yes") {
+			rt.Fatalf("IsURLLikeSpecifier(%q) = %v, spec says %s", s, got, ul)
+		}
+	})
+}

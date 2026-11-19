@@ -244,3 +244,34 @@ describe("patchDynamicHtml — crossorigin normalization", () => {
         expect(s.getAttribute("crossorigin")).toBe("use-credentials");
     });
 });
+
+describe("URL-bearing attributes by kind (spec/Attrs.agda)", () => {
+    it("a URL list: each token, the whitespace as written", () => {
+        patchDynamicHtml(window, tag, (u) => u);
+        const a = document.createElement("a");
+        a.setAttribute("ping", " /p1\t/p2 ");
+        expect(a.getAttribute("ping")).toBe(" /p1?proxified=1\t/p2?proxified=1 ");
+        const img = document.createElement("img");
+        img.setAttribute("attributionsrc", "/r");
+        expect(img.getAttribute("attributionsrc")).toBe("/r?proxified=1");
+    });
+    it("background is fetched; cite is not rewritten", () => {
+        patchDynamicHtml(window, tag, (u) => u);
+        const td = document.createElement("td");
+        td.setAttribute("background", "/b.png");
+        expect(td.getAttribute("background")).toBe("/b.png?proxified=1");
+        const q = document.createElement("q");
+        q.setAttribute("cite", "/c");
+        expect(q.getAttribute("cite")).toBe("/c");
+    });
+    it("SVG elements in innerHTML; xlink:href on an HTML element is no URL", () => {
+        patchDynamicHtml(window, tag, (u) => u);
+        const div = document.createElement("div");
+        div.innerHTML = '<svg><image href="/i.png"></image><use href="/u.svg#x"></use></svg>';
+        expect(div.querySelector("image")!.getAttribute("href")).toBe("/i.png?proxified=1");
+        expect(div.querySelector("use")!.getAttribute("href")).toBe("/u.svg#x?proxified=1");
+        const a = document.createElement("a");
+        a.setAttribute("xlink:href", "/x");
+        expect(a.getAttribute("xlink:href")).toBe("/x");
+    });
+});
