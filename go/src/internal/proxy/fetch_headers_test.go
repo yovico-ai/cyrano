@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/yovico/cyrano/internal/urlrewrite"
@@ -41,6 +42,36 @@ func TestDirectFetchHeaders(t *testing.T) {
 	}
 	up, _ := url.Parse(upstream.URL)
 	crossPage := "https://page.example/a/b?q=1"
+
+	// A request made under its own referrer policy carries it in its
+	// proxified URL (/cyrano/http!<policy>/…); the browser sent the full
+	// page URL (unsafe-url) and the proxy applies the request's policy.
+	t.Run("a request's own referrer policy, from its URL", func(t *testing.T) {
+		for policy, want := range map[urlrewrite.Policy]string{
+			urlrewrite.Origin:     "https://page.example/",
+			urlrewrite.NoReferrer: "",
+			urlrewrite.UnsafeURL:  crossPage,
+			urlrewrite.SameOrigin: "",
+		} {
+			marked := urlrewrite.RewriteWithPolicy(upstream.URL+"/f", nil, devProxyCfg(), policy)
+			req := httptest.NewRequest("GET", strings.TrimPrefix(marked, "http://localhost:9081"), nil)
+			req.Host = "localhost:9081"
+			req.Header.Set("Referer", proxied(crossPage))
+			req.Header.Set("Sec-Fetch-Dest", "iframe")
+			req.Header.Set("Sec-Fetch-Mode", "navigate")
+			func() {
+				defer func() {
+					if r := recover(); r != nil && r != http.ErrAbortHandler {
+						panic(r)
+					}
+				}()
+				h.ServeHTTP(httptest.NewRecorder(), req)
+			}()
+			if got := captured.headers.Get("Referer"); got != want {
+				t.Errorf("%s: Referer %q, want %q", policy, got, want)
+			}
+		}
+	})
 
 	t.Run("cross-origin referrer is trimmed to the origin by default", func(t *testing.T) {
 		got := send("GET", upstream.URL+"/img.png", map[string]string{

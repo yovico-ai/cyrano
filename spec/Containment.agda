@@ -19,6 +19,14 @@
 -- in href); unwrap reads the host segment as the browser would
 -- (H.com:443 is h.com).
 --
+-- A proxified URL may carry the referrer policy its request is made under
+-- (an element's referrerpolicy, fetch's referrerPolicy): the scheme segment
+-- is then "<scheme>!<policy>" — /cyrano/https!origin/a.example/x (owner,
+-- 2026-11-18). The browser is told unsafe-url, so the proxy learns the
+-- requesting page, and the proxy applies the request's own policy
+-- (`targetPolicy`); unwrap ignores the marker, so the law below holds for
+-- marked URLs alike.
+--
 -- Decisions (owner, 2026-11-17):
 --   * Targets are normalized as the browser does (see Url.agda).
 --   * A URL that is not proxified comes back exactly as given — no
@@ -42,6 +50,7 @@ open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; cong;
 
 open import Scheme
 open import Url
+import Referrer as R
 
 -- The proxy's public origin, as the browser sees it.
 record Proxy : Set where
@@ -93,17 +102,50 @@ underCyrano []           = false
 underCyrano (c ∷ [])     = false
 underCyrano (c ∷ _ ∷ _)  = isCyrano c
 
--- A path proxify can have produced: /cyrano/<scheme>/<host><rest>.
+-- The scheme segment: "<scheme>" or "<scheme>!<policy>"; nothing when the
+-- scheme is not one cyrano proxifies or the policy is not a policy's name.
+schemeSegment : Str → Maybe (Scheme × Maybe R.Policy)
+schemeSegment s with splitBang s
+  where
+  splitBang : Str → Str × Maybe Str
+  splitBang []       = [] , nothing
+  splitBang (c ∷ cs) with is 33 c | splitBang cs
+  ... | true  | _        = [] , just cs
+  ... | false | (a , b)  = (c ∷ a) , b
+... | (sc , nothing) = withPolicy (schemeOf sc) (just nothing)
+  where
+  withPolicy : Maybe Scheme → Maybe (Maybe R.Policy) → Maybe (Scheme × Maybe R.Policy)
+  withPolicy (just x) (just pol) = just (x , pol)
+  withPolicy _        _          = nothing
+... | (sc , just pt) = withPolicy (schemeOf sc) (byName (R.policyToken pt) pt)
+  where
+  withPolicy : Maybe Scheme → Maybe (Maybe R.Policy) → Maybe (Scheme × Maybe R.Policy)
+  withPolicy (just x) (just pol) = just (x , pol)
+  withPolicy _        _          = nothing
+
+  -- Only the policy's own name, as cyrano writes it.
+  byName : Maybe R.Policy → Str → Maybe (Maybe R.Policy)
+  byName (just pol) t = if eqStr t (toList (R.policyName pol)) then just (just pol) else nothing
+  byName nothing    t = nothing
+
+-- A path proxify can have produced: /cyrano/<scheme>[!<policy>]/<host><rest>.
 target : List Str → Maybe (Scheme × Str × List Str)
 target []                 = nothing
 target (_ ∷ [])           = nothing
 target (_ ∷ _ ∷ [])       = nothing
 target (c ∷ s ∷ h ∷ rest) =
-  if isCyrano c ∧ not (isEmpty h) then withScheme (schemeOf s) else nothing
+  if isCyrano c ∧ not (isEmpty h) then withScheme (schemeSegment s) else nothing
   where
-  withScheme : Maybe Scheme → Maybe (Scheme × Str × List Str)
-  withScheme nothing   = nothing
-  withScheme (just sc) = just (sc , h , rest)
+  withScheme : Maybe (Scheme × Maybe R.Policy) → Maybe (Scheme × Str × List Str)
+  withScheme nothing         = nothing
+  withScheme (just (sc , _)) = just (sc , h , rest)
+
+-- The referrer policy a proxified path carries, if any.
+targetPolicy : List Str → Maybe R.Policy
+targetPolicy (c ∷ s ∷ h ∷ rest) with isCyrano c ∧ not (isEmpty h) | schemeSegment s
+... | true | just (_ , pol) = pol
+... | _    | _              = nothing
+targetPolicy _ = nothing
 
 -- The authority as a path segment. A host of "." or ".." is a valid
 -- host, but as a segment it would be a dot segment the browser removes;
@@ -128,9 +170,17 @@ proxify p a = mkAbs (pScheme p) (pAuth p)
                     (toList "cyrano" ∷ schemeChars (scheme a) ∷ escapePct (segmentOf (auth a)) ∷ map escapePct (path a))
                     (query a) (frag a)
 
--- What a parsed URL becomes.
-rewriteAbs : Proxy → Abs → Answer
-rewriteAbs p a = decide (sameOrigin p a) (target (path a))
+-- … and requested under a referrer policy of its own.
+proxifyWith : Proxy → Maybe R.Policy → Abs → Abs
+proxifyWith p nothing    a = proxify p a
+proxifyWith p (just pol) a = mkAbs (pScheme p) (pAuth p)
+                    (toList "cyrano" ∷ (schemeChars (scheme a) ++ '!' ∷ toList (R.policyName pol))
+                      ∷ escapePct (segmentOf (auth a)) ∷ map escapePct (path a))
+                    (query a) (frag a)
+
+-- What a parsed URL becomes (requested under policy pol, if given).
+rewriteAbsWith : Proxy → Maybe R.Policy → Abs → Answer
+rewriteAbsWith p pol a = decide (sameOrigin p a) (target (path a))
   where
   decide : Bool → Maybe (Scheme × Str × List Str) → Answer
   -- On the proxy: already proxified, or a request to cyrano itself.
@@ -140,16 +190,19 @@ rewriteAbs p a = decide (sameOrigin p a) (target (path a))
   -- path (/cyrano/https/site/…): move it to the proxy instead of
   -- wrapping it a second time.
   decide false (just _) = emit remapped (href (mkAbs (pScheme p) (pAuth p) (path a) (query a) (frag a)))
-  decide false nothing  = emit proxified (href (proxify p a))
+  decide false nothing  = emit proxified (href (proxifyWith p pol a))
+
+rewriteAbs : Proxy → Abs → Answer
+rewriteAbs p a = rewriteAbsWith p nothing a
 
 -- REQUIREMENTS §1, for a URL `raw` found on the page whose original URL
 -- is `base`.
-rewriteUrl : Proxy → Abs → Str → Answer
-rewriteUrl p b []       = keep emptyRef
-rewriteUrl p b (c ∷ cs) = classify (preprocess (c ∷ cs))
+rewriteUrlWith : Proxy → Maybe R.Policy → Abs → Str → Answer
+rewriteUrlWith p pol b []       = keep emptyRef
+rewriteUrlWith p pol b (c ∷ cs) = classify (preprocess (c ∷ cs))
   where
   byParse : Parsed → Answer
-  byParse (url a)     = rewriteAbs p a
+  byParse (url a)     = rewriteAbsWith p pol a
   byParse otherScheme = keep notProxifiable
   byParse invalid     = keep unparseable
   byParse outside     = silent
@@ -157,6 +210,9 @@ rewriteUrl p b (c ∷ cs) = classify (preprocess (c ∷ cs))
   classify : Str → Answer
   classify []       = byParse (parse (just b) [])
   classify (d ∷ ds) = if isHash d then keep anchor else byParse (parse (just b) (d ∷ ds))
+
+rewriteUrl : Proxy → Abs → Str → Answer
+rewriteUrl p b raw = rewriteUrlWith p nothing b raw
 
 ------------------------------------------------------------------------
 -- Direct: what page code is shown for `raw` on a page at `base` when the
@@ -288,3 +344,44 @@ unwrap-proxify p http  h hs x xs q f c rewrite sameOrigin-proxify p (mkAbs http 
 unwrap-proxify p https h hs x xs q f c rewrite sameOrigin-proxify p (mkAbs https (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
 unwrap-proxify p ws    h hs x xs q f c rewrite sameOrigin-proxify p (mkAbs ws    (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
 unwrap-proxify p wss   h hs x xs q f c rewrite sameOrigin-proxify p (mkAbs wss   (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+
+sameOrigin-proxifyWith : ∀ p pol a → sameOrigin p (proxifyWith p pol a) ≡ true
+sameOrigin-proxifyWith p nothing    a = sameOrigin-proxify p a
+sameOrigin-proxifyWith p (just pol) a rewrite sameScheme-refl (pScheme p) | eqStr-refl (hostPort (pAuth p)) = refl
+
+-- The law for a URL that carries a referrer policy: the marker is not
+-- part of what page code reads back.
+unwrap-proxifyWith : ∀ p s pol h hs x xs q f → canonical s (h ∷ hs) →
+  unwrapAbs p (proxifyWith p (just pol) (mkAbs s (h ∷ hs) (x ∷ xs) q f)) ≡ original (mkAbs s (h ∷ hs) (x ∷ xs) q f)
+unwrap-proxifyWith p http R.noReferrer h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.noReferrer) (mkAbs http (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p http R.noReferrerWhenDowngrade h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.noReferrerWhenDowngrade) (mkAbs http (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p http R.sameOrigin h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.sameOrigin) (mkAbs http (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p http R.origin h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.origin) (mkAbs http (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p http R.strictOrigin h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.strictOrigin) (mkAbs http (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p http R.originWhenCrossOrigin h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.originWhenCrossOrigin) (mkAbs http (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p http R.strictOriginWhenCrossOrigin h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.strictOriginWhenCrossOrigin) (mkAbs http (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p http R.unsafeUrl h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.unsafeUrl) (mkAbs http (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p https R.noReferrer h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.noReferrer) (mkAbs https (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p https R.noReferrerWhenDowngrade h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.noReferrerWhenDowngrade) (mkAbs https (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p https R.sameOrigin h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.sameOrigin) (mkAbs https (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p https R.origin h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.origin) (mkAbs https (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p https R.strictOrigin h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.strictOrigin) (mkAbs https (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p https R.originWhenCrossOrigin h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.originWhenCrossOrigin) (mkAbs https (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p https R.strictOriginWhenCrossOrigin h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.strictOriginWhenCrossOrigin) (mkAbs https (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p https R.unsafeUrl h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.unsafeUrl) (mkAbs https (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p ws R.noReferrer h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.noReferrer) (mkAbs ws (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p ws R.noReferrerWhenDowngrade h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.noReferrerWhenDowngrade) (mkAbs ws (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p ws R.sameOrigin h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.sameOrigin) (mkAbs ws (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p ws R.origin h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.origin) (mkAbs ws (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p ws R.strictOrigin h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.strictOrigin) (mkAbs ws (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p ws R.originWhenCrossOrigin h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.originWhenCrossOrigin) (mkAbs ws (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p ws R.strictOriginWhenCrossOrigin h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.strictOriginWhenCrossOrigin) (mkAbs ws (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p ws R.unsafeUrl h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.unsafeUrl) (mkAbs ws (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p wss R.noReferrer h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.noReferrer) (mkAbs wss (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p wss R.noReferrerWhenDowngrade h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.noReferrerWhenDowngrade) (mkAbs wss (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p wss R.sameOrigin h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.sameOrigin) (mkAbs wss (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p wss R.origin h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.origin) (mkAbs wss (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p wss R.strictOrigin h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.strictOrigin) (mkAbs wss (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p wss R.originWhenCrossOrigin h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.originWhenCrossOrigin) (mkAbs wss (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p wss R.strictOriginWhenCrossOrigin h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.strictOriginWhenCrossOrigin) (mkAbs wss (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+unwrap-proxifyWith p wss R.unsafeUrl h hs x xs q f c rewrite sameOrigin-proxifyWith p (just R.unsafeUrl) (mkAbs wss (h ∷ hs) (x ∷ xs) q f) | segment-nonEmpty h hs | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl

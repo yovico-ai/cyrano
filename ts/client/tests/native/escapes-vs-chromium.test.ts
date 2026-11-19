@@ -142,6 +142,29 @@ describe.skipIf(!wanted)("escapes and breaks found on random sites, in Chromium"
         expect(hits).toContain("/cyrano/https/cdn.example/mod.mjs");
     }, 60_000);
 
+    // An element's referrer policy travels in its proxified URL (the proxy
+    // applies it; the browser is told unsafe-url) — set before or after its
+    // URL — and the page reads back what it wrote.
+    it("an element's referrerPolicy marks its URL, and reads back", async () => {
+        const page = await browser.newPage();
+        await page.goto(`${origin}/cyrano/https/site.example/page`);
+        const out = await page.evaluate(async () => {
+            const img = document.createElement("img");
+            img.src = "https://cdn.example/rp.png";
+            img.referrerPolicy = "origin";
+            document.body.appendChild(img);
+            const img2 = document.createElement("img");
+            img2.setAttribute("referrerpolicy", "No-Referrer");
+            img2.setAttribute("src", "https://cdn.example/rp2.png");
+            document.body.appendChild(img2);
+            await new Promise((r) => setTimeout(r, 500));
+            return [img.referrerPolicy, img.getAttribute("referrerpolicy"), img.src, img2.referrerPolicy, img2.getAttribute("referrerpolicy"), img2.getAttribute("src")];
+        });
+        expect(out).toEqual(["origin", "origin", "https://cdn.example/rp.png", "no-referrer", "No-Referrer", "https://cdn.example/rp2.png"]);
+        expect(hits).toContain("/cyrano/https!origin/cdn.example/rp.png");
+        expect(hits).toContain("/cyrano/https!no-referrer/cdn.example/rp2.png");
+    }, 60_000);
+
     // fetchLater: the quota is per original origin (under the proxy every
     // destination is the proxy's — tumblr lost posts to "exceeds its
     // quota"); requests beyond the proxy origin's own quota are deferred by

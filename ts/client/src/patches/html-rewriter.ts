@@ -26,6 +26,7 @@
 // descriptors at module-init time (lazily, on first call) and bypass the
 // patches by calling the originals directly.
 
+import { rewriteFor, type RewriteOne } from "./referrer-policy";
 import { SafeMap, SafeSet, nO, ncall } from "../native/intrinsics";
 import { trusted, trustedPolicyName } from "../native/trusted";
 import { rewriteCssText } from "../css/rewriter";
@@ -218,15 +219,20 @@ export function rewriteHtmlString(
             ncall(natives.setAttribute, element, HIDDEN_STYLE, rewriteCssText(styleAttr, rewriteOne));
         }
 
-        // 5. Type-specific URL-bearing attributes (img.src, a.href, ...).
+        // 5. Type-specific URL-bearing attributes (img.src, a.href, ...),
+        // carrying the element's own referrer policy, if it states one; the
+        // browser is then told unsafe-url (as the server's markup:
+        // htmlrewrite elementReferrerPolicy).
         const attrs = urlAttrsForTagName(element.tagName);
         if (!attrs) continue;
+        const rw = rewriteFor(element, rewriteOne as RewriteOne);
+        if (rw !== rewriteOne) ncall(natives.setAttribute, element, "referrerpolicy", "unsafe-url");
         for (const attrName of attrs) {
             const value = element.getAttribute(attrName);
             if (value === null || value.length === 0) continue;
             const rewritten = isSrcsetAttr(attrName)
-                ? rewriteSrcsetAttribute(value, rewriteOne)
-                : rewriteOne(value);
+                ? rewriteSrcsetAttribute(value, rw)
+                : rw(value);
             // Use the captured native setAttribute so we don't recurse through
             // our own setAttribute patch (which would rewrite again).
             ncall(natives.setAttribute, element, attrName, attrName === "src" && (element.tagName === "SCRIPT" || element.tagName === "EMBED") ? T("ScriptURL", rewritten) : rewritten);

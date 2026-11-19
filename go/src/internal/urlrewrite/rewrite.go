@@ -94,8 +94,12 @@ func ParseCyranoURL(u *url.URL) (*url.URL, bool) {
 	if !strings.HasPrefix(dec, prefix) {
 		return nil, false
 	}
-	scheme, rest, ok := strings.Cut(dec[len(prefix):], "/")
-	if !ok || scheme == "" {
+	schemeSeg, rest, ok := strings.Cut(dec[len(prefix):], "/")
+	if !ok || schemeSeg == "" {
+		return nil, false
+	}
+	scheme, _, okSeg := schemeSegment(schemeSeg)
+	if !okSeg {
 		return nil, false
 	}
 	seg, path := rest, "/"
@@ -183,6 +187,15 @@ func EscapePct(s string) string { return escapePct(s) }
 // resolved; a /cyrano/<scheme>/<host> path glued to another origin is moved
 // onto the proxy origin; anything else is proxified.
 func Rewrite(rawURL string, baseURL *url.URL, cfg ProxyConfig) string {
+	return RewriteWithPolicy(rawURL, baseURL, cfg, "")
+}
+
+// RewriteWithPolicy is Rewrite for a request made under its own referrer
+// policy (an element's referrerpolicy, fetch's referrerPolicy): the
+// proxified URL carries it in its scheme segment, /cyrano/https!origin/…
+// (spec rewriteUrlWith), for the proxy to apply (TargetPolicy). An empty
+// policy is Rewrite.
+func RewriteWithPolicy(rawURL string, baseURL *url.URL, cfg ProxyConfig, policy Policy) string {
 	if rawURL == "" {
 		return rawURL
 	}
@@ -219,7 +232,11 @@ func Rewrite(rawURL string, baseURL *url.URL, cfg ProxyConfig) string {
 	for i, s := range a.path {
 		path[i] = escapePct(s)
 	}
-	return proxy.origin() + "/cyrano/" + a.scheme + "/" + escapePct(segmentOf(a.auth)) +
+	schemeSeg := a.scheme
+	if policy != "" {
+		schemeSeg += "!" + string(policy)
+	}
+	return proxy.origin() + "/cyrano/" + schemeSeg + "/" + escapePct(segmentOf(a.auth)) +
 		pathText(path) + queryText(a.query) + fragText(a.frag)
 }
 
@@ -240,10 +257,60 @@ func cyranoTarget(path []string) (scheme, host string, rest []string, ok bool) {
 	if len(path) < 3 || path[0] != "cyrano" || path[2] == "" {
 		return "", "", nil, false
 	}
-	if _, proxifiable := defaultPort[path[1]]; !proxifiable {
+	scheme, _, ok = schemeSegment(path[1])
+	if !ok {
 		return "", "", nil, false
 	}
-	return path[1], path[2], path[3:], true
+	return scheme, path[2], path[3:], true
+}
+
+// policyNames are the referrer policies a scheme segment may carry, by
+// their own names (spec R.policyName).
+var markerPolicies = map[Policy]bool{
+	NoReferrer: true, NoReferrerWhenDowngrade: true, SameOrigin: true, Origin: true,
+	StrictOrigin: true, OriginWhenCrossOrigin: true, StrictOriginWhenCrossOrigin: true, UnsafeURL: true,
+}
+
+// schemeSegment reads "<scheme>" or "<scheme>!<policy>" (spec
+// schemeSegment): false when the scheme is not one cyrano proxifies or
+// the policy is not a policy's name.
+func schemeSegment(seg string) (scheme string, policy Policy, ok bool) {
+	scheme, pol, marked := strings.Cut(seg, "!")
+	if _, proxifiable := defaultPort[scheme]; !proxifiable {
+		return "", "", false
+	}
+	if marked {
+		if !markerPolicies[Policy(pol)] {
+			return "", "", false
+		}
+		policy = Policy(pol)
+	}
+	return scheme, policy, true
+}
+
+// ReferrerPolicyToken is the policy an element's referrerpolicy attribute
+// or fetch's referrerPolicy names (ASCII case-insensitive), or "".
+func ReferrerPolicyToken(v string) Policy {
+	p := Policy(asciiLower(v))
+	if markerPolicies[p] {
+		return p
+	}
+	return ""
+}
+
+// TargetPolicy is the referrer policy a proxified path carries, or ""
+// (spec targetPolicy). The path is read as the browser's parser reads it
+// (dot segments removed): give it as it came on the wire (EscapedPath).
+func TargetPolicy(escapedPath string) Policy {
+	a, res := parseRef(nil, preprocess("http://h"+escapedPath))
+	if res != parsedURL || len(a.path) < 3 || a.path[0] != "cyrano" || a.path[2] == "" {
+		return ""
+	}
+	_, policy, ok := schemeSegment(a.path[1])
+	if !ok {
+		return ""
+	}
+	return policy
 }
 
 // Unwrap is Rewrite's inverse (spec/Containment.agda unwrap): given a

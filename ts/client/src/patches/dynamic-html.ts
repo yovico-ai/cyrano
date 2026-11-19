@@ -48,6 +48,8 @@ export function bootstrapOf(node: unknown): (() => string) | undefined {
 }
 import { rewriteSrcsetAttribute } from "./srcset";
 import { SVG_NS, XLINK_NS, isSrcsetAttr, svgUrlAttrs, urlAttrsForTagName } from "./url-attribute-map";
+import { remark, rewriteFor } from "./referrer-policy";
+import { isReferrerPolicy } from "../url/containment";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 import { injectFramesIn } from "./dynamic-iframe";
 import { isUrlLikeSpecifier } from "../url/containment";
@@ -191,6 +193,8 @@ export function patchDynamicHtml(
         const kind = sinkKind(self as Element, args[0]);
         nR.apply(native, self, [args[0], kind ? trustedLike(targetWindow, kind, args[1], v) : v]);
         recordAttr(self as Element, args[0], v, given);
+        // Its referrer policy changed: its URLs carry the new one.
+        if (args[0].toLowerCase() === "referrerpolicy") remark(self as Element, rewriteOne);
         return;
     });
     patchIntegrityProperty(targetWindow);
@@ -239,6 +243,11 @@ function patchHtmlParsers(targetWindow: Window, rewriteOne: (url: string) => str
  * script's JS or the style's CSS, rewritten — or null when `el` is neither
  * (or a script that is not JavaScript: JSON, an import map, a template).
  */
+/** Elements whose referrerpolicy governs their requests. */
+function elementPolicyCapable(el: Element): boolean {
+    return el.namespaceURI === "http://www.w3.org/1999/xhtml" && /^(A|AREA|IMG|IFRAME|LINK|SCRIPT)$/.test(el.tagName);
+}
+
 // Per window: an element's original base URL (its document's, <base href>
 // included). Registered by patchDynamicHtml; read by rawText through the
 // element's own window (a frame may share its creator's module).
@@ -382,9 +391,13 @@ function attributeValue(el: Element, name: string, value: string, rewriteOne: (u
     }
     if (lowerName === "style") return rewriteCssText(value, rewriteOne);
     if (lowerName === "srcdoc" && el.tagName === "IFRAME") return rewriteSrcdoc(value, rewriteOne, proxyOrigin, bootstrapOf(el));
+    // An element's own referrer policy: the browser is told unsafe-url, its
+    // URLs carry the policy (patches/referrer-policy.ts).
+    if (lowerName === "referrerpolicy" && isReferrerPolicy(value.replace(/[A-Z]/g, (c) => c.toLowerCase())) && elementPolicyCapable(el)) return "unsafe-url";
     const attrs = el.namespaceURI === SVG_NS ? svgUrlAttrs(el.localName) : urlAttrsForTagName(el.tagName);
     if (!attrs || !attrs.includes(lowerName)) return value;
-    return isSrcsetAttr(lowerName) ? rewriteSrcsetAttribute(value, rewriteOne) : rewriteOne(value);
+    const rw = rewriteFor(el, rewriteOne);
+    return isSrcsetAttr(lowerName) ? rewriteSrcsetAttribute(value, rw) : rw(value);
 }
 
 // The integrity the page set on each element (never applied).

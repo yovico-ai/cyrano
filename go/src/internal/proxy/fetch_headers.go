@@ -102,12 +102,12 @@ func initiatorOrigin(v string) string {
 // outgoing request to what a direct browser would send to target
 // (spec/Referrer.agda; urlrewrite.Referrer, OriginHeader, SecFetchSite).
 //
-// Known gaps: a policy set by <meta name=referrer>, a referrerpolicy
-// attribute or fetch({referrerPolicy}) is applied by the browser against
-// proxy URLs (an origin-only result names the proxy and is dropped here);
-// and cyrano forces crossorigin on scripts, which changes their fetch mode,
+// A request's own policy (an element's referrerpolicy, fetch's
+// referrerPolicy) comes in its proxified URL (urlrewrite.TargetPolicy; the
+// browser was told unsafe-url) and is applied here before the page's.
+// Known gap: cyrano forces crossorigin on scripts, which changes their fetch mode,
 // so Origin is added only for fetch()/XHR requests.
-func (h *Handler) directFetchHeaders(req *http.Request, target *url.URL) {
+func (h *Handler) directFetchHeaders(req *http.Request, target *url.URL, requestPolicy urlrewrite.Policy) {
 	to := pageKey(target)
 	referer := req.Header.Get("Referer")
 	from := h.originalReferrer(referer)
@@ -120,7 +120,11 @@ func (h *Handler) directFetchHeaders(req *http.Request, target *url.URL) {
 		req.Header.Del("Referer")
 		mode := strings.ToLower(req.Header.Get("Sec-Fetch-Mode"))
 		safe := req.Method == http.MethodGet || req.Method == http.MethodHead
-		if v, ok := urlrewrite.OriginHeader(mode, safe, urlrewrite.DefaultPolicy, initiator+"/", to); ok {
+		pol := urlrewrite.DefaultPolicy
+		if requestPolicy != "" {
+			pol = requestPolicy
+		}
+		if v, ok := urlrewrite.OriginHeader(mode, safe, pol, initiator+"/", to); ok {
 			req.Header.Set("Origin", v)
 		} else {
 			req.Header.Del("Origin")
@@ -144,7 +148,11 @@ func (h *Handler) directFetchHeaders(req *http.Request, target *url.URL) {
 	}
 
 	page := pageKey(from)
+	// The request's own policy, where it has one, before its page's.
 	policy := pagePolicies.get(page)
+	if requestPolicy != "" {
+		policy = requestPolicy
+	}
 	if v, ok := urlrewrite.Referrer(policy, page, to); ok {
 		req.Header.Set("Referer", v)
 	} else {

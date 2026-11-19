@@ -13,6 +13,7 @@
 // getAttribute and srcset return the text as the page *wrote* it (relative
 // URLs relative) — that needs the original text kept, a separate step.
 
+import { rewriteFor, type RewriteOne } from "./referrer-policy";
 import { rewriteCssText } from "../css/rewriter";
 import { nO, nR, ncall } from "../native/intrinsics";
 import { isTrustedValue, trusted } from "../native/trusted";
@@ -25,7 +26,7 @@ type ProtoLike = { prototype: object };
 
 export function patchUrlAttributes(
     targetWindow: Window,
-    rewriteOne: (url: string) => string,
+    rewriteOne: RewriteOne,
     unwrapOne: (url: string) => string = (u) => u,
 ): void {
     const globals = targetWindow as unknown as Record<string, ProtoLike | undefined>;
@@ -48,7 +49,8 @@ export function patchUrlAttributes(
                     // objects stringify to their URL.
                     if (value == null) return ncall(set, self, value);
                     const s = String(value);
-                    const now = srcset ? rewriteSrcsetAttribute(s, rewriteOne) : rewriteOne(s);
+                    const rw = rewriteFor(self as Element, rewriteOne);
+                    const now = srcset ? rewriteSrcsetAttribute(s, rw) : rw(s);
                     // A TrustedScriptURL (script.src under Trusted Types) stays trusted.
                     ncall(set, self, isTrustedValue(value) ? trusted(targetWindow, "ScriptURL", now) : now);
                     recordAttr(self as Element, attribute, now, s);

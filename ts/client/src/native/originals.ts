@@ -88,6 +88,18 @@ export function initOriginals(targetWindow: Window): void {
 
 const lower = (name: string): string => name.toLowerCase();
 
+/** The attribute as the element holds it (the native getAttribute, not the read-back). */
+export function heldAttr(el: Element, name: string): string | null {
+    if (!nat) return el.getAttribute(name);
+    return ncall(nat.getAttribute, el, name) as string | null;
+}
+
+/** Sets the attribute on the element itself (the native setAttribute). */
+export function holdAttr(el: Element, name: string, value: string): void {
+    if (!nat) { el.setAttribute(name, value); return; }
+    ncall(nat.setAttribute, el, name, value);
+}
+
 /** Records that `el` now holds `now` for `name`, where the page wrote `was`. */
 export function recordAttr(el: Element, name: string, now: string | null, was: string | null): void {
     const key = lower(name);

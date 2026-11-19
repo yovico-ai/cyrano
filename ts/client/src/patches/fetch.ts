@@ -21,6 +21,8 @@ import { patchFetchLater } from "./fetch-later";
 import { wrapAccessor, wrapConstructor, wrapMethod } from "../native/surface";
 import { CREDENTIALS, INITIATOR, includesCredentials, initiatorValue, corsAllows, exposedBy, isCrossOrigin, type CorsContext, type Exposed } from "./cors";
 import { headerViewsOf } from "./response-headers";
+import { type RewriteOne } from "./referrer-policy";
+import { isReferrerPolicy } from "../url/containment";
 
 const isRequest = (x: unknown): x is Request =>
     typeof x === "object" && x !== null && ncall(nOP.toString, x) === "[object Request]";
@@ -35,9 +37,22 @@ function nativeRefuses(raw: string, base: () => URL): boolean {
     }
 }
 
+/** The referrer policy a RequestInit names (a valid one; anything else is the native's to judge). */
+function policyOf(init: unknown): string | null {
+    if (typeof init !== "object" || init === null) return null;
+    let p: unknown;
+    try { p = (init as { referrerPolicy?: unknown }).referrerPolicy; } catch { return null; }
+    return typeof p === "string" && isReferrerPolicy(p) ? p : null;
+}
+
+/** The page's init, its referrerPolicy read as unsafe-url (its other members its own, read once each). */
+function unsafeUrlInit(init: object): object {
+    return new Proxy(init, { get: (t, k, r) => (k === "referrerPolicy" ? "unsafe-url" : nR.get(t, k, r)) });
+}
+
 export function patchFetch(
     targetWindow: Window,
-    rewriteOne: (url: string) => string,
+    rewriteOne: RewriteOne,
     unwrapOne: (url: string) => string,
     baseUrl: () => URL,
     cors?: CorsContext,
@@ -68,7 +83,12 @@ export function patchFetch(
         // input.url reads back the original (patched getter below).
         const original = viaRequest ? input.url : String(input);
         if (nativeRefuses(original, baseUrl)) return nR.apply(native, self, args) as Promise<Response>;
-        const rewritten = rewriteOne(original);
+        // The request's own referrer policy: carried by its URL, the browser
+        // told unsafe-url (patches/referrer-policy.ts). A Request made by the
+        // page carries it already.
+        const policy = policyOf(rest[0]);
+        if (policy !== null) rest[0] = unsafeUrlInit(rest[0] as object);
+        const rewritten = policy !== null && rewriteOne.withPolicy ? rewriteOne.withPolicy(original, policy) : rewriteOne(original);
         // The page's own Request goes to the native as it is wherever it
         // already names the proxied URL (the Request constructor below
         // proxifies it): a Request rebuilt from another has that one's body
@@ -168,14 +188,27 @@ export function patchFetch(
 
     // new Request(url): the URL is proxified as fetch's is — left to the
     // browser it resolves against the proxy's origin.
+    // A Request made with a referrer policy: its URL carries it and the
+    // native holds unsafe-url; its referrerPolicy reads the page's.
+    const requestPolicies = new SafeWeakMap<object, string>();
     wrapConstructor<typeof Request>(targetWindow, "Request", (Native, args, newTarget) => {
         const next = args.slice();
+        const policy = policyOf(next[1]);
+        if (policy !== null) next[1] = unsafeUrlInit(next[1] as object);
         if (next.length && !isRequest(next[0])) {
             const raw = String(next[0]);
-            if (!nativeRefuses(raw, baseUrl)) next[0] = rewriteOne(raw);
+            if (!nativeRefuses(raw, baseUrl)) next[0] = policy !== null && rewriteOne.withPolicy ? rewriteOne.withPolicy(raw, policy) : rewriteOne(raw);
         }
-        return nR.construct(Native, next, newTarget as typeof Request);
+        const req = nR.construct(Native, next, newTarget as typeof Request) as Request;
+        const kept = policy ?? (isRequest(next[0]) ? requestPolicies.get(next[0]) : undefined);
+        if (kept !== undefined) requestPolicies.set(req, kept);
+        return req;
     });
+    if (NativeRequest?.prototype && nO.getOwnPropertyDescriptor(NativeRequest.prototype, "referrerPolicy")) {
+        wrapAccessor<string>(NativeRequest.prototype, "referrerPolicy", {
+            get: (get, self) => (typeof self === "object" && self !== null ? requestPolicies.get(self) : undefined) ?? ncall(get, self),
+        });
+    }
     for (const Ctor of [w.Request, w.Response]) {
         if (!Ctor?.prototype) continue;
         wrapAccessor<string>(Ctor.prototype, "url", { get: (get, self) => unwrapOne(ncall(get, self)) });

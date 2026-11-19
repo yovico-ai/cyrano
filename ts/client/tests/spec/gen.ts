@@ -70,9 +70,18 @@ export function url(proxy: string): fc.Arbitrary<string> {
 }
 
 /** What page code might read back from location.href and the like. */
+// A scheme segment's referrer-policy marker: none, a policy's name, and
+// forms that are not one (Go: specoracle.policyMarkers).
+const policyMarkers = ["", "", "", "!origin", "!no-referrer", "!strict-origin-when-cross-origin", "!unsafe-url",
+    "!Origin", "!bogus", "!", "!origin!x"];
+
+/** The referrer policies a request may carry. */
+export const policies = ["no-referrer", "no-referrer-when-downgrade", "same-origin", "origin", "strict-origin",
+    "origin-when-cross-origin", "strict-origin-when-cross-origin", "unsafe-url"];
+
 export function proxiedHref(proxy: string): fc.Arbitrary<string> {
     return fc.oneof(
-        { weight: 3, arbitrary: cat(lit(proxy + "/cyrano/"), pick(cyranoSchemes), lit("/"), pick(cyranoHosts), pick(["", "/"]), path, qf) },
+        { weight: 3, arbitrary: cat(lit(proxy + "/cyrano/"), pick(cyranoSchemes), pick(policyMarkers), lit("/"), pick(cyranoHosts), pick(["", "/"]), path, qf) },
         { weight: 1, arbitrary: cat(lit(proxy + "/"), path, qf) },
         { weight: 1, arbitrary: cat(lit("https://"), host, lit("/cyrano/https/example.com/"), path, qf) },
         { weight: 1, arbitrary: pick(["about:blank", "not a url", "", "javascript:x", "/cyrano/https/h/x"]) },

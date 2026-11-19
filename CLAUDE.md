@@ -126,8 +126,12 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
   (host-sources → proxied path prefixes, rehashed inline scripts) is not
   done: a proxied page is allowed more than direct. CSS `url()` handling still differs between
   Go (lexer) and TS (regex).
-- **Referrer policy** set by `<meta name=referrer>`, a `referrerpolicy`
-  attribute or `fetch({referrerPolicy})` is not applied (only the header).
+- **Referrer policy**: the document's (header, `<meta name=referrer>`) is
+  recorded per page; a request's own (an element's `referrerpolicy`,
+  `fetch`/`Request` `referrerPolicy`) travels in its proxified URL,
+  `/cyrano/https!origin/…` (spec/Containment.agda `rewriteUrlWith`,
+  `targetPolicy`; unwrap ignores it — proved). The browser is always told
+  unsafe-url; the proxy applies the policy (`proxy/fetch_headers.go`).
 - **Request fingerprint** (checked against tls.peet.ws in real Chrome: TLS
   JA4, HTTP/2 settings and header order equal a direct Chrome's). Header
   order is the browser's own, recorded off its HTTP/1.x connection
@@ -279,8 +283,7 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
   random-site testing (2026-11-18): `location` / `top` / `parent` read by
   destructuring is handled where the pattern has a source (R14:
   declarations, assignments — Transcend's consent manager), not in a
-  parameter's or a nested pattern; an element's `referrerPolicy` drops the Referer;
-  a document whose CSP is `default-src 'none'` still gets the runtime.
+  parameter's or a nested pattern; a document whose CSP is `default-src 'none'` still gets the runtime.
   `fetchLater` keeps its quota per original origin and defers what the
   proxy makes the native refuse (`patches/fetch-later.ts`; tumblr) — the
   requests it defers go out with keepalive (64 KiB in flight at unload). DOM insertion by any

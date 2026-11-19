@@ -24,6 +24,7 @@ open import Data.Char.Base using (Char; toℕ; fromℕ)
 open import Data.List.Base using (List; []; _∷_; _++_; reverse)
 open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.Nat.Base using (ℕ; _<ᵇ_)
+import Data.String.Base
 open import Data.String.Base using (toList)
 open import Data.Product.Base using (_×_; _,_)
 
@@ -66,6 +67,17 @@ policyToken s =
 
   t : Str
   t = lowerAll′ (trim s)
+
+-- A policy's name, as the header and the referrerpolicy attribute write it.
+policyName : Policy → Data.String.Base.String
+policyName noReferrer                  = "no-referrer"
+policyName noReferrerWhenDowngrade     = "no-referrer-when-downgrade"
+policyName sameOrigin                  = "same-origin"
+policyName origin                      = "origin"
+policyName strictOrigin                = "strict-origin"
+policyName originWhenCrossOrigin       = "origin-when-cross-origin"
+policyName strictOriginWhenCrossOrigin = "strict-origin-when-cross-origin"
+policyName unsafeUrl                   = "unsafe-url"
 
 -- The policy a Referrer-Policy header value sets, if any.
 headerPolicy : Str → Maybe Policy

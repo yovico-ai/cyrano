@@ -176,3 +176,53 @@ func onTheWire(href string) string {
 	}
 	return scheme + "://" + hostPort(rest[:end]) + rest[end:]
 }
+
+// A request made under its own referrer policy: the proxified URL carries
+// it (spec rewriteUrlWith), and the proxy reads it back (targetPolicy).
+func TestSpecConformance_RewriteWithPolicy(t *testing.T) {
+	oracle := specoracle.Need(t)
+	rapid.Check(t, func(rt *rapid.T) {
+		proxy := rapid.SampledFrom(specoracle.Proxies).Draw(rt, "proxy")
+		base := rapid.SampledFrom(specoracle.Bases).Draw(rt, "base")
+		raw := specoracle.URL(rt, proxy)
+		pol := rapid.SampledFrom(specoracle.Policies).Draw(rt, "policy")
+		want, _, err := oracle.Ask("rewritewith", proxy, base, pol, raw)
+		if errors.Is(err, specoracle.ErrOutOfModel) {
+			rt.Skip("outside the spec's model")
+		}
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		baseURL, err := url.Parse(base)
+		if err != nil {
+			rt.Fatalf("base %q: %v", base, err)
+		}
+		got := RewriteWithPolicy(raw, baseURL, proxyConfig(rt, proxy), Policy(pol))
+		if got != want {
+			rt.Fatalf("RewriteWithPolicy(%q, %s) on %s = %q, spec says %q", raw, pol, base, got, want)
+		}
+	})
+}
+
+func TestSpecConformance_TargetPolicy(t *testing.T) {
+	oracle := specoracle.Need(t)
+	rapid.Check(t, func(rt *rapid.T) {
+		proxy := rapid.SampledFrom(specoracle.Proxies).Draw(rt, "proxy")
+		href := specoracle.ProxiedHref(rt, proxy)
+		want, has, err := oracle.Ask("targetpolicy", href)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		if !has {
+			want = ""
+		}
+		a, res := parseRef(nil, preprocess(href))
+		got := ""
+		if res == parsedURL && a.scheme+"://"+hostPort(a.auth) == proxy {
+			got = string(TargetPolicy(pathText(a.path)))
+		}
+		if got != want {
+			rt.Fatalf("TargetPolicy(%q) = %q, spec says %q", href, got, want)
+		}
+	})
+}

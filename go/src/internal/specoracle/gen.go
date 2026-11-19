@@ -100,10 +100,19 @@ func URL(t *rapid.T, proxy string) string {
 
 // ProxiedHref draws what page code might read back from location.href
 // and the like.
+// policyMarkers: a scheme segment's referrer-policy marker — none, a
+// policy's name, and forms that are not one.
+var policyMarkers = []string{"", "", "", "!origin", "!no-referrer", "!strict-origin-when-cross-origin", "!unsafe-url",
+	"!Origin", "!bogus", "!", "!origin!x"}
+
+// Policies are the referrer policies a request may carry.
+var Policies = []string{"no-referrer", "no-referrer-when-downgrade", "same-origin", "origin", "strict-origin",
+	"origin-when-cross-origin", "strict-origin-when-cross-origin", "unsafe-url"}
+
 func ProxiedHref(t *rapid.T, proxy string) string {
 	switch rapid.IntRange(0, 5).Draw(t, "form") {
 	case 0, 1, 2:
-		return proxy + "/cyrano/" + pick(cyranoSchemes).Draw(t, "cs") + "/" +
+		return proxy + "/cyrano/" + pick(cyranoSchemes).Draw(t, "cs") + pick(policyMarkers).Draw(t, "pm") + "/" +
 			pick(cyranoHosts).Draw(t, "ch") + pick([]string{"", "/"}).Draw(t, "slash") + path(t) + qf(t)
 	case 3:
 		return proxy + "/" + path(t) + qf(t)

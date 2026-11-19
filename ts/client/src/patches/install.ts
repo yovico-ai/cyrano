@@ -42,6 +42,7 @@ import { patchFunctionConstructor } from "./function-ctor";
 import { patchDynamicIframeAppend } from "./dynamic-iframe";
 import { patchHistory } from "./history";
 import { patchNavigation } from "./navigation";
+import { patchReferrerPolicy, type RewriteOne } from "./referrer-policy";
 import { patchSendBeacon } from "./beacon";
 import { patchWindowOpen } from "./window-open";
 import { patchServiceWorker } from "./service-worker";
@@ -73,8 +74,12 @@ export function installPatches(
         } catch { /* the page's location */ }
         return getCurrentBaseUrl();
     };
-    const rewriteOne = (rawUrl: string): string =>
-        rewriteUrl(rawUrl, documentBase(), config);
+    // (withPolicy: the same, for a request made under its own referrer
+    // policy — the proxified URL carries it; patches/referrer-policy.ts.)
+    const rewriteOne: RewriteOne = Object.assign((rawUrl: string): string =>
+        rewriteUrl(rawUrl, documentBase(), config), {
+        withPolicy: (rawUrl: string, policy: string): string => rewriteUrl(rawUrl, documentBase(), config, policy),
+    });
     const unwrapOne = (proxiedUrl: string): string =>
         unwrapProxiedUrl(proxiedUrl, config);
 
@@ -122,6 +127,7 @@ export function installPatches(
         () => buildBootstrapHtml(config, getCurrentBaseUrl().href), new URL(config.apiBaseURL).origin));
     step("patchUrlAttributes", () => patchUrlAttributes(targetWindow, rewriteOne, unwrapOne));
     step("patchAudioConstructor", () => patchAudioConstructor(targetWindow, rewriteOne));
+    step("patchReferrerPolicy", () => patchReferrerPolicy(targetWindow, rewriteOne));
     step("patchFontFaceConstructor", () => patchFontFaceConstructor(targetWindow, rewriteOne));
     step("patchCssRules", () => patchCssRules(targetWindow, rewriteOne));
     step("patchCssStyleDeclaration", () => patchCssStyleDeclaration(targetWindow, rewriteOne));

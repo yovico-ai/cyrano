@@ -221,6 +221,10 @@ func (h *Handler) serveTarget(w http.ResponseWriter, r *http.Request, target *ur
 // in place. ReverseProxy invokes this once per request before dispatching.
 func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 	return func(req *http.Request) {
+		// The request's own referrer policy, carried by its proxified URL
+		// (an element's referrerpolicy, fetch's referrerPolicy): read before
+		// the URL becomes the target's.
+		requestPolicy := urlrewrite.TargetPolicy(req.URL.EscapedPath())
 		req.URL.Scheme = target.Scheme
 		req.URL.Host = target.Host
 		req.URL.Path = target.Path
@@ -278,7 +282,7 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		h.filterClientHints(req, target, sessionID) // reads the proxied Referer: before it is replaced
 		noteCORS(req, target)                       // reads the runtime's headers: before they are consumed below
 		h.storageAccess(req, target, sessionID)     // reads the proxied Referer and the runtime's headers
-		h.directFetchHeaders(req, target)
+		h.directFetchHeaders(req, target, requestPolicy)
 		ensurePriority(req, target, req.ProtoMajor < 2)
 
 		// User-Agent isn't auto-set if the request had none and the Director

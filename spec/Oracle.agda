@@ -5,6 +5,10 @@
 --   vocab                               → {"schemes":["http",..]}
 --   rewrite <proxy> <base> <url>        → {"kind":"proxified","out":"…"}
 --   unwrap  <proxy> <href>              → {"kind":"unwrapped","out":"…"}
+--   rewritewith <proxy> <base> <policy> <url>
+--                                       → as rewrite, the request made under
+--                                         that referrer policy (marked)
+--   targetpolicy <proxied URL>          → {"out":"origin"} / {"none":true}
 --   srcset  <value>                     → {"out":"…"}  (each URL u written as [u])
 --   direct  <base> <url>                → {"kind":"shownDirect","out":"…"}
 --                                         (what the browser shows, no cyrano)
@@ -133,15 +137,7 @@ kindText plainProxyPath   = "plainProxyPath"
 kindText unwrapped        = "unwrapped"
 kindText shownDirect      = "shownDirect"
 
-policyName : Policy → String
-policyName noReferrer                  = "no-referrer"
-policyName noReferrerWhenDowngrade     = "no-referrer-when-downgrade"
-policyName sameOrigin                  = "same-origin"
-policyName origin                      = "origin"
-policyName strictOrigin                = "strict-origin"
-policyName originWhenCrossOrigin       = "origin-when-cross-origin"
-policyName strictOriginWhenCrossOrigin = "strict-origin-when-cross-origin"
-policyName unsafeUrl                   = "unsafe-url"
+
 
 siteName : Site → String
 siteName sameOriginSite = "same-origin"
@@ -211,6 +207,8 @@ unescapeAll (f ∷ fs) with unescape f | unescapeAll fs
 dispatch : Str → List Str → Str
 dispatch op args =
   if eqStr op (toList "rewrite") then rewriteReq args
+  else if eqStr op (toList "rewritewith") then rewriteWithReq args
+  else if eqStr op (toList "targetpolicy") then targetPolicyReq args
   else if eqStr op (toList "unwrap") then unwrapReq args
   else if eqStr op (toList "srcset") then srcsetReq args
   else if eqStr op (toList "direct") then directReq args
@@ -238,6 +236,14 @@ dispatch op args =
   ... | just _  | nothing   = errorReply "BadBase"
   rewriteReq _ = errorReply "BadRequest"
 
+  rewriteWithReq : List Str → Str
+  rewriteWithReq (p ∷ b ∷ pt ∷ raw ∷ []) with proxyOf p | baseOf b | policyToken pt
+  ... | just px | just base | just pol = answerReply raw (rewriteUrlWith px (just pol) base raw)
+  ... | nothing | _         | _        = errorReply "BadProxy"
+  ... | just _  | nothing   | _        = errorReply "BadBase"
+  ... | just _  | just _    | nothing  = errorReply "BadRequest"
+  rewriteWithReq _ = errorReply "BadRequest"
+
   unwrapReq : List Str → Str
   unwrapReq (p ∷ h ∷ []) with proxyOf p
   ... | just px = answerReply h (unwrap px h)
@@ -256,6 +262,17 @@ dispatch op args =
   maybeOut : Maybe Str → Str
   maybeOut (just v) = out v
   maybeOut nothing  = toList "{\"none\":true}"
+
+  targetPolicyReq : List Str → Str
+  targetPolicyReq (u ∷ []) with parse nothing (preprocess u)
+  ... | url a = maybeOut (named (targetPolicy (path a)))
+    where
+    named : Maybe Policy → Maybe Str
+    named (just pol) = just (toList (policyName pol))
+    named nothing    = nothing
+  ... | _ = maybeOut nothing
+  targetPolicyReq _ = errorReply "BadRequest"
+
 
   policyReq : List Str → Str
   policyReq (v ∷ []) with headerPolicy v

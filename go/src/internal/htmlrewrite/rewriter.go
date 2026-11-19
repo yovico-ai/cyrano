@@ -176,9 +176,17 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 // invariant). cfg is by pointer so HTML_BASETAG can shift BaseURL for
 // subsequent tags in the same document.
 func applyAttrRules(tag string, attrs []html.Attribute, cfg *Config) []html.Attribute {
+	// An element's own referrer policy: its requests carry it in their
+	// proxified URLs (urlrewrite.RewriteWithPolicy) and the browser is told
+	// unsafe-url, so the proxy learns the page and applies the policy
+	// (TS: patches/referrer-policy.ts). An invalid value is no policy.
+	policy := elementReferrerPolicy(tag, attrs)
+	if policy != "" {
+		attrs = setAttr(attrs, "referrerpolicy", string(urlrewrite.UnsafeURL))
+	}
 	rewriteOne := func(raw string, opts urlOpts) string {
 		_ = opts // reserved for future ?r=1, ?ct=js, ?doc=1 query-suffix support
-		return urlrewrite.Rewrite(raw, cfg.BaseURL, cfg.Proxy)
+		return urlrewrite.RewriteWithPolicy(raw, cfg.BaseURL, cfg.Proxy, policy)
 	}
 
 	// HTML_BASETAG — <base href> updates the in-flight base URL so all
@@ -425,6 +433,23 @@ func isJSScript(attrs []html.Attribute) bool {
 		return true
 	}
 	return jsMimeTypes[strings.ToLower(strings.TrimSpace(t))]
+}
+
+// referrerPolicyTags are the elements with a referrerpolicy attribute.
+var referrerPolicyTags = map[string]bool{"a": true, "area": true, "img": true, "iframe": true, "link": true, "script": true}
+
+// elementReferrerPolicy is the referrer policy an element's referrerpolicy
+// attribute states (an enumerated attribute: ASCII case-insensitive), or ""
+// for none or an invalid value.
+func elementReferrerPolicy(tag string, attrs []html.Attribute) urlrewrite.Policy {
+	if !referrerPolicyTags[tag] {
+		return ""
+	}
+	v, ok := getAttr(attrs, "referrerpolicy")
+	if !ok {
+		return ""
+	}
+	return urlrewrite.ReferrerPolicyToken(v)
 }
 
 // OriginalsAttr carries, on an element of rewritten HTML, the text of each

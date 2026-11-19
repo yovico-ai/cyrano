@@ -122,10 +122,21 @@ function pctDecode(s: string): string {
  * matches lowercase only, as proxify writes it; the host is taken as written.
  * Shared by remap and unwrap so the two can never disagree.
  */
-function cyranoTarget(pathname: string): { scheme: string; host: string; rest: string } | null {
-    const m = /^\/cyrano\/(http|https|ws|wss)\/([^/]+)(.*)$/s.exec(pathname);
+function cyranoTarget(pathname: string): { scheme: string; policy: string | null; host: string; rest: string } | null {
+    const m = /^\/cyrano\/(http|https|ws|wss)(?:!([^/]*))?\/([^/]+)(.*)$/s.exec(pathname);
     if (m === null) return null;
-    return { scheme: m[1]!, host: m[2]!, rest: m[3]! };
+    // A policy marker (spec schemeSegment): only a policy's own name.
+    if (m[2] !== undefined && !REFERRER_POLICIES.has(m[2])) return null;
+    return { scheme: m[1]!, policy: m[2] ?? null, host: m[3]!, rest: m[4]! };
+}
+
+/** The referrer policies a scheme segment may carry (spec R.policyName). */
+const REFERRER_POLICIES = new SafeSet(["no-referrer", "no-referrer-when-downgrade", "same-origin", "origin",
+    "strict-origin", "origin-when-cross-origin", "strict-origin-when-cross-origin", "unsafe-url"]);
+
+/** Whether `p` is a referrer policy's name (what a proxified URL may carry). */
+export function isReferrerPolicy(p: string): boolean {
+    return REFERRER_POLICIES.has(p);
 }
 
 /**
@@ -144,6 +155,10 @@ export function rewriteUrl(
     rawUrl: string,
     pageBaseUrl: URL,
     config: ClientConfig,
+    // The request's own referrer policy (an element's referrerpolicy,
+    // fetch's referrerPolicy): carried in the scheme segment,
+    // /cyrano/https!origin/… (spec rewriteUrlWith), for the proxy to apply.
+    policy?: string,
 ): string {
     if (typeof rawUrl !== "string" || rawUrl.length === 0) return rawUrl;
     if (config.identity) return rawUrl;
@@ -193,7 +208,8 @@ export function rewriteUrl(
     const rest = afterAuthority(absolute);
     const tail = rest.slice(absolute.pathname.length); // ?query#fragment, exactly
     const seg = escapePct(segmentOf(userinfoText(absolute) + absolute.host));
-    return `${apiBase}/cyrano/${scheme}/${seg}${escapePct(absolute.pathname)}${tail}`;
+    const schemeSeg = policy && REFERRER_POLICIES.has(policy) ? `${scheme}!${policy}` : scheme;
+    return `${apiBase}/cyrano/${schemeSeg}/${seg}${escapePct(absolute.pathname)}${tail}`;
 }
 
 /**
