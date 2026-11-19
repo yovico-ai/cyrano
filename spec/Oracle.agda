@@ -15,6 +15,7 @@
 --                                       → {"out":"js|css|html|none"} (what the proxy does with the body)
 --   acceptch <field lines>              → {"out":"<names, space-separated>"|"none"} (none: counts for nothing)
 --   hintsent <hint> <set> <0|1> <0|1> <0|1> → {"out":"yes"|"no"}
+--   postdelivery <sender> <recipient> <targetOrigin> → {"out":"deliver"|"drop"|"throw"}
 --   setspolicy <dest>                  → {"out":"yes"|"no"} (its response sets a context's referrer policy)
 --   sniffhtml <body>                   → {"out":"yes"|"no"} (Chromium's HTML sniff)
 --   metadatasent <name> <0|1>          → {"out":"yes"|"no"} (reaches a target of that trustworthiness)
@@ -139,6 +140,7 @@ import Permissions
 import Allow
 import Storage
 import Metadata
+import Messaging
 open import Html using (ScriptKind; scriptClassic; scriptModule; scriptImportMap; scriptSpeculation; scriptData; scriptKind; documentBase; BaseURL; baseOf′; aboutBlank; beyond)
 
 ------------------------------------------------------------------------
@@ -286,6 +288,7 @@ dispatch op args =
   else if eqStr op (toList "disposition") then dispositionReq args
   else if eqStr op (toList "sniffhtml") then sniffHtmlReq args
   else if eqStr op (toList "setspolicy") then setsPolicyReq args
+  else if eqStr op (toList "postdelivery") then postDeliveryReq args
   else if eqStr op (toList "refreshread") then refreshReadReq args
   else if eqStr op (toList "wsmark") then wsMarkReq args
   else if eqStr op (toList "jsonbytes") then jsonBytesReq args
@@ -434,6 +437,16 @@ dispatch op args =
     opt : Str → Str → Maybe Str
     opt p v = if eqStr p (toList "1") then just v else nothing
   dispositionReq _ = errorReply "BadRequest"
+
+  -- postdelivery <sender origin> <recipient origin> <targetOrigin>
+  postDeliveryReq : List Str → Str
+  postDeliveryReq (se ∷ re ∷ t ∷ []) = out (toList (deliveryName (Messaging.delivery se re t)))
+    where
+    deliveryName : Messaging.Delivery → String
+    deliveryName Messaging.deliver = "deliver"
+    deliveryName Messaging.drop    = "drop"
+    deliveryName Messaging.throws  = "throw"
+  postDeliveryReq _ = errorReply "BadRequest"
 
   setsPolicyReq : List Str → Str
   setsPolicyReq (d ∷ []) = out (if Referrer.setsPolicy d then toList "yes" else toList "no")

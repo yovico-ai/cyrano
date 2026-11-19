@@ -103,3 +103,15 @@ describe("callerUrls", () => {
         }
     });
 });
+
+// An opaque targetOrigin throws natively a SyntaxError (Chromium); it was
+// compared as the string "null" and dropped silently: the page got no
+// exception (spec/Messaging.agda).
+describe("delivery — opaque targetOrigins", () => {
+    it("leaves data:, javascript: and file: targets to the native", () => {
+        const win = { $rewriter: { get_base_url: () => new URL("https://a.example/page") } };
+        for (const t of ["data:x", "javascript:x", "blob:nope", "file:///x"]) {
+            expect(delivery(win, t, "https://a.example", "http://proxy:1", (h) => h).kind, t).toBe("native");
+        }
+    });
+});

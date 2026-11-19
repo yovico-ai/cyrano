@@ -1,5 +1,7 @@
 // postMessage's targetOrigin, as HTML defines it, for windows that all
-// really live on the proxy origin.
+// really live on the proxy origin: a port of spec/Messaging.agda delivery,
+// which is the authority (checked against it: message-conformance; the
+// spec against Chromium: post-message-vs-chromium).
 //
 // Natively: "*" delivers to any recipient; "/" only to one whose origin is
 // the sender's; anything else is parsed as a URL (a parse failure throws a
@@ -52,6 +54,10 @@ export function delivery(
     } catch {
         return { kind: "native" }; // the native throws its own SyntaxError
     }
+    // An opaque origin (data:, javascript:; file: reads "null" too): the
+    // native decides — it throws a SyntaxError, or drops a file: one
+    // (spec/Messaging.agda). Compared as a string it was silently dropped.
+    if (wanted === "null") return { kind: "native" };
     return wanted === to ? { kind: "send", origin: proxyOrigin } : { kind: "drop" };
 }
 
