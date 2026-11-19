@@ -118,11 +118,11 @@ func (h *Handler) filterClientHints(req *http.Request, target *url.URL, sessionI
 	dest := strings.ToLower(req.Header.Get("Sec-Fetch-Dest"))
 	from := h.originalReferrer(req.Header.Get("Referer"))
 	sameOrigin := from != nil && strings.EqualFold(from.Scheme, target.Scheme) && strings.EqualFold(from.Host, target.Host)
-	if strings.EqualFold(target.Scheme, "https") && (dest == "document" || sameOrigin) {
+	secure := urlrewrite.Trustworthy(target)
+	if secure && (dest == "document" || sameOrigin) {
 		allowed = acceptedHints.get(hintKey(sessionID, target))
 	}
 	navigation := dest == "document"
-	secure := strings.EqualFold(target.Scheme, "https")
 	withheld := http.Header{}
 	for name, vs := range req.Header {
 		l := strings.ToLower(name)
@@ -138,11 +138,11 @@ func (h *Handler) filterClientHints(req *http.Request, target *url.URL, sessionI
 }
 
 // hintSent: whether a direct browser sends this hint (spec/Hints.agda):
-// the low-entropy ones always; another when the target is secure, its
-// origin asked for it, and the request is a top-level navigation or to
-// the page's own origin.
+// only to a potentially trustworthy target (none at all to an http name);
+// there the low-entropy ones always, another when its origin asked for it
+// and the request is a top-level navigation or to the page's own origin.
 func hintSent(hint string, set map[string]bool, secure, navigation, samePage bool) bool {
-	return lowEntropy[hint] || secure && (navigation || samePage) && set[hint]
+	return secure && (lowEntropy[hint] || (navigation || samePage) && set[hint])
 }
 
 type withheldHintsKey struct{}
@@ -225,7 +225,7 @@ func recordAcceptCH(resp *http.Response, target *url.URL, sessionID string) {
 		resp.Header.Del("Critical-CH")
 		return
 	}
-	secure := strings.EqualFold(target.Scheme, "https")
+	secure := urlrewrite.Trustworthy(target)
 	key := hintKey(sessionID, target)
 	// A valid Accept-CH replaces the origin's set (an empty one clears
 	// it); an invalid one changes nothing, as for Chromium

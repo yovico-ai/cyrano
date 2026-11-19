@@ -15,6 +15,8 @@
 --                                       → {"out":"js|css|html|none"} (what the proxy does with the body)
 --   acceptch <field lines>              → {"out":"<names, space-separated>"|"none"} (none: counts for nothing)
 --   hintsent <hint> <set> <0|1> <0|1> <0|1> → {"out":"yes"|"no"}
+--   metadatasent <name> <0|1>          → {"out":"yes"|"no"} (reaches a target of that trustworthiness)
+--   storageaccess <mode> <dest> <cred> <chain> <from> <to> <site> <0|1> → {"out":"active"|"none"}
 --   allowframe <attr> <f> <0|1> <parent> <src> <frame> → {"out":"yes"|"no"} (the frame's featurePolicy)
 --   allowrewrite <attr>                 → {"out":"<the attribute the browser is given>"}
 --   ppallows <lines> <feature> <0|1> <doc> <origin> → {"out":"yes"|"no"} (featurePolicy.allowsFeature)
@@ -133,6 +135,8 @@ import Hints
 import Upgrades
 import Permissions
 import Allow
+import Storage
+import Metadata
 open import Html using (ScriptKind; scriptClassic; scriptModule; scriptImportMap; scriptSpeculation; scriptData; scriptKind; documentBase; BaseURL; baseOf′; aboutBlank; beyond)
 
 ------------------------------------------------------------------------
@@ -288,6 +292,8 @@ dispatch op args =
   else if eqStr op (toList "upgradable") then upgradableReq args
   else if eqStr op (toList "ppallows") then ppAllowsReq args
   else if eqStr op (toList "allowframe") then allowFrameReq args
+  else if eqStr op (toList "storageaccess") then storageAccessReq args
+  else if eqStr op (toList "metadatasent") then metadataSentReq args
   else if eqStr op (toList "allowrewrite") then allowRewriteReq args
   else if eqStr op (toList "pptranslate") then ppTranslateReq args
   else if eqStr op (toList "swapscheme") then swapSchemeReq args
@@ -442,6 +448,20 @@ dispatch op args =
   hintSentReq (h ∷ set ∷ s₁ ∷ n₁ ∷ p₁ ∷ []) =
     out (if Hints.hintSent h (splitOn (is 32) set) (eqStr s₁ (toList "1")) (eqStr n₁ (toList "1")) (eqStr p₁ (toList "1")) then toList "yes" else toList "no")
   hintSentReq _ = errorReply "BadRequest"
+
+  -- metadatasent <header name> <trustworthy 0|1>
+  metadataSentReq : List Str → Str
+  metadataSentReq (n ∷ t ∷ []) = out (if Metadata.sentTo n (eqStr t (toList "1")) then toList "yes" else toList "no")
+  metadataSentReq _ = errorReply "BadRequest"
+
+  -- storageaccess <mode> <dest> <include|omit|same-origin> <chain sites, space-separated> <from origin> <to origin> <target site> <trustworthy 0|1>
+  storageAccessReq : List Str → Str
+  storageAccessReq (m ∷ d ∷ c ∷ ch ∷ f ∷ t ∷ ts ∷ tw ∷ []) =
+    out (if Storage.storageAccess m d cred (splitOn (is 32) ch) f t ts (eqStr tw (toList "1")) then toList "active" else toList "none")
+    where
+    cred : Storage.Credentials
+    cred = if eqStr c (toList "include") then Storage.include else if eqStr c (toList "omit") then Storage.omit else Storage.sameOrigin
+  storageAccessReq _ = errorReply "BadRequest"
 
   -- allowframe <attr> <feature> <default * 0|1> <parent> <src origin> <frame origin>
   allowFrameReq : List Str → Str

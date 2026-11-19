@@ -35,20 +35,27 @@ import (
 // It never goes upstream.
 const CredentialsHeader = "Crn-C"
 
-// topSiteStore remembers, per session, the top-level site of framed
-// documents by their URL. Bounded.
+// frameContext is a framed document's context: its top-level site, and
+// whether a document of its chain (itself included) is of another site.
+type frameContext struct {
+	top   string
+	cross bool
+}
+
+// topSiteStore remembers, per session, the context of framed documents by
+// their URL. Bounded.
 type topSiteStore struct {
 	mu sync.Mutex
-	m  map[string]string
+	m  map[string]frameContext
 }
 
 const topSiteStoreMax = 8192
 
-func (s *topSiteStore) set(session, doc, site string) {
+func (s *topSiteStore) set(session, doc string, c frameContext) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.m == nil {
-		s.m = make(map[string]string)
+		s.m = make(map[string]frameContext)
 	}
 	if len(s.m) >= topSiteStoreMax {
 		for k := range s.m {
@@ -56,13 +63,14 @@ func (s *topSiteStore) set(session, doc, site string) {
 			break
 		}
 	}
-	s.m[session+"\x00"+doc] = site
+	s.m[session+"\x00"+doc] = c
 }
 
-func (s *topSiteStore) get(session, doc string) string {
+func (s *topSiteStore) get(session, doc string) (frameContext, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.m[session+"\x00"+doc]
+	c, ok := s.m[session+"\x00"+doc]
+	return c, ok
 }
 
 var topSites topSiteStore
@@ -109,35 +117,58 @@ func (h *Handler) storageAccess(req *http.Request, target *url.URL, sessionID st
 	if navigation && dest != "document" && from != nil {
 		*req = *req.WithContext(context.WithValue(req.Context(), framedByKey{}, from))
 	}
-	var top string
+	var ctx frameContext // the requesting document's (for a navigation: the embedder's)
 	switch {
 	case navigation && dest == "document":
-		top = siteOf(target)
+		ctx = frameContext{top: siteOf(target)}
 	case from != nil:
-		if top = topSites.get(sessionID, pageKey(from)); top == "" {
-			top = siteOf(from)
+		var ok bool
+		if ctx, ok = topSites.get(sessionID, pageKey(from)); !ok {
+			ctx = frameContext{top: siteOf(from)} // a top-level document
 		}
 	default:
 		return // nothing known of the context: the browser's own header, if any, stands
 	}
 	req.Header.Del("Sec-Fetch-Storage-Access")
+	targetSite := siteOf(target)
 	if navigation {
-		topSites.set(sessionID, pageKey(target), top)
+		topSites.set(sessionID, pageKey(target), frameContext{top: ctx.top, cross: ctx.cross || targetSite != ctx.top})
 	}
-	if top == "" || siteOf(target) == top {
-		return
+	cred := credentials
+	if cred == "" {
+		if navigation || mode == "no-cors" {
+			cred = "include"
+		} else {
+			cred = "same-origin" // fetch's and a cors element's default
+		}
 	}
-	credentialed := false
-	switch {
-	case credentials != "":
-		credentialed = credentials == "include"
-	case navigation || mode == "no-cors":
-		credentialed = true
-	case mode == "cors" && dest == "empty" && from != nil:
-		// fetch/XHR by default: credentials to its own origin only.
-		credentialed = from.Scheme == target.Scheme && strings.EqualFold(from.Host, target.Host)
+	fromOrigin := ""
+	if from != nil {
+		fromOrigin = strings.ToLower(from.Scheme + "://" + from.Host)
 	}
-	if credentialed {
+	if storageAccessActive(mode, dest, cred, ctx, fromOrigin, strings.ToLower(target.Scheme+"://"+target.Host), targetSite, urlrewrite.Trustworthy(target)) {
 		req.Header.Set("Sec-Fetch-Storage-Access", "active")
 	}
+}
+
+// storageAccessActive: whether a direct browser sends
+// Sec-Fetch-Storage-Access: active (spec/Storage.agda storageAccess) — to a
+// trustworthy target, not on a top-level navigation, on a third-party
+// request (any document of the chain, or the target, of another site than
+// the top-level one: a cross-site frame's requests to the top-level site
+// are) that carries credentials.
+func storageAccessActive(mode, dest, cred string, ctx frameContext, from, to, targetSite string, trustworthy bool) bool {
+	if !trustworthy || mode == "navigate" && dest == "document" || ctx.top == "" {
+		return false
+	}
+	if !ctx.cross && targetSite == ctx.top {
+		return false
+	}
+	switch cred {
+	case "include":
+		return true
+	case "same-origin":
+		return from != "" && from == to
+	}
+	return false
 }

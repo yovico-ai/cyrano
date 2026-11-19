@@ -13,7 +13,9 @@
 --     replaces the origin's set (an empty one clears it); an invalid one,
 --     or none, leaves it as it was.
 --   * A request carries the low-entropy hints (sec-ch-ua, -mobile,
---     -platform) always, and another hint only when its target is secure,
+--     -platform) when its target is potentially trustworthy (https or
+--     loopback; none at all to an http name — Metadata.agda), and another
+--     hint only when, besides,
 --     its origin's set names it, and it is a top-level navigation or a
 --     request to the page's own origin. The proxy drops the others: through
 --     it every site is one origin to the browser, which would send one
@@ -76,11 +78,12 @@ memberS x []       = false
 memberS x (y ∷ ys) = eqStr x y ∨ memberS x ys
 
 -- hint: a hint header's name (lowercase); set: the target origin's;
--- secure: the target is https; navigation: a top-level document request;
+-- secure: the target is potentially trustworthy; navigation: a top-level
+-- document request;
 -- samePage: the request's page is of the target's origin.
 hintSent : Str → List Str → Bool → Bool → Bool → Bool
 hintSent hint set secure navigation samePage =
-  lowEntropy hint ∨ (secure ∧ (navigation ∨ samePage) ∧ memberS hint set)
+  secure ∧ (lowEntropy hint ∨ ((navigation ∨ samePage) ∧ memberS hint set))
 
 ------------------------------------------------------------------------
 -- The low-entropy Sec-CH-UA a Chrome of major version m sends (UA-CH

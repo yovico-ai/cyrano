@@ -7,6 +7,7 @@ package urlrewrite
 // functions recompute them from the original URLs.
 
 import (
+	"net/url"
 	"strings"
 
 	"golang.org/x/net/publicsuffix"
@@ -85,6 +86,33 @@ func trustworthy(u absURL) bool {
 	}
 	parts := strings.Split(h, ".")
 	return len(parts) == 4 && parts[0] == "127"
+}
+
+// Trustworthy: u is a potentially trustworthy URL (trustworthy), for a
+// parsed target.
+func Trustworthy(u *url.URL) bool {
+	if u == nil {
+		return false
+	}
+	return trustworthy(absURL{scheme: strings.ToLower(u.Scheme), auth: strings.ToLower(u.Host)})
+}
+
+// SecureOnlyHeader: a request header a direct browser sends only to a
+// potentially trustworthy URL (spec/Metadata.agda secureOnly) — the fetch
+// metadata and the client hints. Through the proxy the browser sends them
+// for every request (the proxy is trustworthy); the upstream transport
+// leaves them off for an http name (upstream.RoundTrip). They stay on the
+// proxy's own copy of the request, which the response handling reads.
+func SecureOnlyHeader(name string) bool {
+	n := strings.ToLower(name)
+	if strings.HasPrefix(n, "sec-fetch-") || strings.HasPrefix(n, "sec-ch-") {
+		return true
+	}
+	switch n {
+	case "dpr", "device-memory", "viewport-width", "width", "rtt", "downlink", "ect":
+		return true
+	}
+	return false
 }
 
 func downgrade(from, to absURL) bool { return trustworthy(from) && !trustworthy(to) }

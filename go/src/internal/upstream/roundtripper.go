@@ -19,6 +19,7 @@ import (
 	"github.com/bogdanfinn/fhttp/httptrace"
 	"github.com/yovico/cyrano/internal/dnscache"
 	"github.com/yovico/cyrano/internal/headerorder"
+	"github.com/yovico/cyrano/internal/urlrewrite"
 	"net"
 	"net/http"
 	"net/textproto"
@@ -158,29 +159,7 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	fReq.Host = req.Host
 	fReq.ContentLength = req.ContentLength
-	// Copy headers. A nil value slice (cyrano suppresses X-Forwarded-For by
-	// setting it to nil) contributes nothing, preserving the suppression.
-	// Skip framing/hop-by-hop headers the transport owns: copying Content-Length
-	// here duplicates it against fReq.ContentLength, producing a request with two
-	// Content-Length headers — a smuggling signature that upstreams (Cloudflare)
-	// reject with a 400. That silently broke every POST (GETs, having no body,
-	// were unaffected).
-	for k, vs := range req.Header {
-		switch k {
-		case "Content-Length", "Host", "Transfer-Encoding", "Connection":
-			continue
-		}
-		for _, v := range vs {
-			fReq.Header.Add(k, v)
-		}
-	}
-	// Real Chrome sends these low-entropy Sec-CH-UA-* hints on every request,
-	// same-origin or not — their total absence on a request whose UA claims
-	// Chrome is itself a bot signal fingerprinting WAFs check for. Some
-	// automation-driven Chrome configurations (e.g. certain headless/CDP
-	// setups) omit them even though the real browser sends them normally, so
-	// synthesize them from the UA when the incoming request didn't carry any.
-	ensureClientHints(fReq.Header, req.Header.Get("User-Agent"))
+	copyHeaders(fReq.Header, req)
 
 	// Header order is part of the fingerprint. Send the headers in the
 	// order the browser itself sent them (recorded on its connection:
@@ -401,4 +380,42 @@ func convertHeader(h fhttp.Header) http.Header {
 		out[ck] = append(out[ck], vs...)
 	}
 	return out
+}
+
+// copyHeaders sets the upstream request's headers from the proxy's.
+func copyHeaders(out fhttp.Header, req *http.Request) {
+	// Copy headers. A nil value slice (cyrano suppresses X-Forwarded-For by
+	// setting it to nil) contributes nothing, preserving the suppression.
+	// Skip framing/hop-by-hop headers the transport owns: copying Content-Length
+	// here duplicates it against fReq.ContentLength, producing a request with two
+	// Content-Length headers — a smuggling signature that upstreams (Cloudflare)
+	// reject with a 400. That silently broke every POST (GETs, having no body,
+	// were unaffected).
+	// To a target that is not potentially trustworthy (an http name) a
+	// direct browser sends no fetch metadata and no client hints
+	// (spec/Metadata.agda); the browser sent them to the proxy.
+	trustworthy := urlrewrite.Trustworthy(req.URL)
+	for k, vs := range req.Header {
+		switch k {
+		case "Content-Length", "Host", "Transfer-Encoding", "Connection":
+			continue
+		}
+		if !trustworthy && urlrewrite.SecureOnlyHeader(k) {
+			continue
+		}
+		for _, v := range vs {
+			out.Add(k, v)
+		}
+	}
+	// Real Chrome sends these low-entropy Sec-CH-UA-* hints on every request,
+	// same-origin or not — their total absence on a request whose UA claims
+	// Chrome is itself a bot signal fingerprinting WAFs check for. Some
+	// automation-driven Chrome configurations (e.g. certain headless/CDP
+	// setups) omit them even though the real browser sends them normally, so
+	// synthesize them from the UA when the incoming request didn't carry any.
+	// Only for a potentially trustworthy target: to an http name a direct
+	// browser sends no client hints at all (spec/Metadata.agda).
+	if trustworthy {
+		ensureClientHints(out, req.Header.Get("User-Agent"))
+	}
 }

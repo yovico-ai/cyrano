@@ -10,6 +10,9 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
     test: {
+        // The spec conformance tests make hundreds of oracle round trips:
+        // past the 5 s default when the suite runs in parallel under load.
+        testTimeout: 30_000,
         environment: "happy-dom",
         globals: true,
         include: ["tests/**/*.test.ts"],

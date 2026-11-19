@@ -182,7 +182,9 @@ the data copy. Unwrap ignores the marks.
   (`patches/cors.ts`: exposed headers, the check, `Crn-I`/`Crn-C` request
   headers naming the context and credentials mode to the proxy);
   `Sec-Fetch-Storage-Access` for third-party frames
-  (`proxy/storage_access.go`); original body sizes in performance entries
+  (`proxy/storage_access.go`, spec/Storage.agda: by the chain of sites);
+  no Sec-Fetch-* / client hints to an http name, as direct
+  (spec/Metadata.agda, `upstream.copyHeaders`); original body sizes in performance entries
   (Server-Timing metric `crnb`); read-back of script text through
   ancestors' `textContent`, text nodes and `XMLSerializer`;
   `Notification.permission` in a third-party frame (`patches/embedded.ts`).

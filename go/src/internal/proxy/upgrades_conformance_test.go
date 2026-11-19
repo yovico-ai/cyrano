@@ -140,3 +140,35 @@ func TestHTTPSUpgrade_UniqueNamesOnly(t *testing.T) {
 		}
 	}
 }
+
+// The Sec-Fetch-Storage-Access decision against spec/Storage.agda (the
+// spec against Chromium: storage-access-vs-chromium).
+func TestSpecConformance_StorageAccess(t *testing.T) {
+	oracle := specoracle.Need(t)
+	sites := []string{"https://a.example", "https://b.example", "http://c.example"}
+	rapid.Check(t, func(rt *rapid.T) {
+		chain := rapid.SliceOfN(rapid.SampledFrom(sites), 1, 4).Draw(rt, "chain")
+		mode := rapid.SampledFrom([]string{"navigate", "cors", "no-cors", "same-origin"}).Draw(rt, "mode")
+		dest := rapid.SampledFrom([]string{"document", "iframe", "empty", "image", "script"}).Draw(rt, "dest")
+		cred := rapid.SampledFrom([]string{"include", "omit", "same-origin"}).Draw(rt, "cred")
+		from := chain[len(chain)-1]
+		to := rapid.SampledFrom(sites).Draw(rt, "to")
+		tw := rapid.Bool().Draw(rt, "trustworthy")
+		b := "0"
+		if tw {
+			b = "1"
+		}
+		want, _, err := oracle.Ask("storageaccess", mode, dest, cred, strings.Join(chain, " "), from, to, to, b)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		ctx := frameContext{top: chain[0]}
+		for _, s := range chain {
+			ctx.cross = ctx.cross || s != chain[0]
+		}
+		got := storageAccessActive(mode, dest, cred, ctx, from, to, to, tw)
+		if got != (want == "active") {
+			rt.Fatalf("%s %s %s chain %v → %s: %v, spec %s", mode, dest, cred, chain, to, got, want)
+		}
+	})
+}
