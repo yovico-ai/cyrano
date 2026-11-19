@@ -60,3 +60,21 @@ storageAccess mode dest cred chain from to targetSite trustworthy =
     byMode include    = true
     byMode omit       = false
     byMode sameOrigin = eqStr from to
+
+------------------------------------------------------------------------
+-- The storage partition a context's localStorage, IndexedDB, caches and
+-- broadcast channels live in (Chromium's StorageKey; TS: patches/
+-- storage.ts storagePrefix). First-party — the context's site and every
+-- ancestor's are the top-level site's — the origin alone; otherwise the
+-- origin with the top-level site (an A-B-A frame is third-party). Checked
+-- against Chromium with third-party storage partitioning on:
+-- storage-partition-vs-chromium.
+--
+-- ancestors: the sites from the top-level document down to the parent;
+-- site, origin: the context's own.
+
+partitionKey : List Str → Str → Str → Str
+partitionKey []                  site origin = origin
+partitionKey (top ∷ ancestors) site origin =
+  if thirdParty (top ∷ ancestors) site then origin Data.List.Base.++ ('^' ∷ top) else origin
+  where import Data.List.Base

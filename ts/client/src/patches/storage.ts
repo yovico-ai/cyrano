@@ -7,9 +7,12 @@
 // origin has its own — and a frame embedded by another site gets a
 // partition of its own, keyed by the top-level site as well.
 //
-// So every name is stored under a prefix that names the original origin
-// (and, for a frame of another origin than the top document's, that
-// document's origin), and page code sees only its own names, unprefixed:
+// So every name is stored under a prefix that names the context's storage
+// key as Chromium makes it (spec/Storage.agda partitionKey): the original
+// origin for a first-party context — its site and every ancestor's the
+// top-level site — else the origin with the top-level site (an A-B-A
+// frame is third-party; a same-site frame is not). Page code sees only its
+// own names, unprefixed:
 //
 //   - localStorage / sessionStorage: a view per window — methods, length,
 //     named properties, enumeration — and `storage` events of other
@@ -23,6 +26,8 @@
 // Known gaps: SharedWorker names and Web Locks names are shared; data
 // stored before this existed stays, invisible, under its bare names.
 
+import { getDomain } from "tldts";
+
 import { SafeWeakMap, nO, nR, ncall, sStarts } from "../native/intrinsics";
 import { internalsOf } from "../native/internals";
 import { wrapAccessor, wrapConstructor, wrapMethod } from "../native/surface";
@@ -30,18 +35,43 @@ import { wrapAccessor, wrapConstructor, wrapMethod } from "../native/surface";
 const SEP = "\u001f";
 const TAG = "crn" + SEP;
 
-/** The prefix of this context's names: its origin, and its top document's when that differs. */
+/** The prefix of this context's names: its storage key (partitionKey). */
 export type Prefix = () => string;
+
+/** A URL's schemeful site: scheme and registrable domain (the host where it has none). */
+export function siteOf(u: URL): string {
+    const host = u.hostname;
+    return `${u.protocol}//${getDomain(host, { allowPrivateDomains: true }) ?? host}`;
+}
+
+/**
+ * Chromium's storage key for a context (spec/Storage.agda partitionKey):
+ * ancestors' sites from the top-level document down to the parent.
+ */
+export function partitionKey(ancestors: string[], site: string, origin: string): string {
+    if (ancestors.length === 0) return origin;
+    const top = ancestors[0]!;
+    let third = site !== top;
+    for (let i = 1; i < ancestors.length; i++) third = third || ancestors[i] !== top;
+    return third ? `${origin}^${top}` : origin;
+}
 
 export function storagePrefix(targetWindow: Window, origin: () => string): Prefix {
     return () => {
         const own = origin();
-        let top = own;
+        const ancestors: string[] = [];
         try {
-            const t = targetWindow.top;
-            if (t && t !== targetWindow) top = internalsOf(t)?.api.get_base_url()?.origin ?? own;
-        } catch { /* a really cross-origin top: no partition known */ }
-        return TAG + (top === own ? own : top + "^" + own) + SEP;
+            let w: Window = targetWindow;
+            for (let i = 0; i < 64 && w.parent && w.parent !== w; i++) {
+                w = w.parent;
+                const base = internalsOf(w)?.api.get_base_url();
+                if (!base) break; // a really cross-origin ancestor: no partition known past it
+                ancestors.unshift(siteOf(base));
+            }
+        } catch { /* a really cross-origin ancestor */ }
+        let site = own;
+        try { site = siteOf(new URL(own)); } catch { /* an opaque origin */ }
+        return TAG + partitionKey(ancestors, site, own) + SEP;
     };
 }
 

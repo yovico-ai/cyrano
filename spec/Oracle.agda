@@ -21,6 +21,7 @@
 --   setspolicy <dest>                  → {"out":"yes"|"no"} (its response sets a context's referrer policy)
 --   sniffhtml <body>                   → {"out":"yes"|"no"} (Chromium's HTML sniff)
 --   metadatasent <name> <0|1>          → {"out":"yes"|"no"} (reaches a target of that trustworthiness)
+--   storagekey <ancestors> <site> <origin> → {"out":"<the partition key>"}
 --   storageaccess <mode> <dest> <cred> <chain> <from> <to> <site> <0|1> → {"out":"active"|"none"}
 --   allowframe <attr> <f> <0|1> <parent> <src> <frame> → {"out":"yes"|"no"} (the frame's featurePolicy)
 --   fpallows <pp lines|""> <fp> <f> <0|1> <doc> <origin> → {"out":"yes"|"no"} (featurePolicy.allowsFeature)
@@ -309,6 +310,7 @@ dispatch op args =
   else if eqStr op (toList "fpallows") then fpAllowsReq args
   else if eqStr op (toList "fprewrite") then fpRewriteReq args
   else if eqStr op (toList "storageaccess") then storageAccessReq args
+  else if eqStr op (toList "storagekey") then storageKeyReq args
   else if eqStr op (toList "metadatasent") then metadataSentReq args
   else if eqStr op (toList "allowrewrite") then allowRewriteReq args
   else if eqStr op (toList "pptranslate") then ppTranslateReq args
@@ -510,6 +512,12 @@ dispatch op args =
   metadataSentReq : List Str → Str
   metadataSentReq (n ∷ t ∷ []) = out (if Metadata.sentTo n (eqStr t (toList "1")) then toList "yes" else toList "no")
   metadataSentReq _ = errorReply "BadRequest"
+
+  -- storagekey <ancestor sites, top first, space-separated> <site> <origin>
+  storageKeyReq : List Str → Str
+  storageKeyReq (a ∷ s ∷ o ∷ []) = out (Storage.partitionKey (if Data.List.Base.null a then [] else splitOn (is 32) a) s o)
+    where import Data.List.Base
+  storageKeyReq _ = errorReply "BadRequest"
 
   -- storageaccess <mode> <dest> <include|omit|same-origin> <chain sites, space-separated> <from origin> <to origin> <target site> <trustworthy 0|1>
   storageAccessReq : List Str → Str
