@@ -1,3 +1,5 @@
+import { heldAttr } from "../native/originals";
+import type { Dest } from "../url/containment";
 // Single source of truth for the URL-bearing attribute list.
 //
 // Three consumers:
@@ -138,4 +140,38 @@ export const XLINK_NS = "http://www.w3.org/1999/xlink";
 export function svgUrlAttrs(localName: string): readonly string[] | undefined {
     const row = own(svgKinds, localName.toLowerCase());
     return row ? Object.keys(row) : undefined;
+}
+
+/**
+ * What an attribute's URL is requested for, when it is a script or a
+ * stylesheet (spec/Attrs.agda urlDest): the proxified URL is marked so,
+ * and the proxy rewrites the response as such whatever its Content-Type.
+ * rel: the link types (lowercase); as: the as attribute (lowercase; null:
+ * absent).
+ */
+export function urlDest(svg: boolean, tag: string, attr: string, rel: readonly string[], as: string | null): Dest | null {
+    if (svg) return tag === "script" && (attr === "href" || attr === "xlink:href") ? "js" : null;
+    if (tag === "script" && attr === "src") return "js";
+    if (tag !== "link" || attr !== "href") return null;
+    const has = (r: string): boolean => { for (const x of rel) if (x === r) return true; return false; };
+    if (has("stylesheet")) return "css";
+    if (has("modulepreload")) return "js";
+    if (has("preload") || has("prefetch")) return as === "script" ? "js" : as === "style" ? "css" : null;
+    return null;
+}
+
+const lowerA = (s: string): string => s.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+const relTokens = (v: string | null): string[] => (v === null ? [] : lowerA(v).split(/[\t\n\f\r ]+/).filter((t) => t !== ""));
+
+/** urlDest for this element's attribute, by its rel and as as the page wrote them. */
+export function urlDestOf(el: Element, attr: string): Dest | null {
+    try {
+        const svg = el.namespaceURI === SVG_NS;
+        const tag = svg ? el.localName : el.localName.toLowerCase();
+        if (tag !== "script" && tag !== "link") return null;
+        const as = heldAttr(el, "as");
+        return urlDest(svg, tag, attr.toLowerCase(), relTokens(heldAttr(el, "rel")), as === null ? null : lowerA(as));
+    } catch {
+        return null;
+    }
 }

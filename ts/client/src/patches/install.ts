@@ -8,6 +8,7 @@
 //
 // A window is patched once: runtime/bootstrap.ts checks before calling.
 
+import type { Dest } from "../url/containment";
 import { SafeSet, nO, nOP, nR, ncall, sStarts } from "../native/intrinsics";
 import { initTrusted } from "../native/trusted";
 import type { ClientConfig } from "../config";
@@ -79,6 +80,8 @@ export function installPatches(
     const rewriteOne: RewriteOne = Object.assign((rawUrl: string): string =>
         rewriteUrl(rawUrl, documentBase(), config), {
         withPolicy: (rawUrl: string, policy: string): string => rewriteUrl(rawUrl, documentBase(), config, policy),
+        withMark: (rawUrl: string, policy: string | null, dest: Dest | null): string =>
+            rewriteUrl(rawUrl, documentBase(), config, policy ?? undefined, dest ?? undefined),
     });
     const unwrapOne = (proxiedUrl: string): string =>
         unwrapProxiedUrl(proxiedUrl, config);

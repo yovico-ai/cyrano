@@ -32,6 +32,7 @@ open import Data.Product.Base using (_×_; _,_; proj₁; proj₂)
 open import Data.String.Base using (toList)
 
 open import Url using (Str; is; within; isDigit; isAlpha; lowerAscii; eqStr)
+open import Containment using (Dest; destStyle)
 
 ------------------------------------------------------------------------
 -- Code points (§4.2).
@@ -336,6 +337,7 @@ tokenize s = go (length s) s
 
 data Role : Set where
   asUrl asString plain : Role   -- a url token's value; a string that is a URL; neither
+  importUrl importString : Role -- the same, an @import's: a stylesheet (spec/Containment.agda Dest)
 
 -- Which tokens are URLs: a url token; the first string directly inside a
 -- url() function; a string after @import; a string directly inside
@@ -348,8 +350,13 @@ roles ts = go ts false []
   isImageSet v = eqStr v (toList "image-set") ∨ eqStr v (toList "-webkit-image-set")
 
   inUrlFn : List (Maybe Str) → Bool
-  inUrlFn (just v ∷ _) = eqStr v (toList "url")
+  inUrlFn (just v ∷ _) = eqStr v (toList "url") ∨ eqStr v (toList "url-import")
   inUrlFn _ = false
+
+  -- a url() right after @import
+  inImportUrl : List (Maybe Str) → Bool
+  inImportUrl (just v ∷ _) = eqStr v (toList "url-import")
+  inImportUrl _ = false
 
   inImageSet : List (Maybe Str) → Bool
   inImageSet (just v ∷ _) = isImageSet v
@@ -357,7 +364,7 @@ roles ts = go ts false []
 
   -- url("x") takes one string.
   afterString : List (Maybe Str) → List (Maybe Str)
-  afterString (just v ∷ st) = if eqStr v (toList "url") then just (toList "url-used") ∷ st else just v ∷ st
+  afterString (just v ∷ st) = if eqStr v (toList "url") ∨ eqStr v (toList "url-import") then just (toList "url-used") ∷ st else just v ∷ st
   afterString st = st
 
   pop : List (Maybe Str) → List (Maybe Str)
@@ -378,10 +385,10 @@ roles ts = go ts false []
   go (t ∷ ts′) imp st with kind t
   ... | kWS        = plain ∷ go ts′ imp st
   ... | kComment   = plain ∷ go ts′ imp st
-  ... | kUrl       = asUrl ∷ go ts′ false st
-  ... | kString    = (if imp ∨ inUrlFn st ∨ inImageSet st then asString else plain) ∷ go ts′ false (afterString st)
+  ... | kUrl       = (if imp then importUrl else asUrl) ∷ go ts′ false st
+  ... | kString    = (if imp ∨ inImportUrl st then importString else if inUrlFn st ∨ inImageSet st then asString else plain) ∷ go ts′ false (afterString st)
   ... | kAtKeyword = plain ∷ go ts′ (eqStr (value t) (toList "import")) st
-  ... | kFunction  = plain ∷ go ts′ false (just (value t) ∷ st)
+  ... | kFunction  = plain ∷ go ts′ false (just (if imp ∧ eqStr (value t) (toList "url") then toList "url-import" else value t) ∷ st)
   ... | _          = plain ∷ go ts′ false (if opens (text t) then nothing ∷ st else if closes (text t) then pop st else st)
 
 ------------------------------------------------------------------------
@@ -413,17 +420,23 @@ serializeString s = '"' ∷ esc s ++ '"' ∷ []
     else c ∷ esc cs
 
 -- The rewritten CSS, given what containment makes of a URL (nothing: kept
--- as written).
-rewriteCss : (Str → Maybe Str) → Str → Str
+-- as written) — an @import's marked as a stylesheet's.
+rewriteCss : (Maybe Dest → Str → Maybe Str) → Str → Str
 rewriteCss rw s = emit (tokenize s) (roles (tokenize s))
   where
+  asUrlTok : Maybe Dest → Tok → List Tok → List Role → Str
+  asStrTok : Maybe Dest → Tok → List Tok → List Role → Str
   emit : List Tok → List Role → Str
-  emit (t ∷ ts) (asUrl ∷ rs) with rw (value t)
+  asUrlTok d t ts rs with rw d (value t)
   ... | just u  = toList "url(" ++ serializeString u ++ ')' ∷ [] ++ emit ts rs
   ... | nothing = text t ++ emit ts rs
-  emit (t ∷ ts) (asString ∷ rs) with rw (value t)
+  asStrTok d t ts rs with rw d (value t)
   ... | just u  = serializeString u ++ emit ts rs
   ... | nothing = text t ++ emit ts rs
+  emit (t ∷ ts) (asUrl ∷ rs)        = asUrlTok nothing t ts rs
+  emit (t ∷ ts) (importUrl ∷ rs)    = asUrlTok (just destStyle) t ts rs
+  emit (t ∷ ts) (asString ∷ rs)     = asStrTok nothing t ts rs
+  emit (t ∷ ts) (importString ∷ rs) = asStrTok (just destStyle) t ts rs
   emit (t ∷ ts) (_ ∷ rs) = text t ++ emit ts rs
   emit (t ∷ ts) [] = text t ++ emit ts []
   emit [] _ = []
@@ -436,5 +449,7 @@ cssUrls s = pick (tokenize s) (roles (tokenize s))
   pick : List Tok → List Role → List Str
   pick (t ∷ ts) (asUrl ∷ rs)    = value t ∷ pick ts rs
   pick (t ∷ ts) (asString ∷ rs) = value t ∷ pick ts rs
+  pick (t ∷ ts) (importUrl ∷ rs)    = value t ∷ pick ts rs
+  pick (t ∷ ts) (importString ∷ rs) = value t ∷ pick ts rs
   pick (t ∷ ts) (_ ∷ rs)        = pick ts rs
   pick _ _ = []

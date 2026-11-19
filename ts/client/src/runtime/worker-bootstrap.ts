@@ -138,7 +138,8 @@ export function initWorker(
             if (typeof scriptUrl === "string") {
                 try { base = new URL(scriptUrl); } catch { /* keep the worker's */ }
             }
-            return rewriteUrl(specifier, base, config);
+            // A module's URL: marked as a script's (spec/Containment.agda Dest).
+            return rewriteUrl(specifier, base, config, undefined, "js");
         },
         wrap_worker_url: (url) => {
             const urlStr = typeof url === "string" ? url : (url != null ? String(url) : null);
@@ -185,8 +186,11 @@ function patchWorkerScope(
     // importScripts is classic-worker-only and synchronous.
     if (typeof scope.importScripts === "function") {
         wrapMethod<(...a: unknown[]) => void>(scope, "importScripts", (native, self, args) =>
-            nR.apply(native, self, args.map((u) =>
-                (isTrustedValue(u) ? trusted(scope, "ScriptURL", rewriteOne(String(u))) : rewriteOne(String(u))))) as void);
+            nR.apply(native, self, args.map((u) => {
+                // A script's URL: marked so (spec/Containment.agda Dest).
+                const r = rewriteUrl(String(u), baseUrl, config, undefined, "js");
+                return isTrustedValue(u) ? trusted(scope, "ScriptURL", r) : r;
+            })) as void);
     }
     // self.location is a WorkerLocation; its accessors report the worker's
     // original URL (natively the worker script's own URL).

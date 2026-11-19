@@ -2,6 +2,7 @@ package urlrewrite
 
 import (
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -10,8 +11,8 @@ func TestRewriteLinkHeaderAndRefresh(t *testing.T) {
 	base, _ := url.Parse("https://site.example/a/page")
 	P := "http://localhost:9081/cyrano/https/"
 	for _, c := range []struct{ in, want string }{
-		{`<https://cdn.example/app.js>; rel=preload; as=script`, `<` + P + `cdn.example/app.js>; rel=preload; as=script`},
-		{`</s.css>; rel=preload; as=style, <img/x.png>; rel="preload"; title="a, <b>"`, `<` + P + `site.example/s.css>; rel=preload; as=style, <` + P + `site.example/a/img/x.png>; rel="preload"; title="a, <b>"`},
+		{`<https://cdn.example/app.js>; rel=preload; as=script`, `<` + strings.Replace(P, "https/", "https!js/", 1) + `cdn.example/app.js>; rel=preload; as=script`},
+		{`</s.css>; rel=preload; as=style, <img/x.png>; rel="preload"; title="a, <b>"`, `<` + strings.Replace(P, "https/", "https!css/", 1) + `site.example/s.css>; rel=preload; as=style, <` + P + `site.example/a/img/x.png>; rel="preload"; title="a, <b>"`},
 		{`rel=preload`, `rel=preload`},
 	} {
 		if got := RewriteLinkHeader(c.in, base, cfg); got != c.want {

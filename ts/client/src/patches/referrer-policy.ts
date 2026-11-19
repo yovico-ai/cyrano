@@ -19,12 +19,15 @@ import { heldAttr, holdAttr, originalAttr, recordAttr } from "../native/original
 import { wrapAccessor, wrapMethod } from "../native/surface";
 import { isReferrerPolicy } from "../url/containment";
 import { rewriteSrcsetAttribute } from "./srcset";
-import { kindOf, rewriteByKind, urlAttrsOf } from "./url-attribute-map";
+import { kindOf, rewriteByKind, urlAttrsOf, urlDestOf } from "./url-attribute-map";
+import type { Dest } from "../url/containment";
 
 /** A rewriter of URLs that can also mark the request's referrer policy. */
 export interface RewriteOne {
     (url: string): string;
     withPolicy?: (url: string, policy: string) => string;
+    /** Marked: a referrer policy of its own, what it is requested for (spec/Containment.agda Mark). */
+    withMark?: (url: string, policy: string | null, dest: Dest | null) => string;
 }
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
@@ -47,9 +50,16 @@ export function elementPolicy(el: Element): string | null {
     }
 }
 
-/** rewriteOne, for a URL of this element: marked with its referrer policy, if it states one. */
-export function rewriteFor(el: Element, rewriteOne: RewriteOne): (url: string) => string {
+/**
+ * rewriteOne, for a URL in this element's attribute: marked with its
+ * referrer policy, if it states one, and with what it is requested for — a
+ * script or a stylesheet (spec/Attrs.agda urlDest).
+ */
+export function rewriteFor(el: Element, rewriteOne: RewriteOne, attr?: string): (url: string) => string {
     const p = elementPolicy(el);
+    const d = attr === undefined ? null : urlDestOf(el, attr);
+    const withMark = rewriteOne.withMark;
+    if ((p || d) && withMark) return (u) => withMark(u, p, d);
     const withPolicy = rewriteOne.withPolicy;
     return p && withPolicy ? (u) => withPolicy(u, p) : rewriteOne;
 }
@@ -57,8 +67,8 @@ export function rewriteFor(el: Element, rewriteOne: RewriteOne): (url: string) =
 /** The element's URL attributes rewritten again from what the page wrote (its policy changed). */
 export function remark(el: Element, rewriteOne: RewriteOne): void {
     const attrs = urlAttrsOf(el);
-    const rw = rewriteFor(el, rewriteOne);
     for (const name of attrs) {
+        const rw = rewriteFor(el, rewriteOne, name);
         const o = originalAttr(el, name);
         const was = o ? o.value : heldAttr(el, name);
         if (was === null || was === "") continue;

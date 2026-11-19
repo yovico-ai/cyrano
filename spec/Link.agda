@@ -34,6 +34,8 @@ open import Data.Product.Base using (_×_; _,_; proj₁; proj₂)
 open import Data.String.Base using (String; toList)
 
 open import Url using (Str; is; eqStr; lowerAscii; dropWhile)
+open import Containment using (Dest)
+import Attrs
 
 ows : Char → Bool
 ows c = is 32 c ∨ is 9 c
@@ -224,12 +226,21 @@ joinWith c []       = []
 joinWith c (s ∷ []) = s
 joinWith c (s ∷ ss) = s ++ c ∷ joinWith c ss
 
--- rw: a URL's proxified form (nothing: kept); srcset: a srcset value's.
-rewriteLinkValue : (Str → Maybe Str) → (Str → Str) → Str → Str
+-- rw: a URL's proxified form, marked for what it is requested for
+-- (nothing: kept); srcset: a srcset value's. A preload, modulepreload or
+-- prefetch of a script or stylesheet is marked as the <link> is
+-- (spec/Attrs.agda urlDest).
+rewriteLinkValue : (Maybe Dest → Str → Maybe Str) → (Str → Str) → Str → Str
 rewriteLinkValue rw srcset v with piecesOf v | readLink v
 ... | just (pieces lead t p₀ ps) | just (link target xs) =
-  lead ++ toList "<" ++ newTarget (rw target) ++ toList ">" ++ p₀ ++ concatP ps
+  lead ++ toList "<" ++ newTarget (rw dest target) ++ toList ">" ++ p₀ ++ concatP ps
   where
+  asOf : Maybe Str
+  asOf with valueOf (toList "as") xs
+  ... | just a  = just (lowerS a)
+  ... | nothing = nothing
+  dest : Maybe Dest
+  dest = Attrs.urlDest Attrs.htmlNs (toList "link") (toList "href") (rels xs) asOf
   newTarget : Maybe Str → Str
   newTarget (just u) = u
   newTarget nothing  = t
@@ -263,6 +274,6 @@ rewriteLinkValue rw srcset v with piecesOf v | readLink v
 ... | _ | _ = v
 
 -- The Link header, each link-value rewritten.
-rewriteLink : (Str → Maybe Str) → (Str → Str) → Str → Str
+rewriteLink : (Maybe Dest → Str → Maybe Str) → (Str → Str) → Str → Str
 rewriteLink rw srcset h =
   joinWith comma (map (rewriteLinkValue rw srcset) (splitTop true comma h))

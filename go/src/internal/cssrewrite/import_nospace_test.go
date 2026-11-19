@@ -15,7 +15,7 @@ func TestImportWithoutSpace(t *testing.T) {
 	base, _ := url.Parse("https://site.test/")
 	for _, in := range []string{`@import"https://fonts.test/a.css";`, `@import'https://fonts.test/a.css';`, `@IMPORT url(https://fonts.test/a.css);`} {
 		out := string(Rewrite([]byte(in), Options{BaseURL: base, Proxy: urlrewrite.ProxyConfig{PublicURL: pub}}))
-		if !strings.Contains(out, "proxy.test/cyrano/https/fonts.test/a.css") {
+		if !strings.Contains(out, "proxy.test/cyrano/https!css/fonts.test/a.css") {
 			t.Errorf("%s → %s", in, out)
 		}
 	}

@@ -76,7 +76,7 @@ export function patchUrlAttributes(
                     // objects stringify to their URL.
                     if (value == null) return ncall(set, self, value);
                     const s = String(value);
-                    const rw = rewriteFor(self as Element, rewriteOne);
+                    const rw = rewriteFor(self as Element, rewriteOne, attribute);
                     const now = rewriteByKind(kindOf(self as Element, attribute), s, rw, rewriteSrcsetAttribute);
                     // A TrustedScriptURL (script.src under Trusted Types) stays trusted.
                     ncall(set, self, isTrustedValue(value) ? trusted(targetWindow, "ScriptURL", now) : now);

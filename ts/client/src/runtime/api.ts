@@ -246,7 +246,8 @@ export function createRewriterApi(
             if (typeof scriptUrl === "string") {
                 try { base = new URL(scriptUrl); } catch { /* keep the page's */ }
             }
-            return rewriteUrl(specifier, base, config);
+            // A module's URL: marked as a script's (spec/Containment.agda Dest).
+            return rewriteUrl(specifier, base, config, undefined, "js");
         },
         // JS_WRAP_NEW_WORKER — proxify the url argument of `new Worker(url)` /
         // `new SharedWorker(url)` at the source level so the Worker script is

@@ -194,9 +194,13 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 	if policy != "" {
 		attrs = setAttr(attrs, "referrerpolicy", string(urlrewrite.UnsafeURL))
 	}
+	// A script's or stylesheet's URL says so (spec/Attrs.agda urlDest), for
+	// the proxy to rewrite it as such whatever its Content-Type.
+	rel, _ := getAttr(attrs, "rel")
+	as, hasAs := getAttr(attrs, "as")
 	rewriteOne := func(raw string, opts urlOpts) string {
-		_ = opts // reserved for future ?r=1, ?ct=js, ?doc=1 query-suffix support
-		return urlrewrite.RewriteWithPolicy(raw, cfg.BaseURL, cfg.Proxy, policy)
+		dest := URLDest(svg, tag, opts.attr, strings.Fields(strings.ToLower(rel)), strings.ToLower(as), hasAs)
+		return urlrewrite.RewriteMarked(raw, cfg.BaseURL, cfg.Proxy, urlrewrite.Mark{Policy: policy, Dest: dest})
 	}
 
 	// HTML_BASETAG — <base href> updates the in-flight base URL so all
@@ -325,7 +329,7 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 	return attrs
 }
 
-// urlOpts carries per-tag context for future handling (e.g. REST-form targets).
+// urlOpts names the attribute a URL is in.
 type urlOpts struct {
 	tag  string
 	attr string

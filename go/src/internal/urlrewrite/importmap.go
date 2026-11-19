@@ -393,7 +393,8 @@ func jsonStringify(s string) string {
 // RewriteImportMap rewrites an import map for the proxy (spec
 // rewriteImportMap).
 func RewriteImportMap(src []byte, base *url.URL, cfg ProxyConfig) []byte {
-	return []byte(RewriteImportMapText(string(src), func(u string) string { return Rewrite(u, base, cfg) }))
+	// An import map's URLs are module URLs: marked as scripts.
+	return []byte(RewriteImportMapText(string(src), func(u string) string { return RewriteDest(u, base, cfg, DestScript) }))
 }
 
 // RewriteImportMapText is RewriteImportMap with the URL rewriter given.

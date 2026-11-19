@@ -73,7 +73,7 @@ export function url(proxy: string): fc.Arbitrary<string> {
 // A scheme segment's referrer-policy marker: none, a policy's name, and
 // forms that are not one (Go: specoracle.policyMarkers).
 const policyMarkers = ["", "", "", "!origin", "!no-referrer", "!strict-origin-when-cross-origin", "!unsafe-url",
-    "!Origin", "!bogus", "!", "!origin!x"];
+    "!Origin", "!bogus", "!", "!origin!x", "!js", "!css", "!origin!js", "!unsafe-url!css", "!js!origin", "!JS", "!js!css", "!origin!js!x", "!css!"];
 
 /** The referrer policies a request may carry. */
 export const policies = ["no-referrer", "no-referrer-when-downgrade", "same-origin", "origin", "strict-origin",

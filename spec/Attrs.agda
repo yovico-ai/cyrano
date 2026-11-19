@@ -112,3 +112,51 @@ rewriteUrlList rw s = go s []
   go [] acc = flush (reverse acc)
   go (c ∷ cs) acc =
     if isHtmlWS c then flush (reverse acc) ++ c ∷ go cs [] else go cs (c ∷ acc)
+
+------------------------------------------------------------------------
+-- What an attribute's URL is requested for, when it is a script or a
+-- stylesheet (spec/Containment.agda Dest): the proxified URL is marked
+-- so, and the proxy rewrites the response as such whatever its
+-- Content-Type (spec/Disposition.agda).
+--
+--   <script src>, an SVG script's href / xlink:href          → script
+--   <link href> whose rel has stylesheet                     → style
+--   <link href> whose rel has modulepreload                  → script
+--   <link href> whose rel has preload or prefetch, as=script → script
+--                                                  as=style  → style
+-- rel: the link types (ASCII-lowercased, as split); as: its as
+-- (ASCII-lowercased; nothing: absent).
+
+open import Containment using (Dest; destScript; destStyle)
+
+hasRel : String → List Str → Bool
+hasRel r []       = false
+hasRel r (x ∷ xs) = eqStr x (toList r) ∨ hasRel r xs
+
+urlDest : Ns → Str → Str → List Str → Maybe Str → Maybe Dest
+urlDest svgNs t a _ _ =
+  if eqStr t (toList "script") ∧′ (eqStr a (toList "href") ∨ eqStr a (toList "xlink:href")) then just destScript else nothing
+  where
+  _∧′_ : Bool → Bool → Bool
+  true  ∧′ b = b
+  false ∧′ _ = false
+urlDest htmlNs t a rel as =
+  if eqStr t (toList "script") ∧′ eqStr a (toList "src") then just destScript
+  else if eqStr t (toList "link") ∧′ eqStr a (toList "href") then linkDest
+  else nothing
+  where
+  _∧′_ : Bool → Bool → Bool
+  true  ∧′ b = b
+  false ∧′ _ = false
+  asIs′ : Maybe Str → String → Bool
+  asIs′ (just x) v = eqStr x (toList v)
+  asIs′ nothing  v = false
+  asIs : String → Bool
+  asIs v = asIs′ as v
+  linkDest : Maybe Dest
+  linkDest =
+    if hasRel "stylesheet" rel then just destStyle
+    else if hasRel "modulepreload" rel then just destScript
+    else if hasRel "preload" rel ∨ hasRel "prefetch" rel then
+      (if asIs "script" then just destScript else if asIs "style" then just destStyle else nothing)
+    else nothing

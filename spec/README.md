@@ -13,7 +13,7 @@ The rules both runtimes must follow byte for byte, written once:
 |---|---|---|
 | `Scheme.agda` | the proxified schemes (http, https, ws, wss) | `PROXIFIABLE_SCHEMES` in both runtimes |
 | `Url.agda` | how a URL string is read (WHATWG basic URL parser, Node 22 flavour) | `go/src/internal/urlrewrite/whatwg.go`; the browser's `URL` in TS |
-| `Containment.agda` | rewrite (proxify, remap, keep) and unwrap | `urlrewrite.Rewrite`/`Unwrap`; `rewriteUrl`/`unwrapProxiedUrl` in `ts/client/src/url/containment.ts` |
+| `Containment.agda` | rewrite (proxify, remap, keep) and unwrap; the marks a proxified URL carries, `<scheme>[!<policy>][!js\|!css]` (proved: unwrap ignores them, the proxy reads them back) | `urlrewrite.Rewrite`/`Unwrap`; `rewriteUrl`/`unwrapProxiedUrl` in `ts/client/src/url/containment.ts` |
 | `Srcset.agda` | where each srcset candidate's URL starts and ends | `htmlrewrite/srcset.go`; `ts/client/src/patches/srcset.ts` |
 | `Referrer.agda` | Referer, Origin and Sec-Fetch-Site as a direct browser sends them (Referrer Policy, Fetch, Fetch Metadata); a RequestInit's referrer as Chromium reads it (`initReferrer`; the runtime hands it over proxified) | `urlrewrite/referrer.go`, applied in `proxy/fetch_headers.go`; `ts/client/src/patches/fetch.ts` (`initReferrer`) |
 | `Cookies.agda` | reading Set-Cookie, storing, choosing cookies for a URL, SameSite, and the wire form of a cookie in the browser's jar (RFC 6265bis) | `urlrewrite/cookies.go`, `proxy/cookies.go`; `ts/client/src/cookies/rfc.ts` |
@@ -25,6 +25,7 @@ The rules both runtimes must follow byte for byte, written once:
 | `Attrs.agda` | which (namespace, element, attribute) holds a URL, a URL list (ping, attributionsrc), a srcset, or a reflected-only URL (cite, longdesc); URL lists rewritten token by token | `htmlrewrite/attrs.go` (`URLAttrKind`, `RewriteURLList`, SVG namespace tracking); `ts/client/src/patches/url-attribute-map.ts` |
 | `HtmlTok.agda` | HTML tokenization (§13.2.5's boundary-deciding states, raw text only for HTML elements) and the namespace of each start tag (svg/math foreign content, integration points, breakouts); where the bootstrap goes; the attribute spans the client edits markup at | `htmlrewrite/stream.go` (x/net/html told raw text and CDATA from the tree), `nsTracker`; `ts/client/src/patches/html-tokens.ts`, `html-rewriter.ts` |
 | `Link.agda` | the Link response header (RFC 8288) as Chromium reads it, and as the proxy rewrites it: targets proxified, imagesrcset, integrity taken out, crossorigin as the `<link>`'s | `urlrewrite.RewriteLinkHeader` |
+| `Disposition.agda` | what the proxy rewrites a response's body as — JavaScript, CSS, HTML or nothing — by its URL's mark, else Sec-Fetch-Dest, never by changing the Content-Type | `server/bodyrewriter.go` (`responseKind`) |
 | `Oracle.agda` | wire format only (one request line → one JSON line) | — |
 | `Main.agda` | the IO loop (spec-oracle skill's file, unchanged) | — |
 
@@ -115,8 +116,8 @@ entry when its module lands):
 - HTTPS-Upgrades (Go `proxy/https_upgrades.go`).
 - Permissions-Policy / Feature-Policy translation (Go `proxy/permissions.go`).
 - Sec-Fetch-Storage-Access (Go `proxy/storage_access.go`).
-- Which responses are documents, and MIME essence / sniffing (Go
-  `server/bodyrewriter.go`, `fetch_headers.go`: destination lists differ).
+- MIME sniffing beyond the HTML check, and `fetch_headers.go`'s
+  destination lists (the body decision is `Disposition.agda`).
 - postMessage targetOrigin (TS `messaging/target-origin.ts`).
 
 Medium: CSS attribute selectors widened to proxied URLs (TS

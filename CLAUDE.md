@@ -56,8 +56,8 @@ run the build step before starting the server if it's missing.
 ## Test commands
 
 ```bash
-# Go — 125 tests, fast
-( cd go/src && go test ./... )
+# Go — fast; and the full-stack e2e tests (proxy + fixture upstreams)
+( cd go/src && go test ./... && go test -tags e2e ./internal/e2e )
 
 # TS strict typecheck
 ( cd ts/client && npm run typecheck )
@@ -99,6 +99,20 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
 - Stdlib `net/http/httputil.ReverseProxy` with Director + ModifyResponse.
 - Stdlib `http.Hijacker` + raw TCP for WebSocket — no third-party WS lib.
 - Stdlib `log/slog` for structured logging.
+
+## What a response is rewritten as
+
+By what the request is for, never by its Content-Type, which the proxy
+never changes (spec/Disposition.agda; the browser decides what it runs).
+The rewriter marks the proxified URL of every script and stylesheet it
+writes — `<script src>`, `<link rel=stylesheet>`, their preloads, the Link
+header, `@import`, import maps, module specifiers, `importScripts`, the
+runtime's setters — as `/cyrano/https!js/…` or `!css` (after a policy mark,
+`!origin!js`; spec/Containment.agda, Attrs.agda `urlDest`). A marked
+response is rewritten as such even when served `text/plain`; an unmarked
+one goes by Sec-Fetch-Dest; a fetch() of the same file gets the origin's
+bytes under a different URL, so the browser's cache never hands a script
+the data copy. Unwrap ignores the marks.
 
 ## Known gaps
 

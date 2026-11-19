@@ -99,7 +99,9 @@ describe.skipIf(!wanted || located.skip !== "")("Link header: the spec is Chromi
             if (JSON.stringify(direct) !== JSON.stringify([...new Set(want)])) bad.push(`direct ${JSON.stringify(h)}: Chromium ${JSON.stringify(direct)}, spec ${JSON.stringify(want)}`);
             const rewritten = (await oracle.ask("link", [proxy, base, h]))!;
             const viaProxy = (await fetched(`${proxy}/cyrano/http/a.localhost:${port}/dir/page`, rewritten))
-                .filter((p) => p.includes("/i/") || p.includes("/x/"));
+                .filter((p) => p.includes("/i/") || p.includes("/x/"))
+                // (A script's or stylesheet's preload is marked so: /cyrano/http!js/….)
+                .map((p) => p.replace(/^\/cyrano\/http(?:![^/]*)?\//, "/cyrano/http/")).sort();
             const expected = direct.map((p) => `/cyrano/http/a.localhost:${port}${p}`);
             if (JSON.stringify(viaProxy) !== JSON.stringify(expected)) bad.push(`proxied ${JSON.stringify(h)} → ${JSON.stringify(rewritten)}: ${JSON.stringify(viaProxy)}, direct ${JSON.stringify(expected)}`);
         }

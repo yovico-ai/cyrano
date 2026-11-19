@@ -48,7 +48,7 @@ export function bootstrapOf(node: unknown): (() => string) | undefined {
 }
 import { rewriteSrcsetAttribute } from "./srcset";
 import { XLINK_NS, kindOf, rewriteByKind } from "./url-attribute-map";
-import { remark, rewriteFor } from "./referrer-policy";
+import { remark, rewriteFor, type RewriteOne } from "./referrer-policy";
 import { scriptKindOf } from "./script-kind";
 import { isReferrerPolicy } from "../url/containment";
 import { wrapAccessor, wrapMethod } from "../native/surface";
@@ -258,12 +258,18 @@ function elementPolicyCapable(el: Element): boolean {
 // element's own window (a frame may share its creator's module).
 const scriptBases = new SafeWeakMap<object, (el: Element) => string | null>();
 
+/** rewriteOne, for a module's URL: marked as a script's (spec/Containment.agda Dest). */
+export function asScript(rewriteOne: (url: string) => string): (url: string) => string {
+    const withMark = (rewriteOne as RewriteOne).withMark;
+    return withMark ? (u) => withMark(u, null, "js") : rewriteOne;
+}
+
 export function rawText(el: Element, text: string, rewriteOne: (url: string) => string): string | null {
     const tag = el.tagName;
     if (tag === "STYLE") return rewriteCssText(text, rewriteOne);
     if (tag !== "SCRIPT") return null;
     const kind = scriptKindOf(el);
-    if (kind === "importmap") return rewriteImportMap(text, rewriteOne);
+    if (kind === "importmap") return rewriteImportMap(text, asScript(rewriteOne));
     if (kind !== "classic" && kind !== "module") return text;
     // As the server's: static import/export specifiers and literal import()
     // are proxified against the script's base URL, which import.meta.url
@@ -276,8 +282,9 @@ export function rawText(el: Element, text: string, rewriteOne: (url: string) => 
     } catch { base = null; }
     if (base) {
         opts.baseUrl = base;
+        const rwJs = asScript(rewriteOne);
         opts.proxify = (specifier, from) => {
-            try { return rewriteOne(new URL(specifier, from).href); } catch { return specifier; }
+            try { return rwJs(new URL(specifier, from).href); } catch { return specifier; }
         };
     }
     return rewriteJsSource(text, opts);
@@ -379,7 +386,7 @@ function attributeValue(el: Element, name: string, value: string, rewriteOne: (u
     if (lowerName === "referrerpolicy" && isReferrerPolicy(value.replace(/[A-Z]/g, (c) => c.toLowerCase())) && elementPolicyCapable(el)) return "unsafe-url";
     const kind = kindOf(el, lowerName);
     if (kind === "none" || kind === "reflected") return value;
-    return rewriteByKind(kind, value, rewriteFor(el, rewriteOne), rewriteSrcsetAttribute);
+    return rewriteByKind(kind, value, rewriteFor(el, rewriteOne, lowerName), rewriteSrcsetAttribute);
 }
 
 // The integrity the page set on each element (never applied).

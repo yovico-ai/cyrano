@@ -187,7 +187,43 @@ func EscapePct(s string) string { return escapePct(s) }
 // resolved; a /cyrano/<scheme>/<host> path glued to another origin is moved
 // onto the proxy origin; anything else is proxified.
 func Rewrite(rawURL string, baseURL *url.URL, cfg ProxyConfig) string {
-	return RewriteWithPolicy(rawURL, baseURL, cfg, "")
+	return RewriteMarked(rawURL, baseURL, cfg, Mark{})
+}
+
+// Dest is what a request is for, when the rewriter knows (spec Dest): the
+// URL of a <script src>, a module specifier, importScripts (DestScript),
+// a <link rel=stylesheet>, @import (DestStyle), and their preloads.
+type Dest string
+
+const (
+	DestScript Dest = "js"
+	DestStyle  Dest = "css"
+)
+
+// Mark is what a proxified URL carries besides its target (spec Mark): a
+// referrer policy of its own, what the request is for. The scheme
+// segment is "<scheme>[!<policy>][!<dest>]".
+type Mark struct {
+	Policy Policy
+	Dest   Dest
+}
+
+func (m Mark) text() string {
+	s := ""
+	if m.Policy != "" {
+		s += "!" + string(m.Policy)
+	}
+	if m.Dest != "" {
+		s += "!" + string(m.Dest)
+	}
+	return s
+}
+
+// RewriteDest is Rewrite for the URL of a script or a stylesheet: the
+// proxified URL says so (spec rewriteUrlWith), for the proxy to rewrite
+// the response as such whatever its Content-Type.
+func RewriteDest(rawURL string, baseURL *url.URL, cfg ProxyConfig, dest Dest) string {
+	return RewriteMarked(rawURL, baseURL, cfg, Mark{Dest: dest})
 }
 
 // RewriteWithPolicy is Rewrite for a request made under its own referrer
@@ -196,6 +232,12 @@ func Rewrite(rawURL string, baseURL *url.URL, cfg ProxyConfig) string {
 // (spec rewriteUrlWith), for the proxy to apply (TargetPolicy). An empty
 // policy is Rewrite.
 func RewriteWithPolicy(rawURL string, baseURL *url.URL, cfg ProxyConfig, policy Policy) string {
+	return RewriteMarked(rawURL, baseURL, cfg, Mark{Policy: policy})
+}
+
+// RewriteMarked is Rewrite with the proxified URL marked (spec
+// rewriteUrlWith): /cyrano/https!origin!js/….
+func RewriteMarked(rawURL string, baseURL *url.URL, cfg ProxyConfig, m Mark) string {
 	if rawURL == "" {
 		return rawURL
 	}
@@ -232,10 +274,7 @@ func RewriteWithPolicy(rawURL string, baseURL *url.URL, cfg ProxyConfig, policy 
 	for i, s := range a.path {
 		path[i] = escapePct(s)
 	}
-	schemeSeg := a.scheme
-	if policy != "" {
-		schemeSeg += "!" + string(policy)
-	}
+	schemeSeg := a.scheme + m.text()
 	return proxy.origin() + "/cyrano/" + schemeSeg + "/" + escapePct(segmentOf(a.auth)) +
 		pathText(path) + queryText(a.query) + fragText(a.frag)
 }
@@ -271,21 +310,37 @@ var markerPolicies = map[Policy]bool{
 	StrictOrigin: true, OriginWhenCrossOrigin: true, StrictOriginWhenCrossOrigin: true, UnsafeURL: true,
 }
 
-// schemeSegment reads "<scheme>" or "<scheme>!<policy>" (spec
-// schemeSegment): false when the scheme is not one cyrano proxifies or
-// the policy is not a policy's name.
-func schemeSegment(seg string) (scheme string, policy Policy, ok bool) {
-	scheme, pol, marked := strings.Cut(seg, "!")
+// schemeSegment reads "<scheme>[!<policy>][!<dest>]" (spec
+// schemeSegment): false when the scheme is not one cyrano proxifies or a
+// marker is not one cyrano writes.
+func schemeSegment(seg string) (scheme string, m Mark, ok bool) {
+	parts := strings.Split(seg, "!")
+	scheme = parts[0]
 	if _, proxifiable := defaultPort[scheme]; !proxifiable {
-		return "", "", false
+		return "", Mark{}, false
 	}
-	if marked {
-		if !markerPolicies[Policy(pol)] {
-			return "", "", false
+	dest := func(t string) Dest {
+		if t == string(DestScript) || t == string(DestStyle) {
+			return Dest(t)
 		}
-		policy = Policy(pol)
+		return ""
 	}
-	return scheme, policy, true
+	switch len(parts) {
+	case 1:
+		return scheme, Mark{}, true
+	case 2:
+		if d := dest(parts[1]); d != "" {
+			return scheme, Mark{Dest: d}, true
+		}
+		if markerPolicies[Policy(parts[1])] {
+			return scheme, Mark{Policy: Policy(parts[1])}, true
+		}
+	case 3:
+		if d := dest(parts[2]); d != "" && markerPolicies[Policy(parts[1])] {
+			return scheme, Mark{Policy: Policy(parts[1]), Dest: d}, true
+		}
+	}
+	return "", Mark{}, false
 }
 
 // ReferrerPolicyToken is the policy an element's referrerpolicy attribute
@@ -298,20 +353,29 @@ func ReferrerPolicyToken(v string) Policy {
 	return ""
 }
 
-// TargetPolicy is the referrer policy a proxified path carries, or ""
-// (spec targetPolicy). The path is read as the browser's parser reads it
-// (dot segments removed): give it as it came on the wire (EscapedPath).
-func TargetPolicy(escapedPath string) Policy {
+// TargetMark is what a proxified path carries (spec targetMark), the
+// zero Mark when it is not one. The path is read as the browser's parser
+// reads it (dot segments removed): give it as it came on the wire
+// (EscapedPath).
+func TargetMark(escapedPath string) Mark {
 	a, res := parseRef(nil, preprocess("http://h"+escapedPath))
 	if res != parsedURL || len(a.path) < 3 || a.path[0] != "cyrano" || a.path[2] == "" {
-		return ""
+		return Mark{}
 	}
-	_, policy, ok := schemeSegment(a.path[1])
+	_, m, ok := schemeSegment(a.path[1])
 	if !ok {
-		return ""
+		return Mark{}
 	}
-	return policy
+	return m
 }
+
+// TargetPolicy is the referrer policy a proxified path carries, or ""
+// (spec targetPolicy).
+func TargetPolicy(escapedPath string) Policy { return TargetMark(escapedPath).Policy }
+
+// TargetDest is what a proxified path's request is for, or "" (spec
+// targetDest).
+func TargetDest(escapedPath string) Dest { return TargetMark(escapedPath).Dest }
 
 // Unwrap is Rewrite's inverse (spec/Containment.agda unwrap): given a
 // proxified URL, recover the original. Returns proxiedHref unchanged if

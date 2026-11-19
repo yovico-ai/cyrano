@@ -16,7 +16,8 @@ func TestRewriteImportMap(t *testing.T) {
 	if err := json.Unmarshal(RewriteImportMap([]byte(in), base, cfg), &got); err != nil {
 		t.Fatal(err)
 	}
-	P := "http://localhost:9081/cyrano/https/"
+	// Module URLs: marked as scripts (spec/Containment.agda Dest).
+	P := "http://localhost:9081/cyrano/https!js/"
 	imports := got["imports"].(map[string]any)
 	for k, want := range map[string]any{
 		"react": P + "cdn.example/react.js", "lib/": P + "site.example/vendor/lib/",

@@ -48,8 +48,10 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 		}
 	}
 	jsOpts.Logger = logger.With("component", "jsrewrite")
+	// Module specifiers name modules: marked as scripts, as an import
+	// map's URLs are (spec/Containment.agda Dest).
 	jsOpts.ProxifyURL = func(rawURL string, base *url.URL) string {
-		return urlrewrite.Rewrite(rawURL, base, proxyCfg)
+		return urlrewrite.RewriteDest(rawURL, base, proxyCfg, urlrewrite.DestScript)
 	}
 	// rewriteJSFor returns a rewriter closure bound to scriptURL so that
 	// relative import() specifiers are resolved against the right base.
@@ -115,18 +117,18 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 		if !bodyAllowed(resp) {
 			return nil
 		}
-		fixContentType(resp, target)
 		ct := resp.Header.Get("Content-Type")
-		sniffed := sniffedHTML(resp)
 
-		switch {
-		case fetchedAsData(resp) && !isHTML(resp):
-			// CSS or JS read by a script through fetch()/XHR is data to the
-			// page: it must get the bytes the origin sent (ns1p.net slices
-			// a JSONP reply by position; reformatted, its JSON.parse threw).
-			// If the page then runs it — eval, new Function, a script's
-			// text, a blob worker — the client runtime rewrites it there.
-		case isCSS(resp):
+		// What the body is rewritten as (spec/Disposition.agda): by what
+		// the request is for — its URL's mark, else Sec-Fetch-Dest — never
+		// by changing the Content-Type; the browser decides what it runs.
+		// A fetch()/XHR gets the origin's bytes (ns1p.net slices a JSONP
+		// reply by position); if the page then runs them — eval, new
+		// Function, a script's text, a blob worker — the runtime rewrites
+		// them there.
+		switch kindOf(resp) {
+		case kindAsIs:
+		case kindCSS:
 			body, err := readDecompressedBody(resp)
 			if err != nil {
 				logger.Warn("rewriter: read upstream CSS body failed",
@@ -142,19 +144,10 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				"target", target.String(), "in", len(body), "out", len(rewritten))
 			replaceBody(resp, rewritten)
 
-		case isHTML(resp) || sniffed:
-			// Only rewrite HTML that will actually be rendered by a browser.
-			// Responses to fetch/XHR (Sec-Fetch-Dest: empty) carry text/html
-			// content consumed programmatically — e.g. Cloudflare's challenge
-			// platform returns text/html from its flow API endpoint, and
-			// orchestrate.js reads it as text. Injecting bootstrap scripts
-			// into such responses corrupts the payload.
-			if resp.Request != nil {
-				dest := strings.ToLower(resp.Request.Header.Get("Sec-Fetch-Dest"))
-				if dest != "" && dest != "document" && dest != "frame" && dest != "iframe" && dest != "embed" && dest != "object" {
-					break
-				}
-			}
+		case kindHTML:
+			// Only HTML a browser renders: a fetch/XHR's text/html is the
+			// page's data (Cloudflare's challenge flow API answers text/html
+			// that orchestrate.js reads as text).
 			body, err := readDecompressedBody(resp)
 			if err != nil {
 				logger.Warn("rewriter: read upstream body failed",
@@ -209,7 +202,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				"target", target.String(), "in", len(body), "out", out.Len())
 			replaceBody(resp, out.Bytes())
 
-		case isJS(resp):
+		case kindJS:
 			// Challenge and bot-detection scripts (Cloudflare's orchestrate,
 			// jsd and Turnstile, Akamai's sensor) are rewritten like any
 			// other: their self-checks see their original source.
@@ -259,6 +252,97 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 		}
 		return nil
 	}
+}
+
+// What a response's body is rewritten as (spec/Disposition.agda Kind).
+type bodyKind int
+
+const (
+	kindAsIs bodyKind = iota
+	kindJS
+	kindCSS
+	kindHTML
+)
+
+func (k bodyKind) String() string {
+	return [...]string{"none", "js", "css", "html"}[k]
+}
+
+// mimeEssence is a Content-Type's essence: up to ";", HTTP whitespace
+// trimmed, ASCII-lowercased (spec essence).
+func mimeEssence(ct string) string {
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = ct[:i]
+	}
+	return strings.ToLower(strings.Trim(ct, " \t\n\r"))
+}
+
+var jsEssences = map[string]bool{}
+
+func init() {
+	for _, e := range strings.Fields("application/ecmascript application/javascript application/x-ecmascript application/x-javascript text/ecmascript text/javascript text/javascript1.0 text/javascript1.1 text/javascript1.2 text/javascript1.3 text/javascript1.4 text/javascript1.5 text/jscript text/livescript text/x-ecmascript text/x-javascript") {
+		jsEssences[e] = true
+	}
+}
+
+// responseKind decides (spec responseKind): mark is the URL's
+// destination mark; sfd the Sec-Fetch-Dest (has: the request sent one);
+// ct the Content-Type (hasCT: there is one); sniffed reports whether the
+// body sniffs as HTML (asked only for a document with no Content-Type).
+func responseKind(mark urlrewrite.Dest, sfd string, has bool, ct string, hasCT bool, sniffed func() bool) bodyKind {
+	switch mark {
+	case urlrewrite.DestScript:
+		return kindJS
+	case urlrewrite.DestStyle:
+		return kindCSS
+	}
+	e := mimeEssence(ct)
+	isHTMLType := e == "text/html" || e == "application/xhtml+xml"
+	if !has {
+		switch {
+		case !hasCT:
+			return kindAsIs
+		case isHTMLType:
+			return kindHTML
+		case jsEssences[e]:
+			return kindJS
+		case e == "text/css":
+			return kindCSS
+		}
+		return kindAsIs
+	}
+	switch strings.ToLower(sfd) {
+	case "script", "worker", "sharedworker", "serviceworker", "audioworklet", "paintworklet":
+		return kindJS
+	case "style":
+		return kindCSS
+	case "document", "iframe", "frame", "embed", "object":
+		if hasCT {
+			if isHTMLType {
+				return kindHTML
+			}
+			return kindAsIs
+		}
+		if sniffed() {
+			return kindHTML
+		}
+	}
+	return kindAsIs
+}
+
+func kindOf(resp *http.Response) bodyKind {
+	sfd, has := "", false
+	if resp.Request != nil {
+		if v := resp.Request.Header.Values("Sec-Fetch-Dest"); len(v) > 0 {
+			sfd, has = v[0], true
+		}
+	}
+	cts := resp.Header.Values("Content-Type")
+	ct, hasCT := "", len(cts) > 0
+	if hasCT {
+		ct = cts[0]
+	}
+	return responseKind(proxy.RequestDest(resp), sfd, has, ct, hasCT, func() bool { return sniffedHTML(resp) })
 }
 
 // replaceBody substitutes resp.Body with the given bytes, fixing
@@ -429,25 +513,6 @@ func isCSS(resp *http.Response) bool {
 	return strings.Contains(ct, "text/css")
 }
 
-// fixContentType corrects a generic Content-Type (text/plain,
-// application/octet-stream) when the URL path has an unambiguous extension.
-// Some CDNs misconfigure MIME types, and browsers enforce strict MIME checking
-// for stylesheets — a text/plain .css file is silently rejected.
-func fixContentType(resp *http.Response, target *url.URL) {
-	ct := strings.ToLower(resp.Header.Get("Content-Type"))
-	if ct != "" &&
-		!strings.HasPrefix(ct, "text/plain") &&
-		!strings.HasPrefix(ct, "application/octet-stream") {
-		return // already a specific type — leave it alone
-	}
-	path := strings.ToLower(target.Path)
-	switch {
-	case strings.HasSuffix(path, ".css"):
-		resp.Header.Set("Content-Type", "text/css; charset=utf-8")
-	case strings.HasSuffix(path, ".js") || strings.HasSuffix(path, ".mjs"):
-		resp.Header.Set("Content-Type", "application/javascript; charset=utf-8")
-	}
-}
 
 // readDecompressedBody reads resp.Body, transparently decompressing gzip,
 // brotli, or zstd content. Removes Content-Encoding so the rewritten response

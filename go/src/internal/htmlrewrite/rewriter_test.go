@@ -80,14 +80,14 @@ func TestRewrite_ImgSrc(t *testing.T) {
 
 func TestRewrite_ScriptSrc(t *testing.T) {
 	got := rewrite(t, `<script src="https://cdn.example.com/x.js"></script>`)
-	if !strings.Contains(got, `src="http://localhost:9081/cyrano/https/cdn.example.com/x.js"`) {
+	if !strings.Contains(got, `src="http://localhost:9081/cyrano/https!js/cdn.example.com/x.js"`) {
 		t.Errorf("script src not rewritten: %s", got)
 	}
 }
 
 func TestRewrite_LinkHref(t *testing.T) {
 	got := rewrite(t, `<link rel="stylesheet" href="/styles.css">`)
-	if !strings.Contains(got, `href="http://localhost:9081/cyrano/https/example.com/styles.css"`) {
+	if !strings.Contains(got, `href="http://localhost:9081/cyrano/https!css/example.com/styles.css"`) {
 		t.Errorf("link href not rewritten: %s", got)
 	}
 }
@@ -255,7 +255,7 @@ func TestRewrite_BootstrapInjected(t *testing.T) {
 func TestRewrite_BootstrapInjectedBeforeOtherScripts(t *testing.T) {
 	got := rewrite(t, `<html><head><script src="/page.js"></script></head></html>`, withInject)
 	idxBootstrap := strings.Index(got, `<script src="/rewriter.js"`)
-	idxPageScript := strings.Index(got, `<script src="http://localhost:9081/cyrano/https/example.com/page.js"`)
+	idxPageScript := strings.Index(got, `<script src="http://localhost:9081/cyrano/https!js/example.com/page.js"`)
 	if idxBootstrap < 0 || idxPageScript < 0 {
 		t.Fatalf("missing scripts: bootstrap=%d page=%d in:\n%s", idxBootstrap, idxPageScript, got)
 	}
@@ -321,7 +321,7 @@ func TestRewrite_FullPage(t *testing.T) {
 	}
 	// All three external URLs proxified
 	for _, u := range []string{
-		"localhost:9081/cyrano/https/example.com/style.css",
+		"localhost:9081/cyrano/https!css/example.com/style.css",
 		"localhost:9081/cyrano/https/example.com/about",
 		"localhost:9081/cyrano/https/example.com/p.png",
 	} {
@@ -564,7 +564,7 @@ func TestRewrite_IframeSrcdoc(t *testing.T) {
 	}
 	doc := out[i:]
 	doc = doc[:strings.Index(doc, `></iframe>`)]
-	boot, script := strings.Index(doc, "$rewriter_init"), strings.Index(doc, "/cyrano/https/t.example/a.js")
+	boot, script := strings.Index(doc, "$rewriter_init"), strings.Index(doc, "/cyrano/https!js/t.example/a.js")
 	if boot < 0 || script < 0 || boot > script {
 		t.Errorf("srcdoc needs the runtime, then its script proxified (runtime at %d, script at %d):\n%s", boot, script, doc)
 	}

@@ -77,6 +77,18 @@ type Options struct {
 	Transport http.RoundTripper
 }
 
+type destContextKey struct{}
+
+// RequestDest is what the response's request was marked for in its
+// proxified URL (spec/Containment.agda Dest), or "".
+func RequestDest(resp *http.Response) urlrewrite.Dest {
+	if resp == nil || resp.Request == nil {
+		return ""
+	}
+	d, _ := resp.Request.Context().Value(destContextKey{}).(urlrewrite.Dest)
+	return d
+}
+
 // SessionContextKey is the context key used to propagate the proxy session ID
 // from Director to ModifyResponse and the body rewriter.
 type SessionContextKey struct{}
@@ -224,7 +236,13 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		// The request's own referrer policy, carried by its proxified URL
 		// (an element's referrerpolicy, fetch's referrerPolicy): read before
 		// the URL becomes the target's.
-		requestPolicy := urlrewrite.TargetPolicy(req.URL.EscapedPath())
+		requestMark := urlrewrite.TargetMark(req.URL.EscapedPath())
+		requestPolicy := requestMark.Policy
+		// What the rewriter marked the URL for (a script, a stylesheet):
+		// the body rewriter rewrites the response as that (RequestDest).
+		if requestMark.Dest != "" {
+			*req = *req.WithContext(context.WithValue(req.Context(), destContextKey{}, requestMark.Dest))
+		}
 		req.URL.Scheme = target.Scheme
 		req.URL.Host = target.Host
 		req.URL.Path = target.Path

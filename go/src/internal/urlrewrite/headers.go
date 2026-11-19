@@ -17,7 +17,7 @@ import (
 func RewriteLinkHeader(v string, base *url.URL, cfg ProxyConfig) string {
 	values := linkSplit(v, true, ',')
 	for i, lv := range values {
-		values[i] = rewriteLinkValue(lv, func(u string) string { return Rewrite(u, base, cfg) })
+		values[i] = rewriteLinkValue(lv, func(u string, d Dest) string { return RewriteMarked(u, base, cfg, Mark{Dest: d}) })
 	}
 	return strings.Join(values, ",")
 }
@@ -115,7 +115,28 @@ func readLinkParam(raw string) (p linkParam, empty, ok bool) {
 	return p, false, false // unterminated
 }
 
-func rewriteLinkValue(v string, rw func(string) string) string {
+// linkDest is what a link-value's target is requested for, as for the
+// <link> element (spec/Attrs.agda urlDest; htmlrewrite.URLDest, kept here
+// to avoid an import cycle).
+func linkDest(rels map[string]bool, as string, hasAs bool) Dest {
+	switch {
+	case rels["stylesheet"]:
+		return DestStyle
+	case rels["modulepreload"]:
+		return DestScript
+	case rels["preload"] || rels["prefetch"]:
+		if hasAs && as == "script" {
+			return DestScript
+		}
+		if hasAs && as == "style" {
+			return DestStyle
+		}
+	}
+	return ""
+}
+
+func rewriteLinkValue(v string, rwd func(string, Dest) string) string {
+	rw := func(u string) string { return rwd(u, "") }
 	lead := 0
 	for lead < len(v) && linkOWS(v[lead]) {
 		lead++
@@ -156,13 +177,14 @@ func rewriteLinkValue(v string, rw func(string) string) string {
 			rels[t] = true
 		}
 	}
-	as, _ := first("as")
+	as, hasAs := first("as")
 	fontHint := strings.EqualFold(as, "font") && (rels["preload"] || rels["prefetch"])
+	dest := linkDest(rels, strings.ToLower(as), hasAs)
 
 	var b strings.Builder
 	b.WriteString(v[:lead])
 	b.WriteByte('<')
-	b.WriteString(rw(linkTrim(target)))
+	b.WriteString(rwd(linkTrim(target), dest))
 	b.WriteByte('>')
 	b.WriteString(parts[0])
 	for _, raw := range parts[1:] {

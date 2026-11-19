@@ -1,3 +1,4 @@
+import type { RewriteOne } from "../patches/referrer-policy";
 // Client-side CSS rewriter: the URLs in CSS text, through the proxy.
 //
 // A port of spec/Css.agda, which is the authority — keep this in step with
@@ -232,7 +233,8 @@ function tokenize(src: string): Tok[] {
     return out;
 }
 
-type Role = "url" | "string" | "plain";
+// importUrl / importString: an @import's — a stylesheet (spec Css roles).
+type Role = "url" | "string" | "plain" | "importUrl" | "importString";
 
 function roles(toks: Tok[]): Role[] {
     const out: Role[] = [];
@@ -245,20 +247,20 @@ function roles(toks: Tok[]): Role[] {
                 out.push("plain");
                 break;
             case "url":
-                out.push("url"); imp = false;
+                out.push(imp ? "importUrl" : "url"); imp = false;
                 break;
             case "string": {
                 const f = top();
-                out.push(imp || f === "url" || f === "image-set" || f === "-webkit-image-set" ? "string" : "plain");
+                out.push(imp || f === "url-import" ? "importString" : f === "url" || f === "image-set" || f === "-webkit-image-set" ? "string" : "plain");
                 imp = false;
-                if (f === "url") stack[stack.length - 1] = "url-used";
+                if (f === "url" || f === "url-import") stack[stack.length - 1] = "url-used";
                 break;
             }
             case "atKeyword":
                 out.push("plain"); imp = t.value === "import";
                 break;
             case "function":
-                out.push("plain"); imp = false; stack.push(t.value);
+                out.push("plain"); stack.push(imp && t.value === "url" ? "url-import" : t.value); imp = false;
                 break;
             default:
                 out.push("plain"); imp = false;
@@ -291,9 +293,10 @@ export function cssUrls(src: string): string[] {
 
 /**
  * Rewrites every URL in CSS text (spec rewriteCss): `rewriteOne` gives each
- * URL's proxified form; one it returns unchanged is kept as written.
+ * URL's proxified form (an @import's marked as a stylesheet's, through its
+ * withMark); one it returns unchanged is kept as written.
  */
-export function rewriteCssText(src: string, rewriteOne: (url: string) => string): string {
+export function rewriteCssText(src: string, rewriteOne: RewriteOne): string {
     if (typeof src !== "string" || src.length === 0) return src;
     // Cheap exit: no URL can be named without one of these.
     if (!/url|import|image-set|\\/i.test(src)) return src;
@@ -304,9 +307,11 @@ export function rewriteCssText(src: string, rewriteOne: (url: string) => string)
         const t = toks[i]!;
         const r = rs[i];
         if (r === "plain") { out += t.text; continue; }
-        const u = rewriteOne(t.value);
+        // An @import's URL is a stylesheet's: marked so (spec rewriteCss).
+        const imported = r === "importUrl" || r === "importString";
+        const u = imported && rewriteOne.withMark ? rewriteOne.withMark(t.value, null, "css") : rewriteOne(t.value);
         if (u === t.value) { out += t.text; continue; }
-        out += r === "url" ? `url(${serializeString(u)})` : serializeString(u);
+        out += r === "url" || r === "importUrl" ? `url(${serializeString(u)})` : serializeString(u);
     }
     return out;
 }

@@ -122,12 +122,30 @@ function pctDecode(s: string): string {
  * matches lowercase only, as proxify writes it; the host is taken as written.
  * Shared by remap and unwrap so the two can never disagree.
  */
-function cyranoTarget(pathname: string): { scheme: string; policy: string | null; host: string; rest: string } | null {
-    const m = /^\/cyrano\/(http|https|ws|wss)(?:!([^/]*))?\/([^/]+)(.*)$/s.exec(pathname);
+function cyranoTarget(pathname: string): { scheme: string; policy: string | null; dest: Dest | null; host: string; rest: string } | null {
+    const m = /^\/cyrano\/(http|https|ws|wss)((?:![^/!]*)*)\/([^/]+)(.*)$/s.exec(pathname);
     if (m === null) return null;
-    // A policy marker (spec schemeSegment): only a policy's own name.
-    if (m[2] !== undefined && !REFERRER_POLICIES.has(m[2])) return null;
-    return { scheme: m[1]!, policy: m[2] ?? null, host: m[3]!, rest: m[4]! };
+    // The markers (spec schemeSegment): [!<policy>][!<dest>], by their own names.
+    const marks = m[2] === "" ? [] : m[2]!.slice(1).split("!");
+    let policy: string | null = null, dest: Dest | null = null;
+    if (marks.length === 1) {
+        if (isDest(marks[0]!)) dest = marks[0] as Dest;
+        else if (REFERRER_POLICIES.has(marks[0]!)) policy = marks[0]!;
+        else return null;
+    } else if (marks.length === 2) {
+        if (!REFERRER_POLICIES.has(marks[0]!) || !isDest(marks[1]!)) return null;
+        policy = marks[0]!; dest = marks[1] as Dest;
+    } else if (marks.length > 2) return null;
+    return { scheme: m[1]!, policy, dest, host: m[3]!, rest: m[4]! };
+}
+
+/** What a request is for, when the rewriter knows (spec Dest): a script, a stylesheet. */
+export type Dest = "js" | "css";
+const isDest = (t: string): boolean => t === "js" || t === "css";
+
+/** What a proxified URL's request was marked for (spec targetDest), or null. */
+export function targetDest(href: string): Dest | null {
+    try { return cyranoTarget(new URL(href).pathname)?.dest ?? null; } catch { return null; }
 }
 
 /** The referrer policies a scheme segment may carry (spec R.policyName). */
@@ -159,6 +177,9 @@ export function rewriteUrl(
     // fetch's referrerPolicy): carried in the scheme segment,
     // /cyrano/https!origin/… (spec rewriteUrlWith), for the proxy to apply.
     policy?: string,
+    // What it is requested for, a script or a stylesheet: carried after the
+    // policy, /cyrano/https!js/…, for the proxy to rewrite it as such.
+    dest?: Dest,
 ): string {
     if (typeof rawUrl !== "string" || rawUrl.length === 0) return rawUrl;
     if (config.identity) return rawUrl;
@@ -208,7 +229,7 @@ export function rewriteUrl(
     const rest = afterAuthority(absolute);
     const tail = rest.slice(absolute.pathname.length); // ?query#fragment, exactly
     const seg = escapePct(segmentOf(userinfoText(absolute) + absolute.host));
-    const schemeSeg = policy && REFERRER_POLICIES.has(policy) ? `${scheme}!${policy}` : scheme;
+    const schemeSeg = scheme + (policy && REFERRER_POLICIES.has(policy) ? `!${policy}` : "") + (dest && isDest(dest) ? `!${dest}` : "");
     return `${apiBase}/cyrano/${schemeSeg}/${seg}${escapePct(absolute.pathname)}${tail}`;
 }
 

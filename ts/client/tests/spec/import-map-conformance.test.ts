@@ -36,7 +36,7 @@ describe.skipIf(located.skip !== "")("import maps: spec conformance", () => {
     it("rewriteImportMapText is rewriteImportMap", async () => {
         await fc.assert(fc.asyncProperty(fc.constantFrom(...proxies), fc.constantFrom(...bases), text, async (proxy, base, t) => {
             const want = await oracle.ask("importmap", [proxy, base, t]);
-            expect(rewriteImportMapText(t, (u) => rewriteUrl(u, new URL(base), config(proxy))), JSON.stringify(t)).toBe(want);
+            expect(rewriteImportMapText(t, (u) => rewriteUrl(u, new URL(base), config(proxy), undefined, "js")), JSON.stringify(t)).toBe(want);
         }), { numRuns: 800 });
     });
 

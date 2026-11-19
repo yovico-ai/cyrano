@@ -1,6 +1,10 @@
 package htmlrewrite
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/yovico/cyrano/internal/urlrewrite"
+)
 
 // AttrKind is what an attribute's value is to cyrano (spec/Attrs.agda;
 // TS: ts/client/src/patches/url-attribute-map.ts urlAttrKind).
@@ -54,6 +58,46 @@ func init() {
 
 // URLAttrKind is spec attrKind: the attribute (lowercase; xlink:href) of an
 // element (lowercase local name) in the SVG namespace or HTML.
+// URLDest is what an attribute's URL is requested for, when it is a
+// script or a stylesheet (spec/Attrs.agda urlDest): rel the link types
+// (lowercase), as the as attribute (lowercase; hasAs: present).
+func URLDest(svg bool, tag, attr string, rel []string, as string, hasAs bool) urlrewrite.Dest {
+	if svg {
+		if tag == "script" && (attr == "href" || attr == "xlink:href") {
+			return urlrewrite.DestScript
+		}
+		return ""
+	}
+	if tag == "script" && attr == "src" {
+		return urlrewrite.DestScript
+	}
+	if tag != "link" || attr != "href" {
+		return ""
+	}
+	has := func(r string) bool {
+		for _, x := range rel {
+			if x == r {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("stylesheet"):
+		return urlrewrite.DestStyle
+	case has("modulepreload"):
+		return urlrewrite.DestScript
+	case has("preload") || has("prefetch"):
+		if hasAs && as == "script" {
+			return urlrewrite.DestScript
+		}
+		if hasAs && as == "style" {
+			return urlrewrite.DestStyle
+		}
+	}
+	return ""
+}
+
 func URLAttrKind(svg bool, tag, attr string) AttrKind {
 	if svg {
 		return svgAttrKinds[tag][attr]

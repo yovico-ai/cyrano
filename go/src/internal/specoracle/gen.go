@@ -103,7 +103,7 @@ func URL(t *rapid.T, proxy string) string {
 // policyMarkers: a scheme segment's referrer-policy marker — none, a
 // policy's name, and forms that are not one.
 var policyMarkers = []string{"", "", "", "!origin", "!no-referrer", "!strict-origin-when-cross-origin", "!unsafe-url",
-	"!Origin", "!bogus", "!", "!origin!x"}
+	"!Origin", "!bogus", "!", "!origin!x", "!js", "!css", "!origin!js", "!unsafe-url!css", "!js!origin", "!JS", "!js!css", "!origin!js!x", "!css!"}
 
 // Policies are the referrer policies a request may carry.
 var Policies = []string{"no-referrer", "no-referrer-when-downgrade", "same-origin", "origin", "strict-origin",

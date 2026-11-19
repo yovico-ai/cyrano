@@ -86,7 +86,7 @@ describe("relative URLs resolve against <base href>", () => {
         setBase(proxify("https://cdn.example/assets/"));
         const script = child.document.createElement("script");
         script.src = "lib.js";
-        expect(nativeGetAttribute.call(script, "src")).toBe(proxify("https://cdn.example/assets/lib.js"));
+        expect(nativeGetAttribute.call(script, "src")).toBe(rewriteUrl("https://cdn.example/assets/lib.js", new URL(PAGE), config, undefined, "js"));
     });
 
     it("an absolute URL is unaffected by the base", async () => {

@@ -15,14 +15,17 @@
 
 import { type RewriteOne } from "./referrer-policy";
 import { scriptKind } from "./script-kind";
-import { rewriteImportMap } from "./dynamic-html";
+import { asScript, rewriteImportMap } from "./dynamic-html";
 import { SafeSet, nO, ncall, aIncludes, sStarts } from "../native/intrinsics";
 import { trusted, trustedPolicyName } from "../native/trusted";
 import { rewriteCssText } from "../css/rewriter";
 import { ORIGINALS_ATTR } from "../native/originals";
 import { defaultJsRewriteOptions, rewriteJsSource } from "../js/rewriter";
 import { rewriteSrcsetAttribute } from "./srcset";
-import { rewriteByKind, urlAttrKind } from "./url-attribute-map";
+import { rewriteByKind, urlAttrKind, urlDest } from "./url-attribute-map";
+
+const lowerAscii = (s: string): string => s.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+const relOf = (v: string | null): string[] => (v === null ? [] : lowerAscii(v).split(/[\t\n\f\r ]+/).filter((t) => t !== ""));
 import { tokenize, withBootstrap, type Ns, type Tok, type TokAttr } from "./html-tokens";
 import { isReferrerPolicy } from "../url/containment";
 
@@ -176,12 +179,14 @@ function editStartTag(src: string, t: Extract<Tok, { kind: "start" }>, rewriteOn
     // is told unsafe-url (patches/referrer-policy.ts; Go:
     // htmlrewrite elementReferrerPolicy).
     let rw: (u: string) => string = rewriteOne;
+    let policyMark: string | null = null;
     if (html && POLICY_TAGS.has(t.name)) {
         const p = value("referrerpolicy");
         const lp = p === null ? null : p.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
         if (lp !== null && isReferrerPolicy(lp) && rewriteOne.withPolicy) {
             const withPolicy = rewriteOne.withPolicy;
             rw = (u) => withPolicy(u, lp);
+            policyMark = lp;
             change(attr("referrerpolicy"), "referrerpolicy", "unsafe-url");
         }
     }
@@ -210,7 +215,11 @@ function editStartTag(src: string, t: Extract<Tok, { kind: "start" }>, rewriteOn
         }
         const kind = urlAttrKind(!html, t.name, a.name);
         if (kind === "none" || kind === "reflected") continue;
-        change(a, a.name, rewriteByKind(kind, v, rw, rewriteSrcsetAttribute));
+        // A script's or stylesheet's URL says so (spec/Attrs.agda urlDest).
+        const as = value("as");
+        const dest = urlDest(!html, t.name, a.name, relOf(value("rel")), as === null ? null : lowerAscii(as));
+        const rwd = dest && rewriteOne.withMark ? (u: string) => rewriteOne.withMark!(u, policyMark, dest) : rw;
+        change(a, a.name, rewriteByKind(kind, v, rwd, rewriteSrcsetAttribute));
     }
     if (!changed) return;
     set.set(ORIGINALS_ATTR, JSON.stringify(originals));
@@ -275,7 +284,7 @@ export function rewriteHtmlString(
             if (attrOf(t.ns === "svg" ? "href" : "src") !== null || (t.ns === "svg" && attrOf("xlink:href") !== null)) continue;
             const kind = scriptKind(attrOf("type"), attrOf("language"));
             if (kind === "classic" || kind === "module") out = rewriteJsSource(text, defaultJsRewriteOptions());
-            else if (kind === "importmap" && t.ns === "html") out = rewriteImportMap(text, rewriteOne);
+            else if (kind === "importmap" && t.ns === "html") out = rewriteImportMap(text, asScript(rewriteOne));
             else continue;
         }
         edits[edits.length] = [t.to, next.from, t.ns === "svg" ? escapedText(out) : out];

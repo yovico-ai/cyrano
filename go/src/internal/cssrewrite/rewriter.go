@@ -37,8 +37,8 @@ func Rewrite(src []byte, opts Options) []byte {
 	if opts.BaseURL == nil || len(src) == 0 {
 		return src
 	}
-	return []byte(RewriteText(string(src), func(u string) string {
-		return urlrewrite.Rewrite(u, opts.BaseURL, opts.Proxy)
+	return []byte(RewriteTextDest(string(src), func(u string, d urlrewrite.Dest) string {
+		return urlrewrite.RewriteDest(u, opts.BaseURL, opts.Proxy, d)
 	}))
 }
 
@@ -379,6 +379,8 @@ const (
 	plain role = iota
 	asURL
 	asString
+	importURL    // an @import's: a stylesheet (urlrewrite.DestStyle)
+	importString
 )
 
 // roles marks which tokens are URLs (spec roles).
@@ -397,21 +399,31 @@ func roles(toks []tok) []role {
 		case kWS, kComment:
 		case kURL:
 			out[i] = asURL
+			if imp {
+				out[i] = importURL
+			}
 			imp = false
 		case kString:
 			f := top()
-			if imp || f == "url" || f == "image-set" || f == "-webkit-image-set" {
+			switch {
+			case imp || f == "url-import":
+				out[i] = importString
+			case f == "url" || f == "image-set" || f == "-webkit-image-set":
 				out[i] = asString
 			}
 			imp = false
-			if f == "url" {
+			if f == "url" || f == "url-import" {
 				stack[len(stack)-1] = "url-used"
 			}
 		case kAtKeyword:
 			imp = t.value == "import"
 		case kFunction:
+			name := t.value
+			if imp && name == "url" {
+				name = "url-import" // url() right after @import
+			}
 			imp = false
-			stack = append(stack, t.value)
+			stack = append(stack, name)
 		default:
 			imp = false
 			switch t.text {
@@ -464,6 +476,12 @@ func URLs(s string) []string {
 // RewriteText rewrites every URL in CSS text (spec rewriteCss): rewrite
 // gives a URL's proxified form; one it returns unchanged is kept as written.
 func RewriteText(s string, rewrite func(string) string) string {
+	return RewriteTextDest(s, func(u string, _ urlrewrite.Dest) string { return rewrite(u) })
+}
+
+// RewriteTextDest is RewriteText with an @import's URL marked as a
+// stylesheet's (spec rewriteCss).
+func RewriteTextDest(s string, rewrite func(string, urlrewrite.Dest) string) string {
 	toks := tokenize(s)
 	rs := roles(toks)
 	var b strings.Builder
@@ -473,12 +491,16 @@ func RewriteText(s string, rewrite func(string) string) string {
 			b.WriteString(t.text)
 			continue
 		}
-		u := rewrite(t.value)
+		d := urlrewrite.Dest("")
+		if rs[i] == importURL || rs[i] == importString {
+			d = urlrewrite.DestStyle
+		}
+		u := rewrite(t.value, d)
 		if u == t.value {
 			b.WriteString(t.text)
 			continue
 		}
-		if rs[i] == asURL {
+		if rs[i] == asURL || rs[i] == importURL {
 			b.WriteString("url(" + serializeString(u) + ")")
 		} else {
 			b.WriteString(serializeString(u))

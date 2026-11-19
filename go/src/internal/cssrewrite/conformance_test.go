@@ -45,9 +45,9 @@ func TestSpecConformance_CSS(t *testing.T) {
 		if err != nil {
 			rt.Skip("oracle: " + err.Error()) // invalid UTF-8 cannot be a request field
 		}
-		got := RewriteText(text, func(u string) string { return urlrewrite.Rewrite(u, baseURL, cfg) })
+		got := RewriteTextDest(text, func(u string, d urlrewrite.Dest) string { return urlrewrite.RewriteDest(u, baseURL, cfg, d) })
 		if got != want {
-			rt.Fatalf("RewriteText(%q) = %q, spec says %q", text, got, want)
+			rt.Fatalf("RewriteTextDest(%q) = %q, spec says %q", text, got, want)
 		}
 		urls, _, _ := oracle.Ask("cssurls", text)
 		if g := strings.Join(URLs(text), "\n"); g != urls {

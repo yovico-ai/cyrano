@@ -65,21 +65,21 @@ func TestUrlRelative(t *testing.T) {
 
 func TestImportString(t *testing.T) {
 	got := rewrite(t, `@import "https://fonts.example.com/font.css";`)
-	if !strings.Contains(got, "localhost:9081/cyrano/https/fonts.example.com/font.css") {
+	if !strings.Contains(got, "localhost:9081/cyrano/https!css/fonts.example.com/font.css") {
 		t.Errorf("@import string url not rewritten: %s", got)
 	}
 }
 
 func TestImportUrlForm(t *testing.T) {
 	got := rewrite(t, `@import url(https://fonts.example.com/font2.css);`)
-	if !strings.Contains(got, "localhost:9081/cyrano/https/fonts.example.com/font2.css") {
+	if !strings.Contains(got, "localhost:9081/cyrano/https!css/fonts.example.com/font2.css") {
 		t.Errorf("@import url() not rewritten: %s", got)
 	}
 }
 
 func TestImportSingleQuote(t *testing.T) {
 	got := rewrite(t, `@import 'https://x.example.com/y.css';`)
-	if !strings.Contains(got, `"http://localhost:9081/cyrano/https/x.example.com/y.css"`) {
+	if !strings.Contains(got, `"http://localhost:9081/cyrano/https!css/x.example.com/y.css"`) {
 		t.Errorf("@import single-quote rewrite missing: %s", got)
 	}
 }

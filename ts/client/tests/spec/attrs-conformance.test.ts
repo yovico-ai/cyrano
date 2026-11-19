@@ -7,7 +7,7 @@
 import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { rewriteUrlList, urlAttrKind } from "../../src/patches/url-attribute-map";
+import { rewriteUrlList, urlAttrKind, urlDest } from "../../src/patches/url-attribute-map";
 import { rewriteUrl } from "../../src/url/containment";
 import type { ClientConfig } from "../../src/config";
 import { OracleClient, locateOracle, oracleRequired } from "./oracle-client";
@@ -33,6 +33,19 @@ describe.skipIf(located.skip !== "")("URL attributes: spec conformance", () => {
             const got = urlAttrKind(ns === "svg", t, a);
             if (got !== want) bad.push(`${ns} ${t} ${a}: ${got}, spec ${want}`);
         }
+        expect(bad).toEqual([]);
+    });
+
+    it("urlDest is urlDest", async () => {
+        const rels = ["", "stylesheet", "alternate stylesheet", "preload", "prefetch", "modulepreload", "icon", "preload prefetch", "dns-prefetch"];
+        const ases = ["-", "script", "style", "font", "image", ""];
+        const bad: string[] = [];
+        for (const ns of ["html", "svg"]) for (const t of ["script", "link", "img", "a", "image"]) for (const a of ["src", "href", "xlink:href"])
+            for (const rel of rels) for (const as of ases) {
+                const want = await oracle.ask("urldest", [ns, t, a, rel, as]);
+                const got = urlDest(ns === "svg", t, a, rel.split(" ").filter((x) => x !== ""), as === "-" ? null : as) ?? "-";
+                if (got !== want) bad.push(`${ns} ${t} ${a} rel=${rel} as=${as}: ${got}, spec ${want}`);
+            }
         expect(bad).toEqual([]);
     });
 

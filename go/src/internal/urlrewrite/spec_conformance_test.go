@@ -204,6 +204,62 @@ func TestSpecConformance_RewriteWithPolicy(t *testing.T) {
 	})
 }
 
+// A script's or stylesheet's URL: the proxified URL says so (spec
+// rewriteUrlWith with a destination mark), and the proxy reads it back
+// (targetDest); unwrap ignores it (Unwrap is checked on ProxiedHref,
+// which draws marked segments).
+func TestSpecConformance_RewriteMarked(t *testing.T) {
+	oracle := specoracle.Need(t)
+	rapid.Check(t, func(rt *rapid.T) {
+		proxy := rapid.SampledFrom(specoracle.Proxies).Draw(rt, "proxy")
+		base := rapid.SampledFrom(specoracle.Bases).Draw(rt, "base")
+		raw := specoracle.URL(rt, proxy)
+		pol := rapid.SampledFrom(append([]string{"-", "-"}, specoracle.Policies...)).Draw(rt, "policy")
+		dest := rapid.SampledFrom([]string{"-", "js", "css"}).Draw(rt, "dest")
+		want, _, err := oracle.Ask("rewritemark", proxy, base, pol, dest, raw)
+		if errors.Is(err, specoracle.ErrOutOfModel) {
+			rt.Skip("outside the spec's model")
+		}
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		baseURL, _ := url.Parse(base)
+		m := Mark{}
+		if pol != "-" {
+			m.Policy = Policy(pol)
+		}
+		if dest != "-" {
+			m.Dest = Dest(dest)
+		}
+		if got := RewriteMarked(raw, baseURL, proxyConfig(rt, proxy), m); got != want {
+			rt.Fatalf("RewriteMarked(%q, %+v) on %s = %q, spec says %q", raw, m, base, got, want)
+		}
+	})
+}
+
+func TestSpecConformance_TargetDest(t *testing.T) {
+	oracle := specoracle.Need(t)
+	rapid.Check(t, func(rt *rapid.T) {
+		proxy := rapid.SampledFrom(specoracle.Proxies).Draw(rt, "proxy")
+		href := specoracle.ProxiedHref(rt, proxy)
+		want, has, err := oracle.Ask("targetdest", href)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		if !has {
+			want = ""
+		}
+		a, res := parseRef(nil, preprocess(href))
+		got := ""
+		if res == parsedURL && a.scheme+"://"+hostPort(a.auth) == proxy {
+			got = string(TargetDest(pathText(a.path)))
+		}
+		if got != want {
+			rt.Fatalf("TargetDest(%q) = %q, spec says %q", href, got, want)
+		}
+	})
+}
+
 func TestSpecConformance_TargetPolicy(t *testing.T) {
 	oracle := specoracle.Need(t)
 	rapid.Check(t, func(rt *rapid.T) {

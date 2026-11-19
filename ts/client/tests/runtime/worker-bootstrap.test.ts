@@ -114,7 +114,7 @@ describe("initWorker — patches the worker's own fetch/XHR/importScripts", () =
         scope.importScripts("/cdn-cgi/challenge-platform/h/g/extra.js");
 
         expect(importScriptsSpy).toHaveBeenCalledWith(
-            "http://localhost:9081/cyrano/https/claude.ai/cdn-cgi/challenge-platform/h/g/extra.js",
+            "http://localhost:9081/cyrano/https!js/claude.ai/cdn-cgi/challenge-platform/h/g/extra.js",
         );
     });
 

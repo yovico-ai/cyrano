@@ -9,6 +9,11 @@
 --                                       → as rewrite, the request made under
 --                                         that referrer policy (marked)
 --   targetpolicy <proxied URL>          → {"out":"origin"} / {"none":true}
+--   rewritemark <proxy> <base> <policy|-> <js|css|-> <url>
+--                                       → as rewrite, the URL marked so
+--   disposition <js|css|-> <0|1> <Sec-Fetch-Dest> <0|1> <Content-Type> <0|1 sniffed>
+--                                       → {"out":"js|css|html|none"} (what the proxy does with the body)
+--   targetdest <proxied URL>            → {"out":"js"|"css"} / {"none":true}
 --   srcset  <value>                     → {"out":"…"}  (each URL u written as [u])
 --   direct  <base> <url>                → {"kind":"shownDirect","out":"…"}
 --                                         (what the browser shows, no cyrano)
@@ -46,6 +51,7 @@
 --                                         the document's <base> elements)
 --   importmap <proxy> <base> <text>     → {"out":"<rewritten import map>"}
 --   attrkind <html|svg> <tag> <attr>    → {"out":"url|urllist|srcset|reflected|none"}
+--   urldest <html|svg> <tag> <attr> <rel types> <as|-> → {"out":"js|css|-"}
 --   urllist <proxy> <base> <text>       → {"out":"<each token proxified>"}
 --   urllike <specifier>                 → {"out":"yes"} / {"out":"no"}
 --   jsonobject <text>                   → {"out":"yes"} / {"out":"no"} (a JSON object)
@@ -100,6 +106,7 @@ import ImportMap
 import Attrs
 import HtmlTok
 import Link
+import Disposition
 open import Html using (ScriptKind; scriptClassic; scriptModule; scriptImportMap; scriptSpeculation; scriptData; scriptKind; documentBase; BaseURL; baseOf′; aboutBlank; beyond)
 
 ------------------------------------------------------------------------
@@ -242,6 +249,9 @@ dispatch op args =
   if eqStr op (toList "rewrite") then rewriteReq args
   else if eqStr op (toList "rewritewith") then rewriteWithReq args
   else if eqStr op (toList "targetpolicy") then targetPolicyReq args
+  else if eqStr op (toList "targetdest") then targetDestReq args
+  else if eqStr op (toList "rewritemark") then rewriteMarkReq args
+  else if eqStr op (toList "disposition") then dispositionReq args
   else if eqStr op (toList "unwrap") then unwrapReq args
   else if eqStr op (toList "srcset") then srcsetReq args
   else if eqStr op (toList "direct") then directReq args
@@ -264,6 +274,7 @@ dispatch op args =
   else if eqStr op (toList "importmap") then importMapReq args
   else if eqStr op (toList "urllike") then urlLikeReq args
   else if eqStr op (toList "attrkind") then attrKindReq args
+  else if eqStr op (toList "urldest") then urlDestReq args
   else if eqStr op (toList "urllist") then urlListReq args
   else if eqStr op (toList "jsonobject") then jsonObjectReq args
   else if eqStr op (toList "link") then linkReq args
@@ -287,11 +298,34 @@ dispatch op args =
 
   rewriteWithReq : List Str → Str
   rewriteWithReq (p ∷ b ∷ pt ∷ raw ∷ []) with proxyOf p | baseOf b | policyToken pt
-  ... | just px | just base | just pol = answerReply raw (rewriteUrlWith px (just pol) base raw)
+  ... | just px | just base | just pol = answerReply raw (rewriteUrlWith px (mark (just pol) nothing) base raw)
   ... | nothing | _         | _        = errorReply "BadProxy"
   ... | just _  | nothing   | _        = errorReply "BadBase"
   ... | just _  | just _    | nothing  = errorReply "BadRequest"
   rewriteWithReq _ = errorReply "BadRequest"
+
+  -- rewritemark <proxy> <base> <policy|-> <js|css|-> <url>
+  rewriteMarkReq : List Str → Str
+  rewriteMarkReq (p ∷ b ∷ pt ∷ dt ∷ raw ∷ []) with proxyOf p | baseOf b
+  ... | just px | just base = byMark (pol pt) (dst dt)
+    where
+    pol : Str → Maybe (Maybe Policy)
+    pol t = if eqStr t (toList "-") then just nothing else polOf (policyToken t)
+      where
+      polOf : Maybe Policy → Maybe (Maybe Policy)
+      polOf (just x) = just (just x)
+      polOf nothing  = nothing
+    dst : Str → Maybe (Maybe Dest)
+    dst t = if eqStr t (toList "-") then just nothing
+            else if eqStr t (toList "js") then just (just destScript)
+            else if eqStr t (toList "css") then just (just destStyle)
+            else nothing
+    byMark : Maybe (Maybe Policy) → Maybe (Maybe Dest) → Str
+    byMark (just x) (just d) = answerReply raw (rewriteUrlWith px (mark x d) base raw)
+    byMark _        _        = errorReply "BadRequest"
+  ... | nothing | _ = errorReply "BadProxy"
+  ... | just _  | nothing = errorReply "BadBase"
+  rewriteMarkReq _ = errorReply "BadRequest"
 
   unwrapReq : List Str → Str
   unwrapReq (p ∷ h ∷ []) with proxyOf p
@@ -335,6 +369,27 @@ dispatch op args =
     named nothing    = nothing
   ... | _ = maybeOut nothing
   targetPolicyReq _ = errorReply "BadRequest"
+
+  -- disposition <js|css|-> <0|1 Sec-Fetch-Dest present> <Sec-Fetch-Dest> <0|1 Content-Type present> <Content-Type> <0|1 sniffed>
+  dispositionReq : List Str → Str
+  dispositionReq (m ∷ sp ∷ sd ∷ cp ∷ ct ∷ sn ∷ []) =
+    out (toList (Disposition.kindName (Disposition.responseKind dst (opt sp sd) (opt cp ct) (eqStr sn (toList "1")))))
+    where
+    dst : Maybe Dest
+    dst = if eqStr m (toList "js") then just destScript else if eqStr m (toList "css") then just destStyle else nothing
+    opt : Str → Str → Maybe Str
+    opt p v = if eqStr p (toList "1") then just v else nothing
+  dispositionReq _ = errorReply "BadRequest"
+
+  targetDestReq : List Str → Str
+  targetDestReq (u ∷ []) with parse nothing (preprocess u)
+  ... | url a = maybeOut (named (targetDest (path a)))
+    where
+    named : Maybe Dest → Maybe Str
+    named (just d) = just (toList (destName d))
+    named nothing  = nothing
+  ... | _ = maybeOut nothing
+  targetDestReq _ = errorReply "BadRequest"
 
 
   policyReq : List Str → Str
@@ -492,8 +547,9 @@ dispatch op args =
   importMapReq (p ∷ b ∷ text ∷ []) with proxyOf p | baseOf b
   ... | just px | just base = out (ImportMap.rewriteImportMap rw text)
     where
+    -- an import map's URLs are module URLs: marked as scripts
     rw : Str → Maybe Str
-    rw u with rewriteUrl px base u
+    rw u with rewriteUrlWith px (mark nothing (just destScript)) base u
     ... | emit _ v = just v
     ... | _        = nothing
   ... | nothing | _ = errorReply "BadProxy"
@@ -517,6 +573,24 @@ dispatch op args =
     else errorReply "BadRequest"
   attrKindReq _ = errorReply "BadRequest"
 
+  -- urldest <html|svg> <tag> <attr> <rel types, space-separated> <as|->
+  urlDestReq : List Str → Str
+  urlDestReq (n ∷ t ∷ a ∷ rel ∷ as ∷ []) =
+    out (dname (Attrs.urlDest (if eqStr n (toList "svg") then Attrs.svgNs else Attrs.htmlNs) t a (relWords rel)
+                 (if eqStr as (toList "-") then nothing else just as)))
+    where
+    dname : Maybe Dest → Str
+    dname (just d) = toList (destName d)
+    dname nothing  = toList "-"
+    relWords : Str → List Str
+    relWords s = drop0 (splitOn (is 32) s)
+      where
+      drop0 : List Str → List Str
+      drop0 []        = []
+      drop0 ([] ∷ vs) = drop0 vs
+      drop0 (v ∷ vs)  = v ∷ drop0 vs
+  urlDestReq _ = errorReply "BadRequest"
+
   urlListReq : List Str → Str
   urlListReq (p ∷ b ∷ text ∷ []) with proxyOf p | baseOf b
   ... | just px | just base = out (Attrs.rewriteUrlList rw text)
@@ -537,8 +611,8 @@ dispatch op args =
   cssReq (p ∷ b ∷ text ∷ []) with proxyOf p | baseOf b
   ... | just px | just base = out (rewriteCss rw text)
     where
-    rw : Str → Maybe Str
-    rw u with rewriteUrl px base u
+    rw : Maybe Dest → Str → Maybe Str
+    rw d u with rewriteUrlWith px (mark nothing d) base u
     ... | emit _ v = just v
     ... | _        = nothing
   ... | nothing | _ = errorReply "BadProxy"
@@ -556,12 +630,14 @@ dispatch op args =
 
   linkReq : List Str → Str
   linkReq (p ∷ b ∷ h ∷ []) with proxyOf p | baseOf b
-  ... | just px | just base = out (Link.rewriteLink rw (rewriteSrcset (λ u → keepOr u (rw u))) h)
+  ... | just px | just base = out (Link.rewriteLink rwd (rewriteSrcset (λ u → keepOr u (rw u))) h)
     where
-    rw : Str → Maybe Str
-    rw u with rewriteUrl px base u
+    rwd : Maybe Dest → Str → Maybe Str
+    rwd d u with rewriteUrlWith px (mark nothing d) base u
     ... | emit _ v = just v
     ... | _        = nothing
+    rw : Str → Maybe Str
+    rw = rwd nothing
     keepOr : Str → Maybe Str → Str
     keepOr u (just v) = v
     keepOr u nothing  = u

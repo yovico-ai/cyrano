@@ -82,3 +82,28 @@ func TestAttrNamespaces(t *testing.T) {
 		}
 	}
 }
+
+func TestSpecConformance_URLDest(t *testing.T) {
+	oracle := specoracle.Need(t)
+	rels := []string{"", "stylesheet", "STYLESHEET", "alternate stylesheet", "preload", "prefetch", "modulepreload", "icon", "preload prefetch", "dns-prefetch"}
+	ases := []string{"-", "script", "SCRIPT", "style", "font", "image", ""}
+	rapid.Check(t, func(rt *rapid.T) {
+		ns := rapid.SampledFrom([]string{"html", "svg"}).Draw(rt, "ns")
+		tag := rapid.SampledFrom([]string{"script", "link", "img", "a", "image", "use"}).Draw(rt, "tag")
+		attr := rapid.SampledFrom([]string{"src", "href", "xlink:href", "srcset"}).Draw(rt, "attr")
+		rel := rapid.SampledFrom(rels).Draw(rt, "rel")
+		as := rapid.SampledFrom(ases).Draw(rt, "as")
+		lrel := strings.ToLower(rel)
+		want, _, err := oracle.Ask("urldest", ns, tag, attr, lrel, strings.ToLower(as))
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		got := string(URLDest(ns == "svg", tag, attr, strings.Fields(lrel), strings.ToLower(as), as != "-"))
+		if got == "" {
+			got = "-"
+		}
+		if got != want {
+			rt.Fatalf("URLDest(%s %s %s rel=%q as=%q) = %s, spec says %s", ns, tag, attr, rel, as, got, want)
+		}
+	})
+}

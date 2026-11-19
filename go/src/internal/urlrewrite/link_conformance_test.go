@@ -52,7 +52,7 @@ func TestRewriteLinkHeader_IntegrityAndCrossorigin(t *testing.T) {
 	cfg := ProxyConfig{PublicURL: &url.URL{Scheme: "http", Host: "p:1"}}
 	base, _ := url.Parse("https://shop.app/accounts/pre_auth")
 	in := `<https://cdn.example/E.js>; rel=modulepreload; as=script; crossorigin=anonymous; integrity=sha384-UWWf; nonce=N; nopush, </f.woff2>; rel=preload; as=font; crossorigin=anonymous`
-	want := `<http://p:1/cyrano/https/cdn.example/E.js>; rel=modulepreload; as=script; crossorigin=use-credentials; nonce=N; nopush, <http://p:1/cyrano/https/shop.app/f.woff2>; rel=preload; as=font; crossorigin=anonymous`
+	want := `<http://p:1/cyrano/https!js/cdn.example/E.js>; rel=modulepreload; as=script; crossorigin=use-credentials; nonce=N; nopush, <http://p:1/cyrano/https/shop.app/f.woff2>; rel=preload; as=font; crossorigin=anonymous`
 	if got := RewriteLinkHeader(in, base, cfg); got != want {
 		t.Errorf("\n got  %s\n want %s", got, want)
 	}

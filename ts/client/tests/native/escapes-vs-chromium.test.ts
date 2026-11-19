@@ -139,7 +139,7 @@ describe.skipIf(!wanted)("escapes and breaks found on random sites, in Chromium"
         expect(hits).toContain("/cyrano/https/cdn.example/font.woff2");
         expect(hits).toContain("/cyrano/https/cdn.example/avatar.png");
         expect(hits).toContain("/cyrano/https/cdn.example/srcdoc.png");
-        expect(hits).toContain("/cyrano/https/cdn.example/mod.mjs");
+        expect(hits).toContain("/cyrano/https!js/cdn.example/mod.mjs");
     }, 60_000);
 
     // An element's referrer policy travels in its proxified URL (the proxy

@@ -39,7 +39,10 @@ describe.skipIf(located.skip !== "")("CSS: spec conformance", () => {
         const proxy = "http://localhost:9081", base = "https://site.example/dir/page";
         await fc.assert(fc.asyncProperty(css, async (text) => {
             const want = await oracle.ask("css", [proxy, base, text]);
-            expect(rewriteCssText(text, (u) => rewriteUrl(u, new URL(base), config(proxy))), JSON.stringify(text)).toBe(want);
+            const rw = Object.assign((u: string) => rewriteUrl(u, new URL(base), config(proxy)), {
+                withMark: (u: string, p: string | null, d: "js" | "css" | null) => rewriteUrl(u, new URL(base), config(proxy), p ?? undefined, d ?? undefined),
+            });
+            expect(rewriteCssText(text, rw), JSON.stringify(text)).toBe(want);
         }), { numRuns: 800 });
     });
 
