@@ -179,23 +179,44 @@ func (h *Handler) directFetchHeaders(req *http.Request, target *url.URL, request
 	}
 }
 
-// recordPagePolicy notes a document's Referrer-Policy and, when it sets
-// one, replaces the header the browser sees with unsafe-url: the browser
-// then always sends the full (proxied) referrer, from which
-// directFetchHeaders computes what the page's own policy allows upstream.
+// recordPagePolicy notes the Referrer-Policy of a response that sets one
+// (spec/Referrer.agda setsPolicy: a document, a worker, a stylesheet) and,
+// when it has one, replaces the header the browser sees with unsafe-url:
+// the browser then always sends the full (proxied) referrer, from which
+// directFetchHeaders computes what the policy allows upstream. A
+// stylesheet with none follows its document's (CSSOM): it is recorded with
+// the requesting page's.
 func recordPagePolicy(resp *http.Response, target *url.URL) {
 	dest := strings.ToLower(resp.Request.Header.Get("Sec-Fetch-Dest"))
-	isDoc := dest == "document" || dest == "iframe" || dest == "frame" || dest == "embed" || dest == "object" ||
-		(dest == "" && strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/html"))
-	if !isDoc {
+	if !setsPolicy(dest) && !(dest == "" && strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/html")) {
 		return
 	}
 	p := urlrewrite.HeaderPolicy(strings.Join(resp.Header.Values("Referrer-Policy"), ","))
+	if p == "" && dest == "style" {
+		if page, ok := resp.Request.Context().Value(requesterKey{}).(string); ok {
+			p = pagePolicies.get(page)
+		}
+	}
 	pagePolicies.set(pageKey(target), p)
-	if p != "" {
+	if resp.Header.Get("Referrer-Policy") != "" && p != "" {
 		resp.Header.Set("Referrer-Policy", string(urlrewrite.UnsafeURL))
 	}
 }
+
+// setsPolicy: a response to a request of this destination sets the
+// referrer policy its own requests follow (spec/Referrer.agda setsPolicy;
+// checked against Chromium).
+func setsPolicy(dest string) bool {
+	switch dest {
+	case "document", "iframe", "frame", "embed", "object", "worker", "sharedworker", "serviceworker", "style":
+		return true
+	}
+	return false
+}
+
+// requesterKey is the request context's page key of the requesting
+// document, noted before its Referer is replaced (recordPagePolicy).
+type requesterKey struct{}
 
 // chromePriority is the Priority header (RFC 9218) Chrome most commonly
 // sends for a request of this Sec-Fetch-Dest and Sec-Fetch-Mode, measured

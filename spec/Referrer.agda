@@ -268,3 +268,20 @@ initReferrer base ctx v with parse (just base) (preprocess v)
 ... | invalid     = initError
 ... | otherScheme = initClient
 ... | outside     = initOutside
+
+------------------------------------------------------------------------
+-- Which responses set a referrer policy: those whose own requests then
+-- follow the response's Referrer-Policy — a document (top-level, frame,
+-- iframe, embed, object), a worker (dedicated, shared, service), and a
+-- stylesheet (CSSOM: its url()s, @imports and fonts). A script's sets
+-- nothing. The proxy records the policy of these (Go: recordPagePolicy) and
+-- tells the browser unsafe-url. Checked against Chromium:
+-- policy-contexts-vs-chromium.
+
+setsPolicy : Str → Bool
+setsPolicy d = anyS (Data.List.Base.map toList ("document" ∷ "iframe" ∷ "frame" ∷ "embed" ∷ "object" ∷ "worker" ∷ "sharedworker" ∷ "serviceworker" ∷ "style" ∷ []))
+  where
+  import Data.List.Base
+  anyS : List Str → Bool
+  anyS []       = false
+  anyS (x ∷ xs) = eqStr (Data.List.Base.map lowerAscii d) x ∨ anyS xs

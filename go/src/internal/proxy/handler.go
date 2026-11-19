@@ -300,6 +300,9 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		h.filterClientHints(req, target, sessionID) // reads the proxied Referer: before it is replaced
 		noteCORS(req, target)                       // reads the runtime's headers: before they are consumed below
 		h.storageAccess(req, target, sessionID)     // reads the proxied Referer and the runtime's headers
+		if from := h.requestingDocument(req); from != nil { // before directFetchHeaders replaces the Referer
+			*req = *req.WithContext(context.WithValue(req.Context(), requesterKey{}, pageKey(from)))
+		}
 		h.directFetchHeaders(req, target, requestPolicy)
 		ensurePriority(req, target, req.ProtoMajor < 2)
 
