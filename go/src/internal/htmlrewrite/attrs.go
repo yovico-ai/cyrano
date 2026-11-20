@@ -80,6 +80,10 @@ func URLDest(svg bool, tag, attr string, rel []string, as string, hasAs bool) ur
 	if tag == "script" && attr == "src" {
 		return urlrewrite.DestScript
 	}
+	// The document a frame is given by the document that holds it.
+	if attr == "src" && (tag == "iframe" || tag == "frame" || tag == "embed") || tag == "object" && attr == "data" {
+		return urlrewrite.DestFrame
+	}
 	if tag != "link" || attr != "href" {
 		return ""
 	}

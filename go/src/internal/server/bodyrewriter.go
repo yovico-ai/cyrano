@@ -692,6 +692,16 @@ func workerPreamble(proxyBase, rewriterPath string, config map[string]any, worke
 // client constructs every URL it needs (cookies.json, ?goto=, proxified
 // resources) by appending paths to it.
 func buildClientPassthrough(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig) map[string]any {
+	cfg := clientBase(vhost, proxyCfg)
+	// The portal toolbar (ts/client/src/ui/toolbar.ts; spec/Toolbar.agda):
+	// its home button goes to the portal's main page.
+	if vhost.Toolbar {
+		cfg["toolbar"] = map[string]any{"home": urlrewrite.APIBase(proxyCfg) + "/"}
+	}
+	return cfg
+}
+
+func clientBase(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig) map[string]any {
 	return map[string]any{
 		"apiBaseURL":            urlrewrite.APIBase(proxyCfg),
 		"cacheKey":              "",

@@ -37,11 +37,16 @@ export interface LocationViewOptions {
     config: ClientConfig;
     /** The window this location belongs to (for ancestorOrigins). */
     win?: Window;
+    /**
+     * The window is a child frame of the one navigating it: the URL it is
+     * given is marked as a frame's from its parent (spec Frames embedderOf).
+     */
+    childFrame?(): boolean;
 }
 
 export function makeLocationView(real: Location, o: LocationViewOptions): Location {
     const navigate = (method: "assign" | "replace", url: string): void => {
-        real[method](rewriteUrl(String(url), o.base(), o.config));
+        real[method](rewriteUrl(String(url), o.base(), o.config, undefined, o.childFrame?.() ? "frame" : undefined));
     };
     const setPart = (part: Part, value: string): void => {
         const next = new URL(o.base().href);
@@ -121,7 +126,7 @@ export function makeLocationView(real: Location, o: LocationViewOptions): Locati
  * The location view of another window, or its real location when cyrano
  * does not proxy it (or it is really cross-origin).
  */
-export function foreignLocationView(win: unknown, config: ClientConfig): unknown {
+export function foreignLocationView(win: unknown, config: ClientConfig, viewer?: Window): unknown {
     let real: Location;
     try {
         real = (win as { location: Location }).location;
@@ -141,7 +146,11 @@ export function foreignLocationView(win: unknown, config: ClientConfig): unknown
     } catch {
         return real;
     }
-    return makeLocationView(real, { base, config, win: win as Window });
+    // A parent navigating its own child frame gives it its URL, as by its src.
+    const childFrame = (): boolean => {
+        try { return viewer !== undefined && win !== viewer && (win as Window).parent === viewer; } catch { return false; }
+    };
+    return makeLocationView(real, { base, config, win: win as Window, childFrame });
 }
 
 // ancestorOrigins: a Proxy of the real DOMStringList (so instanceof, the

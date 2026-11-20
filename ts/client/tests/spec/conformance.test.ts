@@ -10,6 +10,7 @@ import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { ClientConfig } from "../../src/config";
+import { netDestination } from "../../src/patches/navigation";
 import { rewriteSrcsetAttribute } from "../../src/patches/srcset";
 import { PROXIFIABLE_SCHEMES, rewriteUrl, targetDest, unwrapProxiedUrl, type Dest } from "../../src/url/containment";
 import { bases, policies, proxiedHref, proxies, srcset, url } from "./gen";
@@ -75,7 +76,7 @@ describe.skipIf(located.skip !== "")("spec conformance", () => {
     // A script's or stylesheet's URL: marked (spec rewriteUrlWith), read back (targetDest).
     it("rewriteUrl with a destination mark, and targetDest", async () => {
         const input = fc.constantFrom(...proxies).chain((proxy) =>
-            fc.tuple(fc.constant(proxy), fc.constantFrom(...bases), fc.constantFrom("-", "-", ...policies), fc.constantFrom("-", "js", "css"), url(proxy), proxiedHref(proxy)));
+            fc.tuple(fc.constant(proxy), fc.constantFrom(...bases), fc.constantFrom("-", "-", ...policies), fc.constantFrom("-", "js", "css", "frame"), url(proxy), proxiedHref(proxy)));
         await fc.assert(fc.asyncProperty(input, async ([proxy, base, pol, dest, raw, href]) => {
             fc.pre(!nodeIsNotChromium(raw) && !nodeIsNotChromium(href));
             const want = await ask(() => oracle.ask("rewritemark", [proxy, base, pol, dest, raw]));
@@ -85,6 +86,23 @@ describe.skipIf(located.skip !== "")("spec conformance", () => {
             let onProxy = false;
             try { onProxy = new URL(href).origin === proxy; } catch { onProxy = false; }
             expect(onProxy ? targetDest(href) : null, `targetDest(${JSON.stringify(href)})`).toBe(td ?? null);
+        }), runs);
+    });
+
+    // The navigation net (spec Route.netDestination): where a navigation
+    // to an absolute URL goes instead, or nowhere else.
+    it("netDestination", async () => {
+        const input = fc.constantFrom(...proxies).chain((proxy) =>
+            fc.tuple(fc.constant(proxy), fc.constantFrom(...bases), fc.oneof(url(proxy), proxiedHref(proxy))));
+        await fc.assert(fc.asyncProperty(input, async ([proxy, base, raw]) => {
+            fc.pre(!nodeIsNotChromium(raw));
+            // A navigation's destination is an absolute URL, as the browser serializes it.
+            let dest: string;
+            try { dest = new URL(raw, base).href; } catch { return; }
+            fc.pre(!nodeIsNotChromium(dest));
+            const want = await ask(() => oracle.ask("netdest", [proxy, dest]));
+            const got = netDestination(dest, new URL(proxy).origin, (u) => rewriteUrl(u, new URL(base), config(proxy)));
+            expect(got ?? "none", `netDestination(${JSON.stringify(dest)}) under ${proxy}`).toBe(want);
         }), runs);
     });
 

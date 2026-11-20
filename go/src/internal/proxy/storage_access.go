@@ -40,6 +40,9 @@ const CredentialsHeader = "Crn-C"
 type frameContext struct {
 	top   string
 	cross bool
+	// embedder: the document that embeds this one (its original URL), when
+	// it was loaded as a frame; "" for a top-level document.
+	embedder string
 }
 
 // topSiteStore remembers, per session, the context of framed documents by
@@ -104,7 +107,7 @@ func (h *Handler) requestingDocument(req *http.Request) *url.URL {
 // direct browser would, and notes the top-level site of a document being
 // navigated to. It reads the proxied Referer and the runtime's headers: call
 // it before directFetchHeaders replaces them.
-func (h *Handler) storageAccess(req *http.Request, target *url.URL, sessionID string) {
+func (h *Handler) storageAccess(req *http.Request, target *url.URL, sessionID string, frameMarked bool) {
 	mode := strings.ToLower(req.Header.Get("Sec-Fetch-Mode"))
 	dest := strings.ToLower(req.Header.Get("Sec-Fetch-Dest"))
 	credentials := strings.ToLower(req.Header.Get(CredentialsHeader))
@@ -114,8 +117,16 @@ func (h *Handler) storageAccess(req *http.Request, target *url.URL, sessionID st
 	navigation := mode == "navigate"
 	// A framed document's embedder, for judging its frame-ancestors and
 	// X-Frame-Options against (frame_ancestors.go).
+	// Its parent: the Referer's document when that document gave the frame
+	// this URL (marked), the embedder of the Referer's document when a
+	// frame navigates itself (spec Frames embedderOf).
+	framedBy := ""
 	if navigation && dest != "document" && from != nil {
-		*req = *req.WithContext(context.WithValue(req.Context(), framedByKey{}, from))
+		recorded, _ := topSites.get(sessionID, pageKey(from))
+		framedBy = embedderOf(frameMarked, recorded.embedder, pageKey(from))
+		if by, err := url.Parse(framedBy); err == nil {
+			*req = *req.WithContext(context.WithValue(req.Context(), framedByKey{}, by))
+		}
 	}
 	var ctx frameContext // the requesting document's (for a navigation: the embedder's)
 	switch {
@@ -132,7 +143,7 @@ func (h *Handler) storageAccess(req *http.Request, target *url.URL, sessionID st
 	req.Header.Del("Sec-Fetch-Storage-Access")
 	targetSite := siteOf(target)
 	if navigation {
-		topSites.set(sessionID, pageKey(target), frameContext{top: ctx.top, cross: ctx.cross || targetSite != ctx.top})
+		topSites.set(sessionID, pageKey(target), frameContext{top: ctx.top, cross: ctx.cross || targetSite != ctx.top, embedder: framedBy})
 	}
 	cred := credentials
 	if cred == "" {

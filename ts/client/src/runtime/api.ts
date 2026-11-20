@@ -138,7 +138,7 @@ export function createRewriterApi(
         if (obj === targetWindow || obj === targetWindow.document) return wrappedLocation;
         // A cross-origin window's location is its view's: settable, not readable.
         if (isView(obj)) return (obj as { location: unknown }).location;
-        return foreignLocationView(obj, config);
+        return foreignLocationView(obj, config, targetWindow);
     };
 
     // Single rewriter closure shared by every wrapper that needs to proxify

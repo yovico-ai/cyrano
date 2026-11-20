@@ -317,7 +317,7 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		noDictionaryOffer(req)
 		h.filterClientHints(req, target, sessionID) // reads the proxied Referer: before it is replaced
 		noteCORS(req, target)                       // reads the runtime's headers: before they are consumed below
-		h.storageAccess(req, target, sessionID)     // reads the proxied Referer and the runtime's headers
+		h.storageAccess(req, target, sessionID, requestMark.Dest == urlrewrite.DestFrame) // reads the proxied Referer and the runtime's headers
 		if from := h.requestingDocument(req); from != nil { // before directFetchHeaders replaces the Referer
 			*req = *req.WithContext(context.WithValue(req.Context(), requesterKey{}, pageKey(from)))
 		}
@@ -413,8 +413,8 @@ func (h *Handler) translateResponse(resp *http.Response) error {
 	// (the redirect target) and Content-Location (alternate URL for the
 	// returned representation) the same way.
 	if h.opts.ProxyCfg.PublicURL != nil && resp.Request != nil && resp.Request.URL != nil {
-		rewriteRedirectHeader(resp, "Location", h.opts.ProxyCfg)
-		rewriteRedirectHeader(resp, "Content-Location", h.opts.ProxyCfg)
+		rewriteRedirectHeader(resp, "Location", h.opts.ProxyCfg, urlrewrite.Mark{Dest: RequestDest(resp)})
+		rewriteRedirectHeader(resp, "Content-Location", h.opts.ProxyCfg, urlrewrite.Mark{})
 		// Link (preload/modulepreload/prefetch hints) and Refresh carry URLs
 		// the browser fetches or navigates to on its own.
 		if vs := resp.Header.Values("Link"); len(vs) > 0 {
@@ -445,15 +445,18 @@ func (h *Handler) translateResponse(resp *http.Response) error {
 	return nil
 }
 
-// rewriteRedirectHeader runs urlrewrite.Rewrite over the named header value,
+// rewriteRedirectHeader runs urlrewrite.RewriteMarked over the named header value,
 // using the upstream request URL as the base for relative-URL resolution.
-// No-op when the header is absent or empty.
-func rewriteRedirectHeader(resp *http.Response, name string, cfg urlrewrite.ProxyConfig) {
+// No-op when the header is absent or empty. mark: what the URL carries —
+// for Location, what the redirected request is for.
+func rewriteRedirectHeader(resp *http.Response, name string, cfg urlrewrite.ProxyConfig, mark urlrewrite.Mark) {
 	v := resp.Header.Get(name)
 	if v == "" {
 		return
 	}
-	rewritten := urlrewrite.Rewrite(v, resp.Request.URL, cfg)
+	// What the request is for carries over a redirect (spec Containment
+	// redirectMark): a redirected frame is still its parent's frame.
+	rewritten := urlrewrite.RewriteMarked(v, resp.Request.URL, cfg, mark)
 	if rewritten != v {
 		resp.Header.Set(name, rewritten)
 	}

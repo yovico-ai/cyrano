@@ -22,7 +22,7 @@ open import Data.String.Base using (toList)
 
 open import Scheme using (Scheme; http; https; ws; wss; schemeChars)
 open import Url using (Str; Abs; parse; preprocess; url; scheme; auth; hostPort)
-open import Containment using (Proxy; unwrapAbs; original; escapePct; segmentOf)
+open import Containment using (Proxy; unwrapAbs; original; escapePct; segmentOf; sameOrigin; rewriteAbsWith; noMark; Answer; emit; keep; silent)
 
 -- path: the request's path as sent (raw); query: "?…" as sent, or "".
 refererRoute : Proxy → Str → Str → Str → Maybe Str
@@ -44,3 +44,36 @@ refererRoute p referer path query with parse nothing (preprocess referer)
   byScheme wss   = nothing
 ...   | _ = nothing
 refererRoute p referer path query | _ = nothing
+
+
+------------------------------------------------------------------------
+-- The navigation net (TS: patches/navigation.ts): the other half of the
+-- same safety. A navigation this document starts — a location assignment
+-- the rules did not see (`window[k] = url`, a setTimeout string, a
+-- javascript: URL's code), a meta refresh a script built, a link or form
+-- that escaped rewriting — whose destination is an http(s) URL off the
+-- proxy's origin is stopped before it leaves (the Navigation API's
+-- navigate event, cancelable for every navigation a document starts) and
+-- made to the destination's proxified URL instead. A destination on the
+-- proxy's origin is left alone: already proxified, the proxy's own pages,
+-- or a bare path the server routes by Referer (above).
+--
+-- Because of it the rules leave the target of a plain `=` as written
+-- (spec/js-rewrite R3, R5): `obj[k] = function(){}` keeps the name V8
+-- infers for it from its target, `obj.<computed>` — rewritten, its stack
+-- frames read `$rewriter.wrap_member_expression`.
+netDestination : Proxy → Str → Maybe Str
+netDestination p dest with parse nothing (preprocess dest)
+... | url a = if sameOrigin p a then nothing else byScheme (scheme a)
+  where
+  byAnswer : Answer → Maybe Str
+  byAnswer (emit _ s) = just s
+  byAnswer (keep _)   = nothing
+  byAnswer silent     = nothing
+  -- (A document does not navigate to a WebSocket URL.)
+  byScheme : Scheme → Maybe Str
+  byScheme http  = byAnswer (rewriteAbsWith p noMark a)
+  byScheme https = byAnswer (rewriteAbsWith p noMark a)
+  byScheme ws    = nothing
+  byScheme wss   = nothing
+... | _ = nothing

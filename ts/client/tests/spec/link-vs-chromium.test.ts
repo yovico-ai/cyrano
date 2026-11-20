@@ -106,6 +106,8 @@ describe.skipIf(!wanted || located.skip !== "")("Link header: the spec is Chromi
             if (JSON.stringify(viaProxy) !== JSON.stringify(expected)) bad.push(`proxied ${JSON.stringify(h)} → ${JSON.stringify(rewritten)}: ${JSON.stringify(viaProxy)}, direct ${JSON.stringify(expected)}`);
         }
         expect(bad.slice(0, 10), `${bad.length} of ${draws.length} (seed ${seed})`).toEqual([]);
-        expect(preloaded).toBeGreaterThan(draws.length / 6);
+        // The check decided something. (A floor, not a rate: a sixth of the
+        // draws usually preload, and a draw of 150 once gave 24.)
+        expect(preloaded).toBeGreaterThan(draws.length / 10);
     }, 300_000);
 });

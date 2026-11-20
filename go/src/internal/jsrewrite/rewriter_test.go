@@ -91,14 +91,28 @@ func TestWrapGetParentWindow_ReusesGetTopWindow(t *testing.T) {
 // ── WRAP_TOP_WINDOW / WRAP_PARENT_WINDOW (member access) ────────────────────
 
 func TestWrapTopWindow_DotAccess(t *testing.T) {
-	got := rewrite(t, `obj.top = w;`)
+	got := rewrite(t, `w = obj.top;`)
 	if !strings.Contains(got, `$rewriter.wrap_top_window({obj`) {
 		t.Errorf("wrap_top_window on obj.top missing: %s", got)
 	}
 }
 
+// A write stays as written (R3, R5): a function assigned there keeps the
+// name V8 infers from its target; `window[k] = url` is the navigation
+// net's (spec/Route.agda netDestination).
+func TestWrittenMembersStayAsWritten(t *testing.T) {
+	for _, src := range []string{`obj.top = w;`, `obj.parent = function(){};`, `obj[k] = function(){};`, `a.b[k] = () => 1;`} {
+		if got := rewrite(t, src); !strings.HasSuffix(got, src) || strings.Contains(got[len(got)-len(src):], "$rewriter") {
+			t.Errorf("%s was rewritten: %s", src, got)
+		}
+	}
+	if got := rewrite(t, `obj.location = u;`); !strings.Contains(got, `$rewriter.wrap_location({obj`) {
+		t.Errorf("obj.location = u must stay the runtime's: %s", got)
+	}
+}
+
 func TestWrapParentWindow_DotAccess(t *testing.T) {
-	got := rewrite(t, `obj.parent = w;`)
+	got := rewrite(t, `w = obj.parent;`)
 	if !strings.Contains(got, `$rewriter.wrap_parent_window({obj`) {
 		t.Errorf("wrap_parent_window on obj.parent missing: %s", got)
 	}

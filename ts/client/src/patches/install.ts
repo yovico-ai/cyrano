@@ -22,6 +22,7 @@ import { patchCrossOriginWindows } from "./cross-origin-windows";
 import { patchResponseHeaders } from "./response-headers";
 import { patchEmbeddedContext } from "./embedded";
 import { patchFedCM } from "./fedcm";
+import { installToolbar } from "../ui/toolbar";
 import { patchSelectors } from "./selectors";
 import { patchStorageNames, patchWebStorage, storagePrefix } from "./storage";
 import { patchReflection } from "../native/hidden-globals";
@@ -107,6 +108,9 @@ export function installPatches(
         if (skip.has(name) || skip.has("*")) return;
         try { patch(); } catch { /* that surface stays native */ }
     };
+    // First: the portal toolbar keeps the natives as they are now (ui/toolbar.ts).
+    const toolbarHome = config.toolbar?.home;
+    if (typeof toolbarHome === "string") step("toolbar", () => installToolbar(targetWindow, toolbarHome));
     step("patchReflection", () => patchReflection(targetWindow));
     step("patchErrorStacks", () => patchErrorStacks(targetWindow, config.apiBaseURL + config.source, unwrapOne));
     step("patchPerformanceEntryNames", () => patchPerformanceEntryNames(targetWindow, unwrapOne, rewriteOne, new URL(config.apiBaseURL).origin,
@@ -142,7 +146,7 @@ export function installPatches(
     step("patchFunctionConstructor", () => patchFunctionConstructor(targetWindow));
     step("patchDynamicIframeAppend", () => patchDynamicIframeAppend(targetWindow, config, () => getCurrentBaseUrl().href, rewriteOne));
     step("patchHistory", () => patchHistory(targetWindow, rewriteOne, setBaseUrl, unwrapOne, getCurrentBaseUrl));
-    step("patchNavigation", () => patchNavigation(targetWindow, rewriteOne, unwrapOne, setBaseUrl));
+    step("patchNavigation", () => patchNavigation(targetWindow, rewriteOne, unwrapOne, setBaseUrl, config.identity ? undefined : new URL(config.apiBaseURL).origin));
     step("patchSendBeacon", () => patchSendBeacon(targetWindow, rewriteOne));
     step("patchWindowOpen", () => patchWindowOpen(targetWindow, rewriteOne));
     // (Not with the page on its own origins — config.identity: the

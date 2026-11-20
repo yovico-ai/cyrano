@@ -33,7 +33,7 @@ open import Data.String.Base using (String; toList)
 open import Url using (Str; is; eqStr; lowerAscii; dropWhile; break)
 import Url
 open import Data.Nat.Base using (ℕ; zero; suc)
-open import Containment using (Dest; destScript; destStyle)
+open import Containment using (Dest; destScript; destStyle; destFrame)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl)
 
 data Kind : Set where
@@ -130,10 +130,10 @@ sniffHtml body = anyP htmlPrefixes
 -- dest: the URL's mark; sfd: Sec-Fetch-Dest (ASCII case aside; nothing:
 -- the request had none); ct: the Content-Type (nothing: none); sniffed: the
 -- body's first bytes sniff as HTML.
-responseKind : Maybe Dest → Maybe Str → Maybe Str → Bool → Kind
-responseKind (just destScript) _ _ _ = asJs
-responseKind (just destStyle)  _ _ _ = asCss
-responseKind nothing (just d₀) ct sniffed =
+-- By the request alone (no mark, or the frame mark, which says nothing
+-- of what the response is).
+unmarked : Maybe Str → Maybe Str → Bool → Kind
+unmarked (just d₀) ct sniffed =
   if inS d ("script" ∷ "worker" ∷ "sharedworker" ∷ "serviceworker" ∷ "audioworklet" ∷ "paintworklet" ∷ []) then asJs
   else if eqStr d (toList "style") then asCss
   else if inS d ("document" ∷ "iframe" ∷ "frame" ∷ "embed" ∷ "object" ∷ []) then document ct
@@ -148,12 +148,18 @@ responseKind nothing (just d₀) ct sniffed =
     byTaken nothing  = if sniffed then asHtml else asIs
     byTaken (just m) = if isHtmlType m then asHtml else if unknownMime m ∧ sniffed then asHtml else asIs
   document nothing  = if sniffed then asHtml else asIs
-responseKind nothing nothing (just t) _ =
+unmarked nothing (just t) _ =
   if isHtmlType (essence t) then asHtml
   else if isJsType (essence t) then asJs
   else if isCssType (essence t) then asCss
   else asIs
-responseKind nothing nothing nothing _ = asIs
+unmarked nothing nothing _ = asIs
+
+responseKind : Maybe Dest → Maybe Str → Maybe Str → Bool → Kind
+responseKind (just destScript) _ _ _ = asJs
+responseKind (just destStyle)  _ _ _ = asCss
+responseKind (just destFrame)  sfd ct sniffed = unmarked sfd ct sniffed
+responseKind nothing           sfd ct sniffed = unmarked sfd ct sniffed
 
 ------------------------------------------------------------------------
 -- Whether a stylesheet applies (Chromium, checked: quirks-sheets-vs-

@@ -87,6 +87,23 @@ export function patchCookieStore(targetWindow: Window, baseUrl: () => URL): void
     const write = (c: StoredCookie, expiry: string): void => {
         ncall(cookieSet, W.document, `${wireName(c)}=${wireValue(c)}; Path=/${expiry}`);
     };
+    // A write goes through document.cookie, and the browser's own store
+    // answers on another channel: natively a set() has taken effect by the
+    // time its promise resolves, so here it resolves when the native list
+    // shows it (a cookie present with its value; gone, for a delete or an
+    // expired one) — a getAll() right after raced it and came back without
+    // the cookie. Bounded: a write the browser refuses never shows.
+    const settled = (self: unknown, c: StoredCookie, present: boolean): unknown => {
+        if (!nativeGetAll) return undefined;
+        const name = wireName(c), value = wireValue(c);
+        const step = (left: number): unknown => nR.apply(then, nR.apply(nativeGetAll, self, []), [(list: Item[]) => {
+            let found = false;
+            // (Gone: no cookie of the name, whatever its value.)
+            for (const it of list) if (String(it["name"]) === name && (!present || String(it["value"]) === value)) { found = true; break; }
+            return found === present || left <= 0 ? undefined : step(left - 1);
+        }, () => undefined]);
+        return step(5);
+    };
 
     // The cookies cyrano wrote, from the native list; each item kept with its cookie.
     const items = new SafeWeakMap<StoredCookie, Item>();
@@ -156,9 +173,10 @@ export function patchCookieStore(targetWindow: Window, baseUrl: () => URL): void
                 name, value, domain, path, sameSite: ss === "none" ? "n" : ss === "lax" ? "l" : "t",
             });
             if ("error" in r) return refuse(self, r.error, name, value);
-            if (expires !== null && expires <= Date.now()) write(r, "; Max-Age=0");
+            const gone = expires !== null && expires <= Date.now();
+            if (gone) write(r, "; Max-Age=0");
             else write(r, expires !== null ? `; Expires=${new Date(expires).toUTCString()}` : "");
-            return undefined;
+            return settled(self, r, !gone);
         }]);
     });
 
@@ -183,7 +201,7 @@ export function patchCookieStore(targetWindow: Window, baseUrl: () => URL): void
                 return nR.apply(nativeDelete, self, [probe]);
             }
             write(r, "; Max-Age=0");
-            return undefined;
+            return settled(self, r, false);
         }]);
     });
 }

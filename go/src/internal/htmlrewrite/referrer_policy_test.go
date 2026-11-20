@@ -12,7 +12,7 @@ func TestRewrite_ElementReferrerPolicy(t *testing.T) {
 	got := rewrite(t, `<iframe referrerpolicy="Origin" src="https://ad.example/f"></iframe><img referrerpolicy="bogus" src="https://cdn.example/x.png">`,
 		withBaseURL("https://site.example/page"), func(c *Config) { c.NoOriginals = false })
 	for _, want := range []string{
-		`src="http://localhost:9081/cyrano/https!origin/ad.example/f"`,
+		`src="http://localhost:9081/cyrano/https!origin!frame/ad.example/f"`, // its policy, and the frame mark
 		`referrerpolicy="unsafe-url"`,
 		`&#34;referrerpolicy&#34;:&#34;Origin&#34;`,
 		`src="http://localhost:9081/cyrano/https/cdn.example/x.png"`,

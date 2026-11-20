@@ -27,6 +27,21 @@ type framedByKey struct{}
 
 func originOf(u *url.URL) string { return u.Scheme + "://" + u.Host }
 
+// embedderOf is the document that embeds a framed document being
+// navigated to (spec/Frames.agda embedderOf). marked: the frame's URL
+// carries the frame mark — the Referer's document gave it; recorded: the
+// embedder recorded for the Referer's document when it was itself loaded
+// as a frame ("": it was not). A frame navigating itself (unmarked, from a
+// frame's document) keeps its embedder: support.microsoft.com's silent
+// sign-in frame, back from login.microsoftonline.com by a form POST, was
+// judged against login.microsoftonline.com and refused.
+func embedderOf(marked bool, recorded, referer string) string {
+	if !marked && recorded != "" {
+		return recorded
+	}
+	return referer
+}
+
 // judgeFraming rewrites resp's framing restrictions for the embedder of
 // the document it answers (spec/Csp.agda frameAncestors, xfoAllows); a
 // response that is not a framed document, or whose embedder is unknown, is

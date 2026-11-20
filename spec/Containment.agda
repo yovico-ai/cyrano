@@ -113,13 +113,19 @@ underCyrano (c ∷ [])     = false
 underCyrano (c ∷ _ ∷ _)  = isCyrano c
 
 -- What a request is for, when the rewriter knows: a script (classic or
--- module, a worker's importScripts) or a stylesheet.
+-- module, a worker's importScripts), a stylesheet, or the document of a
+-- frame its embedder gives it (an iframe's / frame's src, an object's
+-- data, an embed's src: Attrs urlDest). The frame mark changes nothing of
+-- how the response is rewritten (Disposition responseKind); it tells the
+-- proxy that the requesting document is the frame's parent — a frame
+-- navigating itself asks with no mark (Frames embedderOf).
 data Dest : Set where
-  destScript destStyle : Dest
+  destScript destStyle destFrame : Dest
 
 destName : Dest → String
 destName destScript = "js"
 destName destStyle  = "css"
+destName destFrame  = "frame"
 
 -- What a proxified URL carries besides its target.
 record Mark : Set where
@@ -131,6 +137,16 @@ open Mark public
 
 noMark : Mark
 noMark = mark nothing nothing
+
+-- The mark of a redirect's Location (Go: proxy rewriteRedirectHeader): a
+-- redirect is the same request going on, so what it is for carries over —
+-- a redirected frame is still its parent's frame (Frames embedderOf: a
+-- frame's parent that is itself a frame would otherwise be taken for a
+-- document navigating itself), a redirected script still a script. The
+-- request's own referrer policy does not carry: the redirect's response
+-- may set another.
+redirectMark : Mark → Mark
+redirectMark (mark _ d) = mark nothing d
 
 markText : Mark → Str
 markText (mark pol d) = polText pol ++ destText d
@@ -155,6 +171,7 @@ schemeSegment s = bySplit (splitOn (is 33) s)
   destNamed : Str → Maybe Dest
   destNamed t = if eqStr t (toList "js") then just destScript
                 else if eqStr t (toList "css") then just destStyle
+                else if eqStr t (toList "frame") then just destFrame
                 else nothing
 
   withScheme : Maybe Scheme → Maybe Mark → Maybe (Scheme × Mark)
@@ -414,111 +431,147 @@ segment-mark : ∀ s m → schemeSegment (schemeChars s ++ markText m) ≡ just 
 segment-mark http (mark nothing nothing) = refl
 segment-mark http (mark nothing (just destScript)) = refl
 segment-mark http (mark nothing (just destStyle)) = refl
+segment-mark http (mark nothing (just destFrame)) = refl
 segment-mark http (mark (just R.noReferrer) nothing) = refl
 segment-mark http (mark (just R.noReferrer) (just destScript)) = refl
 segment-mark http (mark (just R.noReferrer) (just destStyle)) = refl
+segment-mark http (mark (just R.noReferrer) (just destFrame)) = refl
 segment-mark http (mark (just R.noReferrerWhenDowngrade) nothing) = refl
 segment-mark http (mark (just R.noReferrerWhenDowngrade) (just destScript)) = refl
 segment-mark http (mark (just R.noReferrerWhenDowngrade) (just destStyle)) = refl
+segment-mark http (mark (just R.noReferrerWhenDowngrade) (just destFrame)) = refl
 segment-mark http (mark (just R.sameOrigin) nothing) = refl
 segment-mark http (mark (just R.sameOrigin) (just destScript)) = refl
 segment-mark http (mark (just R.sameOrigin) (just destStyle)) = refl
+segment-mark http (mark (just R.sameOrigin) (just destFrame)) = refl
 segment-mark http (mark (just R.origin) nothing) = refl
 segment-mark http (mark (just R.origin) (just destScript)) = refl
 segment-mark http (mark (just R.origin) (just destStyle)) = refl
+segment-mark http (mark (just R.origin) (just destFrame)) = refl
 segment-mark http (mark (just R.strictOrigin) nothing) = refl
 segment-mark http (mark (just R.strictOrigin) (just destScript)) = refl
 segment-mark http (mark (just R.strictOrigin) (just destStyle)) = refl
+segment-mark http (mark (just R.strictOrigin) (just destFrame)) = refl
 segment-mark http (mark (just R.originWhenCrossOrigin) nothing) = refl
 segment-mark http (mark (just R.originWhenCrossOrigin) (just destScript)) = refl
 segment-mark http (mark (just R.originWhenCrossOrigin) (just destStyle)) = refl
+segment-mark http (mark (just R.originWhenCrossOrigin) (just destFrame)) = refl
 segment-mark http (mark (just R.strictOriginWhenCrossOrigin) nothing) = refl
 segment-mark http (mark (just R.strictOriginWhenCrossOrigin) (just destScript)) = refl
 segment-mark http (mark (just R.strictOriginWhenCrossOrigin) (just destStyle)) = refl
+segment-mark http (mark (just R.strictOriginWhenCrossOrigin) (just destFrame)) = refl
 segment-mark http (mark (just R.unsafeUrl) nothing) = refl
 segment-mark http (mark (just R.unsafeUrl) (just destScript)) = refl
 segment-mark http (mark (just R.unsafeUrl) (just destStyle)) = refl
+segment-mark http (mark (just R.unsafeUrl) (just destFrame)) = refl
 segment-mark https (mark nothing nothing) = refl
 segment-mark https (mark nothing (just destScript)) = refl
 segment-mark https (mark nothing (just destStyle)) = refl
+segment-mark https (mark nothing (just destFrame)) = refl
 segment-mark https (mark (just R.noReferrer) nothing) = refl
 segment-mark https (mark (just R.noReferrer) (just destScript)) = refl
 segment-mark https (mark (just R.noReferrer) (just destStyle)) = refl
+segment-mark https (mark (just R.noReferrer) (just destFrame)) = refl
 segment-mark https (mark (just R.noReferrerWhenDowngrade) nothing) = refl
 segment-mark https (mark (just R.noReferrerWhenDowngrade) (just destScript)) = refl
 segment-mark https (mark (just R.noReferrerWhenDowngrade) (just destStyle)) = refl
+segment-mark https (mark (just R.noReferrerWhenDowngrade) (just destFrame)) = refl
 segment-mark https (mark (just R.sameOrigin) nothing) = refl
 segment-mark https (mark (just R.sameOrigin) (just destScript)) = refl
 segment-mark https (mark (just R.sameOrigin) (just destStyle)) = refl
+segment-mark https (mark (just R.sameOrigin) (just destFrame)) = refl
 segment-mark https (mark (just R.origin) nothing) = refl
 segment-mark https (mark (just R.origin) (just destScript)) = refl
 segment-mark https (mark (just R.origin) (just destStyle)) = refl
+segment-mark https (mark (just R.origin) (just destFrame)) = refl
 segment-mark https (mark (just R.strictOrigin) nothing) = refl
 segment-mark https (mark (just R.strictOrigin) (just destScript)) = refl
 segment-mark https (mark (just R.strictOrigin) (just destStyle)) = refl
+segment-mark https (mark (just R.strictOrigin) (just destFrame)) = refl
 segment-mark https (mark (just R.originWhenCrossOrigin) nothing) = refl
 segment-mark https (mark (just R.originWhenCrossOrigin) (just destScript)) = refl
 segment-mark https (mark (just R.originWhenCrossOrigin) (just destStyle)) = refl
+segment-mark https (mark (just R.originWhenCrossOrigin) (just destFrame)) = refl
 segment-mark https (mark (just R.strictOriginWhenCrossOrigin) nothing) = refl
 segment-mark https (mark (just R.strictOriginWhenCrossOrigin) (just destScript)) = refl
 segment-mark https (mark (just R.strictOriginWhenCrossOrigin) (just destStyle)) = refl
+segment-mark https (mark (just R.strictOriginWhenCrossOrigin) (just destFrame)) = refl
 segment-mark https (mark (just R.unsafeUrl) nothing) = refl
 segment-mark https (mark (just R.unsafeUrl) (just destScript)) = refl
 segment-mark https (mark (just R.unsafeUrl) (just destStyle)) = refl
+segment-mark https (mark (just R.unsafeUrl) (just destFrame)) = refl
 segment-mark ws (mark nothing nothing) = refl
 segment-mark ws (mark nothing (just destScript)) = refl
 segment-mark ws (mark nothing (just destStyle)) = refl
+segment-mark ws (mark nothing (just destFrame)) = refl
 segment-mark ws (mark (just R.noReferrer) nothing) = refl
 segment-mark ws (mark (just R.noReferrer) (just destScript)) = refl
 segment-mark ws (mark (just R.noReferrer) (just destStyle)) = refl
+segment-mark ws (mark (just R.noReferrer) (just destFrame)) = refl
 segment-mark ws (mark (just R.noReferrerWhenDowngrade) nothing) = refl
 segment-mark ws (mark (just R.noReferrerWhenDowngrade) (just destScript)) = refl
 segment-mark ws (mark (just R.noReferrerWhenDowngrade) (just destStyle)) = refl
+segment-mark ws (mark (just R.noReferrerWhenDowngrade) (just destFrame)) = refl
 segment-mark ws (mark (just R.sameOrigin) nothing) = refl
 segment-mark ws (mark (just R.sameOrigin) (just destScript)) = refl
 segment-mark ws (mark (just R.sameOrigin) (just destStyle)) = refl
+segment-mark ws (mark (just R.sameOrigin) (just destFrame)) = refl
 segment-mark ws (mark (just R.origin) nothing) = refl
 segment-mark ws (mark (just R.origin) (just destScript)) = refl
 segment-mark ws (mark (just R.origin) (just destStyle)) = refl
+segment-mark ws (mark (just R.origin) (just destFrame)) = refl
 segment-mark ws (mark (just R.strictOrigin) nothing) = refl
 segment-mark ws (mark (just R.strictOrigin) (just destScript)) = refl
 segment-mark ws (mark (just R.strictOrigin) (just destStyle)) = refl
+segment-mark ws (mark (just R.strictOrigin) (just destFrame)) = refl
 segment-mark ws (mark (just R.originWhenCrossOrigin) nothing) = refl
 segment-mark ws (mark (just R.originWhenCrossOrigin) (just destScript)) = refl
 segment-mark ws (mark (just R.originWhenCrossOrigin) (just destStyle)) = refl
+segment-mark ws (mark (just R.originWhenCrossOrigin) (just destFrame)) = refl
 segment-mark ws (mark (just R.strictOriginWhenCrossOrigin) nothing) = refl
 segment-mark ws (mark (just R.strictOriginWhenCrossOrigin) (just destScript)) = refl
 segment-mark ws (mark (just R.strictOriginWhenCrossOrigin) (just destStyle)) = refl
+segment-mark ws (mark (just R.strictOriginWhenCrossOrigin) (just destFrame)) = refl
 segment-mark ws (mark (just R.unsafeUrl) nothing) = refl
 segment-mark ws (mark (just R.unsafeUrl) (just destScript)) = refl
 segment-mark ws (mark (just R.unsafeUrl) (just destStyle)) = refl
+segment-mark ws (mark (just R.unsafeUrl) (just destFrame)) = refl
 segment-mark wss (mark nothing nothing) = refl
 segment-mark wss (mark nothing (just destScript)) = refl
 segment-mark wss (mark nothing (just destStyle)) = refl
+segment-mark wss (mark nothing (just destFrame)) = refl
 segment-mark wss (mark (just R.noReferrer) nothing) = refl
 segment-mark wss (mark (just R.noReferrer) (just destScript)) = refl
 segment-mark wss (mark (just R.noReferrer) (just destStyle)) = refl
+segment-mark wss (mark (just R.noReferrer) (just destFrame)) = refl
 segment-mark wss (mark (just R.noReferrerWhenDowngrade) nothing) = refl
 segment-mark wss (mark (just R.noReferrerWhenDowngrade) (just destScript)) = refl
 segment-mark wss (mark (just R.noReferrerWhenDowngrade) (just destStyle)) = refl
+segment-mark wss (mark (just R.noReferrerWhenDowngrade) (just destFrame)) = refl
 segment-mark wss (mark (just R.sameOrigin) nothing) = refl
 segment-mark wss (mark (just R.sameOrigin) (just destScript)) = refl
 segment-mark wss (mark (just R.sameOrigin) (just destStyle)) = refl
+segment-mark wss (mark (just R.sameOrigin) (just destFrame)) = refl
 segment-mark wss (mark (just R.origin) nothing) = refl
 segment-mark wss (mark (just R.origin) (just destScript)) = refl
 segment-mark wss (mark (just R.origin) (just destStyle)) = refl
+segment-mark wss (mark (just R.origin) (just destFrame)) = refl
 segment-mark wss (mark (just R.strictOrigin) nothing) = refl
 segment-mark wss (mark (just R.strictOrigin) (just destScript)) = refl
 segment-mark wss (mark (just R.strictOrigin) (just destStyle)) = refl
+segment-mark wss (mark (just R.strictOrigin) (just destFrame)) = refl
 segment-mark wss (mark (just R.originWhenCrossOrigin) nothing) = refl
 segment-mark wss (mark (just R.originWhenCrossOrigin) (just destScript)) = refl
 segment-mark wss (mark (just R.originWhenCrossOrigin) (just destStyle)) = refl
+segment-mark wss (mark (just R.originWhenCrossOrigin) (just destFrame)) = refl
 segment-mark wss (mark (just R.strictOriginWhenCrossOrigin) nothing) = refl
 segment-mark wss (mark (just R.strictOriginWhenCrossOrigin) (just destScript)) = refl
 segment-mark wss (mark (just R.strictOriginWhenCrossOrigin) (just destStyle)) = refl
+segment-mark wss (mark (just R.strictOriginWhenCrossOrigin) (just destFrame)) = refl
 segment-mark wss (mark (just R.unsafeUrl) nothing) = refl
 segment-mark wss (mark (just R.unsafeUrl) (just destScript)) = refl
 segment-mark wss (mark (just R.unsafeUrl) (just destStyle)) = refl
+segment-mark wss (mark (just R.unsafeUrl) (just destFrame)) = refl
 
 -- The law for a marked URL: the marker is not part of what page code
 -- reads back.

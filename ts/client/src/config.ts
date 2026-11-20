@@ -59,6 +59,12 @@ export interface ClientConfig {
      */
     identity?: boolean;
 
+    /**
+     * The portal toolbar (ui/toolbar.ts, spec/Toolbar.agda): shown over
+     * top-level documents when present. `home`: the portal's main page.
+     */
+    toolbar?: { home: string };
+
     /** Development aid: names of patches (install.ts steps) not to install; "*" for all. */
     skip?: string[];
 }

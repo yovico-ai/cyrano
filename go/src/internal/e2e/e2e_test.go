@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"strings"
 	"testing"
 
@@ -317,5 +318,84 @@ func TestE2E_SVGPresentationURLAttr(t *testing.T) {
 	}
 	if !strings.Contains(body, `crn-o=`) || !strings.Contains(body, `clip-path`) {
 		t.Errorf("no original kept for read-back:\n%.600s", body)
+	}
+}
+
+// TestE2E_FramedPageKeepsItsEmbedder — a frame that navigates itself is
+// still embedded by its parent (spec/Frames.agda embedderOf): the parent
+// gives the frame a marked URL; the frame then goes to another site's
+// login page and is sent back, unmarked, with the login page as Referer —
+// its frame-ancestors is judged against the parent, not the login page
+// (support.microsoft.com's silent sign-in frame was refused).
+func TestE2E_FramedPageKeepsItsEmbedder(t *testing.T) {
+	up := startInlineServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/back" {
+			w.Header().Set("Content-Security-Policy", "frame-ancestors 'self'")
+		}
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = io.WriteString(w, "<!doctype html><title>t</title>")
+	})
+	proxy := startProxy(t)
+	port := up.URL[strings.LastIndex(up.URL, ":")+1:]
+	site := up.URL                      // the parent's site (127.0.0.1)
+	login := "http://localhost:" + port // another origin
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+	nav := func(target, referer, dest string, marked bool) string {
+		u := gotoURL(proxy, target)
+		if marked {
+			u = strings.Replace(u, "/cyrano/http/", "/cyrano/http!frame/", 1)
+		}
+		req, _ := http.NewRequest("GET", u, nil)
+		req.Header.Set("Sec-Fetch-Mode", "navigate")
+		req.Header.Set("Sec-Fetch-Dest", dest)
+		if referer != "" {
+			req.Header.Set("Referer", gotoURL(proxy, referer))
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", target, err)
+		}
+		defer resp.Body.Close()
+		_, _ = io.ReadAll(resp.Body)
+		if resp.StatusCode != 200 {
+			t.Fatalf("%s: status %d", target, resp.StatusCode)
+		}
+		return resp.Header.Get("Content-Security-Policy")
+	}
+	nav(site+"/parent", "", "document", false)               // the page (sets the session)
+	nav(site+"/silent", site+"/parent", "iframe", true)      // its frame, given by the parent
+	nav(login+"/authorize", site+"/silent", "iframe", false) // the frame goes to the login page itself
+	// … and is sent back: unmarked, Referer the login page. Its parent is still the page.
+	if csp := nav(site+"/back", login+"/authorize", "iframe", false); csp != "frame-ancestors 'self'" {
+		t.Errorf("a frame back from another site: %q, want frame-ancestors 'self' (its parent is same-origin)", csp)
+	}
+	// A frame the login page itself embeds (marked) is judged against the login page.
+	if csp := nav(site+"/back", login+"/authorize", "iframe", true); csp != "frame-ancestors 'none'" {
+		t.Errorf("a frame of the other site's page: %q, want frame-ancestors 'none'", csp)
+	}
+}
+
+// TestE2E_RedirectKeepsWhatTheRequestIsFor — a redirect is the same request
+// going on (spec/Containment.agda redirectMark): the Location of a marked
+// request carries its mark — a redirected frame is still its parent's
+// frame, a redirected script still a script — and an unmarked one none.
+func TestE2E_RedirectKeepsWhatTheRequestIsFor(t *testing.T) {
+	up := startInlineServer(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/landed", http.StatusFound)
+	})
+	proxy := startProxy(t)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	for mark, want := range map[string]string{"": "/cyrano/http/", "!frame": "/cyrano/http!frame/", "!js": "/cyrano/http!js/", "!origin!frame": "/cyrano/http!frame/"} {
+		u := strings.Replace(gotoURL(proxy, up.URL+"/start"), "/cyrano/http/", "/cyrano/http"+mark+"/", 1)
+		resp, err := client.Get(u)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		loc := resp.Header.Get("Location")
+		if !strings.Contains(loc, want) || !strings.HasSuffix(loc, "/landed") {
+			t.Errorf("mark %q: Location %q, want it under %s", mark, loc, want)
+		}
 	}
 }

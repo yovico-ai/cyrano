@@ -340,8 +340,14 @@ func (p *parser) member(obj *expr, name string, static, computed, optional bool,
 		return false
 	}
 	inChain := optional || obj.chain
+	// The target of a plain `=` (the next token) is written, not read:
+	// X.top / X.parent and X[k] stay as they are — a function assigned
+	// there keeps the name V8 infers from its target, and `window[k] = url`
+	// navigates through the runtime's navigation net (spec/Route.agda
+	// netDestination).
+	written := p.is("=")
 	if static {
-		if h := p.memberHelper(name, called); h != "" { // R3
+		if h := p.memberHelper(name, called); h != "" && !(written && (name == "top" || name == "parent")) { // R3
 			p.open(obj.start, "$rewriter."+h+"({obj:")
 			if inChain {
 				p.close(obj.end, ",opt:1})")
@@ -365,7 +371,7 @@ func (p *parser) member(obj *expr, name string, static, computed, optional bool,
 		}
 		return false
 	}
-	if !inChain && p.o.WrapMemberExpression && (p.o.DebugR5At == nil || p.o.DebugR5At(lb)) { // R5
+	if !inChain && !written && p.o.WrapMemberExpression && (p.o.DebugR5At == nil || p.o.DebugR5At(lb)) { // R5
 		p.open(obj.start, "$rewriter.wrap_member_expression(")
 		p.replace(lb, 1, ",$__crn_key__=(")
 		p.replace(rb, 1, "))[$__crn_key__]")

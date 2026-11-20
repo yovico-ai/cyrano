@@ -69,3 +69,33 @@ selfOrigin nativeOrigin original = if opaqueByNative nativeOrigin then toList "n
 
 documentDomain : Str → Str → Str
 documentDomain nativeOrigin host = if opaqueByNative nativeOrigin then [] else host
+
+------------------------------------------------------------------------
+-- Who embeds a framed document (Go: proxy/frame_ancestors.go): the
+-- document the proxy judges its frame-ancestors and X-Frame-Options
+-- against (spec/Csp.agda frameAncestors, xfoAllows). Natively that is the
+-- frame's parent, whoever started the navigation. The proxy sees the
+-- Referer — the parent's when the parent gives the frame its URL, the
+-- frame's own previous document when the frame navigates itself (a link,
+-- a form, a script of its own). The URL tells them apart: a document
+-- gives its frames marked URLs (Containment destFrame; Attrs urlDest),
+-- its own navigations are unmarked.
+--
+--   marked:   the frame's URL carries the frame mark;
+--   recorded: the embedder recorded for the Referer's document when it
+--             was itself loaded as a frame (nothing: it was not);
+--   referer:  the Referer's document.
+--
+-- A marked navigation, or one from a document that is no frame, is
+-- embedded by the Referer's document; an unmarked one from a frame's
+-- document keeps that frame's embedder. (support.microsoft.com's silent
+-- sign-in frame comes back from login.microsoftonline.com by a form POST:
+-- it was judged against login.microsoftonline.com and refused; its parent
+-- is support.microsoft.com.) Not told apart: a framed document navigating
+-- a frame of its own by name (a link's or form's target) — unmarked, it is
+-- taken for the document navigating itself.
+embedderOf : Bool → Maybe Str → Str → Str
+embedderOf true  _        referer = referer
+embedderOf false (just e) referer = e
+embedderOf false nothing  referer = referer
+

@@ -27,6 +27,8 @@
 --   priority <dest> <mode> <method> <purpose> → {"out":"<Priority>"|"none"}
 --   fetchlatersize <href> <headers k:v, LF> <none|text|params|buffer|blob:type> <body bytes> → {"out":"<n>"|"unknown-length"}
 --   frameorigin <object 0|1> <srcdoc 0|1> <src as read> <creator origin> → {"out":"same"|"cross"|"opaque"}
+--   netdest <proxy> <destination>      → {"out":"<where the navigation goes instead>"|"none"} (Route.netDestination)
+--   embedder <marked 0|1> <recorded embedder|"-"> <referer document> → {"out":"<the embedder>"} (Frames.embedderOf)
 --   selforigin <native origin> <original origin> → {"out":"<self.origin>"} (Frames.selfOrigin)
 --   documentdomain <native origin> <original host> → {"out":"<document.domain>"} (Frames.documentDomain)
 --   frameoriginof <object 0|1> <srcdoc 0|1> <src as read> → {"out":"<origin>"|"creator"|"opaque"}
@@ -41,6 +43,12 @@
 --   featuresources <features>          → {"out":"<attributionsrc values, LF-separated>"}
 --   featuresmap <features>              → {"out":"<the string, each such value v as [v]>"}
 --   sheetapplies <quirks 0|1> <same-origin 0|1> <ct|"-"> <nosniff 0|1> → {"out":"yes"|"no"} (Chromium applies the stylesheet)
+--   toolbarleft <vw> <width> <start> <grab> <now> → {"out":"<left>"} (Toolbar.dragLeft)
+--   toolbarplace <vw> <width> <left>   → {"out":"<left>"} (Toolbar.placeLeft)
+--   toolbarinitial <vw> <width>        → {"out":"<left>"} (Toolbar.initialLeft)
+--   toolbarregion <left> <width> <height> <grip> <jump> <x> <y> → {"out":"outside"|"grip"|"toLeft"|"home"|"toRight"}
+--   toolbarcursor <dragging 0|1> <left> <width> <height> <grip> <jump> <x> <y> → {"out":"page"|"grab"|"grabbing"|"pointer"}
+--   toolbarright <vw> <width>          → {"out":"<left>"} (Toolbar.rightEnd; the left end is 0)
 --   orbblocks <ct|"-"> <body>         → {"out":"yes"|"no"} (ORB blocks a cross-origin no-cors script)
 --   orbproxy <cross-origin 0|1> <redirect 0|1> <ct|"-"> <acao 0|1> <body> → {"out":"yes"|"no"} (the proxy fails it)
 --   sheetnosniff <same-origin 0|1> <ct|"-"> <nosniff 0|1> → {"out":"yes"|"no"} (the proxy adds nosniff)
@@ -168,6 +176,7 @@ import HtmlTok
 import Link
 import Disposition
 import Orb
+import Toolbar
 import Refresh
 import WsOrigin
 import Carry
@@ -363,6 +372,12 @@ dispatch op args =
   else if eqStr op (toList "nosniff") then oneArg (λ v → if Disposition.nosniff (if Data.List.Base.null v then [] else splitOn (is 10) v) then toList "yes" else toList "no") args
   else if eqStr op (toList "sheetapplies") then sheetReq args
   else if eqStr op (toList "orbblocks") then orbReq args
+  else if eqStr op (toList "toolbarleft") then toolbarLeftReq args
+  else if eqStr op (toList "toolbarplace") then toolbarPlaceReq args
+  else if eqStr op (toList "toolbarinitial") then toolbarInitialReq args
+  else if eqStr op (toList "toolbarregion") then toolbarRegionReq args
+  else if eqStr op (toList "toolbarcursor") then toolbarCursorReq args
+  else if eqStr op (toList "toolbarright") then toolbarRightReq args
   else if eqStr op (toList "orbproxy") then orbProxyReq args
   else if eqStr op (toList "sheetnosniff") then sheetNosniffReq args
   else if eqStr op (toList "featuresources") then oneArg (λ f → joinNL (Features.sources f)) args
@@ -375,6 +390,8 @@ dispatch op args =
   else if eqStr op (toList "evalorigin") then twoArgs (λ n l → Stack.evalOrigin n l) args
   else if eqStr op (toList "untag") then threeArgs (λ t o f → Stack.untag t o f) args
   else if eqStr op (toList "frameoriginof") then frameOriginOfReq args
+  else if eqStr op (toList "embedder") then embedderReq args
+  else if eqStr op (toList "netdest") then netDestReq args
   else if eqStr op (toList "selforigin") then twoArgs Frames.selfOrigin args
   else if eqStr op (toList "documentdomain") then twoArgs Frames.documentDomain args
   else if eqStr op (toList "dictae") then oneArg Dictionary.acceptEncoding args
@@ -460,6 +477,7 @@ dispatch op args =
     dst t = if eqStr t (toList "-") then just nothing
             else if eqStr t (toList "js") then just (just destScript)
             else if eqStr t (toList "css") then just (just destStyle)
+            else if eqStr t (toList "frame") then just (just destFrame)
             else nothing
     byMark : Maybe (Maybe Policy) → Maybe (Maybe Dest) → Str
     byMark (just x) (just d) = answerReply raw (rewriteUrlWith px (mark x d) base raw)
@@ -517,7 +535,8 @@ dispatch op args =
     out (toList (Disposition.kindName (Disposition.responseKind dst (opt sp sd) (opt cp ct) (eqStr sn (toList "1")))))
     where
     dst : Maybe Dest
-    dst = if eqStr m (toList "js") then just destScript else if eqStr m (toList "css") then just destStyle else nothing
+    dst = if eqStr m (toList "js") then just destScript else if eqStr m (toList "css") then just destStyle
+          else if eqStr m (toList "frame") then just destFrame else nothing
     opt : Str → Str → Maybe Str
     opt p v = if eqStr p (toList "1") then just v else nothing
   dispositionReq _ = errorReply "BadRequest"
@@ -622,6 +641,61 @@ dispatch op args =
   sheetReq (q ∷ so ∷ ct ∷ ns ∷ []) = yn (Disposition.sheetApplies (eqStr q (toList "1")) (eqStr so (toList "1")) (ctArg ct) (eqStr ns (toList "1")))
   sheetReq _ = errorReply "BadRequest"
 
+  nats : List Str → Maybe (List ℕ)
+  nats [] = just []
+  nats (a ∷ as) with Carry.digitsValue a | nats as
+  ... | just n | just ns = just (n ∷ ns)
+  ... | _      | _       = nothing
+
+  toolbarLeftReq : List Str → Str
+  toolbarLeftReq as with nats as
+  ... | just (vw ∷ w ∷ st ∷ g ∷ nw ∷ []) = out (Url.showN (Toolbar.dragLeft vw w st g nw))
+  ... | _ = errorReply "BadRequest"
+
+  toolbarInitialReq : List Str → Str
+  toolbarInitialReq as with nats as
+  ... | just (vw ∷ w ∷ []) = out (Url.showN (Toolbar.initialLeft vw w))
+  ... | _ = errorReply "BadRequest"
+
+  toolbarPlaceReq : List Str → Str
+  toolbarPlaceReq as with nats as
+  ... | just (vw ∷ w ∷ l ∷ []) = out (Url.showN (Toolbar.placeLeft vw w l))
+  ... | _ = errorReply "BadRequest"
+
+  regionName : Toolbar.Region → Str
+  regionName Toolbar.outside = toList "outside"
+  regionName Toolbar.grip    = toList "grip"
+  regionName Toolbar.toLeft  = toList "toLeft"
+  regionName Toolbar.home    = toList "home"
+  regionName Toolbar.toRight = toList "toRight"
+
+  toolbarRegionReq : List Str → Str
+  toolbarRegionReq as with nats as
+  ... | just (l ∷ w ∷ h ∷ g ∷ j ∷ x ∷ y ∷ []) = out (regionName (Toolbar.region l w h g j x y))
+  ... | _ = errorReply "BadRequest"
+
+  -- dragging 0|1, then a point as toolbarregion
+  toolbarCursorReq : List Str → Str
+  toolbarCursorReq as with nats as
+  ... | just (d ∷ l ∷ w ∷ h ∷ g ∷ j ∷ x ∷ y ∷ []) = out (cursorName (Toolbar.cursorOver (Data.Nat.Base._≡ᵇ_ d 1) (Toolbar.region l w h g j x y)))
+    where
+    cursorName : Toolbar.Cursor → Str
+    cursorName Toolbar.pagesOwn = toList "page"
+    cursorName Toolbar.grab     = toList "grab"
+    cursorName Toolbar.grabbing = toList "grabbing"
+    cursorName Toolbar.pointer  = toList "pointer"
+  ... | _ = errorReply "BadRequest"
+
+  toolbarRightReq : List Str → Str
+  toolbarRightReq as with nats as
+  ... | just (vw ∷ w ∷ []) = out (Url.showN (Toolbar.rightEnd vw w))
+  ... | _ = errorReply "BadRequest"
+
+  embedderReq : List Str → Str
+  embedderReq (m ∷ rec ∷ ref ∷ []) =
+    out (Frames.embedderOf (eqStr m (toList "1")) (if eqStr rec (toList "-") then nothing else just rec) ref)
+  embedderReq _ = errorReply "BadRequest"
+
   orbReq : List Str → Str
   orbReq (ct ∷ b ∷ []) = yn (Orb.blocks (ctArg ct) b)
   orbReq _ = errorReply "BadRequest"
@@ -641,6 +715,16 @@ dispatch op args =
   ...   | just d  = out d
   ...   | nothing = out (toList "none")
   refererRouteReq _ = errorReply "BadRequest"
+
+  netDestReq : List Str → Str
+  netDestReq (p ∷ d ∷ []) with proxyOf p
+  ... | nothing = errorReply "BadProxy"
+  ... | just px with parse nothing (preprocess d)
+  ...   | outside = errorReply "OutOfModel"   -- a host the model does not read: no answer
+  ...   | _ with Route.netDestination px d
+  ...     | just to = out to
+  ...     | nothing = out (toList "none")
+  netDestReq _ = errorReply "BadRequest"
 
   joinComma : List Str → Str
   joinComma [] = []

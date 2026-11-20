@@ -192,12 +192,17 @@ func Rewrite(rawURL string, baseURL *url.URL, cfg ProxyConfig) string {
 
 // Dest is what a request is for, when the rewriter knows (spec Dest): the
 // URL of a <script src>, a module specifier, importScripts (DestScript),
-// a <link rel=stylesheet>, @import (DestStyle), and their preloads.
+// a <link rel=stylesheet>, @import (DestStyle), and their preloads; the
+// document a frame is given by the document that holds it (DestFrame: an
+// iframe's / frame's / embed's src, an object's data) — which changes
+// nothing of how the response is rewritten, and tells the proxy that the
+// requesting document is the frame's parent (spec Frames embedderOf).
 type Dest string
 
 const (
 	DestScript Dest = "js"
 	DestStyle  Dest = "css"
+	DestFrame  Dest = "frame"
 )
 
 // Mark is what a proxified URL carries besides its target (spec Mark): a
@@ -320,7 +325,7 @@ func schemeSegment(seg string) (scheme string, m Mark, ok bool) {
 		return "", Mark{}, false
 	}
 	dest := func(t string) Dest {
-		if t == string(DestScript) || t == string(DestStyle) {
+		if t == string(DestScript) || t == string(DestStyle) || t == string(DestFrame) {
 			return Dest(t)
 		}
 		return ""

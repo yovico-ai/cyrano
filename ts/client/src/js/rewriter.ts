@@ -277,11 +277,15 @@ function memberHelper(name: string, called: boolean, o: JsRewriteOptions): strin
  *        →  $rewriter.wrap_set_location(location, function(v){location=v;}).value
  *  R3  X.location / X.top / X.parent, and X.write / X.writeln / X.postMessage where called
  *        →  $rewriter.<h>({obj:X}).name
+ *      not: X.top / X.parent followed by a plain `=` (a write: as written)
  *      in an optional chain →  $rewriter.<h>({obj:X,opt:1})?.name
  *      (also X["location"] and the like: a constant key is a name)
  *  R4  X.eval  →  $rewriter.wrap_eval_memexp(X).eval          (not in an optional chain)
- *  R5  X[k], k not a constant, not in an optional chain
+ *  R5  X[k], k not a constant, not in an optional chain, not followed by a plain `=`
  *        →  $rewriter.wrap_member_expression(X,$__crn_key__=(k))[$__crn_key__]
+ *      (a write stays as written: `obj[k] = function(){}` is named by V8
+ *      from its target, and `window[k] = url` is caught by the runtime's
+ *      navigation net)
  *  R6  eval(a, …) called directly  →  eval($rewriter.wrap_eval_arg(eval,a), …)
  *  R7  import(s)  →  import($rewriter.wrap_import_arg(s,"<script URL>"))
  *      (a literal s, when it can be proxified now, is replaced instead)
@@ -603,7 +607,13 @@ class Splicer {
         }
         const inChain = Boolean(m["optional"]) || optionalBelow(obj);
 
-        const helper = name === undefined ? null : memberHelper(name, called, this.o);
+        // The target of a plain `=` (the next token; a parenthesized target
+        // is not told) is written, not read: X.top / X.parent and X[k] stay
+        // as they are — a function assigned there keeps the name V8 infers
+        // from its target, and `window[k] = url` navigates through the
+        // runtime's navigation net (spec/Route.agda netDestination).
+        const written = this.plainAssignFollows(m.end);
+        const helper = name === undefined || (written && (name === "top" || name === "parent")) ? null : memberHelper(name, called, this.o);
         if (helper) { // R3
             this.open(obj.start, "$rewriter." + helper + "({obj:");
             this.close(obj.end, inChain ? ",opt:1})" : "})");
@@ -622,7 +632,7 @@ class Splicer {
             this.wrapped.add(m);
             return;
         }
-        if (name === undefined && !inChain && this.o.wrapMemberExpression) { // R5
+        if (name === undefined && !inChain && !written && this.o.wrapMemberExpression) { // R5
             const lb = skipTrivia(this.src, obj.end);
             const rb = m.end - 1;
             if (this.src[lb] !== "[" || this.src[rb] !== "]") return;
@@ -631,6 +641,14 @@ class Splicer {
             this.replace(rb, 1, "))[$__crn_key__]");
             this.wrapped.add(m);
         }
+    }
+
+    /** Whether the token after `at` is a plain `=` (not ==, ===, =>). */
+    private plainAssignFollows(at: number): boolean {
+        const i = skipTrivia(this.src, at);
+        if (this.src[i] !== "=") return false;
+        const next = this.src[i + 1];
+        return next !== "=" && next !== ">";
     }
 
     /** Whether `callee`, as now written, starts with a call (so `new` would bind to that call). */

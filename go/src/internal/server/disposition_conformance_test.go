@@ -26,7 +26,7 @@ func TestSpecConformance_Disposition(t *testing.T) {
 		"application/octet-stream", "", "text/htmlx", "text/javascript1.5", "\ttext/css\t", "unknown/unknown", "Application/Unknown", "*/*", "foo",
 		"te xt/html", "text/html,", "foo,text/html", "text/html,*/*", "text/html, text/plain", "/html", "text/", "text/html x", "text/plain;a=b, unknown/unknown"}
 	rapid.Check(t, func(rt *rapid.T) {
-		mark := rapid.SampledFrom([]string{"-", "-", "js", "css"}).Draw(rt, "mark")
+		mark := rapid.SampledFrom([]string{"-", "-", "js", "css", "frame"}).Draw(rt, "mark")
 		has := rapid.Bool().Draw(rt, "has")
 		sfd := rapid.SampledFrom(dests).Draw(rt, "sfd")
 		hasCT := rapid.Bool().Draw(rt, "hasCT")

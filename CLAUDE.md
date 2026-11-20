@@ -108,7 +108,8 @@ The rewriter marks the proxified URL of every script and stylesheet it
 writes — `<script src>`, `<link rel=stylesheet>`, their preloads, the Link
 header, `@import`, import maps, module specifiers, `importScripts`, the
 runtime's setters — as `/cyrano/https!js/…` or `!css` (after a policy mark,
-`!origin!js`; spec/Containment.agda, Attrs.agda `urlDest`). A marked
+`!origin!js`; spec/Containment.agda, Attrs.agda `urlDest`). (A frame's URL is marked `!frame`, which says who embeds it and
+nothing of how it is rewritten.) A marked
 response is rewritten as such even when served `text/plain`; a
 cross-origin stylesheet of another type gets `nosniff` (it would apply in
 a quirks document only same-origin: Disposition.agda `proxied-sheet`); an unmarked
@@ -121,6 +122,36 @@ is not a redirect (adform's 301 has an HTML body; the browser follows it)
 (`proxy/orb.go`: scripts are forced crossorigin, so the page's mode is
 unknown; without ACAO both modes fail natively). A typeless response stays
 typeless (net/http would sniff one: `typelessWriter`).
+
+## The portal toolbar
+
+The small control over a proxied top-level page — grip, `<<`, home, `>>`
+(`ts/client/src/ui/toolbar.ts`, spec/Toolbar.agda; `CYRANO_TOOLBAR=false`
+turns it off; `tests/native/toolbar-vs-chromium`). The page cannot tell it
+is there: it is no node of the page's DOM (a closed shadow root on
+`<body>`, the body's content through a slot), out of flow, styled by a
+constructed sheet of that root, and takes no pointer events — the runtime
+takes the user's pointer events at the window, first in line, by
+coordinates. Its cursor is the host's (`:host`), inherited beneath. Home
+leaves without a Referer (`window.open(url, "_self", "noreferrer")`: a
+bare path with a proxied Referer is the page's own, spec/Route.agda). Its
+place is kept in localStorage under a bare name no page's view lists.
+Limits: a page that makes `<body>` a shadow host itself (first: no
+toolbar there; later: its attachShadow throws); computed `cursor` reads
+the toolbar's while the pointer is over it; an element beneath with a
+cursor of its own keeps it.
+
+## The navigation net
+
+A `navigate` listener, the first on `navigation` (`patches/navigation.ts`,
+spec/Route.agda netDestination; `tests/native/navigation-net-vs-chromium`):
+a navigation the document starts for an http(s) URL off the proxy's
+origin — by code the rules never saw (`window[k] = url`, a setTimeout
+string), a meta refresh, an unrewritten link or form — is cancelled and
+made to the proxified URL (a form resubmitted to it, method and body
+kept). A destination on the proxy's origin is left alone (the server's
+Referer routing takes bare paths). Browser-side only; the page's own
+navigate listeners see just the navigation that replaces it.
 
 ## Known gaps
 
@@ -141,13 +172,11 @@ typeless (net/http would sniff one: `typelessWriter`).
   (`spec/js-rewrite/README.md`). Code made with `new Function` names the
   page's calling frame as its eval origin, not the runtime's stand-in
   (a //# sourceURL tag the stack formatter puts back; spec/Stack.agda
-  evalOrigin, untag; Kasada reads it). Open: a function assigned through a computed key
-  (`obj[k] = function(){}`) is named by V8 from the rewritten target —
-  its stack frame reads `$rewriter.wrap_member_expression [as k]` where
-  directly it reads `obj.<computed> [as k]` (Adobe Launch on
-  tractorsupply.com, 2026-11-20): R5 on an assignment target needs a form
-  V8 infers the same name from, or the stack formatter must put it back;
-  stack-trace columns are the
+  evalOrigin, untag; Kasada reads it). A member that is written (`obj[k] = …`, `x.top = …`,
+  `x.parent = …`: the next token a plain `=`) is left as written (R3, R5),
+  so V8 names a function from its target as directly (`obj.<computed>`;
+  rewritten, frames read `$rewriter.wrap_member_expression`: Adobe Launch).
+  `window[k] = url` is then the navigation net's (below). Open: stack-trace columns are the
   rewritten text's (a Function body's first line: the preamble's); a server-rewritten inline script's text is restored
   only through the read-back paths (not CSS attribute selectors etc.).
 - **CSP** is weakened, not translated — spec/Csp.agda (both runtimes
@@ -269,15 +298,16 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   CSP lets no inline script run gets its bootstrap as external scripts
   (`htmlrewrite.BootPath`; appleid.apple.com, api.twitter.com);
   `<base href>` is rewritten; `frame-ancestors` / `X-Frame-Options` are
-  judged against the real embedder (`proxy/frame_ancestors.go`; open: the
-  embedder is the navigation's Referer, which is the frame's own previous
-  document once a framed page navigates itself — support.microsoft.com's
-  silent sign-in frame, after a form POST from login.microsoftonline.com,
-  was told `frame-ancestors 'none'`; direct its parent, same-origin, is
-  admitted. Likely fix: a URL mark on child-frame URLs (iframe/frame src,
-  a frame's location) so the proxy can tell a document navigating its own
-  frame — embedder: the one recorded for that document — from one making
-  a child frame; spec first in Containment/Frames);
+  judged against the real embedder (`proxy/frame_ancestors.go`): the
+  frame's parent. A document gives its frames marked URLs —
+  `/cyrano/https!frame/…` for an iframe's / frame's / embed's src, an
+  object's data, a child's location set by its parent (Containment.agda
+  destFrame, Attrs.agda urlDest) — so a marked navigation is embedded by
+  the Referer's document, and an unmarked one from a frame's document (the
+  frame navigating itself: a link, a form POST back from a login page)
+  keeps that frame's recorded embedder (Frames.agda embedderOf;
+  support.microsoft.com's silent sign-in frame was refused). Not told
+  apart: a framed document navigating a frame of its own by name;
   `<meta name="referrer">` is honoured (the proxy needs the full Referer);
   `new Request(url)` is proxified; FedCM requests are refused as if the
   user had turned third-party sign-in off (`patches/fedcm.ts` — the

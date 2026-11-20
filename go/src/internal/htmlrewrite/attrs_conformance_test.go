@@ -68,7 +68,7 @@ func TestAttrNamespaces(t *testing.T) {
 		{`<a xlink:href="/x">x</a>`, `<a xlink:href="/x">x</a>`},                  // HTML: not a URL
 		{`<image src="/i.png">`, `<image src="` + P + `i.png">`},                  // HTML: an img
 		{`<svg><img src="/i.png"></svg>`, `<svg><img src="` + P + `i.png"></svg>`}, // breaks out
-		{`<svg><foreignObject><iframe src="/f"></iframe></foreignObject></svg>`, `<svg><foreignobject><iframe src="` + P + `f"></iframe></foreignobject></svg>`},
+		{`<svg><foreignObject><iframe src="/f"></iframe></foreignObject></svg>`, `<svg><foreignobject><iframe src="http://p:1/cyrano/https!frame/site.example/f"></iframe></foreignobject></svg>`}, // a frame's URL is marked
 		{`<svg><use href="/u#x"/></svg><use href="/v">`, `<svg><use href="` + P + `u#x" /></svg><use href="/v">`},
 		{`<a ping="/p1 /p2" attributionsrc="/r">a</a>`, `<a ping="` + P + `p1 ` + P + `p2" attributionsrc="` + P + `r">a</a>`},
 		{`<q cite="c">q</q><td background="/b.png">`, `<q cite="c">q</q><td background="` + P + `b.png">`},

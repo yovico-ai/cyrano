@@ -48,6 +48,9 @@ type VHost struct {
 	// (e.g. "https://vpn.example.com" or "http://localhost:9081"). When set it
 	// takes precedence over the HTTPS-flag-based derivation in proxyEndpoints.
 	PublicURL           string         `json:"publicUrl"`
+	// Toolbar shows the portal toolbar over proxied pages: back to the
+	// portal's main page (CYRANO_TOOLBAR; on by default from the environment).
+	Toolbar             bool           `json:"toolbar"`
 	Raw                 map[string]any `json:"-"`
 }
 
@@ -102,6 +105,11 @@ func FromEnv() (*File, error) {
 		return nil, err
 	}
 
+	toolbar, err := envBool("CYRANO_TOOLBAR", true)
+	if err != nil {
+		return nil, err
+	}
+
 	hostname := envStr("CYRANO_HOSTNAME", "localhost")
 
 	f := &File{
@@ -120,6 +128,7 @@ func FromEnv() (*File, error) {
 			RewriterJSPath:    envStr("CYRANO_REWRITER_JS_PATH", "/rewriter.js"),
 			CookiesJSONPath:   envStr("CYRANO_COOKIES_JSON_PATH", "/cookies.json"),
 			PublicURL:         envStr("CYRANO_PUBLIC_URL", ""),
+			Toolbar:           toolbar,
 		}},
 	}
 	return f, nil

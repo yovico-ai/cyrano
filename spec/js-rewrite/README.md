@@ -52,7 +52,7 @@ They are held together by:
 ```
 
 The corpus test also checks that what would be served still parses and
-that the original comes back byte for byte. R15 (import.meta.resolve, 2026-11-19) was checked on a small corpus with a Vite module that uses it (IKEA): identical. Last full run (2026-11-20, R15): 1,342 scripts,
+that the original comes back byte for byte. R15 (import.meta.resolve, 2026-11-19) was checked on a small corpus with a Vite module that uses it (IKEA): identical. Last full run (2026-11-20, R15, and R3 / R5 leaving written members as written): 1,342 scripts,
 172.9 MB — identical. (Pass the corpus to js-edits.ts in batches — `xargs -n 200` — or the shell's argument limit cuts the run short.)
 
 ## Known limits

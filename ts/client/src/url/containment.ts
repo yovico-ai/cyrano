@@ -140,8 +140,11 @@ function cyranoTarget(pathname: string): { scheme: string; policy: string | null
 }
 
 /** What a request is for, when the rewriter knows (spec Dest): a script, a stylesheet. */
-export type Dest = "js" | "css";
-const isDest = (t: string): boolean => t === "js" || t === "css";
+// "frame": the document a frame is given by the document that holds it —
+// nothing of how the response is rewritten; it tells the proxy that the
+// requesting document is the frame's parent (spec Frames embedderOf).
+export type Dest = "js" | "css" | "frame";
+const isDest = (t: string): boolean => t === "js" || t === "css" || t === "frame";
 
 /** What a proxified URL's request was marked for (spec targetDest), or null. */
 export function targetDest(href: string): Dest | null {

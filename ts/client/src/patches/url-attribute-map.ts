@@ -159,6 +159,8 @@ export function svgUrlAttrs(localName: string): readonly string[] | undefined {
 export function urlDest(svg: boolean, tag: string, attr: string, rel: readonly string[], as: string | null): Dest | null {
     if (svg) return tag === "script" && (attr === "href" || attr === "xlink:href") ? "js" : null;
     if (tag === "script" && attr === "src") return "js";
+    // The document a frame is given by the document that holds it.
+    if ((attr === "src" && (tag === "iframe" || tag === "frame" || tag === "embed")) || (tag === "object" && attr === "data")) return "frame";
     if (tag !== "link" || attr !== "href") return null;
     const has = (r: string): boolean => { for (const x of rel) if (x === r) return true; return false; };
     if (has("stylesheet")) return "css";
@@ -175,7 +177,7 @@ export function urlDestOf(el: Element, attr: string): Dest | null {
     try {
         const svg = el.namespaceURI === SVG_NS;
         const tag = svg ? el.localName : el.localName.toLowerCase();
-        if (tag !== "script" && tag !== "link") return null;
+        if (tag !== "script" && tag !== "link" && tag !== "iframe" && tag !== "frame" && tag !== "embed" && tag !== "object") return null;
         const as = heldAttr(el, "as");
         return urlDest(svg, tag, attr.toLowerCase(), relTokens(heldAttr(el, "rel")), as === null ? null : lowerA(as));
     } catch {
