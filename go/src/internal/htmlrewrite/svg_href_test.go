@@ -19,3 +19,21 @@ func TestRewrite_SVGHref(t *testing.T) {
 		}
 	}
 }
+
+// An SVG presentation attribute that takes a <url> is CSS (spec/Attrs.agda
+// cssValue), rewritten by the inline-CSS rewriter as a style attribute is,
+// on any SVG element — Google Charts' clip-path="url(<page URL>#id)". Not
+// on HTML elements, and not other attributes.
+func TestRewrite_SVGPresentationURLAttrs(t *testing.T) {
+	in := `<svg><g clip-path="url(https://site.example/page#c)" fill="url(#g)" stroke="red" opacity="url(x)"><rect mask="url(m.svg#m)" marker-start="url(#a)"/></g></svg>` +
+		`<div fill="url(https://site.example/page#c)" clip-path="url(x)"></div>`
+	out := rewrite(t, in, withBaseURL("https://site.example/page"), func(cfg *Config) {
+		cfg.RewriteInlineCSS = func(src []byte) []byte { return []byte("CSS[" + string(src) + "]") }
+	})
+	for _, want := range []string{`clip-path="CSS[url(https://site.example/page#c)]"`, `fill="CSS[url(#g)]"`, `stroke="CSS[red]"`,
+		`opacity="url(x)"`, `mask="CSS[url(m.svg#m)]"`, `marker-start="CSS[url(#a)]"`, `<div fill="url(https://site.example/page#c)" clip-path="url(x)">`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in %s", want, out)
+		}
+	}
+}

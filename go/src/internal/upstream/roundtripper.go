@@ -72,6 +72,10 @@ type RoundTripper struct {
 	mu        sync.Mutex
 	clients   map[string]*clientEntry // "sessionID\x00profileKey" → client
 	lastSweep time.Time
+
+	// Intermediates completed from AIA, as Chrome does (aia.go) — per
+	// session: no session's visits change another's connections.
+	aia map[string]*aiaState
 }
 
 // NewRoundTripper returns a RoundTripper. skipVerify disables upstream TLS
@@ -90,6 +94,7 @@ func NewRoundTripper(skipVerify bool) *RoundTripper {
 			ResponseHeaderTimeout: 15 * time.Second,
 		},
 		clients: make(map[string]*clientEntry),
+		aia:     make(map[string]*aiaState),
 	}
 }
 
@@ -134,7 +139,8 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	// connection pool is per host anyway; per-host clients only stop the
 	// hosts from waiting for each other.
 	sessionID, _ := req.Context().Value(SessionKey{}).(string)
-	client, err := rt.clientFor(sessionID+"\x00"+profileKey+"\x00"+strings.ToLower(req.URL.Host), profile)
+	clientKey := sessionID + "\x00" + profileKey + "\x00" + strings.ToLower(req.URL.Host)
+	client, err := rt.clientFor(clientKey, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -183,6 +189,15 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	fReq.Header[fhttp.HeaderOrderKey] = names
 
 	fResp, err := client.Do(fReq)
+	// A chain the server sent short: complete it from AIA, as Chrome does,
+	// and try once more (a request whose body can be sent again).
+	if err != nil && !rt.skipVerify && (req.Body == nil || req.Body == http.NoBody) && rt.aiaFor(sessionID).complete(err) {
+		rt.dropClients(sessionID)
+		if client, err = rt.clientFor(clientKey, profile); err != nil {
+			return nil, err
+		}
+		fResp, err = client.Do(fReq)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -241,6 +256,7 @@ func (rt *RoundTripper) clientFor(key string, profile profiles.ClientProfile) (t
 		tls_client.WithDisableHttp3(),
 		tls_client.WithDialContext((&dnscache.Dialer{Dialer: net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}}).DialContext),
 		tls_client.WithTransportOptions(&tls_client.TransportOptions{
+			RootCAs:             rt.aiaLocked(sessionOfKey(key)).pool(), // nil: the system's; plus this session's AIA-completed intermediates
 			MaxIdleConns:        100,
 			MaxIdleConnsPerHost: 8,
 			IdleConnTimeout:     &idle,
@@ -266,6 +282,43 @@ func (rt *RoundTripper) clientFor(key string, profile profiles.ClientProfile) (t
 	return c, nil
 }
 
+// dropClients forgets a session's clients (their pooled connections
+// closed), so its next ones verify with its current root pool.
+func (rt *RoundTripper) dropClients(session string) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	for k, e := range rt.clients {
+		if sessionOfKey(k) == session {
+			e.client.CloseIdleConnections()
+			delete(rt.clients, k)
+		}
+	}
+}
+
+// aiaFor is a session's AIA state.
+func (rt *RoundTripper) aiaFor(session string) *aiaState {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return rt.aiaLocked(session)
+}
+
+func (rt *RoundTripper) aiaLocked(session string) *aiaState {
+	a, ok := rt.aia[session]
+	if !ok {
+		a = newAIAState()
+		rt.aia[session] = a
+	}
+	return a
+}
+
+// sessionOfKey is the session a client key ("session\x00profile\x00host") is for.
+func sessionOfKey(key string) string {
+	if i := strings.IndexByte(key, 0); i >= 0 {
+		return key[:i]
+	}
+	return key
+}
+
 // sweepLocked evicts session clients idle longer than clientTTL, closing their
 // pooled connections. Runs at most once per sweepInterval. Caller holds rt.mu.
 func (rt *RoundTripper) sweepLocked(now time.Time) {
@@ -277,6 +330,16 @@ func (rt *RoundTripper) sweepLocked(now time.Time) {
 		if now.Sub(e.lastUsed) > clientTTL {
 			e.client.CloseIdleConnections()
 			delete(rt.clients, k)
+		}
+	}
+	// A session with no clients left keeps no AIA state either.
+	live := make(map[string]bool, len(rt.clients))
+	for k := range rt.clients {
+		live[sessionOfKey(k)] = true
+	}
+	for sess := range rt.aia {
+		if !live[sess] {
+			delete(rt.aia, sess)
 		}
 	}
 }

@@ -76,10 +76,39 @@ func streamStartTags(doc string) string {
 			if !ok {
 				id = "-"
 			}
-			lines = append(lines, tok.Data+" "+ns.String()+" "+id)
+			name := ns.String()
+			if st.ignored {
+				name = "none" // a <form> inside an open form: no element
+			}
+			lines = append(lines, tok.Data+" "+name+" "+id)
 		case html.EndTagToken:
 			name, _ := st.z.TagName()
 			st.endTag(string(name))
+		}
+	}
+}
+
+// The form element pointer (spec formIgnored): a <form> inside an open
+// form makes no element — not inside a template, not in foreign content.
+func TestSpecConformance_NestedForms(t *testing.T) {
+	oracle := specoracle.Need(t)
+	for m, ignores := range map[string]bool{
+		`<form data-i=1><form data-i=2><b data-i=3></b></form><form data-i=4></form>`:                       true,
+		`<p data-i=1><form data-i=2></p><form data-i=3><b data-i=4>`:                                        true,
+		`<template data-i=1><form data-i=2><form data-i=3></form></template><form data-i=4><form data-i=5>`: true,
+		`<form data-i=1><template data-i=2><form data-i=3></form></template></form><form data-i=4>`:         false,
+		`<form data-i=1><svg data-i=2><form data-i=3></form></svg><form data-i=4>`:                          true,
+		`</form><form data-i=1></form></form><form data-i=2>`:                                               false,
+	} {
+		want, _, err := oracle.Ask("htmltags", "1", m)
+		if err != nil {
+			t.Fatalf("oracle: %v", err)
+		}
+		if got := streamStartTags(m); got != want {
+			t.Errorf("%q:\n got  %q\n spec %q", m, got, want)
+		}
+		if strings.Contains(want, " none ") != ignores {
+			t.Errorf("%q: spec %q, ignored tag expected: %v", m, want, ignores)
 		}
 	}
 }

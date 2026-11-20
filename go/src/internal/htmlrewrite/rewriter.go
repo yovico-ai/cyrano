@@ -325,6 +325,10 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 			attrs = setAttr(attrs, key, RewriteURLList(at.Val, one))
 		case AttrSrcset:
 			attrs = setAttr(attrs, key, rewriteSrcset(at.Val, one))
+		case AttrCSS:
+			if cfg.RewriteInlineCSS != nil {
+				attrs = setAttr(attrs, key, string(cfg.RewriteInlineCSS([]byte(at.Val))))
+			}
 		}
 	}
 

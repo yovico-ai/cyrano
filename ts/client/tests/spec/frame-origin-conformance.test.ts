@@ -8,6 +8,7 @@ import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { pendingOrigin } from "../../src/patches/cross-origin-windows";
+import { documentDomain, selfOrigin } from "../../src/patches/location";
 import { OracleClient, locateOracle, oracleRequired } from "./oracle-client";
 
 const located = locateOracle();
@@ -29,5 +30,17 @@ describe.skipIf(located.skip !== "")("Pending frame origin: spec conformance", (
             const got = pendingOrigin(el);
             expect(got ?? "null", src).toBe(want === "creator" || want === "opaque" ? "null" : want);
         }), { numRuns: 300 });
+    });
+
+    // What a document reads of its own origin (Frames.agda selfOrigin,
+    // documentDomain; against Chromium: tests/native/opaque-origin-vs-chromium).
+    it("self.origin and document.domain are selfOrigin and documentDomain", async () => {
+        const natives = ["null", "NULL", "http://localhost:9081", "https://proxy.example", "", "null ", "https://a.example"];
+        const originals = ["https://a.example", "http://b.example:8080", "null", ""];
+        const hosts = ["a.example", "b.example", "", "[::1]"];
+        await fc.assert(fc.asyncProperty(fc.constantFrom(...natives), fc.constantFrom(...originals), fc.constantFrom(...hosts), async (n, o, h) => {
+            expect(selfOrigin(n, o), JSON.stringify([n, o])).toBe(await oracle.ask("selforigin", [n, o]));
+            expect(documentDomain(n, h), JSON.stringify([n, h])).toBe(await oracle.ask("documentdomain", [n, h]));
+        }), { numRuns: 200 });
     });
 });

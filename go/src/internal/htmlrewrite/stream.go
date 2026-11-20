@@ -15,6 +15,8 @@ import (
 type tokenStream struct {
 	z  *html.Tokenizer
 	ns nsTracker
+	// ignored: the start tag last given to startTag makes no element.
+	ignored bool
 }
 
 func newTokenStream(r io.Reader) *tokenStream {
@@ -24,6 +26,11 @@ func newTokenStream(r io.Reader) *tokenStream {
 // startTag records the start tag just read and returns its element's
 // namespace. Call it before the next token is read.
 func (s *tokenStream) startTag(tok html.Token, selfClosing bool) Ns {
+	// A <form> inside an open form makes no element (spec formIgnored):
+	// the stack stays as it is.
+	if s.ignored = s.ns.formIgnored(tok.Data); s.ignored {
+		return NsHTML
+	}
 	ns := s.ns.start(tok.Data, selfClosing, func(a string) (string, bool) { return getAttr(tok.Attr, a) })
 	if ns != NsHTML {
 		s.z.NextIsNotRawText()

@@ -79,6 +79,14 @@ describe.skipIf(!wanted || located.skip !== "")("HTML tokenization: the spec is 
         const draws = fc.sample(markupArb(), { numRuns: 400, seed });
         // A start tag closes an open p (here inside an integration point).
         draws.push('<svg><foreignObject><p data-i=1><div data-i=2></div></foreignObject><rect data-i=3></rect></svg>');
+        // The form element pointer: a <form> inside an open form makes no
+        // element; </form> clears the pointer; a form popped by another end
+        // tag leaves it set; a foreign <form> is an element of its own.
+        draws.push('<form data-i=1><form data-i=2><b data-i=3></b></form><form data-i=4></form>',
+            '<form data-i=1><div data-i=2></form><form data-i=3><i data-i=4>',
+            '<p data-i=1><form data-i=2></p><form data-i=3><b data-i=4>',
+            '</form><form data-i=1></form></form><form data-i=2><form data-i=3>',
+            '<form data-i=1><svg data-i=2><form data-i=3></form></svg><form data-i=4>');
         const page = await load("<!doctype html><body>");
         // Each draw parsed three ways: a page (written into a frame, so
         // scripting is on), DOMParser and a template (scripting off).
@@ -119,7 +127,8 @@ describe.skipIf(!wanted || located.skip !== "")("HTML tokenization: the spec is 
                 const want = await specTags(scripting, m);
                 compared += want.size;
                 const diff: string[] = [];
-                for (const [id, ns] of want) if (got[id] !== ns) diff.push(`${id}: spec ${ns}, Chromium ${got[id] ?? "no element"}`);
+                // (spec "none": a start tag that makes no element — a <form> inside an open form)
+                for (const [id, ns] of want) if ((got[id] ?? "none") !== ns) diff.push(`${id}: spec ${ns}, Chromium ${got[id] ?? "no element"}`);
                 for (const id of Object.keys(got)) if (!want.has(id)) diff.push(`${id}: spec no start tag, Chromium ${got[id]}`);
                 if (diff.length) mismatches.push(`${view} ${JSON.stringify(m)}: ${diff.join("; ")}`);
             }
@@ -133,6 +142,9 @@ describe.skipIf(!wanted || located.skip !== "")("HTML tokenization: the spec is 
         const draws = fc.sample(fc.tuple(markupArb(), fc.constantFrom(...CONTEXTS)), { numRuns: 400, seed });
         // A <div> closes the p a breakout opened: the svg context is the current node again (seed 163529162).
         draws.push(['<p data-i=1 face><div data-i=2></div><noframes data-i=3></noframes><textarea data-i=4></textarea>', { ns: "svg", name: "g", encoding: null }]);
+        // The form pointer in fragments: a form context element is the pointer.
+        draws.push(['<form data-i=1><b data-i=2></b></form><form data-i=3>', { ns: "html", name: "form", encoding: null }],
+            ['<form data-i=1><form data-i=2></form><form data-i=3>', { ns: "html", name: "div", encoding: null }]);
         const page = await load("<!doctype html><body>");
         const seen = await page.evaluate((ds: [string, (typeof CONTEXTS)[number]][]) => {
             const NSU: Record<string, string> = { html: "http://www.w3.org/1999/xhtml", svg: "http://www.w3.org/2000/svg", math: "http://www.w3.org/1998/Math/MathML" };
@@ -169,7 +181,8 @@ describe.skipIf(!wanted || located.skip !== "")("HTML tokenization: the spec is 
             }
             const got = seen[k]!;
             const diff: string[] = [];
-            for (const [id, ns] of want) if (got[id] !== ns) diff.push(`${id}: spec ${ns}, Chromium ${got[id] ?? "no element"}`);
+            // (spec "none": a start tag that makes no element — a <form> inside an open form)
+                for (const [id, ns] of want) if ((got[id] ?? "none") !== ns) diff.push(`${id}: spec ${ns}, Chromium ${got[id] ?? "no element"}`);
             for (const id of Object.keys(got)) if (!want.has(id)) diff.push(`${id}: spec no start tag, Chromium ${got[id]}`);
             if (diff.length) mismatches.push(`${c.ns}:${c.name}${c.encoding ? "[" + c.encoding + "]" : ""} ${JSON.stringify(m)}: ${diff.join("; ")}`);
         }

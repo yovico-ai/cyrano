@@ -67,7 +67,9 @@ data Attr : Set where
   attr : Str → ℕ → ℕ → Str → ℕ → ℕ → Attr
 
 data Kind : Set where
-  kStart   : Str → List Attr → Bool → Ns3 → Kind   -- name, attributes, self-closing, namespace
+  -- name, attributes, self-closing, namespace, and whether the tag makes
+  -- an element (a <form> inside an open form does not: `formIgnored`)
+  kStart   : Str → List Attr → Bool → Ns3 → Bool → Kind
   kEnd     : Str → Kind
   kComment kDoctype kCdata : Kind
   -- Markers at the end of the input, never in `tokens`: an unfinished
@@ -251,6 +253,33 @@ anyE : (Entry → Bool) → Tracker → Bool
 anyE p []       = false
 anyE p (x ∷ xs) = p x ∨ anyE p xs
 
+------------------------------------------------------------------------
+-- The form element pointer (§13.2.4.4, "in body" start and end tag
+-- "form"): set when a <form> is inserted, cleared by </form>; while it
+-- is set, a <form> start tag is ignored — no element, nothing popped —
+-- unless a <template> is open (inside one the pointer is neither read
+-- nor set). Chromium: the nested tag makes no element (found by
+-- html-tok-vs-chromium once its generator drew forms, 2026-11-20).
+--
+-- The pointer is kept in the tracker as a marker entry below everything
+-- (below the context root too): its name holds a space, which no tag
+-- name does, so no end tag reaches it and nothing pops it.
+
+formMarker : Entry
+formMarker = ent (toList " form pointer") nsHtml noIP
+
+isFormMarker : Entry → Bool
+isFormMarker x = not (isRoot x) ∧ eqStr (eTag x) (toList " form pointer")
+
+formPointer templateOpen : Tracker → Bool
+formPointer  = anyE isFormMarker
+templateOpen = anyE (namedHtml (toList "template"))
+
+setFormPointer clearFormPointer : Tracker → Tracker
+setFormPointer ts = if formPointer ts then ts else ts ++ (formMarker ∷ [])
+clearFormPointer []       = []
+clearFormPointer (x ∷ xs) = if isFormMarker x then xs else x ∷ clearFormPointer xs
+
 filterE : (Entry → Bool) → Tracker → Tracker
 filterE p []       = []
 filterE p (x ∷ xs) = if p x then x ∷ filterE p xs else filterE p xs
@@ -293,8 +322,18 @@ startT ts t as self = place (decide (foreignFor ts t))
   before nsHtml us = if closesP then popUntil (namedHtml (toList "p")) buttonB us else us
   before _      us = us
 
+  -- An inserted HTML <form> sets the form pointer (not inside a template).
+  pointed : Ns3 → Tracker → Tracker
+  pointed nsHtml us = if eqStr t (toList "form") ∧ not (templateOpen us) then setFormPointer us else us
+  pointed _      us = us
+
   place : Ns3 × Tracker → Ns3 × Tracker
-  place (ns , us) = ns , (if pushed ns then ent (el ns) ns (ipOf ns t as) ∷ before ns us else before ns us)
+  place (ns , us) = ns , pointed ns (if pushed ns then ent (el ns) ns (ipOf ns t as) ∷ before ns us else before ns us)
+
+-- A <form> start tag the tree builder ignores: processed as HTML (not in
+-- foreign content), the form pointer set, no template open.
+formIgnored : Tracker → Str → Bool
+formIgnored ts t = eqStr t (toList "form") ∧ not (foreignFor ts t) ∧ formPointer ts ∧ not (templateOpen ts)
 
 data Split : Set where
   found : Tracker → Entry → Tracker → Split
@@ -341,6 +380,10 @@ headings = "h1" ∷ "h2" ∷ "h3" ∷ "h4" ∷ "h5" ∷ "h6" ∷ []
 htmlEnd : Str → Tracker → Tracker
 htmlEnd t ts =
   if inS t ("body" ∷ "html" ∷ "br" ∷ []) then ts
+  -- </form> outside a template: by the form pointer — ignored when it is
+  -- not set, else it is cleared and the form closed (if in scope).
+  else if eqStr t (toList "form") ∧ not (templateOpen ts)
+       then (if formPointer ts then clearFormPointer (popUntil (namedHtml t) scopeB ts) else ts)
   else if eqStr t (toList "p") then popUntil (namedHtml t) buttonB ts
   else if eqStr t (toList "li") then popUntil (namedHtml t) listB ts
   else if inS t headings then popUntil (λ x → not (isRoot x) ∧ not (foreignNs (eNs x)) ∧ inS (eTag x) headings) scopeB ts
@@ -518,10 +561,13 @@ module Run (sc : Bool) (n : ℕ) where
 
     emit : Tracker → ℕ → ℕ → Bool → Str → List Attr → Bool → IStr → List Tok
     emit ts p q true  nm as self I = tok (kEnd nm) p q ∷ dataS (settle (endT ts nm)) I
-    emit ts p q false nm as self I = emitS p q nm (reverse as) self (startT (settle ts) nm (reverse as) self) I
+    emit ts p q false nm as self I =
+      if formIgnored (settle ts) nm
+      then tok (kStart nm (reverse as) self nsHtml false) p q ∷ dataS (settle ts) I
+      else emitS p q nm (reverse as) self (startT (settle ts) nm (reverse as) self) I
 
     emitS : ℕ → ℕ → Str → List Attr → Bool → Ns3 × Tracker → IStr → List Tok
-    emitS p q nm as self (ns , ts) I = tok (kStart nm as self ns) p q ∷ after ns nm ts I
+    emitS p q nm as self (ns , ts) I = tok (kStart nm as self ns true) p q ∷ after ns nm ts I
 
     -- What follows a start tag: raw text for some HTML elements.
     after : Ns3 → Str → Tracker → IStr → List Tok
@@ -762,7 +808,7 @@ tail : Bool → Str → Maybe ℕ
 tail sc s = go nothing (Run.dataS sc (len s) [] (index s))
   where
   rawStart : Maybe Tok → Bool
-  rawStart (just (tok (kStart nm _ _ nsHtml) _ _)) = eqLit nm "script" ∨ rawName sc nm
+  rawStart (just (tok (kStart nm _ _ nsHtml _) _ _)) = eqLit nm "script" ∨ rawName sc nm
   rawStart _ = false
   fromOf : Maybe Tok → Maybe ℕ
   fromOf (just (tok _ f _)) = just f
@@ -788,8 +834,13 @@ tail sc s = go nothing (Run.dataS sc (len s) [] (index s))
 tokensIn : Bool → Ns3 → Str → Maybe Str → Str → List Tok
 tokensIn sc ns nm enc s = start ns
   where
+  -- (A form as the context element is the form pointer.)
   ts : Tracker
-  ts = root nm ns (ipOf ns nm []) false ∷ []
+  ts = pointer ns (root nm ns (ipOf ns nm []) false ∷ [])
+    where
+    pointer : Ns3 → Tracker → Tracker
+    pointer nsHtml us = if eqLit nm "form" then setFormPointer us else us
+    pointer _      us = us
   I : IStr
   I = index s
   start : Ns3 → List Tok
@@ -821,7 +872,7 @@ splice ((a , b , r) ∷ es) ((i , c) ∷ I) =
 
 bootstrapAt : List Tok → Maybe ℕ
 bootstrapAt [] = nothing
-bootstrapAt (tok (kStart nm _ _ _) f t ∷ ts) =
+bootstrapAt (tok (kStart nm _ _ _ _) f t ∷ ts) =
   if inS nm ("head" ∷ "body" ∷ []) then just t
   else if eqLit nm "html" then bootstrapAt ts
   else just f
@@ -862,7 +913,8 @@ startTagsOf ts₀ = go ts₀
   ... | nothing = toList "-"
   go : List Tok → List Str
   go [] = []
-  go (tok (kStart nm as _ ns) _ _ ∷ ts) = (nm ++ toList " " ++ nsName ns ++ toList " " ++ idOf as) ∷ go ts
+  go (tok (kStart nm as _ ns made) _ _ ∷ ts) =
+    (nm ++ toList " " ++ (if made then nsName ns else toList "none") ++ toList " " ++ idOf as) ∷ go ts
   go (_ ∷ ts) = go ts
 
 startTags : Bool → Str → List Str
@@ -881,5 +933,5 @@ startSpans s = go (tokens true s)
     sp ++ m ++ sp ++ showN f ++ sp ++ showN t ++ sp ++ showN vf ++ sp ++ showN vt ++ attrsOf as
   go : List Tok → List Str
   go [] = []
-  go (tok (kStart nm as _ _) f t ∷ ts) = (nm ++ sp ++ showN f ++ sp ++ showN t ++ attrsOf as) ∷ go ts
+  go (tok (kStart nm as _ _ _) f t ∷ ts) = (nm ++ sp ++ showN f ++ sp ++ showN t ++ attrsOf as) ∷ go ts
   go (_ ∷ ts) = go ts

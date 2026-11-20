@@ -1,3 +1,4 @@
+import { rewriteCssText } from "../css/rewriter";
 import { heldAttr } from "../native/originals";
 import type { Dest } from "../url/containment";
 // Single source of truth for the URL-bearing attribute list.
@@ -20,8 +21,12 @@ import type { Dest } from "../url/containment";
 // htmlrewrite/attrs.go). "url": fetched or navigated, proxified;
 // "urllist": space-separated URLs (ping, attributionsrc), each proxified;
 // "srcset"; "reflected": never fetched, but its IDL getter resolves it
-// (q.cite, img.longDesc): kept, the getter unwrapped.
-export type AttrKind = "url" | "urllist" | "srcset" | "reflected" | "none";
+// (q.cite, img.longDesc): kept, the getter unwrapped; "css": an SVG
+// presentation attribute taking a <url>, on any SVG element, rewritten as
+// a style attribute (Google Charts' clip-path="url(<page URL>#id)").
+export type AttrKind = "url" | "urllist" | "srcset" | "css" | "reflected" | "none";
+
+const SVG_CSS_ATTRS = ["clip-path", "cursor", "fill", "filter", "marker-start", "marker-mid", "marker-end", "mask", "stroke"];
 
 const htmlKinds: Record<string, Record<string, AttrKind>> = {};
 const svgKinds: Record<string, Record<string, AttrKind>> = {};
@@ -52,16 +57,17 @@ const own = (m: Record<string, Record<string, AttrKind>>, t: string): Record<str
 /** spec attrKind: an attribute (lowercase) of an element (lowercase local name), SVG or HTML. */
 export function urlAttrKind(svg: boolean, localName: string, attr: string): AttrKind {
     const row = svg ? own(svgKinds, localName) : own(htmlKinds, localName === "image" ? "img" : localName);
-    return row && Object.prototype.hasOwnProperty.call(row, attr) ? row[attr]! : "none";
+    if (row && Object.prototype.hasOwnProperty.call(row, attr)) return row[attr]!;
+    return svg && SVG_CSS_ATTRS.indexOf(attr) >= 0 ? "css" : "none";
 }
 
-/** The element's attributes the runtimes rewrite (url, urllist, srcset). */
+/** The element's attributes the runtimes rewrite (url, urllist, srcset, css). */
 export function urlAttrsOf(el: Element): readonly string[] {
     const svg = el.namespaceURI === SVG_NS;
     const name = el.localName.toLowerCase();
     const row = svg ? own(svgKinds, name) : own(htmlKinds, name);
-    if (!row) return [];
-    return Object.keys(row).filter((a) => row[a] !== "reflected");
+    const urls = row ? Object.keys(row).filter((a) => row[a] !== "reflected") : [];
+    return svg ? [...urls, ...SVG_CSS_ATTRS] : urls;
 }
 
 /** spec rewriteUrlList: each token between ASCII whitespace rewritten, the whitespace kept. */
@@ -75,6 +81,7 @@ export function rewriteByKind(kind: AttrKind, v: string, rw: (url: string) => st
         case "url": return rw(v);
         case "urllist": return rewriteUrlList(v, rw);
         case "srcset": return srcset(v, rw);
+        case "css": return rewriteCssText(v, rw);
         default: return v;
     }
 }

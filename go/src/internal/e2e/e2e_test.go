@@ -289,3 +289,33 @@ func TestE2E_OrbBlocksCrossOriginData(t *testing.T) {
 		t.Errorf("fetch of cross-origin JSON: %v, want the response", err)
 	}
 }
+
+// TestE2E_SVGPresentationURLAttr — Google Charts' clip-path naming the page
+// itself (spec/Attrs.agda cssValue): rewritten as CSS to the proxied page,
+// so the reference stays within the document, as directly; a fragment-only
+// one stays as written; the page reads back the original.
+func TestE2E_SVGPresentationURLAttr(t *testing.T) {
+	var self string
+	up := startInlineServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = io.WriteString(w, `<!doctype html><svg><defs><clipPath id="c"><rect width="9" height="9"/></clipPath></defs>`+
+			`<g clip-path="url(`+self+`/p#c)" fill="url(#g)" stroke="red"><rect width="99" height="99"/></g></svg>`)
+	})
+	self = up.URL
+	proxy := startProxy(t)
+	status, body := getVia(t, proxy, up.URL+"/p")
+	if status != 200 {
+		t.Fatalf("status %d", status)
+	}
+	// (The CSS rewriter writes the URL quoted: spec/Css.agda rewriteCss.)
+	want := `clip-path="url(&#34;` + gotoURL(proxy, up.URL+"/p") + `#c&#34;)"`
+	if !strings.Contains(body, want) {
+		t.Errorf("clip-path not rewritten to the proxied page:\nwant %s\n%.600s", want, body)
+	}
+	if !strings.Contains(body, `fill="url(#g)"`) || !strings.Contains(body, `stroke="red"`) {
+		t.Errorf("a fragment-only reference or a plain value changed:\n%.600s", body)
+	}
+	if !strings.Contains(body, `crn-o=`) || !strings.Contains(body, `clip-path`) {
+		t.Errorf("no original kept for read-back:\n%.600s", body)
+	}
+}

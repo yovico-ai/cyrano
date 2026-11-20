@@ -26,6 +26,7 @@ function makeFakeScope() {
     FakeXHR.prototype.open = openSpy;
     const importScriptsSpy = vi.fn();
     const scope = {
+        location: { href: "blob:https://claude.ai/uuid" }, // the worker's real location
         fetch: fetchSpy as unknown as typeof fetch,
         XMLHttpRequest: FakeXHR as unknown as typeof XMLHttpRequest,
         importScripts: importScriptsSpy,
@@ -37,7 +38,7 @@ describe("initWorker — location", () => {
     it("wrap_get_location masks the worker's real (blob:) location with the upstream URL", () => {
         const { scope } = makeFakeScope();
         const api = initWorker(config, "https://claude.ai/cdn-cgi/challenge-platform/worker", undefined, scope);
-        const loc = api.wrap_get_location(undefined);
+        const loc = api.wrap_get_location(scope.location);
         expect(loc.href).toBe("https://claude.ai/cdn-cgi/challenge-platform/worker");
         expect(loc.host).toBe("claude.ai");
     });
@@ -46,11 +47,24 @@ describe("initWorker — location", () => {
         const { scope } = makeFakeScope();
         const setter = vi.fn();
         const api = initWorker(config, "https://claude.ai/", undefined, scope);
-        const assignable = api.wrap_set_location(undefined, setter);
+        const assignable = api.wrap_set_location(scope.location, setter);
         assignable.value = "https://claude.ai/other";
         expect(setter).toHaveBeenCalledWith(
             "http://localhost:9081/cyrano/https/claude.ai/other",
         );
+    });
+
+    // A binding of the page's named `location` (the rules wrap every bare
+    // one): its own value, read and assigned as is.
+    it("a local `location` is the page's own value", () => {
+        const { scope } = makeFakeScope();
+        const setter = vi.fn();
+        const api = initWorker(config, "https://claude.ai/", undefined, scope);
+        const mine = { insertBefore: () => 1 };
+        expect(api.wrap_get_location(mine as never)).toBe(mine);
+        expect(api.wrap_get_location(undefined)).toBeUndefined();
+        api.wrap_set_location(mine as never, setter).value = "/x";
+        expect(setter).toHaveBeenCalledWith("/x");
     });
 });
 

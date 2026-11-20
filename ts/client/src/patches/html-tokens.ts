@@ -16,7 +16,8 @@ export type Ns = "html" | "svg" | "math";
 /** An attribute: its name's span [from, to), its value as written, the value's span (quotes on; empty at the name's end when it has none). */
 export interface TokAttr { name: string; from: number; to: number; value: string; vfrom: number; vto: number }
 export type Tok =
-    | { kind: "start"; name: string; attrs: TokAttr[]; selfClosing: boolean; ns: Ns; from: number; to: number }
+    // ignored: the tag makes no element (a <form> inside an open form: spec formIgnored)
+    | { kind: "start"; name: string; attrs: TokAttr[]; selfClosing: boolean; ns: Ns; ignored?: true; from: number; to: number }
     | { kind: "end"; name: string; from: number; to: number }
     | { kind: "comment" | "doctype" | "cdata"; from: number; to: number };
 
@@ -84,6 +85,19 @@ class Tracker {
     // it, so an annotation-xml is no HTML integration point).
     constructor(within?: { ns: Ns; name: string }) {
         if (within) this.open[0] = { tag: within.name, ns: within.ns, ip: ipOf(within.ns, within.name, []), root: true, cdata: false };
+        this.formPointer = within !== undefined && within.ns === "html" && within.name === "form";
+    }
+    // The form element pointer (spec formPointer): set when a <form> is
+    // inserted, cleared by </form>; while it is set a <form> start tag is
+    // ignored. Inside a <template> it is neither read nor set.
+    private formPointer: boolean;
+    private templateOpen(): boolean {
+        for (let k = 0; k < this.open.length; k++) if (named(this.open[k]!, "template")) return true;
+        return false;
+    }
+    /** A <form> start tag the tree builder ignores (spec formIgnored). */
+    formIgnored(tag: string): boolean {
+        return tag === "form" && !this.foreignFor(tag) && this.formPointer && !this.templateOpen();
     }
     /** A token was processed: the context element now lets CDATA sections open (Chromium: none before the first). */
     settle(): void {
@@ -119,6 +133,7 @@ class Tracker {
         const el = ns === "html" && tag === "image" ? "img" : tag;
         const pushed = ns === "html" ? !VOID[el] : !selfClosing;
         if (pushed) this.open[this.open.length] = { tag: el, ns, ip: ipOf(ns, tag, attrs) };
+        if (ns === "html" && tag === "form" && !this.templateOpen()) this.formPointer = true;
         return ns;
     }
     /** An end tag (spec endT): the tree builder's end-tag rules, as far as the stack goes. */
@@ -138,6 +153,13 @@ class Tracker {
     }
     private htmlEnd(t: string): void {
         if (t === "body" || t === "html" || t === "br") return;
+        // </form> outside a template: by the form pointer.
+        if (t === "form" && !this.templateOpen()) {
+            if (!this.formPointer) return;
+            this.popUntil((x) => named(x, t), scopeB);
+            this.formPointer = false;
+            return;
+        }
         if (t === "p") return this.popUntil((x) => named(x, t), buttonB);
         if (t === "li") return this.popUntil((x) => named(x, t), listB);
         if (HEADINGS[t]) return this.popUntil((x) => !x.root && x.ns === "html" && HEADINGS[x.tag] === true, scopeB);
@@ -238,6 +260,11 @@ export function tokenize(s: string, scripting: boolean, within?: { ns: Ns; name:
             tr.end(name);
             st = S.Data;
             inRaw = false;
+            return;
+        }
+        if (tr.formIgnored(name)) {
+            push({ kind: "start", name, attrs, selfClosing, ns: "html", ignored: true, from: p, to });
+            st = S.Data;
             return;
         }
         const ns = tr.start(name, attrs, selfClosing);

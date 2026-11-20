@@ -16,6 +16,7 @@
 // (WorkerLocation has no assign/replace/reload) and the fetch/XHR/
 // importScripts patching are worker-specific.
 
+import { isLocationObject } from "../native/brand";
 import { nR } from "../native/intrinsics";
 import { patchReflection } from "../native/hidden-globals";
 import { patchStorageNames } from "../patches/storage";
@@ -69,6 +70,7 @@ interface PatchableWorkerScope {
     fetch?: typeof fetch;
     XMLHttpRequest?: typeof XMLHttpRequest;
     importScripts?: (...urls: string[]) => void;
+    location?: object;
 }
 
 export function initWorker(
@@ -86,11 +88,17 @@ export function initWorker(
     const unwrapOne = (proxiedUrl: string): string => unwrapProxiedUrl(proxiedUrl, config);
 
     patchWorkerScope(scope, config, baseUrl, rewriteOne, unwrapOne);
+    // What a bare `location` holds when no binding of the page shadows it.
+    const scopeLocation = scope.location;
+    const isOwn = (loc: unknown): boolean =>
+        loc === wrappedLocation || (loc !== undefined && loc === scopeLocation) || isLocationObject(loc);
 
     const api: WorkerRewriterApi = {
-        wrap_get_location: (_loc) => wrappedLocation,
-        wrap_set_location: (_loc, setter) => ({
-            set value(v: string) { setter(rewriteOne(v)); },
+        // The scope's location is the view; a local binding named
+        // `location` is the page's own value (api.ts).
+        wrap_get_location: (loc) => (isOwn(loc) ? wrappedLocation : loc) as WorkerWrappedLocation,
+        wrap_set_location: (loc, setter) => ({
+            set value(v: string) { setter(isOwn(loc) ? rewriteOne(v) : v); },
             get value(): string { return baseUrl.href; },
         }),
         // The worker scope's own location is the view; any other object's
@@ -179,7 +187,7 @@ function patchWorkerScope(
         : { origin: () => baseUrl.origin, href: () => baseUrl.href, always: unreferred, proxy: new URL(config.apiBaseURL).origin, opaque };
     patchFetch(realm, rewriteOne, unwrapOne, () => baseUrl, cors);
     patchXmlHttpRequest(realm, rewriteOne, unwrapOne, () => baseUrl, cors);
-    try { patchResponseHeaders(realm); } catch { /* stays native */ }
+    try { patchResponseHeaders(realm, opaque); } catch { /* stays native */ }
     patchWebSocket(realm, rewriteOne, unwrapOne, () => baseUrl.origin);
     // IndexedDB, caches and broadcast channels are this origin's alone
     // (patches/storage.ts). A worker does not know its top document: its

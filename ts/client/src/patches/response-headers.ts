@@ -41,7 +41,14 @@ export interface HeaderViews {
 const viewsOf = new SafeWeakMap<object, HeaderViews>();
 export const headerViewsOf = (realm: object): HeaderViews | undefined => viewsOf.get(realm);
 
-export function patchResponseHeaders(targetWindow: Window): void {
+/**
+ * `opaque`: the context's origin is opaque to the browser (a sandboxed
+ * document, a data: worker). Its requests to the proxy are cross-origin, so
+ * the browser itself shows an XHR only what CORS exposes — the origin's own
+ * answer — and refuses the carrier ("Refused to get unsafe header"): XHR's
+ * header methods stay native there.
+ */
+export function patchResponseHeaders(targetWindow: Window, opaque = false): void {
     const g = targetWindow as unknown as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
     // ── fetch: Headers ──────────────────────────────────────────────────
@@ -95,7 +102,7 @@ export function patchResponseHeaders(targetWindow: Window): void {
 
     // ── XMLHttpRequest ──────────────────────────────────────────────────
     const X = (g["XMLHttpRequest"] as { prototype: XMLHttpRequest } | undefined)?.prototype;
-    if (X) {
+    if (X && !opaque) {
         const nativeOne = X.getResponseHeader;
         const credentialed = nO.getOwnPropertyDescriptor(X, "withCredentials")?.get as ((this: unknown) => boolean) | undefined;
         const originalsOf = (self: unknown): Originals | null => {

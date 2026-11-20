@@ -17,8 +17,8 @@ import (
 
 // AttrTags and AttrNames: the vocabulary both runtimes' tables are compared
 // with the spec's over (every pair the spec names, and more).
-var AttrTags = strings.Fields("a area audio base blockquote body button del embed form frame iframe image img input ins link object q script source table tbody td tfoot th thead tr track video use feimage svg div span p meta html applet portal fencedframe")
-var AttrNames = strings.Fields("src href xlink:href action formaction data poster background ping attributionsrc srcset imagesrcset cite longdesc lowsrc codebase manifest archive classid usemap style id content dynsrc itemid")
+var AttrTags = strings.Fields("a area audio base blockquote body button del embed form frame iframe image img input ins link object q script source table tbody td tfoot th thead tr track video use feimage svg div span p meta html applet portal fencedframe g rect path text pattern")
+var AttrNames = strings.Fields("src href xlink:href action formaction data poster background ping attributionsrc srcset imagesrcset cite longdesc lowsrc codebase manifest archive classid usemap style id content dynsrc itemid clip-path cursor fill filter marker-start marker-mid marker-end mask stroke stroke-width opacity CLIP-PATH")
 
 func TestSpecConformance_AttrKind(t *testing.T) {
 	oracle := specoracle.Need(t)

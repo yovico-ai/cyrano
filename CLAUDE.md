@@ -141,7 +141,13 @@ typeless (net/http would sniff one: `typelessWriter`).
   (`spec/js-rewrite/README.md`). Code made with `new Function` names the
   page's calling frame as its eval origin, not the runtime's stand-in
   (a //# sourceURL tag the stack formatter puts back; spec/Stack.agda
-  evalOrigin, untag; Kasada reads it). Open: stack-trace columns are the
+  evalOrigin, untag; Kasada reads it). Open: a function assigned through a computed key
+  (`obj[k] = function(){}`) is named by V8 from the rewritten target —
+  its stack frame reads `$rewriter.wrap_member_expression [as k]` where
+  directly it reads `obj.<computed> [as k]` (Adobe Launch on
+  tractorsupply.com, 2026-11-20): R5 on an assignment target needs a form
+  V8 infers the same name from, or the stack formatter must put it back;
+  stack-trace columns are the
   rewritten text's (a Function body's first line: the preamble's); a server-rewritten inline script's text is restored
   only through the read-back paths (not CSS attribute selectors etc.).
 - **CSP** is weakened, not translated — spec/Csp.agda (both runtimes
@@ -263,7 +269,15 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   CSP lets no inline script run gets its bootstrap as external scripts
   (`htmlrewrite.BootPath`; appleid.apple.com, api.twitter.com);
   `<base href>` is rewritten; `frame-ancestors` / `X-Frame-Options` are
-  judged against the real embedder (`proxy/frame_ancestors.go`);
+  judged against the real embedder (`proxy/frame_ancestors.go`; open: the
+  embedder is the navigation's Referer, which is the frame's own previous
+  document once a framed page navigates itself — support.microsoft.com's
+  silent sign-in frame, after a form POST from login.microsoftonline.com,
+  was told `frame-ancestors 'none'`; direct its parent, same-origin, is
+  admitted. Likely fix: a URL mark on child-frame URLs (iframe/frame src,
+  a frame's location) so the proxy can tell a document navigating its own
+  frame — embedder: the one recorded for that document — from one making
+  a child frame; spec first in Containment/Frames);
   `<meta name="referrer">` is honoured (the proxy needs the full Referer);
   `new Request(url)` is proxified; FedCM requests are refused as if the
   user had turned third-party sign-in off (`patches/fedcm.ts` — the
@@ -302,6 +316,17 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   a meta-refresh page, readthedocs' and 1stdibs' challenges (direct too,
   once the IP is flagged).
   Known: blob: URLs carry the proxy's origin.
+- **Speed: profile before guessing.** A page that feels slow proxied was
+  the runtime's CPU, not the network: CDP `Network.loadingFinished` early
+  but `responseReceived` late means the main thread is busy — take a
+  `Profiler` profile (warframe.market: `isWindowObject` threw for every
+  `obj.parent` of a tree walk, 26 s of 35). A throw per call is the cost to
+  look for: ~15 µs, stack capture or not. The brand checks now rule out
+  non-candidates with [LegacyLenientThis] accessors (Window's onmouseenter,
+  Document's onreadystatechange: undefined for another receiver, no throw,
+  no Proxy trap — `native/brand.ts`). A 12-site sample (2026-11-20): median
+  load 1.2x direct over TLS; the runtime ~20% of main-thread time on a
+  script-heavy page.
 - **Measuring pages with many requests (ads): serve the proxy over TLS.**
   Over plain HTTP the browser keeps 6 connections to the proxy for every
   site's traffic and queues the rest; over TLS it multiplexes on HTTP/2.
@@ -327,7 +352,10 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   client per session made a page's hundreds of hosts connect one by one
   (header-bidding auctions timed out). Names resolve through
   `internal/dnscache` (browser-like host cache, joined + hedged lookups).
-  `CYRANO_PPROF=127.0.0.1:6060` serves pprof for such hunts.
+  `CYRANO_PPROF=127.0.0.1:6060` serves pprof for such hunts. A chain the
+  server sends short is completed from the certificate's AIA (CA Issuers),
+  as Chrome does: the issuer is accepted only if it verifies to a system
+  root, and the request is tried once more (`upstream/aia.go`; per session, like the clients).
 - **Publisher harness**: direct vs proxied (TLS instance) per site — ad
   requests, filled ad frames, escapes, page errors; ad auctions vary run to
   run, so compare over several runs.
@@ -371,7 +399,10 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   both runtimes (spec/Attrs.agda, checked against what Chromium fetches):
   `ping` / `attributionsrc` are URL lists (and window.open's
   attributionsrc features: spec/Features.agda); `cite` / `longdesc` / `lowsrc` /
-  `codebase` stay as written, their getters unwrapped. Markup is tokenized
+  `codebase` stay as written, their getters unwrapped; an SVG presentation
+  attribute that takes a <url> (clip-path, fill, mask, …) is CSS, rewritten
+  as a style attribute (Attrs.agda cssValue: Google Charts' clip-path naming
+  the page was, proxied, an external document fetched outside the proxy). Markup is tokenized
   as the browser does (spec/HtmlTok.agda, checked against Chromium): raw
   text only for HTML elements (`<svg><style>` holds markup), the
   namespace from a simplified tree construction; Go feeds that back to
@@ -385,7 +416,9 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   and writes into empty frames. A `<noscript>`'s content is kept as
   written (text with scripting on). A tag, comment or script split across
   `document.write` calls is kept back until it is complete (the next
-  write, the next microtask, or close()). Open: a page's parse inside
+  write, the next microtask, or close()). The form element pointer is
+  modelled (a `<form>` inside an open form makes no element: HtmlTok.agda
+  formIgnored, both tokenizers). Open: a page's parse inside
   `<select>` or after `<frameset>` is not modelled. The
   Navigation API is wrapped (`patches/navigation.ts`; Shopify). Open from
   random-site testing (2026-11-18): `location` / `top` / `parent` read by

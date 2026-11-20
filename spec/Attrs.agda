@@ -9,6 +9,15 @@
 --              attributionsrc): each token proxified, the whitespace as
 --              written (rewriteUrlList).
 --   srcsetList a srcset (spec/Srcset.agda).
+--   cssValue   an SVG presentation attribute that takes a <url> (clip-path,
+--              cursor, fill, filter, marker-start/-mid/-end, mask, stroke),
+--              on any SVG element: its value is CSS, rewritten as a style
+--              attribute is (spec/Css.agda rewriteCss). Google Charts
+--              writes clip-path="url(<page URL>#id)": directly a reference
+--              into the document itself; proxied an external document,
+--              fetched outside the proxy and never applied
+--              (definitions.net, 2026-11-20). (The style attribute itself
+--              is rewritten the same way, outside this table.)
 --   reflected  never fetched, but its IDL getter resolves it as a URL
 --              (q.cite, img.longDesc, img.lowsrc, object.codeBase): kept as
 --              written; the runtime's getter resolves it as the page's
@@ -51,12 +60,13 @@ data Ns : Set where
   htmlNs svgNs : Ns
 
 data AttrKind : Set where
-  oneUrl urlList srcsetList reflected none : AttrKind
+  oneUrl urlList srcsetList cssValue reflected none : AttrKind
 
 kindName : AttrKind → Str
 kindName oneUrl     = toList "url"
 kindName urlList    = toList "urllist"
 kindName srcsetList = toList "srcset"
+kindName cssValue   = toList "css"
 kindName reflected  = toList "reflected"
 kindName none       = toList "none"
 
@@ -96,7 +106,10 @@ htmlKind t a =
 svgKind : Str → Str → AttrKind
 svgKind t a =
   if (eqStr a (toList "href") ∨ eqStr a (toList "xlink:href")) ∧′ inS t (strs ("a" ∷ "feimage" ∷ "image" ∷ "script" ∷ "use" ∷ []))
-  then oneUrl else none
+  then oneUrl
+  else if inS a (strs ("clip-path" ∷ "cursor" ∷ "fill" ∷ "filter" ∷ "marker-start" ∷ "marker-mid" ∷ "marker-end" ∷ "mask" ∷ "stroke" ∷ []))
+  then cssValue
+  else none
   where
   _∧′_ : Bool → Bool → Bool
   true  ∧′ b = b

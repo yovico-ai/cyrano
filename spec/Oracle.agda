@@ -27,6 +27,8 @@
 --   priority <dest> <mode> <method> <purpose> → {"out":"<Priority>"|"none"}
 --   fetchlatersize <href> <headers k:v, LF> <none|text|params|buffer|blob:type> <body bytes> → {"out":"<n>"|"unknown-length"}
 --   frameorigin <object 0|1> <srcdoc 0|1> <src as read> <creator origin> → {"out":"same"|"cross"|"opaque"}
+--   selforigin <native origin> <original origin> → {"out":"<self.origin>"} (Frames.selfOrigin)
+--   documentdomain <native origin> <original host> → {"out":"<document.domain>"} (Frames.documentDomain)
 --   frameoriginof <object 0|1> <srcdoc 0|1> <src as read> → {"out":"<origin>"|"creator"|"opaque"}
 --   stackurls <V8 stack text>          → {"out":"<script URLs, innermost first, LF-separated>"}
 --   evalorigin <name> <location>        → {"out":"eval at <name|<anonymous>> (<location>)"}
@@ -373,6 +375,8 @@ dispatch op args =
   else if eqStr op (toList "evalorigin") then twoArgs (λ n l → Stack.evalOrigin n l) args
   else if eqStr op (toList "untag") then threeArgs (λ t o f → Stack.untag t o f) args
   else if eqStr op (toList "frameoriginof") then frameOriginOfReq args
+  else if eqStr op (toList "selforigin") then twoArgs Frames.selfOrigin args
+  else if eqStr op (toList "documentdomain") then twoArgs Frames.documentDomain args
   else if eqStr op (toList "dictae") then oneArg Dictionary.acceptEncoding args
   else if eqStr op (toList "dictreg") then oneArg Dictionary.noRegistration args
   else if eqStr op (toList "dictoffer") then oneArg (λ n → if Dictionary.offerHeader n then toList "yes" else toList "no") args

@@ -1,7 +1,8 @@
 // @vitest-environment node
 //
 // "The spec is the browser", for spec/Attrs.agda: every (element,
-// attribute) Chromium fetches from is url, urllist or srcset to the spec;
+// attribute) Chromium fetches from is url, urllist, srcset or css (an SVG
+// presentation attribute's url(), fetched by some properties) to the spec;
 // every one it does not fetch from is none or reflected (navigations are
 // outside this probe); every IDL property that resolves a URL is on an
 // attribute the spec does not call none.
@@ -31,10 +32,20 @@ const cases: [string, string, string][] = [
     ["html", "blockquote", "cite"], ["html", "q", "cite"], ["html", "del", "cite"], ["html", "ins", "cite"], ["html", "image", "src"],
     ["svg", "image", "href"], ["svg", "image", "xlink:href"], ["svg", "use", "href"], ["svg", "use", "xlink:href"], ["svg", "feimage", "href"],
     ["svg", "feimage", "xlink:href"], ["svg", "script", "href"], ["svg", "pattern", "href"], ["svg", "lineargradient", "href"], ["svg", "filter", "href"],
+    // presentation attributes taking a <url> (spec cssValue), as url(…)
+    ["svg", "g", "clip-path"], ["svg", "rect", "clip-path"], ["svg", "rect", "mask"], ["svg", "rect", "filter"], ["svg", "rect", "fill"],
+    ["svg", "rect", "stroke"], ["svg", "path", "marker-start"], ["svg", "path", "marker-mid"], ["svg", "path", "marker-end"], ["svg", "rect", "cursor"],
+    ["svg", "rect", "opacity"], ["svg", "rect", "stroke-width"],
 ];
+const PRESENTATION = new Set(["clip-path", "mask", "filter", "fill", "stroke", "marker-start", "marker-mid", "marker-end", "cursor", "opacity", "stroke-width"]);
 
 function fragment(ns: string, t: string, a: string, i: number): string {
     const u = `/hit/${i}`;
+    if (ns === "svg" && PRESENTATION.has(a)) {
+        const inner = t === "g" ? `<g ${a}="url(${u}#x)"><rect width="9" height="9"/></g>`
+            : t === "path" ? `<path d="M1 1 L5 5 L9 1" stroke="black" ${a}="url(${u}#x)"/>` : `<${t} width="9" height="9" ${a}="url(${u}#x)"/>`;
+        return `<svg width="20" height="20">${inner}</svg>`;
+    }
     if (ns === "svg") {
         const n = { feimage: "feImage", lineargradient: "linearGradient" }[t] ?? t;
         const at = `${a}="${u}#x"`;
@@ -102,7 +113,10 @@ describe.skipIf(!wanted || located.skip !== "")("URL attributes: the spec is Chr
         const bad: string[] = [];
         for (const [n, t, a, fetched] of checks) {
             const kind = await oracle.ask("attrkind", [n, t, a]);
-            if (fetched !== fetching.has(kind ?? "")) bad.push(`${n} ${t} ${a}: spec ${kind}, chromium ${fetched ? "fetches" : "does not fetch"}`);
+            // A css value is rewritten whether or not Chromium fetches it
+            // (it may, by property): only a fetch it does not cover is wrong.
+            const covers = fetching.has(kind ?? "") || kind === "css";
+            if (fetched ? !covers : fetching.has(kind ?? "")) bad.push(`${n} ${t} ${a}: spec ${kind}, chromium ${fetched ? "fetches" : "does not fetch"}`);
         }
         expect(bad, `chromium ${browser.version()}`).toEqual([]);
     }, 120_000);

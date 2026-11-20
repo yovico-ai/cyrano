@@ -10,7 +10,7 @@ import { nO, nR } from "../native/intrinsics";
 import { crossOriginView } from "../native/cross-origin";
 import { markSender } from "../messaging/target-origin";
 import { isView } from "../native/cross-origin";
-import { isDocumentObject, isWindowObject } from "../native/brand";
+import { isDocumentObject, isLocationObject, isWindowObject } from "../native/brand";
 import { buildBootstrapHtml } from "./bootstrap-html";
 import { honourOptionalChains } from "./optional";
 import type { ClientConfig } from "../config";
@@ -176,12 +176,17 @@ export function createRewriterApi(
         },
 
         // ── Location proxy ─────────────────────────────────────────────────
-        wrap_get_location: (_loc) => wrappedLocation,
-        wrap_set_location: (_loc, setter) => ({
+        // A bare `location` is wrapped wherever it stands (the rules do no
+        // scope analysis): what the identifier holds tells. A Location is
+        // this window's view; anything else — a local `var location =
+        // el.parentNode`, a parameter — is the page's own value, untouched.
+        wrap_get_location: (loc) => (loc === wrappedLocation || isLocationObject(loc) ? wrappedLocation : loc) as Location,
+        wrap_set_location: (loc, setter) => ({
             // Setter pattern: rewrites on assignment. Server emits
             //   $rewriter.wrap_set_location(location, function(v){location=v;}).value = newUrl
+            // A local binding gets what the page assigns, as is.
             set value(v: string) {
-                setter(rewriteOne(v));
+                setter(loc === wrappedLocation || isLocationObject(loc) ? rewriteOne(v) : v);
             },
             // The getter is required by the type but server-rewritten code
             // never reads it. Return the base URL to satisfy TS without lying

@@ -6,7 +6,8 @@
 // simple request non-simple and the browser sent a preflight the page did
 // not cause (Target's PerimeterX frame, 2026-11-19; spec/Fetch.agda
 // namesContext). And it reads `origin` "null" and `document.domain` "",
-// not the page's original origin.
+// not the page's original origin (spec/Frames.agda selfOrigin,
+// documentDomain).
 //
 // Needs the built bundle and Playwright's Chromium; `make browser-check`.
 
@@ -20,7 +21,7 @@ const bundlePath = resolve(__dirname, "../../../../go/assets/client/rewriter.js"
 const wanted = process.env.CYRANO_BROWSER === "1" && existsSync(bundlePath);
 
 type Frame = { url(): string; evaluate<T>(f: () => T): Promise<T> };
-type Page = { goto(u: string): Promise<unknown>; frames(): Frame[]; waitForTimeout(ms: number): Promise<void>; close(): Promise<void> };
+type Page = { on(e: "console", f: (m: { text(): string }) => void): void; goto(u: string): Promise<unknown>; frames(): Frame[]; waitForTimeout(ms: number): Promise<void>; close(): Promise<void> };
 type Browser = { newPage(): Promise<Page>; close(): Promise<void> };
 
 // The frame's script: an XHR and a fetch to another origin, and what the
@@ -32,6 +33,7 @@ window.got = new Promise(function (done) {
   x.open("GET", "http://b.test:PORT/data?x");
   x.onload = function () {
     out.xhr = x.status + " " + x.responseText;
+    out.headers = [x.getResponseHeader("x-shown"), x.getResponseHeader("x-hidden"), /x-shown/i.test(x.getAllResponseHeaders()), /x-hidden/i.test(x.getAllResponseHeaders())];
     fetch("http://b.test:PORT/data?f").then(function (r) { return r.text().then(function (t) { out.fetch = r.status + " " + r.type + " " + t; done(out); }); },
       function (e) { out.fetch = "rejects " + e.name; done(out); });
   };
@@ -60,7 +62,7 @@ describe.skipIf(!wanted)("a sandboxed document in Chromium, direct and proxied",
             const path = m ? m[2]! : req.url ?? "";
             if (req.method === "OPTIONS") preflights.push(`${m ? "proxied" : "direct"} ${host}${path}`);
             if (path.startsWith("/data")) {
-                res.writeHead(200, { "content-type": "text/plain", "access-control-allow-origin": "*" });
+                res.writeHead(200, { "content-type": "text/plain", "access-control-allow-origin": "*", "access-control-expose-headers": "x-shown", "x-shown": "s", "x-hidden": "h" });
                 return res.end("data");
             }
             res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -85,8 +87,15 @@ describe.skipIf(!wanted)("a sandboxed document in Chromium, direct and proxied",
         server?.close();
     });
 
+    // The browser's own "Refused to get unsafe header" lines: the page's
+    // read of x-hidden, and nothing of the runtime's (it asked for its
+    // carrier header, which CORS does not expose to an opaque origin).
+    const refusals: string[][] = [];
     const run = async (url: string): Promise<unknown> => {
         const page = await browser.newPage();
+        const refused: string[] = [];
+        refusals.push(refused);
+        page.on("console", (m) => { if (/Refused to get unsafe header/.test(m.text())) refused.push(m.text()); });
         await page.goto(url);
         let frame: Frame | undefined;
         for (let i = 0; i < 50 && !frame; i++) {
@@ -101,8 +110,10 @@ describe.skipIf(!wanted)("a sandboxed document in Chromium, direct and proxied",
     it("requests and origin as direct, no preflight", async () => {
         const direct = await run(`http://a.test:${port}/page`);
         const proxied = await run(`http://127.0.0.1:${port}/cyrano/http/a.test:${port}/page`);
-        expect(direct).toEqual({ origin: "null", domain: "", xhr: "200 data", fetch: "200 cors data" });
+        expect(direct).toEqual({ origin: "null", domain: "", xhr: "200 data", headers: ["s", null, true, false], fetch: "200 cors data" });
         expect(proxied).toEqual(direct);
+        expect(refusals[0]).toEqual(['Refused to get unsafe header "x-hidden"']);
+        expect(refusals[1]).toEqual(refusals[0]);
         expect(preflights).toEqual([]);
     }, 30_000);
 });

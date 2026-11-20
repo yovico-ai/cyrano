@@ -158,7 +158,7 @@ export function installPatches(
         injectIntoIframe(frame as HTMLIFrameElement, targetWindow, config, getCurrentBaseUrl().href)));
     // Selectors on URL attributes find elements by their original URLs (patches/selectors.ts).
     step("patchSelectors", () => patchSelectors(targetWindow, rewriteOne, config.apiBaseURL));
-    step("patchResponseHeaders", () => patchResponseHeaders(targetWindow));
+    step("patchResponseHeaders", () => patchResponseHeaders(targetWindow, opaqueOrigin));
     // FedCM requests would leave the browser outside the proxy (patches/fedcm.ts).
     step("patchFedCM", () => patchFedCM(targetWindow));
     // What a frame of another origin's page is denied (patches/embedded.ts).

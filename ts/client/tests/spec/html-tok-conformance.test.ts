@@ -20,7 +20,7 @@ const startTags = (s: string, scripting: boolean, within?: (typeof CONTEXTS)[num
     for (const t of tokenize(s, scripting, within)) {
         if (t.kind !== "start") continue;
         const id = t.attrs.find((a) => a.name === "data-i")?.value ?? "-";
-        lines.push(`${t.name} ${t.ns} ${id}`);
+        lines.push(`${t.name} ${t.ignored ? "none" : t.ns} ${id}`); // an ignored <form>: no element
     }
     return lines.join("\n");
 };
@@ -41,6 +41,23 @@ describe.skipIf(located.skip !== "")("HTML tokenization: spec conformance", () =
             const got = tail.at < 0 ? "none" : String([...m.slice(0, tail.at)].length);
             expect(got, JSON.stringify(m)).toBe(await oracle.ask("htmltail", [sc ? "1" : "0", m]));
         }), { numRuns: 2000 });
+    });
+
+    // The form element pointer (spec formIgnored), a template included.
+    it("nested forms: the ignored start tags are the spec's", async () => {
+        const cases: [string, boolean][] = [
+            ['<form data-i=1><form data-i=2><b data-i=3></b></form><form data-i=4></form>', true],
+            ['<p data-i=1><form data-i=2></p><form data-i=3><b data-i=4>', true],
+            ['<template data-i=1><form data-i=2><form data-i=3></form></template><form data-i=4><form data-i=5>', true],
+            ['<form data-i=1><template data-i=2><form data-i=3></form></template></form><form data-i=4>', false],
+            ['<form data-i=1><svg data-i=2><form data-i=3></form></svg><form data-i=4>', true],
+            ['</form><form data-i=1></form></form><form data-i=2>', false],
+        ];
+        for (const [m, ignores] of cases) {
+            const want = (await oracle.ask("htmltags", ["1", m])) ?? "";
+            expect(startTags(m, true), m).toBe(want);
+            expect(want.includes(" none "), m).toBe(ignores);
+        }
     });
 
     it("start tags and namespaces are htmltags", async () => {

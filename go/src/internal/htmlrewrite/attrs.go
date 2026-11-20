@@ -16,10 +16,19 @@ const (
 	AttrURLList            // space-separated URLs (ping, attributionsrc): each proxified
 	AttrSrcset             // a srcset
 	AttrReflected          // never fetched; its IDL getter resolves it (cite, longdesc): kept
+	AttrCSS                // an SVG presentation attribute taking a <url>: CSS, rewritten as a style attribute
 )
 
 func (k AttrKind) String() string {
-	return [...]string{"none", "url", "urllist", "srcset", "reflected"}[k]
+	return [...]string{"none", "url", "urllist", "srcset", "reflected", "css"}[k]
+}
+
+// svgPresentationURLAttrs are the SVG presentation attributes that take a
+// <url>, on any SVG element (spec/Attrs.agda cssValue): Google Charts'
+// clip-path="url(<page URL>#id)" was, proxied, an external document.
+var svgPresentationURLAttrs = map[string]bool{
+	"clip-path": true, "cursor": true, "fill": true, "filter": true,
+	"marker-start": true, "marker-mid": true, "marker-end": true, "mask": true, "stroke": true,
 }
 
 var htmlAttrKinds = map[string]map[string]AttrKind{}
@@ -100,7 +109,13 @@ func URLDest(svg bool, tag, attr string, rel []string, as string, hasAs bool) ur
 
 func URLAttrKind(svg bool, tag, attr string) AttrKind {
 	if svg {
-		return svgAttrKinds[tag][attr]
+		if k := svgAttrKinds[tag][attr]; k != AttrNone {
+			return k
+		}
+		if svgPresentationURLAttrs[attr] {
+			return AttrCSS
+		}
+		return AttrNone
 	}
 	if tag == "image" { // the parser makes it an img
 		tag = "img"
@@ -171,6 +186,25 @@ type nsEntry struct {
 
 type nsTracker struct {
 	open []nsEntry // the current node last
+	// The form element pointer (spec HtmlTok formPointer): set when a
+	// <form> is inserted, cleared by </form>; while it is set a <form>
+	// start tag is ignored. Inside a <template> it is neither read nor set.
+	formPointer bool
+}
+
+func (n *nsTracker) templateOpen() bool {
+	for _, x := range n.open {
+		if namedHTML(x, "template") {
+			return true
+		}
+	}
+	return false
+}
+
+// formIgnored: a <form> start tag the tree builder ignores — no element,
+// nothing popped (spec formIgnored).
+func (n *nsTracker) formIgnored(tag string) bool {
+	return tag == "form" && !n.foreignFor(tag) && n.formPointer && !n.templateOpen()
 }
 
 func fieldSet(s string) map[string]bool {
@@ -274,6 +308,9 @@ func (n *nsTracker) start(tag string, selfClosing bool, attr func(string) (strin
 		}
 		n.open = append(n.open, nsEntry{el, ns, ip})
 	}
+	if ns == NsHTML && tag == "form" && !n.templateOpen() {
+		n.formPointer = true
+	}
 	return ns
 }
 
@@ -360,6 +397,12 @@ func (n *nsTracker) htmlEnd(t string) {
 	named := func(x nsEntry) bool { return namedHTML(x, t) }
 	switch {
 	case t == "body" || t == "html" || t == "br":
+	case t == "form" && !n.templateOpen():
+		// By the form pointer: ignored when it is not set.
+		if n.formPointer {
+			n.popUntil(named, scopeBoundary)
+			n.formPointer = false
+		}
 	case t == "p":
 		n.popUntil(named, func(x nsEntry) bool { return scopeBoundary(x) || namedHTML(x, "button") })
 	case t == "li":

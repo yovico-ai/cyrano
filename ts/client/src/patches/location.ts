@@ -41,7 +41,7 @@ export function patchWindowLocation(
         // meaningless when every frame already shares the proxy origin.
         wrapAccessor<string>(doc, "domain", {
             // An opaque origin's domain is "" (HTML document.domain).
-            get: () => (String((targetWindow as unknown as { origin?: unknown }).origin) === "null" ? "" : baseOf().hostname),
+            get: () => documentDomain(String((targetWindow as unknown as { origin?: unknown }).origin), baseOf().hostname),
             set: () => { /* see above */ },
         });
     }
@@ -55,5 +55,20 @@ export function patchWindowLocation(
     }
     // An opaque origin (a sandboxed document) reads "null", as direct: the
     // browser gives the proxied document the same sandbox.
-    wrapAccessor<string>(targetWindow, "origin", { get: (get, self) => (ncall(get, self) === "null" ? "null" : baseOf().origin) });
+    wrapAccessor<string>(targetWindow, "origin", { get: (get, self) => selfOrigin(String(ncall(get, self)), baseOf().origin) });
+}
+
+/**
+ * What a document reads of its own origin, given what the native `origin`
+ * reads (spec/Frames.agda selfOrigin, documentDomain): "null" there is an
+ * opaque origin — the browser gives the proxied document the sandbox it
+ * has direct — and then `self.origin` is "null" and `document.domain` "";
+ * else the original document's origin and host.
+ */
+export function selfOrigin(nativeOrigin: string, original: string): string {
+    return nativeOrigin === "null" ? "null" : original;
+}
+
+export function documentDomain(nativeOrigin: string, host: string): string {
+    return nativeOrigin === "null" ? "" : host;
 }
