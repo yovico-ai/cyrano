@@ -19,7 +19,7 @@ const config: ClientConfig = {
 // read back. (happy-dom's URL statics cannot be redefined.)
 let made: Map<string, Blob>;
 let win: { Blob: typeof Blob; URL: { createObjectURL(b: Blob): string; revokeObjectURL(u: string): void } };
-function setUp(href = "https://claude.ai/cdn-cgi/challenge-platform/x") {
+function setUp(href = "https://claude.ai/cdn-cgi/challenge-platform/x", XMLHttpRequest?: unknown) {
     made = new Map();
     let n = 0;
     win = {
@@ -28,7 +28,8 @@ function setUp(href = "https://claude.ai/cdn-cgi/challenge-platform/x") {
             createObjectURL: (b: Blob) => { const u = `blob:test/${++n}`; made.set(u, b); return u; },
             revokeObjectURL: () => undefined,
         },
-    };
+        ...(XMLHttpRequest ? { XMLHttpRequest } : {}),
+    } as typeof win;
     return patchBlobWorkerSource(win as unknown as Window, config, () => new URL(href));
 }
 
@@ -90,7 +91,6 @@ describe("patchBlobWorkerSource", () => {
     });
 
     it("a script read back keeps its type: classic runs, module only if JavaScript", () => {
-        const scriptFor = setUp();
         let type = "text/plain;charset=US-ASCII";
         class XHR {
             status = 200;
@@ -100,7 +100,8 @@ describe("patchBlobWorkerSource", () => {
             send(): void { /* done */ }
             getResponseHeader(n: string): string | null { return n.toLowerCase() === "content-type" ? type : null; }
         }
-        (win as unknown as { XMLHttpRequest: unknown }).XMLHttpRequest = XHR;
+        // (There at load: it reads with the XMLHttpRequest it saved then.)
+        const scriptFor = setUp(undefined, XHR);
         expect(scriptFor("data:,postMessage(1)", true)).toBeUndefined();
         expect(scriptFor("data:,postMessage(1)", false)).toBeDefined();
         type = "text/livescript";

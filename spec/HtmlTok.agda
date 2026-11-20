@@ -201,26 +201,6 @@ topNs : Tracker → Ns3
 topNs []                = nsHtml
 topNs (x ∷ _) = eNs x
 
--- A start tag: its namespace, and the stack after it.
-startT : Tracker → Str → List Attr → Bool → Ns3 × Tracker
-startT ts t as self = place (decide (foreignFor ts t))
-  where
-  decide : Bool → Ns3 × Tracker
-  decide true  = if breakout t as then (nsHtml , popForeign ts) else (topNs ts , ts)
-  decide false = (htmlNsOf t , ts)
-
-  -- In HTML, an <image> is an <img> (the tree builder renames it).
-  el : Ns3 → Str
-  el nsHtml = if eqStr t (toList "image") then toList "img" else t
-  el _      = t
-
-  pushed : Ns3 → Bool
-  pushed nsHtml = not (voidEl (el nsHtml))
-  pushed _      = not self
-
-  place : Ns3 × Tracker → Ns3 × Tracker
-  place (ns , us) = ns , (if pushed ns then ent (el ns) ns (ipOf ns t as) ∷ us else us)
-
 -- End tags (§13.2.6.4.7 "in body", §13.2.6.5 foreign content), as far
 -- as the stack goes. An HTML end tag pops to an open HTML element of its
 -- name: one in scope for the block elements, list items, headings,
@@ -283,6 +263,38 @@ popUntil m b ts = go ts
   go : Tracker → Tracker
   go []         = ts
   go (x ∷ rest) = if isRoot x then ts else if m x then rest else if b x then ts else go rest
+
+-- A start tag: its namespace, and the stack after it.
+startT : Tracker → Str → List Attr → Bool → Ns3 × Tracker
+startT ts t as self = place (decide (foreignFor ts t))
+  where
+  decide : Bool → Ns3 × Tracker
+  decide true  = if breakout t as then (nsHtml , popForeign ts) else (topNs ts , ts)
+  decide false = (htmlNsOf t , ts)
+
+  -- In HTML, an <image> is an <img> (the tree builder renames it).
+  el : Ns3 → Str
+  el nsHtml = if eqStr t (toList "image") then toList "img" else t
+  el _      = t
+
+  pushed : Ns3 → Bool
+  pushed nsHtml = not (voidEl (el nsHtml))
+  pushed _      = not self
+
+  -- §13.2.6.4.7 "in body": these start tags first close a p in button
+  -- scope (table too, in no-quirks mode only: not modelled).
+  closesP : Bool
+  closesP = inS t ("address" ∷ "article" ∷ "aside" ∷ "blockquote" ∷ "center" ∷ "details" ∷ "dialog" ∷ "dir"
+    ∷ "div" ∷ "dl" ∷ "fieldset" ∷ "figcaption" ∷ "figure" ∷ "footer" ∷ "header" ∷ "hgroup" ∷ "main" ∷ "menu"
+    ∷ "nav" ∷ "ol" ∷ "p" ∷ "search" ∷ "section" ∷ "summary" ∷ "ul" ∷ "h1" ∷ "h2" ∷ "h3" ∷ "h4" ∷ "h5" ∷ "h6"
+    ∷ "pre" ∷ "listing" ∷ "form" ∷ "plaintext" ∷ "hr" ∷ "xmp" ∷ [])
+
+  before : Ns3 → Tracker → Tracker
+  before nsHtml us = if closesP then popUntil (namedHtml (toList "p")) buttonB us else us
+  before _      us = us
+
+  place : Ns3 × Tracker → Ns3 × Tracker
+  place (ns , us) = ns , (if pushed ns then ent (el ns) ns (ipOf ns t as) ∷ before ns us else before ns us)
 
 data Split : Set where
   found : Tracker → Entry → Tracker → Split

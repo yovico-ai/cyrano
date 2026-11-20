@@ -15,8 +15,16 @@
 --     proxied load);
 --   * trusted-types: 'none' is dropped and the runtime's own policy name is
 --     admitted beside the page's (unless "*" admits it already);
---   * a fetch directive (CSP3 §6.1) gets the proxy origin, unless it is
---     exactly 'none' or already lists it;
+--   * a fetch directive (CSP3 §6.1) gets the proxy origin, unless it
+--     allows nothing ('none', with at most 'report-sample' beside it) or
+--     already lists it;
+--   * the connect policy admits blob: and data: too: the runtime reads a
+--     page's blob: or data: worker script (to rewrite it) with an XHR the
+--     page does not make, which connect-src governs (Costco: every such
+--     read was a violation, reported and fired at the page). A
+--     connect-src gains them; a default-src without a connect-src is
+--     given one, its own list with them (the others still fall back to
+--     default-src unchanged). 'none' alone stays;
 --   * a script/style directive (and default-src) with a hash source: the
 --     rewritten inline scripts cannot match their hashes, and a hash makes
 --     the browser ignore 'unsafe-inline' — its nonces, hashes and
@@ -150,9 +158,23 @@ unhash vs =
     (appendIfAbsent (toList "'unsafe-inline'")
       (filterL (λ t → not (hashSource t ∨ isNonce t ∨ eqStr (lowerAll t) (toList "'strict-dynamic'"))) vs))
 
+-- A source list that allows nothing: 'none', with nothing beside it but
+-- 'report-sample' (x.com's script-src-attr 'none' 'report-sample': with
+-- the proxy origin added, 'none' was ignored — and an object-src so
+-- would admit the proxy's own URLs).
 noneOnly : List Str → Bool
-noneOnly (t ∷ []) = eqStr (lowerAll t) (toList "'none'")
-noneOnly _        = false
+noneOnly ws = anyNone ws ∧ allQuiet ws
+  where
+  anyNone : List Str → Bool
+  anyNone [] = false
+  anyNone (t ∷ ts) = eqStr (lowerAll t) (toList "'none'") ∨ anyNone ts
+  allQuiet : List Str → Bool
+  allQuiet [] = true
+  allQuiet (t ∷ ts) = (eqStr (lowerAll t) (toList "'none'") ∨ eqStr (lowerAll t) (toList "'report-sample'")) ∧ allQuiet ts
+
+-- What the runtime reads, admitted to a connect list.
+readable : List Str → List Str
+readable ws = if noneOnly ws then ws else appendIfAbsent (toList "data:") (appendIfAbsent (toList "blob:") ws)
 
 -- The proxy origin and the runtime's Trusted Types policy name.
 record CspProxy : Set where
@@ -167,6 +189,7 @@ translateDirective p (n , vs) =
   if eqStr n (toList "report-uri") ∨ eqStr n (toList "report-to") then nothing
   else if plainHttp p ∧ (eqStr n (toList "upgrade-insecure-requests") ∨ eqStr n (toList "block-all-mixed-content")) then nothing
   else if eqStr n (toList "trusted-types") then just (n , tt)
+  else if eqStr n (toList "connect-src") then just (n , readable (withProxy hashed))
   else if fetchDirective n then just (n , withProxy hashed)
   else just (n , vs)
   where
@@ -181,11 +204,26 @@ translateDirective p (n , vs) =
   withProxy : List Str → List Str
   withProxy ws = if noneOnly ws ∨ isEmpty (origin p) then ws else appendIfAbsent (origin p) ws
 
+
+translateEach : CspProxy → List Directive → List Directive
+translateEach p []       = []
+translateEach p (d ∷ ds) with translateDirective p d
+... | just d′ = d′ ∷ translateEach p ds
+... | nothing = translateEach p ds
+
+-- A default-src that governs connect: an explicit connect-src after it.
 translatePolicy : CspProxy → List Directive → List Directive
-translatePolicy p []       = []
-translatePolicy p (d ∷ ds) with translateDirective p d
-... | just d′ = d′ ∷ translatePolicy p ds
-... | nothing = translatePolicy p ds
+translatePolicy p ds = withConnect (translateEach p ds)
+  where
+  named : Str → List Directive → Maybe (List Str)
+  named n [] = nothing
+  named n ((m , vs) ∷ rest) = if eqStr m n then just vs else named n rest
+
+  withConnect : List Directive → List Directive
+  withConnect out with named (toList "connect-src") out | named (toList "default-src") out
+  ... | just _  | _       = out
+  ... | nothing | nothing = out
+  ... | nothing | just vs = if noneOnly vs then out else out ++ ((toList "connect-src" , readable vs) ∷ [])
 
 ------------------------------------------------------------------------
 -- Writing.
@@ -295,7 +333,8 @@ inlineScriptAllowed headers = allP (concatPolicies headers)
 -- 'inline-speculation-rules', or no token) — under 'strict-dynamic', when
 -- it has no nonce or hash; an attribute directive — inline
 -- handlers — unless it has 'unsafe-inline' and no nonce, hash or
--- 'strict-dynamic', or 'unsafe-hashes' and a hash. Then the
+-- 'strict-dynamic', or 'unsafe-hashes' and a hash. Or some policy has a
+-- `sandbox` directive without allow-scripts. Then the
 -- document needs no runtime (nothing of the page's reads anything), and
 -- gets none: natively it runs no script, and neither does it proxied.
 -- It is sound, not complete, over several policies: a script must pass
@@ -304,7 +343,7 @@ inlineScriptAllowed headers = allP (concatPolicies headers)
 -- injected, needlessly. Checked against Chromium (no-scripts-vs-chromium):
 -- exact for one policy; for two, "none" here is none there.
 noScriptsRun : List Str → Bool
-noScriptsRun headers = anyP elem pols ∧ anyP attr pols
+noScriptsRun headers = (anyP elem pols ∧ anyP attr pols) ∨ anyP sandboxed pols
   where
   pols : List (List Directive)
   pols = concatPolicies headers
@@ -341,6 +380,14 @@ noScriptsRun headers = anyP elem pols ∧ anyP attr pols
   attrNothing (just vs) = not ((anyL (kw "'unsafe-inline'") vs ∧ not (anyL (λ t → isNonce t ∨ hashSource t ∨ kw "'strict-dynamic'" t) vs))
                                ∨ (anyL (kw "'unsafe-hashes'") vs ∧ anyL hashSource vs))
   attrNothing nothing   = false
+
+  -- A `sandbox` directive without allow-scripts (its tokens ASCII
+  -- case-insensitive): no script runs in the document (Microsoft's
+  -- company-target sync frame; the bootstrap was blocked).
+  sandboxed : List Directive → Bool
+  sandboxed ds with find (toList "sandbox") ds
+  ... | just vs = not (anyL (kw "allow-scripts") vs)
+  ... | nothing = false
 
   elem attr : List Directive → Bool
   elem ds = elemNothing (pick ds (toList "script-src-elem" ∷ toList "script-src" ∷ toList "default-src" ∷ []))

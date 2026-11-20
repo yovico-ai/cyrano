@@ -14,7 +14,7 @@ import (
 
 // The pieces of link-vs-chromium's headers, and more.
 var linkParams = []string{"; rel=preload", `;rel="preload"`, "; REL=PRELOAD", `; rel="prefetch preload"`, "; rel=prefetch", "; rel=modulepreload",
-	"; as=image", `; AS="IMAGE"`, `; as="im\age"`, "; as=font", "; as=script", `; title="a, </i/x>; rel=preload; as=image"`, "; title=a b",
+	"; as=image", `; AS="IMAGE"`, `; as="im\age"`, "; as=font", "; as=fetch", "; AS=Fetch", "; as=script", `; title="a, </i/x>; rel=preload; as=image"`, "; title=a b",
 	`; title="x\"y,z"`, ";", ";;", "; =x", `; x="unterminated`, "; integrity=sha384-AAAA", `; Integrity="sha384-B"`, "; crossorigin=anonymous",
 	"; crossorigin", `; crossorigin = "anonymous"`, `; imagesrcset="/s/1 1x, https://cdn.example/s2 2x"`, "; imagesrcset=c.jpg", "; imagesizes=50vw",
 	" ; rel = preload ", "; title='a,b'", `; t="q"junk`, "; nonce=abc==", "; nopush"}

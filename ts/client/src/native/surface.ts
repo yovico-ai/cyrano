@@ -22,6 +22,7 @@
 
 import { SafeWeakMap, SafeWeakSet, nO, nOP, nR, ncall } from "./intrinsics";
 import { original } from "../js/marks";
+import { PADDED_METHODS } from "./padded";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyFn = (...args: any[]) => unknown;
@@ -108,6 +109,9 @@ export function standIn<F extends object>(
         }
         const proto = nO.getOwnPropertyDescriptor(native, "prototype");
         if (proto) nO.defineProperty(wrapper, "prototype", proto);
+    } else if (ncall(nOP.hasOwnProperty, PADDED_METHODS, name)) {
+        // One V8 prints as a native, in its own messages too (padded.ts).
+        wrapper = PADDED_METHODS[name]!((self, args) => (call ? call(native, self, args) : nR.apply(native as unknown as AnyFn, self, args)));
     } else {
         // A method definition: no `prototype`, not a constructor.
         wrapper = ({

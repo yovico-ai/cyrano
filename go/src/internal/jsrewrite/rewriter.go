@@ -51,9 +51,12 @@ type Options struct {
 	WrapMemberExpression bool
 	WrapImportArg        bool
 	WrapImportMetaUrl    bool
-	WrapStaticImport     bool
-	WrapNewWorker        bool
-	WrapPattern          bool // R14
+	// R15: import.meta.resolve is the runtime's, which resolves the
+	// specifier as import() does (R7) and hands back the original URL.
+	WrapImportMetaResolve bool
+	WrapStaticImport      bool
+	WrapNewWorker         bool
+	WrapPattern           bool // R14
 	// StripDebugger replaces `debugger` statements with empty ones (R12):
 	// a no-op unless DevTools is open, where scripts use it to detect and
 	// stall an inspector.
@@ -87,25 +90,26 @@ type Options struct {
 // DefaultOptions enables every rewrite rule.
 func DefaultOptions() Options {
 	return Options{
-		WrapGetLocation:      true,
-		WrapSetLocation:      true,
-		WrapLocation:         true,
-		WrapGetTopWindow:     true,
-		WrapTopWindow:        true,
-		WrapGetParentWindow:  true,
-		WrapParentWindow:     true,
-		WrapDocumentWrite:    true,
-		WrapPostMessage:      true,
-		WrapEval:             true,
-		WrapEvalArg:          true,
-		WrapEvalMemexp:       true,
-		WrapMemberExpression: true,
-		WrapImportArg:        true,
-		WrapImportMetaUrl:    true,
-		WrapStaticImport:     true,
-		WrapNewWorker:        true,
-		WrapPattern:          true,
-		StripDebugger:        true,
+		WrapGetLocation:       true,
+		WrapSetLocation:       true,
+		WrapLocation:          true,
+		WrapGetTopWindow:      true,
+		WrapTopWindow:         true,
+		WrapGetParentWindow:   true,
+		WrapParentWindow:      true,
+		WrapDocumentWrite:     true,
+		WrapPostMessage:       true,
+		WrapEval:              true,
+		WrapEvalArg:           true,
+		WrapEvalMemexp:        true,
+		WrapMemberExpression:  true,
+		WrapImportArg:         true,
+		WrapImportMetaUrl:     true,
+		WrapImportMetaResolve: true,
+		WrapStaticImport:      true,
+		WrapNewWorker:         true,
+		WrapPattern:           true,
+		StripDebugger:         true,
 	}
 }
 

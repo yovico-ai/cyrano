@@ -160,6 +160,30 @@ func TestDirectFetchHeaders(t *testing.T) {
 		}
 	})
 
+	// A sandboxed document's origin is opaque: the browser's own requests
+	// from it to the proxy are cross-site, with Origin "null" (Target's
+	// PerimeterX frame). Upstream sees what it would direct.
+	t.Run("an opaque context's requests are from null", func(t *testing.T) {
+		got := send("GET", upstream.URL+"/api", map[string]string{
+			"Referer": proxied(upstream.URL + "/sync.html"), "Origin": "null", "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty",
+		})
+		if v := got.Get("Origin"); v != "null" {
+			t.Errorf("Origin = %q, want null", v)
+		}
+		if v := got.Get("Sec-Fetch-Site"); v != "cross-site" {
+			t.Errorf("Sec-Fetch-Site = %q, want cross-site (nothing is same-site with an opaque origin)", v)
+		}
+		if v := got.Get("Referer"); v != upstream.URL+"/sync.html" {
+			t.Errorf("Referer = %q, want the page's URL", v)
+		}
+		got = send("GET", upstream.URL+"/img.png", map[string]string{
+			"Referer": proxied(upstream.URL + "/sync.html"), "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "image",
+		})
+		if v := got.Get("Origin"); v != "" {
+			t.Errorf("no-cors GET: Origin = %q, want none", v)
+		}
+	})
+
 	t.Run("a proxy Referer that names no page is dropped", func(t *testing.T) {
 		got := send("GET", upstream.URL+"/x", map[string]string{"Referer": "http://localhost:9081/"})
 		if v, ok := got["Referer"]; ok {

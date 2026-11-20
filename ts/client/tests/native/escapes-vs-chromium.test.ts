@@ -236,4 +236,27 @@ describe.skipIf(!wanted)("escapes and breaks found on random sites, in Chromium"
         expect(escaped).toEqual([]);
         expect(hits.filter((h) => h.startsWith("/cyrano/https/cdn.example/n")).length).toBeGreaterThan(3);
     }, 60_000);
+
+    // Constructed stylesheets (Google Pay's button on Bloomberg): replace,
+    // replaceSync, addRule, adopted by the document.
+    it("CSS given to a constructed sheet reaches the proxy", async () => {
+        const page = await browser.newPage();
+        const escaped: string[] = [];
+        page.on("request", (r) => { if (!r.url().startsWith(origin) && !r.url().startsWith("data:")) escaped.push(r.url()); });
+        await page.goto(`${origin}/cyrano/https/site.example/page`);
+        await page.evaluate(async () => {
+            const mk = (cls: string) => { const d = document.createElement("div"); d.className = cls; d.textContent = "x"; document.body.appendChild(d); };
+            ["a", "b", "c"].forEach(mk);
+            const s1 = new CSSStyleSheet();
+            s1.replaceSync(".a { background-image: url(https://cdn.example/cs1.png) }");
+            const s2 = new CSSStyleSheet();
+            await s2.replace(".b { background-image: url(https://cdn.example/cs2.png) }");
+            const s3 = new CSSStyleSheet();
+            (s3 as unknown as { addRule(s: string, d: string): number }).addRule(".c", "background-image: url(https://cdn.example/cs3.png)");
+            document.adoptedStyleSheets = [s1, s2, s3];
+            await new Promise((r) => setTimeout(r, 1000));
+        });
+        expect(escaped).toEqual([]);
+        for (const n of ["cs1", "cs2", "cs3"]) expect(hits).toContain(`/cyrano/https/cdn.example/${n}.png`);
+    }, 60_000);
 });

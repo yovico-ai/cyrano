@@ -29,12 +29,18 @@
 --   frameorigin <object 0|1> <srcdoc 0|1> <src as read> <creator origin> → {"out":"same"|"cross"|"opaque"}
 --   frameoriginof <object 0|1> <srcdoc 0|1> <src as read> → {"out":"<origin>"|"creator"|"opaque"}
 --   stackurls <V8 stack text>          → {"out":"<script URLs, innermost first, LF-separated>"}
+--   evalorigin <name> <location>        → {"out":"eval at <name|<anonymous>> (<location>)"}
+--   framedlength <h2|h1> <declared> <came> → {"out":"<length>"}
+--   varyforbrowser <Vary as combined>       → {"out":"<Vary for the browser>"}
+--   untag <tag> <origin> <frame text>   → {"out":"<frame text, tag → origin, <anonymous>>"}
 --   h1orders <connection bytes>         → {"out":"<a,b,…><…>…"} (each recorded request's header names)
 --   refererroute <proxy> <referer> <raw path> <"?query"|""> → {"out":"<redirect path>"|"none"}
 --   cspnoscripts <header lines>        → {"out":"yes"|"no"} (no page script runs: no runtime)
 --   featuresources <features>          → {"out":"<attributionsrc values, LF-separated>"}
 --   featuresmap <features>              → {"out":"<the string, each such value v as [v]>"}
 --   sheetapplies <quirks 0|1> <same-origin 0|1> <ct|"-"> <nosniff 0|1> → {"out":"yes"|"no"} (Chromium applies the stylesheet)
+--   orbblocks <ct|"-"> <body>         → {"out":"yes"|"no"} (ORB blocks a cross-origin no-cors script)
+--   orbproxy <cross-origin 0|1> <redirect 0|1> <ct|"-"> <acao 0|1> <body> → {"out":"yes"|"no"} (the proxy fails it)
 --   sheetnosniff <same-origin 0|1> <ct|"-"> <nosniff 0|1> → {"out":"yes"|"no"} (the proxy adds nosniff)
 --   htmltail <scripting 0|1> <markup>  → {"out":"<offset>"|"none"} (where an unfinished construct at the end begins)
 --   nosniff <field lines, LF>          → {"out":"yes"|"no"} (X-Content-Type-Options says nosniff)
@@ -81,7 +87,12 @@
 --                                       → {"out":"a=1; b=2"}
 --   site    <from> <fromSite|-> <to> <toSite|->
 --                                       → {"out":"same-origin|same-site|cross-site"}
+--   cookiestoreset <139|later> <ps yes|no> <url> <name> <value> <-|=domain> <-|=path> <n|l|t>
+--   cookiestoredelete <139|later> <ps yes|no> <url> <name> <-|=domain> <-|=path>
+--                                       → {"out":"!<error>"} / {"out":"<wire name>\n<wire value>"}
+--   cookiestoreget <url> <-|=name> <jar>   → {"out":"name\tvalue\tdomain|-\tpath\tsameSite\tyes|no\n…"}
 --   credentials <omit|same-origin|include> <same|cross>
+--   namescontext <opaque> <cross> <unreferred>   (each yes|no) → yes|no
 --                                       → {"out":"yes"} / {"out":"no"}
 --   cors    <origin> <cred|nocred> <ACAO lines> <ACAC lines>
 --                                       → {"out":"yes"} / {"out":"no"}
@@ -154,6 +165,7 @@ import Attrs
 import HtmlTok
 import Link
 import Disposition
+import Orb
 import Refresh
 import WsOrigin
 import Carry
@@ -348,12 +360,18 @@ dispatch op args =
   else if eqStr op (toList "htmltail") then htmlTailReq args
   else if eqStr op (toList "nosniff") then oneArg (λ v → if Disposition.nosniff (if Data.List.Base.null v then [] else splitOn (is 10) v) then toList "yes" else toList "no") args
   else if eqStr op (toList "sheetapplies") then sheetReq args
+  else if eqStr op (toList "orbblocks") then orbReq args
+  else if eqStr op (toList "orbproxy") then orbProxyReq args
   else if eqStr op (toList "sheetnosniff") then sheetNosniffReq args
   else if eqStr op (toList "featuresources") then oneArg (λ f → joinNL (Features.sources f)) args
   else if eqStr op (toList "featuresmap") then oneArg (Features.mapSources (λ v → fromℕ 91 ∷ v ++ fromℕ 93 ∷ [])) args
   else if eqStr op (toList "refererroute") then refererRouteReq args
   else if eqStr op (toList "h1orders") then oneArg (λ st → Data.List.Base.concatMap (λ ns → fromℕ 60 ∷ joinComma ns ++ fromℕ 62 ∷ []) (H1.recordsOf st)) args
+  else if eqStr op (toList "framedlength") then framedLengthReq args
+  else if eqStr op (toList "varyforbrowser") then oneArg Carry.varyForBrowser args
   else if eqStr op (toList "stackurls") then oneArg (λ st → joinNL (Stack.stackUrls st)) args
+  else if eqStr op (toList "evalorigin") then twoArgs (λ n l → Stack.evalOrigin n l) args
+  else if eqStr op (toList "untag") then threeArgs (λ t o f → Stack.untag t o f) args
   else if eqStr op (toList "frameoriginof") then frameOriginOfReq args
   else if eqStr op (toList "dictae") then oneArg Dictionary.acceptEncoding args
   else if eqStr op (toList "dictreg") then oneArg Dictionary.noRegistration args
@@ -376,8 +394,12 @@ dispatch op args =
   else if eqStr op (toList "site") then siteReq args
   else if eqStr op (toList "setcookie") then setCookieReq args
   else if eqStr op (toList "cookies") then cookiesReq args
+  else if eqStr op (toList "cookiestoreset") then cookieStoreSetReq args
+  else if eqStr op (toList "cookiestoredelete") then cookieStoreDeleteReq args
+  else if eqStr op (toList "cookiestoreget") then cookieStoreGetReq args
   else if eqStr op (toList "samesite") then sameSiteReq args
   else if eqStr op (toList "credentials") then credentialsReq args
+  else if eqStr op (toList "namescontext") then namesContextReq args
   else if eqStr op (toList "cors") then corsReq args
   else if eqStr op (toList "expose") then exposeReq args
   else if eqStr op (toList "csp") then cspReq args
@@ -596,6 +618,14 @@ dispatch op args =
   sheetReq (q ∷ so ∷ ct ∷ ns ∷ []) = yn (Disposition.sheetApplies (eqStr q (toList "1")) (eqStr so (toList "1")) (ctArg ct) (eqStr ns (toList "1")))
   sheetReq _ = errorReply "BadRequest"
 
+  orbReq : List Str → Str
+  orbReq (ct ∷ b ∷ []) = yn (Orb.blocks (ctArg ct) b)
+  orbReq _ = errorReply "BadRequest"
+
+  orbProxyReq : List Str → Str
+  orbProxyReq (co ∷ rd ∷ ct ∷ a ∷ b ∷ []) = yn (Orb.proxyBlocks (eqStr co (toList "1")) (eqStr rd (toList "1")) (ctArg ct) (eqStr a (toList "1")) b)
+  orbProxyReq _ = errorReply "BadRequest"
+
   sheetNosniffReq : List Str → Str
   sheetNosniffReq (so ∷ ct ∷ ns ∷ []) = yn (Disposition.addNosniff (eqStr so (toList "1")) (ctArg ct) (eqStr ns (toList "1")))
   sheetNosniffReq _ = errorReply "BadRequest"
@@ -656,6 +686,20 @@ dispatch op args =
   oneArg : (Str → Str) → List Str → Str
   oneArg f (v ∷ []) = out (f v)
   oneArg f _        = out (f [])
+
+  framedLengthReq : List Str → Str
+  framedLengthReq (p ∷ d ∷ c ∷ []) with Carry.digitsValue d | Carry.digitsValue c
+  ... | just dn | just cn = out (Url.showN (Carry.framedLength (eqStr p (toList "h2")) dn cn))
+  ... | _       | _       = errorReply "BadRequest"
+  framedLengthReq _ = errorReply "BadRequest"
+
+  twoArgs : (Str → Str → Str) → List Str → Str
+  twoArgs f (a ∷ b ∷ []) = out (f a b)
+  twoArgs f _            = errorReply "BadRequest"
+
+  threeArgs : (Str → Str → Str → Str) → List Str → Str
+  threeArgs f (a ∷ b ∷ c ∷ []) = out (f a b c)
+  threeArgs f _                = errorReply "BadRequest"
 
   -- storagekey <ancestor sites, top first, space-separated> <site> <origin>
   storageKeyReq : List Str → Str
@@ -834,15 +878,23 @@ dispatch op args =
   ... | _        | _         | _       = errorReply "OutOfModel"
   referrerReq _ = errorReply "BadRequest"
 
-  originReq : List Str → Str
-  originReq (m ∷ sm ∷ p ∷ f ∷ t ∷ []) with modeOf m | policyToken p | baseOf f | baseOf t
+  originUrl : Str → Str → Str → Str → Str → Str
+  originUrl m sm p f t with modeOf m | policyToken p | baseOf f | baseOf t
   ... | just mode | just pol | just from | just to =
     maybeOut (originHeader mode (eqStr sm (toList "safe")) pol from to)
   ... | _ | _ | _ | _ = errorReply "OutOfModel"
+
+  originReq : List Str → Str
+  originReq (m ∷ sm ∷ p ∷ f ∷ t ∷ []) with eqStr f (toList "null") | modeOf m
+  ... | true | just mode = maybeOut (originHeaderOpaque mode (eqStr sm (toList "safe")))
+  ... | true | nothing   = errorReply "OutOfModel"
+  ... | false | _ = originUrl m sm p f t
   originReq _ = errorReply "BadRequest"
 
   siteReq : List Str → Str
-  siteReq (f ∷ fs ∷ t ∷ ts ∷ []) with baseOf f | baseOf t
+  siteReq (f ∷ fs ∷ t ∷ ts ∷ []) with eqStr f (toList "null")
+  ... | true = out (toList (siteName secFetchSiteOpaque))
+  ... | false with baseOf f | baseOf t
   ... | just from | just to = out (toList (siteName (secFetchSite from (dash fs) to (dash ts))))
     where
     dash : Str → Maybe Str
@@ -895,6 +947,56 @@ dispatch op args =
   ... | nothing   = errorReply "OutOfModel"
   cookiesReq _ = errorReply "BadRequest"
 
+  -- "-": absent; "=x": x.
+  optional : Str → Maybe Str
+  optional (c ∷ cs) = if is 61 c then just cs else nothing
+  optional []       = nothing
+
+  storeErr : StoreErr → Str
+  storeErr emptyNameEq    = toList "!emptyNameEq"
+  storeErr emptyBoth      = toList "!emptyBoth"
+  storeErr domainDot      = toList "!domainDot"
+  storeErr hostDomain     = toList "!hostDomain"
+  storeErr domainMismatch = toList "!domainMismatch"
+  storeErr nameEq         = toList "!nameEq"
+  storeErr pathSlash      = toList "!pathSlash"
+  storeErr hostPath       = toList "!hostPath"
+  storeErr malformed      = toList "!malformed"
+
+  storeOut : StoreResult → Str
+  storeOut (rejected e) = out (storeErr e)
+  storeOut (stored c)   = out (wireName c ++ fromℕ 10 ∷ wireValue c)
+
+  cookieStoreSetReq : List Str → Str
+  cookieStoreSetReq (g ∷ ps ∷ u ∷ n ∷ v ∷ d ∷ p ∷ ss ∷ []) with baseOf u
+  ... | nothing = errorReply "OutOfModel"
+  ... | just base = storeOut (cookieStoreSet (eqStr g (toList "later")) (eqStr ps (toList "yes")) base (mkStoreSet n v (optional d) (optional p) sso))
+    where
+    sso : SameSite
+    sso = if eqStr ss (toList "n") then ssNone else if eqStr ss (toList "l") then ssLax else ssStrict
+  cookieStoreSetReq _ = errorReply "BadRequest"
+
+  cookieStoreDeleteReq : List Str → Str
+  cookieStoreDeleteReq (g ∷ ps ∷ u ∷ n ∷ d ∷ p ∷ []) with baseOf u
+  ... | nothing = errorReply "OutOfModel"
+  ... | just base = storeOut (cookieStoreDelete (eqStr g (toList "later")) (eqStr ps (toList "yes")) base n (optional d) (optional p))
+  cookieStoreDeleteReq _ = errorReply "BadRequest"
+
+  -- One line per item: name TAB value TAB domain ("-": host-only) TAB path TAB sameSite TAB secure.
+  cookieStoreGetReq : List Str → Str
+  cookieStoreGetReq (u ∷ n ∷ jar ∷ []) with baseOf u
+  ... | nothing = errorReply "OutOfModel"
+  ... | just base = out (itemLines (cookieStoreQuery base (optional n) jar))
+    where
+    item : Stored → Str
+    item c = sName c ++ fromℕ 9 ∷ sValue c ++ fromℕ 9 ∷ (if sHostOnly c then toList "-" else sDomain c)
+             ++ fromℕ 9 ∷ sPath c ++ fromℕ 9 ∷ itemSameSite (sSameSite c) ++ fromℕ 9 ∷ toList (if sSecure c then "yes" else "no")
+    itemLines : List Stored → Str
+    itemLines []       = []
+    itemLines (c ∷ []) = item c
+    itemLines (c ∷ d ∷ cs) = item c ++ fromℕ 10 ∷ itemLines (d ∷ cs)
+  cookieStoreGetReq _ = errorReply "BadRequest"
+
   yesNo : Bool → Str
   yesNo b = out (toList (if b then "yes" else "no"))
 
@@ -906,6 +1008,10 @@ dispatch op args =
   credOf : Str → Maybe Bool
   credOf x = if eqStr x (toList "cred") then just true
              else if eqStr x (toList "nocred") then just false else nothing
+
+  namesContextReq : List Str → Str
+  namesContextReq (a ∷ b ∷ c ∷ []) = yesNo (namesContext (eqStr a (toList "yes")) (eqStr b (toList "yes")) (eqStr c (toList "yes")))
+  namesContextReq _ = errorReply "BadRequest"
 
   credentialsReq : List Str → Str
   credentialsReq (m ∷ so ∷ []) with modeOf′ m

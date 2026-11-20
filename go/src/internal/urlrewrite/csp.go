@@ -33,7 +33,8 @@ var TrustedTypesPolicy = func() string {
 //     policy (TrustedTypesPolicy; TS native/trusted.ts) admitted beside the
 //     page's, unless "*" admits it — a site checks that its Trusted Types
 //     are enforced (Cloudflare's challenge);
-//   - a fetch directive gets the proxy origin, unless it is exactly 'none'
+//   - a fetch directive gets the proxy origin, unless it allows nothing
+//     ('none', with at most 'report-sample' beside it)
 //     or lists it already;
 //   - a script/style directive (and default-src) with a hash source drops
 //     its nonces, hashes and 'strict-dynamic' and gains 'unsafe-inline' and
@@ -173,20 +174,63 @@ func translateCSPDirective(d cspDirective, proxyOrigin string) (cspDirective, bo
 				vals = appendIfAbsent(appendIfAbsent(kept, "'unsafe-inline'"), "'self'")
 			}
 		}
-		if proxyOrigin != "" && !(len(vals) == 1 && strings.EqualFold(vals[0], "'none'")) {
+		if proxyOrigin != "" && !allowsNothing(vals) {
 			vals = appendIfAbsent(vals, proxyOrigin)
+		}
+		if d.name == "connect-src" {
+			vals = readableCSP(vals)
 		}
 		return cspDirective{d.name, vals}, true
 	}
 	return d, true
 }
 
+// allowsNothing: 'none', with nothing beside it but 'report-sample' (spec
+// noneOnly; x.com's script-src-attr 'none' 'report-sample' — the proxy
+// origin added made the browser ignore the 'none').
+func allowsNothing(vals []string) bool {
+	none := false
+	for _, t := range vals {
+		switch strings.ToLower(t) {
+		case "'none'":
+			none = true
+		case "'report-sample'":
+		default:
+			return false
+		}
+	}
+	return none
+}
+
+// readableCSP admits to a connect list what the runtime reads itself: a
+// page's blob: or data: worker script, by an XHR the page does not make
+// (spec readable). 'none' alone stays.
+func readableCSP(vals []string) []string {
+	if allowsNothing(vals) {
+		return vals
+	}
+	return appendIfAbsent(appendIfAbsent(vals, "blob:"), "data:")
+}
+
 func showCSPPolicy(p []cspDirective, proxyOrigin string) string {
 	var ds []string
+	var def []string
+	hasConnect, hasDefault := false, false
 	for _, d := range p {
 		if t, ok := translateCSPDirective(d, proxyOrigin); ok {
 			ds = append(ds, strings.Join(append([]string{t.name}, t.vals...), " "))
+			switch t.name {
+			case "connect-src":
+				hasConnect = true
+			case "default-src":
+				def, hasDefault = t.vals, true
+			}
 		}
+	}
+	// A default-src that governs connect gets an explicit connect-src
+	// after it: its own list, readable (spec translatePolicy).
+	if !hasConnect && hasDefault && !allowsNothing(def) {
+		ds = append(ds, strings.Join(append([]string{"connect-src"}, readableCSP(append([]string(nil), def...))...), " "))
 	}
 	return strings.Join(ds, "; ")
 }
@@ -325,12 +369,22 @@ func NoScriptsRun(headers []string) bool {
 		hashes := has(vs, func(l string) bool { return l == "'unsafe-hashes'" }) && has(vs, isHashSource)
 		return !inline && !hashes
 	}
-	elem, attr := false, false
+	// A sandbox directive without allow-scripts: nothing runs either.
+	sandboxed := func(p []cspDirective) bool {
+		for _, d := range p {
+			if d.name == "sandbox" {
+				return !has(d.vals, func(l string) bool { return l == "allow-scripts" })
+			}
+		}
+		return false
+	}
+	elem, attr, sandbox := false, false, false
 	for _, p := range pols {
 		elem = elem || elemNothing(p)
 		attr = attr || attrNothing(p)
+		sandbox = sandbox || sandboxed(p)
 	}
-	return elem && attr
+	return (elem && attr) || sandbox
 }
 
 // FrameAncestors is a CSP header value's frame-ancestors verdict for a

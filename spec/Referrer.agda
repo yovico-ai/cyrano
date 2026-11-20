@@ -221,6 +221,16 @@ originHeader m safeMethod p init target = byMode m
   byMode cors      = if sameOriginOf init target then otherwise else just o
   byMode _         = otherwise
 
+-- From a context whose origin is opaque (a sandboxed document; the oracle
+-- writes its initiator "null") the origin serializes as "null" and no URL
+-- is same-origin with it: a request carries Origin "null" wherever it
+-- carries one at all — CORS, a WebSocket, an unsafe method (a policy can
+-- only turn it into "null").
+originHeaderOpaque : Mode → Bool → Maybe Str
+originHeaderOpaque websocket _ = just (toList "null")
+originHeaderOpaque cors      _ = just (toList "null")
+originHeaderOpaque _ safeMethod = if safeMethod then nothing else just (toList "null")
+
 ------------------------------------------------------------------------
 -- Fetch Metadata: Sec-Fetch-Site, schemeful. `initSite` / `targetSite`
 -- are the registrable domains (eTLD+1; public-suffix data is outside the
@@ -228,6 +238,10 @@ originHeader m safeMethod p init target = byMode m
 
 data Site : Set where
   sameOriginSite sameSite crossSite : Site
+
+-- From an opaque origin nothing is same-site: cross-site.
+secFetchSiteOpaque : Site
+secFetchSiteOpaque = crossSite
 
 secFetchSite : Abs → Maybe Str → Abs → Maybe Str → Site
 secFetchSite init initSite target targetSite =

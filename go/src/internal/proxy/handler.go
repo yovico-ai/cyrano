@@ -226,8 +226,26 @@ func (h *Handler) serveTarget(w http.ResponseWriter, r *http.Request, target *ur
 		// strip ours explicitly via dropOnRequest in makeDirector and let it
 		// re-add a fresh one if needed.
 	}
-	rp.ServeHTTP(w, r)
+	rp.ServeHTTP(typelessWriter{w}, r)
 }
+
+// typelessWriter keeps a response that came without Content-Type without
+// one: net/http would sniff one for it (a typeless body beginning "ID3"
+// went to the browser as audio/mpeg, and a script of it was refused). The
+// proxy never changes a Content-Type (spec/Disposition.agda); a nil value
+// stops the sniff. Unwrap lets ReverseProxy flush and hijack through it.
+type typelessWriter struct{ http.ResponseWriter }
+
+func (t typelessWriter) WriteHeader(code int) {
+	if h := t.Header(); h != nil {
+		if _, ok := h["Content-Type"]; !ok {
+			h["Content-Type"] = nil
+		}
+	}
+	t.ResponseWriter.WriteHeader(code)
+}
+
+func (t typelessWriter) Unwrap() http.ResponseWriter { return t.ResponseWriter }
 
 // makeDirector returns a Director closure that mutates the outgoing request
 // in place. ReverseProxy invokes this once per request before dispatching.
@@ -336,7 +354,15 @@ func (h *Handler) modifyResponse(resp *http.Response) error {
 	// Whatever is changed below, scripts still read what the origin sent.
 	sent := resp.Header.Clone()
 	defer func() { carryOriginalHeaders(resp.Header, sent) }()
+	// A short HTTP/2 body is the response it is (short_body.go).
+	if err := fitShortBody(resp); err != nil {
+		return err
+	}
+	noteOrbACAO(resp) // before the headers are translated
 	if err := h.translateResponse(resp); err != nil {
+		if errors.Is(err, ErrOrbBlocked) {
+			return err
+		}
 		return rewriteError{err}
 	}
 	return nil
@@ -350,6 +376,7 @@ func (e rewriteError) Unwrap() error { return e.error }
 
 func (h *Handler) translateResponse(resp *http.Response) error {
 	translatePermissionsPolicy(resp.Header)
+	varyOnInitiator(resp.Header)
 	addStylesheetNosniff(resp)
 	if resp.Header.Get("Alt-Svc") != "" {
 		resp.Header.Set("Alt-Svc", "clear")
@@ -446,8 +473,9 @@ func (h *Handler) errorHandler(target *url.URL, inbound *http.Request) func(http
 			slog.String("target", target.String()),
 			slog.String("err", err.Error()),
 		)
-		if errors.Is(err, errCORS) {
-			// A network error, to page code what a CORS failure is.
+		if errors.Is(err, errCORS) || errors.Is(err, ErrOrbBlocked) {
+			// A network error, to page code what a CORS failure (or an
+			// ORB block: orb.go) is.
 			panic(http.ErrAbortHandler)
 		}
 		var re rewriteError

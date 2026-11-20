@@ -32,7 +32,7 @@
 //
 // Known gap: the object URL's origin is the proxy's (blob:http://proxy/…)
 // where natively it is the site's; translating blob: URLs is a follow-up.
-import { SafeMap, SafeWeakMap, nR, sIncludes } from "../native/intrinsics";
+import { SafeMap, SafeWeakMap, nO, nR, ncall, sIncludes } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
 import { rewriteJsSource, defaultJsRewriteOptions } from "../js/rewriter";
 import { wrapConstructor, wrapMethod } from "../native/surface";
@@ -45,6 +45,7 @@ export function patchBlobWorkerSource(
     config: ClientConfig,
     getCurrentBaseUrl: () => URL,
 ): WorkerScriptFor {
+    saveXhr(targetWindow);
     const w = targetWindow as unknown as { URL?: typeof URL; Blob?: typeof Blob };
     const sources = new SafeWeakMap<object, { source: string; type: string }>();
     const byUrl = new SafeMap<string, { source: string; type: string }>();
@@ -66,6 +67,8 @@ export function patchBlobWorkerSource(
         if (src) byUrl.set(url, src);
         return url;
     });
+    // (A URL revoked before the worker is made fails natively, even in the
+    // same turn; so does the read here — Akamai's sensor tries it.)
     wrapMethod<(u: string) => void>(URLs, "revokeObjectURL", (native, self, args) => {
         byUrl.delete(String(args[0]));
         return nR.apply(native, self, args) as void;
@@ -90,17 +93,43 @@ export function patchBlobWorkerSource(
  * Worker constructor is synchronous, and the page may revoke the URL right
  * after it). Undefined for any other URL or when it cannot be read.
  */
+// The XMLHttpRequest the runtime reads a worker script with: the one
+// saved at load, its methods called as saved — never the page's, which a
+// script may have wrapped by then (Dynatrace's made the synchronous read
+// asynchronous and the read came back empty; Dynatrace's wrapper was in
+// the read's path on Walgreens).
+type SavedXhr = {
+    Ctor: typeof XMLHttpRequest;
+    open: (...a: unknown[]) => void; send: (...a: unknown[]) => void; mime: (m: string) => void;
+    status: () => number; text: () => string; header: (n: string) => string | null;
+};
+const savedXhr = new SafeWeakMap<object, SavedXhr>();
+
+function saveXhr(targetWindow: Window): void {
+    const XHR = (targetWindow as unknown as { XMLHttpRequest?: typeof XMLHttpRequest }).XMLHttpRequest;
+    const P = XHR?.prototype;
+    if (!XHR || !P) return;
+    // The accessors as saved; where there are none (a test's stand-in), plain reads.
+    const get = (k: string): (() => unknown) => (nO.getOwnPropertyDescriptor(P, k)?.get as (() => unknown) | undefined)
+        ?? function (this: Record<string, unknown>) { return this[k]; };
+    savedXhr.set(targetWindow, {
+        Ctor: XHR, open: P.open as SavedXhr["open"], send: P.send as SavedXhr["send"], mime: P.overrideMimeType as SavedXhr["mime"],
+        status: get("status") as SavedXhr["status"], text: get("responseText") as SavedXhr["text"], header: P.getResponseHeader as SavedXhr["header"],
+    });
+}
+
 function readScript(targetWindow: Window, url: string): { source: string; type: string } | undefined {
     if (!/^(blob|data):/i.test(url)) return undefined;
-    const XHR = (targetWindow as unknown as { XMLHttpRequest?: typeof XMLHttpRequest }).XMLHttpRequest;
-    if (!XHR) return undefined;
+    const s = savedXhr.get(targetWindow);
+    if (!s) return undefined;
     try {
-        const x = new XHR();
-        x.open("GET", url, false);
-        x.overrideMimeType("text/javascript; charset=utf-8");
-        x.send();
-        if (x.status !== 200 && x.status !== 0) return undefined;
-        return { source: x.responseText, type: x.getResponseHeader("Content-Type") ?? "" };
+        const x = nR.construct(s.Ctor, []) as XMLHttpRequest;
+        ncall(s.open, x, "GET", url, false);
+        ncall(s.mime, x, "text/javascript; charset=utf-8");
+        ncall(s.send, x);
+        const status = ncall(s.status, x) as number;
+        if (status !== 200 && status !== 0) return undefined;
+        return { source: ncall(s.text, x) as string, type: (ncall(s.header, x, "Content-Type") as string | null) ?? "" };
     } catch {
         return undefined;
     }

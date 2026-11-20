@@ -253,9 +253,10 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 	// credentials mode, the browser refuses to reuse it for the script, and the
 	// bundle is fetched twice — the unused preload hangs and, under HTTP/2
 	// coalescing, wedges the connection (the vendor.js/main.js pending-forever
-	// bug). Exception: a font preload stays in its original (anonymous)
+	// bug). Exceptions: a font preload stays in its original (anonymous)
 	// credentials mode to match the @font-face fetch, which is not credentialed
-	// — forcing it would instead double-fetch the font.
+	// — forcing it would instead double-fetch the font; a fetch preload stays
+	// to match the page's own fetch(), whose credentials the runtime leaves.
 	if _, ok := getAttr(attrs, "crossorigin"); ok {
 		rel, _ := getAttr(attrs, "rel")
 		as, _ := getAttr(attrs, "as")
@@ -558,14 +559,15 @@ func withOriginals(written, attrs []html.Attribute) []html.Attribute {
 
 // crossoriginValue is the crossorigin written for an element
 // (spec/Attrs.agda crossoriginValue): on an HTML element use-credentials,
-// except a font preload or prefetch; set false: as written. An SVG
+// except a font or fetch preload or prefetch (matched to @font-face's and
+// the page's own fetch's credentials); set false: as written. An SVG
 // element's was forced too, where the runtime left it.
 func crossoriginValue(html bool, tag, rel, as string) (string, bool) {
 	if !html {
 		return "", false
 	}
 	r := strings.ToLower(rel)
-	if tag == "link" && (r == "preload" || r == "prefetch") && strings.ToLower(as) == "font" {
+	if a := strings.ToLower(as); tag == "link" && (r == "preload" || r == "prefetch") && (a == "font" || a == "fetch") {
 		return "", false
 	}
 	return "use-credentials", true

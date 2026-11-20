@@ -343,6 +343,7 @@ export function rewriteCspContent(csp: string, proxyOrigin: string, ttPolicy?: s
     const plainHttp = sStarts(asciiLower(proxyOrigin), "http://");
     const seen = new SafeSet<string>();
     const out: string[] = [];
+    let defaultVals: string[] | null = null;
     for (const tok of csp.split(";")) {
         const w = cspWords(tok);
         if (w.length === 0 || /[^\x00-\x7f]/.test(tok)) continue;
@@ -360,9 +361,32 @@ export function rewriteCspContent(csp: string, proxyOrigin: string, ttPolicy?: s
                 vals = vals.filter((t) => { const l = asciiLower(t); return !isHashSource(t) && !sStarts(l, "'nonce-") && l !== "'strict-dynamic'"; });
                 vals = appendIfAbsent(appendIfAbsent(vals, "'unsafe-inline'"), "'self'");
             }
-            if (proxyOrigin !== "" && !(vals.length === 1 && asciiLower(vals[0]!) === "'none'")) vals = appendIfAbsent(vals, proxyOrigin);
+            if (proxyOrigin !== "" && !allowsNothing(vals)) vals = appendIfAbsent(vals, proxyOrigin);
+            if (name === "connect-src") vals = readableCsp(vals);
         }
+        if (name === "default-src") defaultVals = vals;
         out.push([name, ...vals].join(" "));
     }
+    // A default-src that governs connect gets an explicit connect-src after it (spec translatePolicy).
+    if (!seen.has("connect-src") && defaultVals && !allowsNothing(defaultVals)) {
+        out.push(["connect-src", ...readableCsp(defaultVals)].join(" "));
+    }
     return out.join("; ");
+}
+
+/** 'none', with nothing beside it but 'report-sample': a list that allows nothing (spec noneOnly). */
+function allowsNothing(vals: string[]): boolean {
+    let none = false;
+    for (const t of vals) {
+        const l = asciiLower(t);
+        if (l === "'none'") none = true;
+        else if (l !== "'report-sample'") return false;
+    }
+    return none;
+}
+
+/** What the runtime reads itself (a page's blob: / data: worker script) admitted to a connect list (spec readable). */
+function readableCsp(vals: string[]): string[] {
+    if (allowsNothing(vals)) return vals;
+    return appendIfAbsent(appendIfAbsent(vals, "blob:"), "data:");
 }

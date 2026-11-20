@@ -24,7 +24,10 @@
 --   crossorigin  on an HTML element, use-credentials — a resource and its
 --                preload keep one credentials mode (crossoriginValue) —
 --                except a font preload or prefetch, kept as written to
---                match @font-face's anonymous fetch.
+--                match @font-face's anonymous fetch, and a fetch one, kept
+--                to match the page's own fetch(), whose credentials mode
+--                the runtime leaves (Spotify's locale JSON was fetched
+--                twice).
 --   sandbox      kept as written: a sandboxed frame is opaque through the
 --                proxy as directly (allow-same-origin, once added, let the
 --                parent read the frame's document, its messages come from
@@ -180,9 +183,10 @@ urlDest htmlNs t a rel as =
 crossoriginValue : Bool → Str → Str → Str → Maybe Str
 crossoriginValue html tag rel as =
   if not html then nothing
-  else if eqStr tag (toList "link") ∧ (eqStr r (toList "preload") ∨ eqStr r (toList "prefetch")) ∧ eqStr (map lowerAscii as) (toList "font") then nothing
+  else if eqStr tag (toList "link") ∧ (eqStr r (toList "preload") ∨ eqStr r (toList "prefetch")) ∧ (eqStr a (toList "font") ∨ eqStr a (toList "fetch")) then nothing
   else just (toList "use-credentials")
   where
   open import Data.Bool.Base using (not; _∧_)
-  r : Str
+  r a : Str
   r = map lowerAscii rel
+  a = map lowerAscii as

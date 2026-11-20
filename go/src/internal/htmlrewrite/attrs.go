@@ -244,6 +244,11 @@ func (n *nsTracker) start(tag string, selfClosing bool, attr func(string) (strin
 			ns = e.ns
 		}
 	}
+	// In body, these start tags first close a p in button scope (spec
+	// HtmlTok closesP).
+	if ns == NsHTML && closesP[tag] {
+		n.popUntil(func(x nsEntry) bool { return namedHTML(x, "p") }, func(x nsEntry) bool { return scopeBoundary(x) || namedHTML(x, "button") })
+	}
 	// In HTML, an <image> is an <img> (the tree builder renames it).
 	el := tag
 	if ns == NsHTML && tag == "image" {
@@ -317,6 +322,10 @@ func ipName(x nsEntry) bool {
 	}
 	return false
 }
+
+// Start tags that close a p in button scope first ("in body"; table
+// too, in no-quirks mode: not modelled).
+var closesP = fieldSet("address article aside blockquote center details dialog dir div dl fieldset figcaption figure footer header hgroup main menu nav ol p search section summary ul h1 h2 h3 h4 h5 h6 pre listing form plaintext hr xmp")
 
 func namedHTML(x nsEntry, t string) bool { return x.ns == NsHTML && x.tag == t }
 func specialEl(x nsEntry) bool {

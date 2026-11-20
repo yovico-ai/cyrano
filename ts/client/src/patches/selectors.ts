@@ -25,6 +25,9 @@
 // Each proxied value is admitted with the destination marks an element's
 // URL can carry (`/cyrano/https!js/…` on a script's src, `!css` on a
 // stylesheet's href): without them `script[src="…"]` found nothing again.
+// On srcset / imagesrcset, an = or ^= of one URL (no whitespace, no comma:
+// the first candidate's URL or its beginning) is widened the same way
+// (Adobe's Edge Delivery: source[srcset^="./media_"]).
 // spec/Selectors.agda is the authority (checked: selectors-conformance;
 // the spec against Chromium: selectors-vs-chromium). Not covered: a value
 // written relative in a `*=` / `$=` test (the element holds it resolved),
@@ -104,12 +107,16 @@ function widenAttribute(whole: string, rewriteOne: (url: string) => string, prox
     const m = ATTR.exec(whole);
     if (!m) return whole;
     const name = m[1]!;
-    if (!URL_ATTRS.has(name.toLowerCase())) return whole;
+    const lname = name.toLowerCase();
+    const srcsetLike = lname === "srcset" || lname === "imagesrcset";
+    if (!URL_ATTRS.has(lname) && !srcsetLike) return whole;
     const op = m[2]!;
     const raw = m[3] ?? m[4] ?? m[5] ?? "";
     const value = raw.replace(/\\([0-9a-fA-F]{1,6}\s?|[\s\S])/g, (_e, x: string) =>
         /^[0-9a-fA-F]/.test(x) ? String.fromCodePoint(parseInt(x.trim(), 16)) : x);
     if (value === "" || sStarts(value, "#") || /^(data|blob|javascript|mailto|tel|about):/i.test(value)) return whole;
+    // A srcset: only an = or ^= of one URL (the first candidate's, or its beginning).
+    if (srcsetLike && !((op === "=" || op === "^=") && !/[\t\n\f\r ,]/.test(value))) return whole;
     const alternatives: string[] = [];
     if (op === "*=" || op === "$=") {
         // Only a value naming a host after "//", the end of a scheme (or

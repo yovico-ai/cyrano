@@ -406,3 +406,135 @@ cookieString (c ∷ d ∷ cs) = one c ++ toList "; " ++ cookieString (d ∷ cs)
 
 cookiesFor : Bool → Abs → Str → Str
 cookiesFor api u jar = cookieString (byPathLength (keep api u (fromJar (jarPairs jar))))
+
+------------------------------------------------------------------------
+-- The Cookie Store API (cookieStore.set / get / getAll / delete), as
+-- Chromium has it — not the WHATWG text, whose CookieListItem is only a
+-- name and a value. Checked against Chrome over https
+-- (cookie-store-vs-chromium).
+--
+-- set({name, value, domain?, path?, sameSite, expires?}) at `u`, in the
+-- order Chromium checks, each failure a TypeError of its own message.
+-- Two generations differ (`later`: Chromium 147, as against Chrome 139;
+-- the runtime tells them apart by how the native words "=" in a name):
+--   * an empty name with "=" in the value; an empty name and value;
+--     (later) "=" in the name;
+--   * a domain on a "__Host-" name (later: the prefix in any case); a
+--     domain starting with "."; a domain the host does not domain-match
+--     (ASCII case-insensitively) — later, nor a public suffix;
+--   * a "__Host-" name with another path than "/"; a path not starting
+--     with "/"; a path not ending in "/" gains one (no path: "/");
+--   * then the cookie as an RFC store would take it, always Secure, or
+--     "malformed": a control character or TAB or ";" in the name or value,
+--     space or TAB at either end of either, "=" in the name, name and
+--     value over 4096 octets, a path or domain over 1024, and every
+--     refusal of `store` (139: a public suffix; the prefixes).
+-- A cookie whose expiry is past is not stored (no error); expiry and
+-- `partitioned` are the browser's, outside the model.
+--
+-- get / getAll list the script-visible cookies for `u` as document.cookie
+-- does (`keep`, `byPathLength`), those of a name when one is given, each
+-- an item of name, value, domain (none for a host-only cookie), path,
+-- sameSite (a cookie that set none reads "lax") and secure.
+-- delete(name, domain?, path?) removes the cookie a set of those would
+-- write (its identity), after the same checks.
+
+data StoreErr : Set where
+  emptyNameEq emptyBoth nameEq hostDomain domainDot domainMismatch pathSlash hostPath malformed : StoreErr
+
+data StoreResult : Set where
+  rejected : StoreErr → StoreResult
+  stored   : Stored → StoreResult
+
+record StoreSet : Set where
+  constructor mkStoreSet
+  field
+    oName oValue : Str
+    oDomain      : Maybe Str
+    oPath        : Maybe Str
+    oSameSite    : SameSite
+open StoreSet public
+
+private
+  anyC : (Char → Bool) → Str → Bool
+  anyC p []       = false
+  anyC p (c ∷ cs) = p c ∨ anyC p cs
+
+  edgeWS : Str → Bool
+  edgeWS []       = false
+  edgeWS (c ∷ cs) = isWSP c ∨ endWS (c ∷ cs)
+    where
+    endWS : Str → Bool
+    endWS s with reverse s
+    ... | []      = false
+    ... | (d ∷ _) = isWSP d
+
+  hostPrefixed : Bool → Str → Bool
+  hostPrefixed later n = if later then startsWith (toList "__host-") (lower n) else startsWith (toList "__Host-") n
+
+  badChar : Char → Bool
+  badChar c = isCtl c ∨ is 9 c ∨ is 59 c
+
+cookieStoreSet : Bool → Bool → Abs → StoreSet → StoreResult
+cookieStoreSet later ps u o =
+  if isEmpty n ∧ anyC (is 61) v then rejected emptyNameEq
+  else if isEmpty n ∧ isEmpty v then rejected emptyBoth
+  else if later ∧ anyC (is 61) n then rejected nameEq
+  else byDomain (oDomain o)
+  where
+  n v : Str
+  n = oName o
+  v = oValue o
+
+  final : Str → StoreResult
+  final p with anyC badChar n ∨ anyC badChar v ∨ edgeWS n ∨ edgeWS v ∨ anyC (is 61) n
+               ∨ (4096 <ᵇ octets n + octets v) ∨ (1024 <ᵇ octets p) ∨ longDomain (oDomain o)
+    where
+    longDomain : Maybe Str → Bool
+    longDomain (just d) = 1024 <ᵇ octets d
+    longDomain nothing  = false
+  ... | true  = rejected malformed
+  ... | false with store true ps u (mkSet n v (lowered (oDomain o)) (just p) true false (oSameSite o) nothing nothing)
+    where
+    lowered : Maybe Str → Maybe Str
+    lowered (just d) = just (lower d)
+    lowered nothing  = nothing
+  ...   | nothing = rejected malformed
+  ...   | just c  = stored c
+
+  byPath : Maybe Str → StoreResult
+  byPath nothing   = final (toList "/")
+  byPath (just []) = final (toList "/")
+  byPath (just (c ∷ cs)) =
+    if hostPrefixed later n ∧ not (eqStr (c ∷ cs) (toList "/")) then rejected hostPath
+    else if not (is 47 c) then rejected pathSlash
+    else final (if endsWith (toList "/") (c ∷ cs) then c ∷ cs else (c ∷ cs) ++ toList "/")
+
+  byDomain : Maybe Str → StoreResult
+  byDomain nothing  = byPath (oPath o)
+  byDomain (just d) =
+    if hostPrefixed later n then rejected hostDomain
+    else if startsWith (toList ".") d then rejected domainDot
+    else if not (domainMatch (hostOf u) (lower d)) then rejected domainMismatch
+    else if later ∧ ps ∧ not (eqStr (lower d) (hostOf u)) then rejected domainMismatch
+    else byPath (oPath o)
+
+-- What delete removes: the cookie a set of that name, domain and path
+-- would write (its value is not part of its identity).
+cookieStoreDelete : Bool → Bool → Abs → Str → Maybe Str → Maybe Str → StoreResult
+cookieStoreDelete later ps u n d p = cookieStoreSet later ps u (mkStoreSet n (toList "x") d p ssStrict)
+
+-- get / getAll.
+cookieStoreQuery : Abs → Maybe Str → Str → List Stored
+cookieStoreQuery u name jar = byName name (byPathLength (keep true u (fromJar (jarPairs jar))))
+  where
+  byName : Maybe Str → List Stored → List Stored
+  byName nothing  cs       = cs
+  byName (just m) []       = []
+  byName (just m) (c ∷ cs) = if eqStr (sName c) m then c ∷ byName (just m) cs else byName (just m) cs
+
+itemSameSite : SameSite → Str
+itemSameSite ssNone    = toList "none"
+itemSameSite ssLax     = toList "lax"
+itemSameSite ssStrict  = toList "strict"
+itemSameSite ssDefault = toList "lax"

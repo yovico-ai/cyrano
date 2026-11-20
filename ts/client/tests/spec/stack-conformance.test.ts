@@ -7,7 +7,7 @@
 import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { stackUrls } from "../../src/native/error-stack";
+import { evalOrigin, stackUrls, untag } from "../../src/native/error-stack";
 import { OracleClient, locateOracle, oracleRequired } from "./oracle-client";
 
 const located = locateOracle();
@@ -42,5 +42,18 @@ describe.skipIf(located.skip !== "")("Stack URLs: spec conformance", () => {
             const want = await oracle.ask("stackurls", [st]);
             expect(stackUrls(st).join("\n"), st).toBe(want);
         }), { numRuns: 500 });
+    });
+
+    it("evalOrigin and untag are the spec's", async () => {
+        const TAGS = ["crn-fn-abc-1", "crn-fn-abc-12", "x"];
+        await fc.assert(fc.asyncProperty(fc.constantFrom(...NAMES, ""), loc, async (name, l) => {
+            expect(evalOrigin(name, l)).toBe(await oracle.ask("evalorigin", [name, l]));
+        }), { numRuns: 200 });
+        await fc.assert(fc.asyncProperty(fc.constantFrom(...TAGS), loc,
+            fc.array(fc.oneof(fc.constantFrom(...TAGS), fc.constantFrom(":3:4", ")", "inner (", "eval at f (", "", ", ")), { maxLength: 6 }),
+            async (tag, origin, parts) => {
+                const s = parts.join("");
+                expect(untag(tag, origin, s), s).toBe(await oracle.ask("untag", [tag, origin, s]));
+            }), { numRuns: 400 });
     });
 });

@@ -20,7 +20,8 @@ const names = ["default-src", "script-src", "Script-Src", "script-src-elem", "st
     "sandbox", "foo-src", "é-src"];
 const values = ["'self'", "'none'", "'NONE'", "'unsafe-inline'", "'unsafe-eval'", "'strict-dynamic'", "'nonce-abc'",
     "'Nonce-XyZ'", "'sha256-AAAA'", "'SHA384-bb'", "https:", "data:", "*", "https://cdn.example", "http://localhost:9081",
-    "HTTP://LOCALHOST:9081", "/r", "'script'", "default", "_crnpolicy"];
+    "HTTP://LOCALHOST:9081", "/r", "'script'", "default", "_crnpolicy", "'report-sample'", "'REPORT-SAMPLE'", "blob:", "allow-scripts",
+    "'unsafe-hashes'"];
 const spaces = [" ", "  ", "\t", "\n", "\f", "\r", "\v", " "];
 const directive = fc.tuple(fc.constantFrom("", ...spaces), fc.constantFrom(...names),
     fc.array(fc.tuple(fc.constantFrom(...spaces), fc.constantFrom(...values)), { maxLength: 4 }), fc.constantFrom("", ...spaces))

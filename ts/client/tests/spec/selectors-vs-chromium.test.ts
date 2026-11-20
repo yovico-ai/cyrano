@@ -8,7 +8,8 @@
 // so is a relative value in a *= or $= test, and a relative ^= prefix
 // ending in "." of a path going on with "." — "." resolves to the
 // directory, "../" to its parent). Scripts and stylesheets hold
-// their URLs marked (`rewritemark`).
+// their URLs marked (`rewritemark`); a source's srcset holds one
+// candidate (= and ^= of one URL are widened there).
 //
 // Needs the oracle and Playwright's Chromium; `make browser-check`.
 
@@ -45,9 +46,12 @@ describe.skipIf(!wanted || located.skip !== "")("Selectors on URL attributes: th
     });
 
     it("the widened selector matches the proxied element as the page's matches the page's", async () => {
-        const kase = fc.tuple(fc.constantFrom(...URLS), fc.constantFrom("=", "^=", "*=", "$="), fc.nat(40), fc.constantFrom(...URLS), fc.boolean(), fc.constantFrom("img", "a", "script", "link"))
-            .map(([o, op, cut, other, related, tag]) => {
-                const attr = tag === "img" || tag === "script" ? "src" : "href";
+        const kase = fc.tuple(fc.constantFrom(...URLS), fc.constantFrom("=", "^=", "*=", "$="), fc.nat(40), fc.constantFrom(...URLS), fc.boolean(), fc.constantFrom("img", "a", "script", "link", "source"))
+            .map(([o0, op0, cut, other, related, tag]) => {
+                // A source's srcset holds one candidate, "URL 1x": only = and ^= are widened there.
+                const o = o0;
+                const op = tag === "source" && op0 !== "=" ? "^=" : op0;
+                const attr = tag === "source" ? "srcset" : tag === "img" || tag === "script" ? "src" : "href";
                 const abs = /^[a-z]+:/.test(o);
                 const afterHost = abs ? o.indexOf("/", o.indexOf("//") + 2) : 0;
                 let v = other;
@@ -74,8 +78,9 @@ describe.skipIf(!wanted || located.skip !== "")("Selectors on URL attributes: th
         await page.setContent("<!doctype html><title>s</title>");
         const got = await page.evaluate((rs: typeof rows) => rs.map((r) => {
             const tag = r.tag;
-            const direct = document.createElement(tag); direct.setAttribute(r.attr, r.o);
-            const proxied = document.createElement(tag); proxied.setAttribute(r.attr, r.held);
+            const cand = r.attr === "srcset" ? " 1x" : "";
+            const direct = document.createElement(tag); direct.setAttribute(r.attr, r.o + cand);
+            const proxied = document.createElement(tag); proxied.setAttribute(r.attr, r.held + cand);
             return [direct.matches(r.sel), proxied.matches(r.wide)];
         }), rows);
         await page.close();

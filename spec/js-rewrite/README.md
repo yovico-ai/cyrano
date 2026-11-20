@@ -25,7 +25,7 @@ Formats and inverse: `ts/client/src/js/marks.ts`,
 
 ## The rules
 
-R1…R13, stated in `ts/client/src/js/rewriter.ts` (class `Splicer`). Each is
+R1…R15, stated in `ts/client/src/js/rewriter.ts` (class `Splicer`). Each is
 a small edit at a position the grammar gives: where a member access's
 object starts and ends, whether an identifier is read, assigned or
 declared.
@@ -52,8 +52,8 @@ They are held together by:
 ```
 
 The corpus test also checks that what would be served still parses and
-that the original comes back byte for byte. Last run (2026-11-18, R13): 1,342 scripts,
-172.9 MB — identical.
+that the original comes back byte for byte. R15 (import.meta.resolve, 2026-11-19) was checked on a small corpus with a Vite module that uses it (IKEA): identical. Last full run (2026-11-20, R15): 1,342 scripts,
+172.9 MB — identical. (Pass the corpus to js-edits.ts in batches — `xargs -n 200` — or the shell's argument limit cuts the run short.)
 
 ## Known limits
 

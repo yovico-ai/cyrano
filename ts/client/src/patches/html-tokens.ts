@@ -49,6 +49,8 @@ const special = (x: Entry): boolean => x.root === true || (x.ns === "html" ? SPE
 const scopeB = (x: Entry): boolean => x.root === true || (x.ns === "html" ? SCOPE_HTML[x.tag] === true : ipName(x));
 const listB = (x: Entry): boolean => scopeB(x) || named(x, "ol") || named(x, "ul");
 const buttonB = (x: Entry): boolean => scopeB(x) || named(x, "button");
+// Start tags that close a p in button scope first ("in body"; table too, in no-quirks mode: not modelled).
+const CLOSES_P = set("address article aside blockquote center details dialog dir div dl fieldset figcaption figure footer header hgroup main menu nav ol p search section summary ul h1 h2 h3 h4 h5 h6 pre listing form plaintext hr xmp");
 const tableB = (x: Entry): boolean => x.root === true || named(x, "html") || named(x, "table") || named(x, "template");
 interface Entry { tag: string; ns: Ns; ip: IP; root?: true; cdata?: boolean }
 
@@ -111,6 +113,8 @@ class Tracker {
                 ns = "html";
             } else ns = this.top()!.ns;
         }
+        // In body, these start tags first close a p in button scope (spec closesP).
+        if (ns === "html" && CLOSES_P[tag]) this.popUntil((x) => named(x, "p"), buttonB);
         // In HTML, an <image> is an <img> (the tree builder renames it).
         const el = ns === "html" && tag === "image" ? "img" : tag;
         const pushed = ns === "html" ? !VOID[el] : !selfClosing;

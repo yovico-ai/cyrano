@@ -117,15 +117,32 @@ describe("fetch(request): the page's own Request goes to the native as is", () =
         expect(req.headers.get("Crn-C")).toBe("include");
     });
 
+    // YouTube's blocker bait: a data: Request whose subclass's `url` names
+    // its player API. It is judged by the URL it holds, as the browser
+    // fetches it — not rebuilt for the API.
+    it("a subclass whose url lies is judged by the URL it holds", async () => {
+        const { win, fetchMock } = setup(sameOriginCors);
+        class Bait extends win.Request {
+            override get url(): string { return "https://api.other.example/youtubei/v1/player"; }
+        }
+        const req = new Bait("data:application/json,%7B%7D", { method: "POST", body: "{}" });
+        await win.fetch(req as unknown as Request);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(fetchMock.mock.calls[0]![0]).toBe(req);
+        expect(fetchMock.mock.calls[0]!.length).toBe(1); // not rebuilt for the URL its getter names
+    });
+
     it("with init headers: the Request still goes as is, the marks in the init's headers", async () => {
         const { win, fetchMock } = setup(sameOriginCors);
         const req = new win.Request("https://page.example/upload", { method: "POST", body: "payload" });
         const init = { headers: { "x-init": "1" } };
         await win.fetch(req as unknown as Request, init);
-        const [sent, sentInit] = fetchMock.mock.calls[0]! as [unknown, { headers: Headers }];
+        const [sent, sentInit] = fetchMock.mock.calls[0]! as [unknown, { headers: HeadersInit }];
         expect(sent).toBe(req);
-        expect(sentInit.headers.get("x-init")).toBe("1");
-        expect(sentInit.headers.get("Crn-I")).toBe("https://page.example/app/");
+        // Handed over as pairs: a Headers is read by its iterator, which hides the marks.
+        const h = new Headers(sentInit.headers);
+        expect(h.get("x-init")).toBe("1");
+        expect(h.get("Crn-I")).toBe("https://page.example/app/");
         // The page's init object is not modified.
         expect(init).toEqual({ headers: { "x-init": "1" } });
     });

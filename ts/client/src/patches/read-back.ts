@@ -1,7 +1,7 @@
 // Reading markup back, as the page wrote it (native/originals.ts holds the
 // originals): getAttribute, hasAttribute, Attr.value, a script's or style's
-// text, innerHTML / outerHTML / getHTML / XMLSerializer, and clones that
-// keep their originals. removeAttribute forgets the attribute's original.
+// text, innerHTML / outerHTML / getHTML / XMLSerializer, isEqualNode, and
+// clones that keep their originals. removeAttribute forgets the attribute's original.
 //
 // Also here: the consumer of the originals attribute on parser-inserted
 // nodes, and the MutationObserver filter that keeps its removal out of the
@@ -31,6 +31,21 @@ export function patchReadBack(targetWindow: Window, onElement: (el: Element) => 
     const E = g["Element"]?.prototype;
     const N = g["Node"]?.prototype;
     if (!E || !N) return;
+
+    // ── isEqualNode ─────────────────────────────────────────────────────
+    // Compared as written: Next.js's head manager keeps a server-rendered
+    // <script> only if it isEqualNode the one React made — a rewritten one
+    // never was, and was put in again: run twice (washingtonpost.com,
+    // 2026-11-20). Where the native finds them different, their
+    // as-written clones are compared.
+    wrapMethod<(...a: unknown[]) => boolean>(N, "isEqualNode", (native, self, args) => {
+        const r = nR.apply(native, self, args) as boolean;
+        const other = args[0];
+        if (r || typeof self !== "object" || self === null || typeof other !== "object" || other === null) return r;
+        const a = asWritten(self as Node);
+        const b = asWritten(other as Node);
+        return a === self && b === other ? r : (nR.apply(native, a, [b]) as boolean);
+    });
 
     // ── attributes ──────────────────────────────────────────────────────
     wrapMethod<(...a: unknown[]) => string | null>(E, "getAttribute", (native, self, args) => {

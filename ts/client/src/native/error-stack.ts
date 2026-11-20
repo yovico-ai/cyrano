@@ -20,12 +20,17 @@
 // Heuristic (REQUIREMENTS.md): V8 only; a page that captured the built-in
 // before cyrano ran, or that compares realms' intrinsics, can still tell.
 
-import { SafeWeakSet, nO, nOP, nR, nbind, ncall, sStarts } from "./intrinsics";
+import { SafeMap, SafeWeakMap, SafeWeakSet, nO, nOP, nR, nbind, ncall, sStarts } from "./intrinsics";
 import { maskAs, replaceValue, standIn } from "./surface";
 
 type CallSite = {
     getFileName(): string | null | undefined;
     getScriptNameOrSourceURL?(): string | null | undefined;
+    getEvalOrigin?(): string | undefined;
+    isEval?(): boolean;
+    getFunctionName?(): string | null;
+    getLineNumber?(): number | null;
+    getColumnNumber?(): number | null;
     toString(): string;
 };
 type PrepareStackTrace = (err: unknown, sites: CallSite[]) => unknown;
@@ -126,6 +131,49 @@ export function stackUrls(stack: string): string[] {
     return out;
 }
 
+// spec/Stack.agda evalOrigin / untag: the eval origin V8 writes for a
+// function made with `new Function`, and a tagged script's frame text put
+// back as V8 writes it natively.
+export function evalOrigin(name: string, loc: string): string {
+    return `eval at ${name === "" ? "<anonymous>" : name} (${loc})`;
+}
+export function untag(tag: string, origin: string, s: string): string {
+    const parts = s.split(tag);
+    let out = parts[0]!;
+    for (let i = 1; i < parts.length; i++) out += (parts[i]!.charCodeAt(0) === 58 ? `${origin}, <anonymous>` : origin) + parts[i]!;
+    return out;
+}
+
+// The scripts the runtime made for page code's `new Function`, by the
+// //# sourceURL it gave them: their native eval origin.
+const TAG = `crn-fn-${Math.floor(Math.random() * 1e9).toString(36)}-`;
+let tagCount = 0;
+const tagged = new SafeMap<string, string>();
+// Each whole tag (…-1 is not …-12), as untag puts it back.
+const TAG_RE = new RegExp(`${TAG}\\d+(?!\\d)(:?)`, "g");
+const untagAll = (s: string): string => s.replace(TAG_RE, (m: string, colon: string) => {
+    const o = tagged.get(colon ? m.slice(0, -1) : m);
+    return o === undefined ? m : colon ? `${o}, <anonymous>:` : o;
+});
+const isTag = (s: unknown): boolean => typeof s === "string" && tagged.has(s);
+const originNow = new SafeWeakMap<object, () => string | null>();
+
+/**
+ * A `new Function` body, tagged so that its frames show the eval origin
+ * V8 gives such code natively: the page's calling frame, not the
+ * runtime's stand-in. A body that names its own sourceURL is left: its
+ * frames show that name, natively too.
+ */
+export function tagFunctionBody(targetWindow: object, body: string): string {
+    if (/\/\/[#@]\s*sourceURL=/.test(body)) return body;
+    const now = originNow.get(targetWindow);
+    const origin = now ? now() : null;
+    if (origin === null) return body;
+    const tag = `${TAG}${++tagCount}`;
+    tagged.set(tag, origin);
+    return `${body}\n//# sourceURL=${tag}`;
+}
+
 export function patchErrorStacks(
     targetWindow: Window,
     runtimeUrl: string,
@@ -156,9 +204,30 @@ export function patchErrorStacks(
     };
 
     const ours = (site: CallSite): boolean => site.getFileName?.() === runtimeUrl;
+    // An eval origin as natively: tags put back, the script's original URL.
+    const unwrapIn = (t: string, eo: string): string => {
+        const u = urlOf(eo, eo.length);
+        return u === null ? t : t.split(u).join(unwrapOne(u));
+    };
+    const originShown = (eo: string): string => { const t = untagAll(eo); return unwrapIn(t, t); };
     const shown = (site: CallSite): CallSite => {
         const file = site.getFileName?.();
-        if (!file) return site;
+        if (!file) {
+            const eo = site.isEval?.() ? site.getEvalOrigin?.() : undefined;
+            if (typeof eo !== "string") return site;
+            const fixed = originShown(eo);
+            const sn = site.getScriptNameOrSourceURL?.();
+            if (fixed === eo && !isTag(sn)) return site;
+            return new Proxy(site, {
+                get(t, k) {
+                    if (k === "getEvalOrigin") return () => fixed;
+                    if (k === "getScriptNameOrSourceURL") return () => (isTag(sn) ? undefined : sn);
+                    if (k === "toString") return () => unwrapIn(untagAll(t.toString()), untagAll(eo));
+                    const v = nR.get(t, k, t) as unknown;
+                    return typeof v === "function" ? nbind((v as (...a: unknown[]) => unknown), t) : v;
+                },
+            });
+        }
         const original = unwrapOne(file);
         if (original === file) return site;
         return new Proxy(site, {
@@ -170,10 +239,37 @@ export function patchErrorStacks(
             },
         });
     };
+    // The eval origin V8 would write for code the page's current caller
+    // makes now: its frame's function name and the call's location.
+    let sitesMode = false;
+    originNow.set(targetWindow, () => {
+        const I = Intrinsic as unknown as { new (): Error; stackTraceLimit: number | undefined };
+        const limit = I.stackTraceLimit;
+        let sites: unknown;
+        sitesMode = true;
+        try { I.stackTraceLimit = 30; sites = new I().stack; } catch { sites = null; } finally { sitesMode = false; I.stackTraceLimit = limit; }
+        if (!Array.isArray(sites)) return null;
+        const caller = (sites as CallSite[]).find((x) => !ours(x));
+        if (!caller) return null;
+        let loc: string;
+        if (caller.isEval?.()) {
+            const eo = caller.getEvalOrigin?.();
+            if (typeof eo !== "string") return null;
+            loc = originShown(eo);
+        } else {
+            const f = caller.getFileName?.();
+            if (!f) return null;
+            loc = `${unwrapOne(f)}:${caller.getLineNumber?.() ?? 0}:${caller.getColumnNumber?.() ?? 0}`;
+        }
+        // A Function-made script's top level: V8 calls its frame "eval", its origin "<anonymous>".
+        const name = caller.getFunctionName?.() ?? "";
+        return evalOrigin(caller.isEval?.() && name === "eval" ? "" : name, loc);
+    });
     const header = (err: unknown): string => {
         try { return ncall((targetWindow as unknown as { Error: ErrorConstructor }).Error.prototype.toString, err); } catch { return "Error"; }
     };
     const format: PrepareStackTrace = (err, sites) => {
+        if (sitesMode) return sites;
         if (rawMode) return [header(err), ...sites.map((s) => `    at ${s.toString()}`)].join("\n");
         let visible = sites.filter((s) => !ours(s)).map(shown);
         // The limit the page set on its `Error` since the last error was made.

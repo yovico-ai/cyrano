@@ -195,6 +195,11 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 					"target", target.String(), "ct", ct, "err", err)
 				return fmt.Errorf("read upstream body: %w", err)
 			}
+			// What Chromium's ORB blocks cross-origin fails here too
+			// (proxy/orb.go; spec/Orb.agda).
+			if proxy.OrbBlocks(resp, body) {
+				return proxy.ErrOrbBlocked
+			}
 			rewritten := rewriteJSFor(target)(body)
 			if prettify {
 				rewritten = jsrewrite.Prettify(rewritten)
@@ -318,20 +323,7 @@ func responseKind(mark urlrewrite.Dest, sfd string, has bool, ct string, hasCT b
 // (spec/Disposition.agda takenMime): of each comma-separated item, HTTP
 // whitespace skipped, up to ";" or whitespace, lowercased; the last with a
 // "/" that is not */*. None: the document's type is sniffed.
-func takenMime(ct string) (string, bool) {
-	m, ok := "", false
-	for _, item := range strings.Split(ct, ",") {
-		item = strings.TrimLeft(item, " \t\r\n")
-		if i := strings.IndexAny(item, "; \t\r\n"); i >= 0 {
-			item = item[:i]
-		}
-		item = strings.ToLower(item)
-		if strings.Contains(item, "/") && item != "*/*" {
-			m, ok = item, true
-		}
-	}
-	return m, ok
-}
+func takenMime(ct string) (string, bool) { return urlrewrite.TakenMime(ct) }
 
 // htmlPrefixes are what Chromium's HTML sniff looks for (spec/Disposition
 // sniffHtml).

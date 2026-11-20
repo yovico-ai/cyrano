@@ -165,7 +165,16 @@ func Referrer(p Policy, ref, target string) (string, bool) {
 // OriginHeader is the Origin header a direct browser sends (Fetch §3.1) for
 // a request with this Sec-Fetch-Mode and method from a document at init to
 // target; ok is false for none.
+//
+// init "null" is a context whose origin is opaque (a sandboxed document;
+// spec originHeaderOpaque): Origin "null" wherever there is one.
 func OriginHeader(mode string, safeMethod bool, p Policy, init, target string) (string, bool) {
+	if init == "null" {
+		if mode == "websocket" || mode == "cors" || !safeMethod {
+			return "null", true
+		}
+		return "", false
+	}
 	i, ires := parseRef(nil, preprocess(init))
 	t, tres := parseRef(nil, preprocess(target))
 	if ires != parsedURL || tres != parsedURL {
@@ -225,6 +234,9 @@ func SchemefulSite(raw string) string {
 // from a document at init to target (schemeful same-site), or "" when
 // either does not parse.
 func SecFetchSite(init, target string) string {
+	if init == "null" { // an opaque origin: nothing is same-site with it
+		return "cross-site"
+	}
 	i, ires := parseRef(nil, preprocess(init))
 	t, tres := parseRef(nil, preprocess(target))
 	if ires != parsedURL || tres != parsedURL {

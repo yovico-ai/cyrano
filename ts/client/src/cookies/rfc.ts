@@ -217,3 +217,64 @@ export function cookieString(cookies: StoredCookie[]): string {
 export function cookiesFor(api: boolean, url: URL, jar: string): string {
     return cookieString(selectCookies(api, url, jarCookies(jar)));
 }
+
+// ── the Cookie Store API (spec/Cookies.agda cookieStoreSet / Query) ──────
+
+export type StoreErr = "emptyNameEq" | "emptyBoth" | "nameEq" | "hostDomain" | "domainDot" | "domainMismatch" | "pathSlash" | "hostPath" | "malformed";
+
+export interface StoreSet {
+    name: string;
+    value: string;
+    domain: string | null;
+    path: string | null;
+    sameSite: "n" | "l" | "t";
+}
+
+/**
+ * What cookieStore.set at `url` stores, or why Chromium refuses it, in its
+ * order of checks; `later`: Chromium 147's generation, not Chrome 139's.
+ */
+export function cookieStoreSet(later: boolean, publicSuffix: boolean, url: URL, o: StoreSet): StoredCookie | { error: StoreErr } {
+    const { name: n, value: v } = o;
+    if (n === "" && sIncludes(v, "=")) return { error: "emptyNameEq" };
+    if (n === "" && v === "") return { error: "emptyBoth" };
+    if (later && sIncludes(n, "=")) return { error: "nameEq" };
+    const hostPrefixed = later ? sStarts(lowerASCII(n), "__host-") : sStarts(n, "__Host-");
+    if (o.domain !== null) {
+        if (hostPrefixed) return { error: "hostDomain" };
+        if (sStarts(o.domain, ".")) return { error: "domainDot" };
+        if (!domainMatch(hostOf(url), lowerASCII(o.domain))) return { error: "domainMismatch" };
+        if (later && publicSuffix && lowerASCII(o.domain) !== hostOf(url)) return { error: "domainMismatch" };
+    }
+    let p = "/";
+    if (o.path !== null && o.path !== "") {
+        if (hostPrefixed && o.path !== "/") return { error: "hostPath" };
+        if (!sStarts(o.path, "/")) return { error: "pathSlash" };
+        p = sEnds(o.path, "/") ? o.path : o.path + "/";
+    }
+    // eslint-disable-next-line no-control-regex
+    const bad = /[\x00-\x1f\x7f;]/;
+    const edge = (s: string): boolean => /^[ \t]|[ \t]$/.test(s);
+    if (bad.test(n) || bad.test(v) || edge(n) || edge(v) || sIncludes(n, "=") ||
+        octets(n) + octets(v) > 4096 || octets(p) > 1024 || (o.domain !== null && octets(o.domain) > 1024)) return { error: "malformed" };
+    const c = storeCookie(true, publicSuffix, url, {
+        name: n, value: v, domain: o.domain === null ? null : lowerASCII(o.domain), path: p,
+        secure: true, httpOnly: false, sameSite: o.sameSite, maxAge: null, expires: null,
+    });
+    return c ?? { error: "malformed" };
+}
+
+/** What cookieStore.delete removes: the cookie such a set would write. */
+export function cookieStoreDelete(later: boolean, publicSuffix: boolean, url: URL, name: string, domain: string | null, path: string | null): StoredCookie | { error: StoreErr } {
+    return cookieStoreSet(later, publicSuffix, url, { name, value: "x", domain, path, sameSite: "t" });
+}
+
+/** get / getAll: the cookies document.cookie shows at `url`, of `name` when given. */
+export function cookieStoreQuery(url: URL, name: string | null, cookies: StoredCookie[]): StoredCookie[] {
+    const all = selectCookies(true, url, cookies);
+    return name === null ? all : all.filter((c) => c.name === name);
+}
+
+export function itemSameSite(s: SameSite): "none" | "lax" | "strict" {
+    return s === "n" ? "none" : s === "t" ? "strict" : "lax";
+}

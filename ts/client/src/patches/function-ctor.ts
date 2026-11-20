@@ -9,6 +9,10 @@
 // masked by a native twin compiled — never run — from the original
 // arguments ("function anonymous(…) {…}").
 //
+// Its frames name the page's calling frame as eval origin, as natively,
+// not this wrapper (the body carries a //# sourceURL tag the stack
+// formatter puts back: native/error-stack.ts; Kasada reads it).
+//
 // Known gap: the AsyncFunction, GeneratorFunction and AsyncGeneratorFunction
 // constructors, reachable as (async () => {}).constructor etc., are not
 // wrapped yet.
@@ -16,6 +20,7 @@
 import { SafeWeakSet, nO, nR } from "../native/intrinsics";
 import { defaultJsRewriteOptions, rewriteJsSource } from "../js/rewriter";
 import { maskAs, replaceValue } from "../native/surface";
+import { tagFunctionBody } from "../native/error-stack";
 import { isTrustedValue, trusted } from "../native/trusted";
 
 export function patchFunctionConstructor(targetWindow: Window): void {
@@ -31,7 +36,8 @@ export function patchFunctionConstructor(targetWindow: Window): void {
         if (typeof body !== "string") return nR.construct(NativeFunction, args, (newTarget ?? NativeFunction) as FunctionConstructor);
         const twin = nR.construct(NativeFunction, args) as object; // the page's own source; throws as natively
         const rewritten = args.slice();
-        const code = rewriteJsSource(body, defaultJsRewriteOptions());
+        // Tagged: its frames show the page's calling frame as eval origin (native/error-stack.ts).
+        const code = tagFunctionBody(targetWindow, rewriteJsSource(body, defaultJsRewriteOptions()));
         rewritten[rewritten.length - 1] = wasTrusted ? trusted(targetWindow, "Script", code) : code;
         const fn = nR.construct(NativeFunction, rewritten, (newTarget ?? NativeFunction) as FunctionConstructor) as object;
         return maskAs(fn, twin);

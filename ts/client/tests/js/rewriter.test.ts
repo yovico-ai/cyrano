@@ -27,7 +27,7 @@ describe("JS rewriting rules", () => {
         expect(code(out)).toBe(want);
         expect(original(out)).toBe(src);
         expect(out.split("\n").length).toBe(src.split("\n").length);
-        expect(() => new Function(out.replace(/\bimport\(/g, "imp("))).not.toThrow();
+        expect(() => new Function(out.replace(/\bimport\(/g, "imp(").replace(/\bimport\.meta\b/g, "imeta"))).not.toThrow();
     });
 
     it("keeps the page's own formatting and comments, byte for byte", () => {

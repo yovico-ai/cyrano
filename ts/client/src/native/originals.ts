@@ -175,6 +175,17 @@ export function consume(root: unknown): void {
     if (typeof r.querySelectorAll !== "function") return;
     const found = r.querySelectorAll(`[${ORIGINALS_ATTR}]`);
     for (let i = 0; i < found.length; i++) one(found[i]!);
+    // A template's content is a fragment of its own, which selectors do
+    // not reach: markup set into a template kept the attribute there, and
+    // so did every copy of it (Next.js builds its head elements so: they
+    // never isEqualNode the page's, washingtonpost.com).
+    const content = (t: unknown): void => {
+        const c = (t as { content?: unknown }).content;
+        if (typeof c === "object" && c !== null && c !== root) consume(c);
+    };
+    if (r.nodeType === 1 && (r as Element).localName === "template") content(r);
+    const templates = r.querySelectorAll("template");
+    for (let i = 0; i < templates.length; i++) content(templates[i]);
 }
 
 function elementsOf(node: Node): Element[] {

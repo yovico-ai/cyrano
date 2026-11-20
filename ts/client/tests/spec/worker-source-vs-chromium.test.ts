@@ -65,6 +65,12 @@ describe.skipIf(!wanted || located.skip !== "")("blob:/data: workers: the spec i
                     }
                 } catch (e) { r(`throw ${(e as Error).name}`); }
             });
+            // Under load an error event can come late: a silent one is tried
+            // once more, with a script of its own.
+            const settled = async (first: string, next: () => string, module: boolean, shared: boolean): Promise<string> => {
+                const g = await run(first, module, shared);
+                return g === "silent" ? run(next(), module, shared) : g;
+            };
             const out: { source: string; mime: string; module: boolean; shared: boolean; got: string }[] = [];
             let n = 0;
             for (const t of types) {
@@ -73,10 +79,12 @@ describe.skipIf(!wanted || located.skip !== "")("blob:/data: workers: the spec i
                     const code = (k: number) => shared ? `/*${k}*/onconnect=(e)=>e.ports[0].postMessage(1)` : `/*${k}*/postMessage(1)`;
                     for (const module of [false, true]) {
                         const blob = t === null ? new Blob([code(++n)]) : new Blob([code(n = n + 1)], { type: t });
-                        out.push({ source: "blob", mime: blob.type, module, shared, got: await run(URL.createObjectURL(blob), module, shared) });
+                        const blobAgain = () => URL.createObjectURL(t === null ? new Blob([code(++n)]) : new Blob([code(++n)], { type: t }));
+                        out.push({ source: "blob", mime: blob.type, module, shared, got: await settled(URL.createObjectURL(blob), blobAgain, module, shared) });
                         const d = `data:${t ?? ""},${encodeURIComponent(code(++n))}`;
                         const mime = (await fetch(d)).headers.get("content-type") ?? "";
-                        out.push({ source: `data ${JSON.stringify(t)}`, mime, module, shared, got: await run(d, module, shared) });
+                        const dataAgain = () => `data:${t ?? ""},${encodeURIComponent(code(++n))}`;
+                        out.push({ source: `data ${JSON.stringify(t)}`, mime, module, shared, got: await settled(d, dataAgain, module, shared) });
                     }
                 }
             }

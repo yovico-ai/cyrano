@@ -17,6 +17,7 @@ import type { ClientConfig } from "../config";
 import type { RewriterApi } from "./api-types";
 import { BaseUrlState } from "./base-url-state";
 import { isUrlLikeSpecifier, rewriteUrl, unwrapProxiedUrl } from "../url/containment";
+import { metaResolver } from "../wrappers/meta-resolve";
 import { foreignLocationView, makeLocationView } from "../wrappers/wrapped-location";
 import {
     wrapGetTopWindow,
@@ -253,6 +254,7 @@ export function createRewriterApi(
         // `new SharedWorker(url)` at the source level so the Worker script is
         // fetched through the proxy even when page code (e.g. reCAPTCHA)
         // restores the native Worker constructor after our prototype patch.
+        wrap_meta_resolve: metaResolver(config),
         wrap_worker_url: (url) => {
             // reCAPTCHA passes a TrustedScriptURL object, not a plain string.
             // String(TrustedScriptURL) returns the inner URL, which we can then proxify.

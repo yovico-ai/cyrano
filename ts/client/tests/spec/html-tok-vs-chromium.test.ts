@@ -77,6 +77,8 @@ describe.skipIf(!wanted || located.skip !== "")("HTML tokenization: the spec is 
 
     it("start tags and their namespaces", async () => {
         const draws = fc.sample(markupArb(), { numRuns: 400, seed });
+        // A start tag closes an open p (here inside an integration point).
+        draws.push('<svg><foreignObject><p data-i=1><div data-i=2></div></foreignObject><rect data-i=3></rect></svg>');
         const page = await load("<!doctype html><body>");
         // Each draw parsed three ways: a page (written into a frame, so
         // scripting is on), DOMParser and a template (scripting off).
@@ -129,6 +131,8 @@ describe.skipIf(!wanted || located.skip !== "")("HTML tokenization: the spec is 
 
     it("start tags and namespaces in a context element (innerHTML)", async () => {
         const draws = fc.sample(fc.tuple(markupArb(), fc.constantFrom(...CONTEXTS)), { numRuns: 400, seed });
+        // A <div> closes the p a breakout opened: the svg context is the current node again (seed 163529162).
+        draws.push(['<p data-i=1 face><div data-i=2></div><noframes data-i=3></noframes><textarea data-i=4></textarea>', { ns: "svg", name: "g", encoding: null }]);
         const page = await load("<!doctype html><body>");
         const seen = await page.evaluate((ds: [string, (typeof CONTEXTS)[number]][]) => {
             const NSU: Record<string, string> = { html: "http://www.w3.org/1999/xhtml", svg: "http://www.w3.org/2000/svg", math: "http://www.w3.org/1998/Math/MathML" };

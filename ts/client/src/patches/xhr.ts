@@ -6,7 +6,7 @@
 
 import { nO, nR, ncall, sStarts } from "../native/intrinsics";
 import { wrapAccessor, wrapMethod } from "../native/surface";
-import { CREDENTIALS, INITIATOR, crossOriginXhr, includesCredentials, initiatorValue, initiatorOfXhr, isCrossOrigin, type CorsContext } from "./cors";
+import { CREDENTIALS, INITIATOR, crossOriginXhr, namesContext, includesCredentials, initiatorValue, initiatorOfXhr, isCrossOrigin, type CorsContext } from "./cors";
 
 export function patchXmlHttpRequest(
     targetWindow: Window,
@@ -29,7 +29,7 @@ export function patchXmlHttpRequest(
             const target = unwrapOne(String(next[1]));
             const cross = isCrossOrigin(target, baseUrl(), own) && !(cors.proxy && sStarts(target, cors.proxy + "/"));
             if (cross) crossOriginXhr.set(self, own); else crossOriginXhr.delete(self);
-            if (cross || cors.always) initiatorOfXhr.set(self, { href: initiatorValue(cors.href()), cross });
+            if (namesContext(cors.opaque === true, cross, cors.always === true)) initiatorOfXhr.set(self, { href: initiatorValue(cors.href()), cross });
             else initiatorOfXhr.delete(self);
         }
         return done;

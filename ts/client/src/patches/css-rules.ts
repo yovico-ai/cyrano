@@ -3,7 +3,8 @@
 // inline `<style>` content and `style="..."` attributes do.
 //
 // Surfaces patched here:
-//   - CSSStyleSheet.prototype.insertRule(rule, index?)
+//   - CSSStyleSheet.prototype.insertRule(rule, index?), replace(text),
+//     replaceSync(text), addRule(selector, style, index?)
 //   - CSSGroupingRule.prototype.insertRule(rule, index?)  (covers @media,
 //     @supports, etc. — they expose the same insertRule on CSSGroupingRule)
 //
@@ -162,10 +163,17 @@ function patchInsertRuleOn(
     rewriteOne: (url: string) => string,
 ): void {
     if (!proto || !ncall(nOP.hasOwnProperty, proto, "insertRule")) return;
-    wrapMethod<(...a: unknown[]) => number>(proto, "insertRule", (native, self, args) => {
-        if (typeof args[0] !== "string") return nR.apply(native, self, args) as number;
-        const next = args.slice();
-        next[0] = rewriteCssText(args[0], rewriteOne);
-        return nR.apply(native, self, next) as number;
-    });
+    // insertRule(rule), and a sheet's replace(text) / replaceSync(text):
+    // the CSS text is the first argument. addRule(selector, style): the
+    // declarations, the second. (Constructed sheets — Google Pay's button
+    // on Bloomberg set its background image so, straight to gstatic.)
+    for (const [key, at] of [["insertRule", 0], ["replace", 0], ["replaceSync", 0], ["addRule", 1]] as const) {
+        if (!ncall(nOP.hasOwnProperty, proto, key)) continue;
+        wrapMethod<(...a: unknown[]) => unknown>(proto, key, (native, self, args) => {
+            if (typeof args[at] !== "string") return nR.apply(native, self, args);
+            const next = args.slice();
+            next[at] = rewriteCssText(args[at] as string, rewriteOne);
+            return nR.apply(native, self, next);
+        });
+    }
 }

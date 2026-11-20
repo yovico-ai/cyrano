@@ -19,7 +19,7 @@ var (
 	cspValues = []string{"'self'", "'none'", "'NONE'", "'unsafe-inline'", "'unsafe-eval'", "'strict-dynamic'",
 		"'nonce-abc'", "'Nonce-XyZ'", "'nonce-'", "'sha256-AAAA'", "'SHA384-bb'", "https:", "data:", "blob:", "*",
 		"https://cdn.example", "*.example.com", "http://localhost:9081", "HTTP://LOCALHOST:9081", "/r", "'script'",
-		"default", "allow-scripts", "_crnpolicy", "'unsafe-hashes'", "'report-sample'", "'wasm-unsafe-eval'", "'inline-speculation-rules'"}
+		"default", "allow-scripts", "ALLOW-Scripts", "allow-forms", "_crnpolicy", "'unsafe-hashes'", "'report-sample'", "'wasm-unsafe-eval'", "'inline-speculation-rules'"}
 	cspSpaces = []string{" ", "  ", "\t", "\n", "\f", "\r", "\v", " ", ""}
 )
 

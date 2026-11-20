@@ -19,7 +19,7 @@ describe.skipIf(located.skip !== "")("crossorigin: spec conformance", () => {
 
     it("crossoriginValue is crossoriginValue", async () => {
         await fc.assert(fc.asyncProperty(fc.boolean(), fc.constantFrom("link", "script", "img", "image", "video"),
-            fc.constantFrom("", "preload", "Preload", "prefetch", "stylesheet", "modulepreload", "preload x"), fc.constantFrom("", "font", "FONT", "script", "style"),
+            fc.constantFrom("", "preload", "Preload", "prefetch", "stylesheet", "modulepreload", "preload x"), fc.constantFrom("", "font", "FONT", "script", "style", "fetch", "FETCH"),
             async (html, tag, rel, as) => {
                 expect(crossoriginValue(html, tag, rel, as) ?? "keep").toBe(await oracle.ask("crossorigin", [html ? "1" : "0", tag, rel, as]));
             }), { numRuns: 300 });

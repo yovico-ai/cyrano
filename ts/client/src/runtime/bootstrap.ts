@@ -5,6 +5,9 @@
 // head-injection script expects. It also makes it easy to construct the API
 // without immediately patching globals (useful in tests).
 
+import { patchLocationReflection } from "../patches/location-reflect";
+import { isDocumentObject, isWindowObject } from "../native/brand";
+import { isView } from "../native/cross-origin";
 import { buildBootstrapHtml } from "./bootstrap-html";
 import { defineHidden } from "../native/hidden-globals";
 import type { ClientConfig } from "../config";
@@ -52,6 +55,12 @@ export function init(
                 (u) => unwrapProxiedUrl(u, config),
                 config.referrer,
                 () => api.get_base_url() ?? new URL(targetWindow.location.href),
+            );
+            // `location` reached through reflection is the view too (patches/location-reflect.ts).
+            patchLocationReflection(
+                targetWindow,
+                (o) => api.wrap_location({ obj: o }) as { location: unknown },
+                (o) => o === targetWindow || o === targetWindow.document || isWindowObject(o) || isDocumentObject(o) || isView(o),
             );
             // Publish the shared bracket-key variable as a writable global property.
             // The server and client JS rewriters emit `$__crn_key__ = expr` to

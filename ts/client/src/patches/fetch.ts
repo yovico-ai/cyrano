@@ -19,7 +19,7 @@
 import { SafeWeakMap, nO, nOP, nR, ncall, sStarts } from "../native/intrinsics";
 import { patchFetchLater } from "./fetch-later";
 import { wrapAccessor, wrapConstructor, wrapMethod } from "../native/surface";
-import { CREDENTIALS, INITIATOR, includesCredentials, initiatorValue, corsAllows, exposedBy, isCrossOrigin, type CorsContext, type Exposed } from "./cors";
+import { CREDENTIALS, INITIATOR, namesContext, includesCredentials, initiatorValue, corsAllows, exposedBy, isCrossOrigin, type CorsContext, type Exposed } from "./cors";
 import { headerViewsOf } from "./response-headers";
 import { type RewriteOne } from "./referrer-policy";
 import { isReferrerPolicy } from "../url/containment";
@@ -103,14 +103,30 @@ export function patchFetch(
     const headersOf = w.Response?.prototype
         ? nO.getOwnPropertyDescriptor(w.Response.prototype, "headers")?.get as ((this: unknown) => Headers) | undefined
         : undefined;
+    // A Headers handed over in an init is read by its iterator, which the
+    // runtime wraps to keep its own request headers out of the page's
+    // sight (response-headers.ts): the native gets the pairs instead,
+    // listed with the native forEach (captured before that patch).
+    const HeadersProto = (targetWindow as unknown as { Headers?: { prototype: Headers } }).Headers?.prototype;
+    const nativeHeadersForEach = HeadersProto?.forEach;
+    const pairsOf = (h: Headers): Array<[string, string]> | Headers => {
+        if (!nativeHeadersForEach) return h;
+        const out: Array<[string, string]> = [];
+        ncall(nativeHeadersForEach, h, (v: string, k: string) => { out[out.length] = [k, v]; });
+        return out;
+    };
     /** Responses that passed the CORS check → what they expose. */
     const corsResponses = new SafeWeakMap<object, Exposed>();
 
     const nativeFetch = wrapMethod<typeof fetch>(targetWindow, "fetch", (native, self, args) => {
         const [input, ...rest] = args;
         const viaRequest = isRequest(input);
-        // input.url reads back the original (patched getter below).
-        const original = viaRequest ? input.url : String(input);
+        // A Request's URL is the one it holds, read by the native getter
+        // (and unwrapped): a page's `url` can be its own (a subclass's
+        // getter — YouTube checks for blockers with a data: Request whose
+        // `url` names its player API; the runtime fetched the API instead,
+        // over a rebuilt request HTTP/1.1 could not send).
+        const original = viaRequest ? (nativeUrl ? unwrapOne(ncall(nativeUrl, input)) : input.url) : String(input);
         if (nativeRefuses(original, baseUrl)) return nR.apply(native, self, args) as Promise<Response>;
         // The request's own referrer policy: carried by its URL, the browser
         // told unsafe-url (patches/referrer-policy.ts). A Request made by the
@@ -138,7 +154,7 @@ export function patchFetch(
         const target = unwrapOne(rewritten);
         const cross = own !== undefined && isCrossOrigin(target, baseUrl(), own) &&
             !(cors!.proxy && sStarts(target, cors!.proxy + "/"));
-        if (own === undefined || (!cross && !cors?.always)) return plain();
+        if (own === undefined || !namesContext(cors?.opaque === true, cross, cors?.always === true)) return plain();
 
         const init = (typeof rest[0] === "object" && rest[0] !== null ? rest[0] : undefined) as RequestInit | undefined;
         const mode = init?.mode ?? (viaRequest ? input.mode : "cors");
@@ -166,13 +182,13 @@ export function patchFetch(
                 const H = (w as unknown as { Headers: typeof Headers }).Headers;
                 if (init && init.headers !== undefined) {
                     const first = viaRequest ? (asIs ? input : new (NativeRequest ?? Request)(rewritten, input)) : rewritten;
-                    sent = nR.apply(native, self, [first, { ...init, headers: mark(new H(init.headers)) }]) as Promise<Response>;
+                    sent = nR.apply(native, self, [first, { ...init, headers: pairsOf(mark(new H(init.headers))) }]) as Promise<Response>;
                 } else if (viaRequest) {
                     const req = asIs ? input : new (NativeRequest ?? Request)(rewritten, input);
                     mark(req.headers);
                     sent = nR.apply(native, self, [req, ...rest]) as Promise<Response>;
                 } else {
-                    sent = nR.apply(native, self, [rewritten, { ...(init ?? {}), headers: mark(new H()) }]) as Promise<Response>;
+                    sent = nR.apply(native, self, [rewritten, { ...(init ?? {}), headers: pairsOf(mark(new H())) }]) as Promise<Response>;
                 }
             }
         } catch {

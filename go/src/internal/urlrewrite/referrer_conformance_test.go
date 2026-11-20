@@ -67,7 +67,7 @@ func TestSpecConformance_OriginHeader(t *testing.T) {
 		mode := rapid.SampledFrom([]string{"navigate", "same-origin", "no-cors", "cors", "websocket"}).Draw(rt, "mode")
 		safe := rapid.Bool().Draw(rt, "safe")
 		p := rapid.SampledFrom(policyNames).Draw(rt, "policy")
-		from := rapid.SampledFrom(refURLs).Draw(rt, "from")
+		from := rapid.SampledFrom(append([]string{"null"}, refURLs...)).Draw(rt, "from") // "null": an opaque origin
 		to := rapid.SampledFrom(refURLs).Draw(rt, "to")
 		sm := "unsafe"
 		if safe {
@@ -92,7 +92,7 @@ func TestSpecConformance_SecFetchSite(t *testing.T) {
 		return a, s, s
 	}
 	rapid.Check(t, func(rt *rapid.T) {
-		from := rapid.SampledFrom(refURLs).Draw(rt, "from")
+		from := rapid.SampledFrom(append([]string{"null"}, refURLs...)).Draw(rt, "from") // "null": an opaque origin
 		to := rapid.SampledFrom(refURLs).Draw(rt, "to")
 		_, _, fs := site(from)
 		_, _, ts := site(to)

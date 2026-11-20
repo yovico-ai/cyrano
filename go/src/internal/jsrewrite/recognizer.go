@@ -1304,6 +1304,11 @@ func (p *parser) lhs(calls bool) expr {
 				e = expr{start: e.start, end: nameEnd}
 				continue
 			}
+			if e.meta && name == "resolve" && p.o.WrapImportMetaResolve && !p.is("=") && !p.isAssignOp() && !((p.is("++") || p.is("--")) && !p.tok.nl) { // R15
+				p.replace(e.start, nameEnd-e.start, "$rewriter.wrap_meta_resolve(import.meta)")
+				e = expr{start: e.start, end: nameEnd, wrapped: true}
+				continue
+			}
 			applied := p.member(&e, name, true, false, optional, opPos, 0, 0, calls && p.calledNext())
 			e = expr{start: e.start, end: nameEnd, chain: e.chain || optional, wrapped: e.wrapped || applied}
 

@@ -24,13 +24,13 @@ module Carry where
 
 open import Data.Bool.Base using (Bool; true; false; _∨_; _∧_; not; if_then_else_)
 open import Data.Char.Base using (Char; toℕ; fromℕ)
-open import Data.List.Base using (List; []; _∷_; _++_; concatMap)
+open import Data.List.Base using (List; []; _∷_; _++_; concatMap; map; reverse)
 open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.Nat.Base using (ℕ; _<ᵇ_; _/_; _%_; _+_)
 open import Data.Product.Base using (_×_; _,_)
 open import Data.String.Base using (toList)
 
-open import Url using (Str; is; isDigit; showN; break)
+open import Url using (Str; is; isDigit; showN; break; splitOn; eqStr; lowerAscii)
 
 hex : ℕ → Char
 hex n = if n <ᵇ 10 then fromℕ (48 + n) else fromℕ (87 + n)
@@ -87,3 +87,46 @@ crnbRead s with break (is 45) s
   both (just x) (just y) = just (x , y)
   both _        _        = nothing
 ... | (a , []) = nothing
+
+------------------------------------------------------------------------
+-- The length the browser is told. An HTTP/2 stream that ends with fewer
+-- body bytes than its Content-Length declared (Akamai's 403s on
+-- api.nike.com: "2", and no DATA) is taken by Chrome as the response it
+-- is, the bytes that came; over the proxy's HTTP/1.1 the browser would
+-- fail it (ERR_CONTENT_LENGTH_MISMATCH). So for such a response the
+-- browser is told the length that came — scripts still read the origin's
+-- Content-Length (Crn-H). Over HTTP/1.1 a short body is a cut connection,
+-- which the browser fails natively too: left as it is. (Go reads the
+-- whole of such a body before answering only up to 64 KiB.)
+
+framedLength : Bool → ℕ → ℕ → ℕ
+framedLength http2 declared came = if http2 ∧ (came <ᵇ declared) then came else declared
+
+------------------------------------------------------------------------
+-- Vary, as the browser is told it. Natively a response that varies on
+-- Origin is cached once per requesting origin; through the proxy every
+-- request is the proxy's own, sends no Origin, and one cached copy went to
+-- every page (bbc.com was handed bbc.co.uk's, failed CORS and sent the
+-- reader back). Where Vary lists Origin (ASCII case-insensitively, as one
+-- of its comma-separated tokens, OWS around), the browser is told
+-- Crn-I besides — the runtime's header naming the requesting page, which
+-- differs where Origin would (Crn-H keeps the origin's Vary for scripts).
+-- "*" already keeps nothing: left as written.
+
+varyLists : Str → Str → Bool
+varyLists tok v = anyTok (splitOn (is 44) v)
+  where
+  trimO : Str → Str
+  trimO s = rev (dropW (rev (dropW s)))
+    where
+    dropW : Str → Str
+    dropW [] = []
+    dropW (c ∷ cs) = if is 32 c ∨ is 9 c then dropW cs else c ∷ cs
+    rev : Str → Str
+    rev = reverse
+  anyTok : List Str → Bool
+  anyTok [] = false
+  anyTok (t ∷ ts) = eqStr (map lowerAscii (trimO t)) (map lowerAscii tok) ∨ anyTok ts
+
+varyForBrowser : Str → Str
+varyForBrowser v = if varyLists (toList "origin") v ∧ not (varyLists (toList "crn-i") v) then v ++ toList ", Crn-I" else v

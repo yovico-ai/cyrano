@@ -163,7 +163,16 @@ func (h *Handler) directFetchHeaders(req *http.Request, target *url.URL, request
 	safe := req.Method == http.MethodGet || req.Method == http.MethodHead
 	browserSent := req.Header.Get("Origin") != ""
 	scripted := strings.EqualFold(req.Header.Get("Sec-Fetch-Dest"), "empty")
-	if v, ok := urlrewrite.OriginHeader(mode, safe, policy, page, to); ok && (browserSent || scripted) {
+	// Every proxied context has the proxy's origin but one the browser
+	// made opaque (a sandboxed document): its requests to the proxy are
+	// the only cross-site ones a proxied page makes. Its Origin is "null"
+	// and nothing is same-site with it (spec/Referrer.agda
+	// originHeaderOpaque, secFetchSiteOpaque); its Referer is its page's.
+	init := page
+	if strings.EqualFold(req.Header.Get("Sec-Fetch-Site"), "cross-site") {
+		init = "null"
+	}
+	if v, ok := urlrewrite.OriginHeader(mode, safe, policy, init, to); ok && (browserSent || scripted) {
 		req.Header.Set("Origin", v)
 	} else if browserSent && !ok {
 		req.Header.Del("Origin")
@@ -173,7 +182,7 @@ func (h *Handler) directFetchHeaders(req *http.Request, target *url.URL, request
 
 	// "none" (a user-initiated navigation) has no initiator to compare.
 	if sfs := req.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "none" {
-		if site := urlrewrite.SecFetchSite(page, to); site != "" {
+		if site := urlrewrite.SecFetchSite(init, to); site != "" {
 			req.Header.Set("Sec-Fetch-Site", site)
 		}
 	}

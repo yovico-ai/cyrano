@@ -10,6 +10,7 @@
 // origin is the proxy's, so the comparison is made between the windows'
 // original origins, and a delivery goes to the native with the proxy origin.
 
+import { trusted } from "../native/trusted";
 import { SafeSet, SafeWeakMap, nO, nR, napply, nqueueMicrotask } from "../native/intrinsics";
 import { realWindow } from "../native/cross-origin";
 import { rawStackUrls } from "../native/error-stack";
@@ -123,8 +124,30 @@ export function callInRealmOf(sender: unknown, fn: unknown, self: unknown, args:
             // The saved apply is handed in: the compiled body never looks up
             // the page-writable Reflect.apply. (A built-in does not change the
             // incumbent realm: the trampoline stays the calling function.)
-            const make = nR.construct(F, ["ap", "return function (f, t, a) { return ap(f, t, a); }"]) as (ap: typeof nR.apply) => (f: unknown, self: unknown, args: unknown[]) => unknown;
-            t = make(nR.apply);
+            // The runtime's own realm (the window its bundle was loaded
+            // into) has a function of its own to call through: nothing is
+            // compiled — under Trusted Types that would be a violation,
+            // fired at the page (Pinterest, 2026-11-20; Chrome's Function
+            // takes no TrustedScript either).
+            if (sender === (globalThis as unknown)) {
+                t = (f: unknown, s: unknown, a: unknown[]) => nR.apply(f as (...x: unknown[]) => unknown, s, a);
+            } else {
+                // Compiled in the sender's realm by its own eval, given a
+                // TrustedScript of the runtime's policy: under Trusted Types
+                // eval takes one, Chrome's Function does not. Where eval
+                // hands the object back (no Trusted Types), Function does it.
+                type Make = (ap: typeof nR.apply) => (f: unknown, self: unknown, args: unknown[]) => unknown;
+                const body = "return function (f, t, a) { return ap(f, t, a); }";
+                const ev = (sender as { eval?: (x: unknown) => unknown }).eval;
+                const code = `(function (ap) { ${body} })`;
+                // The sender realm's own policy, else the runtime's (a frame
+                // that has none of its own: same-origin, it takes ours).
+                let script = trusted(sender, "Script", code);
+                if (typeof script === "string") script = trusted(globalThis, "Script", code);
+                let make = typeof ev === "function" ? nR.apply(ev, sender, [script]) : undefined;
+                if (typeof make !== "function") make = nR.construct(F, ["ap", body]);
+                t = (make as Make)(nR.apply);
+            }
             trampolines.set(sender, t);
         } catch {
             return NOT_SENT; // really cross-origin, or a realm that refuses

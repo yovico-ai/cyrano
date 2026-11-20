@@ -197,6 +197,10 @@ func TestE2E_NoRuntimeWhereNoScriptRuns(t *testing.T) {
 		"script-src 'self'":            true,
 		"script-src-elem 'none'":       true, // inline handlers are governed by nothing: they run
 		"default-src 'none'; script-src 'unsafe-inline'": true,
+		"sandbox":               false, // Microsoft's company-target sync frame
+		"sandbox allow-forms":   false,
+		"sandbox allow-scripts": true,
+		"sandbox ALLOW-SCRIPTS allow-same-origin": true,
 	} {
 		up := startInlineServer(t, func(w http.ResponseWriter, r *http.Request) {
 			if csp != "" {
@@ -216,5 +220,72 @@ func TestE2E_NoRuntimeWhereNoScriptRuns(t *testing.T) {
 		if !strings.Contains(body, "/cyrano/http/") {
 			t.Errorf("%q: the page's URLs are not rewritten:\n%.300s", csp, body)
 		}
+	}
+}
+
+// TestE2E_OrbBlocksCrossOriginData — a <script> to another origin whose
+// response Chromium's ORB blocks (JSON here) is a network error natively;
+// through the proxy every script is same-origin, so the proxy breaks the
+// connection (spec/Orb.agda proxyBlocks; Lenovo's /leid/assign). Not for a
+// same-origin script, one that is script, or one sent with
+// Access-Control-Allow-Origin (the page's mode then decides).
+func TestE2E_OrbBlocksCrossOriginData(t *testing.T) {
+	up := startInlineServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("acao") == "1" {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		}
+		if r.URL.Query().Get("moved") == "1" {
+			// adform's trackpoint: a 301 whose body is HTML; the browser
+			// follows it, ORB judges where it ends.
+			w.Header().Set("Content-Type", "text/html")
+			w.Header().Set("Location", "/leid/assign?js=1")
+			w.WriteHeader(http.StatusMovedPermanently)
+			_, _ = io.WriteString(w, "<html><head><title>301 Moved Permanently</title></head></html>")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("js") == "1" {
+			_, _ = io.WriteString(w, "window.ran = 1;")
+			return
+		}
+		_, _ = io.WriteString(w, `{"status":"200","data":null}`)
+	})
+	proxy := startProxy(t)
+	port := up.URL[strings.LastIndex(up.URL, ":")+1:]
+	dest := "script"
+	load := func(page, query string) error {
+		u := strings.Replace(gotoURL(proxy, up.URL+"/leid/assign"+query), "/cyrano/http/", "/cyrano/http!js/", 1)
+		req, _ := http.NewRequest("GET", u, nil)
+		req.Header.Set("Sec-Fetch-Dest", dest)
+		req.Header.Set("Sec-Fetch-Mode", "cors")
+		if page != "" {
+			req.Header.Set("Referer", gotoURL(proxy, page))
+		}
+		resp, err := noCompressionClient().Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		_, err = io.ReadAll(resp.Body)
+		if err == nil && resp.StatusCode != 200 && resp.StatusCode != http.StatusMovedPermanently {
+			t.Errorf("%s%s: status %d", page, query, resp.StatusCode)
+		}
+		return err
+	}
+	cross := "http://localhost:" + port + "/p"
+	if err := load(cross, ""); err == nil {
+		t.Errorf("cross-origin JSON script: answered, want a broken connection")
+	}
+	// ACAO, a script, a redirect, same-origin, and no page of ours known
+	// behind the request: the response.
+	for _, c := range []struct{ page, query string }{{cross, "?acao=1"}, {cross, "?js=1"}, {cross, "?moved=1"}, {up.URL + "/p", ""}, {"", ""}} {
+		if err := load(c.page, c.query); err != nil {
+			t.Errorf("%q%s: %v, want the response", c.page, c.query, err)
+		}
+	}
+	// Only a script: a fetch() of the same data gets it (CORS decides there).
+	dest = "empty"
+	if err := load(cross, ""); err != nil {
+		t.Errorf("fetch of cross-origin JSON: %v, want the response", err)
 	}
 }

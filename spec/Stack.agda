@@ -127,3 +127,39 @@ lineUrl l with stripPrefix (toList "at ") (dropSpaces l)
 
 stackUrls : Str → List Str
 stackUrls st = concatMap lineUrl (splitOn (is 10) st)
+
+------------------------------------------------------------------------
+-- A function the page makes with `new Function` is made by the runtime's
+-- stand-in, so V8 would name the stand-in as its eval origin ("eval at
+-- make (…/rewriter.js:…)": Kasada reads it). The runtime tags its source
+-- with a //# sourceURL of its own and records the eval origin V8 writes
+-- natively: the calling frame's function name ("<anonymous>" without one)
+-- and the call's location — URL:LINE:COL (the original URL), or, when the
+-- caller is itself eval code, that code's own eval origin.
+-- (The caller's own frame, when it is such code's top level, V8 calls
+-- "eval"; its eval origin names it "<anonymous>".)
+-- V8 writes a tagged script's frames with TAG:LINE:COL where the native
+-- text has "eval at ORIGIN, <anonymous>:LINE:COL", and an eval origin of
+-- code made inside it with a bare TAG where natively ORIGIN stands
+-- (checked: function-stack-vs-chromium).
+
+evalOrigin : Str → Str → Str
+evalOrigin name loc = toList "eval at " ++ (if isEmptyS name then toList "<anonymous>" else name) ++ toList " (" ++ loc ++ toList ")"
+  where
+  isEmptyS : Str → Bool
+  isEmptyS [] = true
+  isEmptyS (_ ∷ _) = false
+
+-- A frame's text with TAG put back as V8 writes the native one.
+untag : Str → Str → Str → Str
+untag tag origin s = go (suc (length s)) s
+  where
+  rep : Str
+  rep = origin ++ toList ", <anonymous>"
+  go : ℕ → Str → Str
+  go zero s = s
+  go (suc f) [] = []
+  go (suc f) (c ∷ cs) with stripPrefix tag (c ∷ cs)
+  ... | just rest@(d ∷ _) = (if is 58 d then rep else origin) ++ go f rest
+  ... | just []           = origin
+  ... | nothing           = c ∷ go f cs

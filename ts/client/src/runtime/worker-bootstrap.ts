@@ -22,6 +22,7 @@ import { patchStorageNames } from "../patches/storage";
 import { honourOptionalChains } from "./optional";
 import type { ClientConfig } from "../config";
 import { isUrlLikeSpecifier, rewriteUrl, unwrapProxiedUrl } from "../url/containment";
+import { metaResolver } from "../wrappers/meta-resolve";
 import { WorkerWrappedLocation } from "../wrappers/worker-location";
 import {
     wrapGetTopWindow,
@@ -59,6 +60,7 @@ export interface WorkerRewriterApi {
     wrap_eval_arg(evalFn: typeof eval, source: unknown): unknown;
     wrap_eval_memexp(obj: unknown): unknown;
     wrap_import_arg(specifier: unknown, scriptUrl?: unknown): unknown;
+    wrap_meta_resolve(meta: unknown): unknown;
     wrap_worker_url(url: unknown): unknown;
 }
 
@@ -141,6 +143,7 @@ export function initWorker(
             // A module's URL: marked as a script's (spec/Containment.agda Dest).
             return rewriteUrl(specifier, base, config, undefined, "js");
         },
+        wrap_meta_resolve: metaResolver(config),
         wrap_worker_url: (url) => {
             const urlStr = typeof url === "string" ? url : (url != null ? String(url) : null);
             return urlStr ? rewriteOne(urlStr) : url;
@@ -170,8 +173,10 @@ function patchWorkerScope(
     // name its origin to the proxy (patches/cors.ts).
     let unreferred = false;
     try { unreferred = /^(blob|data):/i.test(String((scope as unknown as { location?: { href?: string } }).location?.href)); } catch { /* no location */ }
+    let opaque = false;
+    try { opaque = String((scope as unknown as { origin?: unknown }).origin) === "null"; } catch { /* not opaque */ }
     const cors = config.identity ? undefined
-        : { origin: () => baseUrl.origin, href: () => baseUrl.href, always: unreferred, proxy: new URL(config.apiBaseURL).origin };
+        : { origin: () => baseUrl.origin, href: () => baseUrl.href, always: unreferred, proxy: new URL(config.apiBaseURL).origin, opaque };
     patchFetch(realm, rewriteOne, unwrapOne, () => baseUrl, cors);
     patchXmlHttpRequest(realm, rewriteOne, unwrapOne, () => baseUrl, cors);
     try { patchResponseHeaders(realm); } catch { /* stays native */ }

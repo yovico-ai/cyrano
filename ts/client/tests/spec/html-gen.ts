@@ -9,7 +9,9 @@ import fc from "fast-check";
 
 const NAMES = ["div", "p", "b", "i", "span", "a", "svg", "math", "mi", "mtext", "mglyph", "g", "foreignObject", "desc", "title",
     "annotation-xml", "style", "script", "textarea", "xmp", "noscript", "iframe", "noembed", "noframes", "font", "image", "img", "br",
-    "circle", "ul", "li", "h1", "em"];
+    "circle", "ul", "li", "h1", "em",
+    // the start tags that close a <p> (HtmlTok closesP), and a button scope
+    "address", "pre", "listing", "form", "hr", "h3", "H6", "plaintext", "button", "section"];
 const ENDS = ["p", "br", "svg", "math", "div", "b", "style", "script", "title", "textarea", "foreignObject", "desc", "mi",
     "annotation-xml", "noscript", "iframe", "xmp", "SCRIPT", "Style"];
 const ATTRS = ["", " x=\"a>b\"", " y='<p data-i=0>'", " z=<", " w=a/b", " q=\"\"", " encoding=text/html", " encoding=\"APPLICATION/XHTML+XML\"",

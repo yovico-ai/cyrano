@@ -21,7 +21,7 @@ import (
 
 // The pieces of tests/spec/html-gen.ts.
 var (
-	tokNames = strings.Fields("div p b i span a svg math mi mtext mglyph g foreignObject desc title annotation-xml style script textarea xmp noscript iframe noembed noframes font image img br circle ul li h1 em")
+	tokNames = strings.Fields("div p b i span a svg math mi mtext mglyph g foreignObject desc title annotation-xml style script textarea xmp noscript iframe noembed noframes font image img br circle ul li h1 em address pre listing form hr h3 H6 plaintext button section")
 	tokEnds  = strings.Fields("p br svg math div b style script title textarea foreignObject desc mi annotation-xml noscript iframe xmp SCRIPT Style")
 	tokAttrs = []string{"", ` x="a>b"`, ` y='<p data-i=0>'`, " z=<", " w=a/b", ` q=""`, " encoding=text/html", ` encoding="APPLICATION/XHTML+XML"`,
 		" color=red", " face", ` style="c:d"`, " STYLE=e", " =f", ` "g"=h`, " k = 'l'", " m/n", " src=x"}

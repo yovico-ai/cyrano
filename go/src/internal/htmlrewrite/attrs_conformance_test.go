@@ -86,7 +86,7 @@ func TestAttrNamespaces(t *testing.T) {
 func TestSpecConformance_URLDest(t *testing.T) {
 	oracle := specoracle.Need(t)
 	rels := []string{"", "stylesheet", "STYLESHEET", "alternate stylesheet", "preload", "prefetch", "modulepreload", "icon", "preload prefetch", "dns-prefetch"}
-	ases := []string{"-", "script", "SCRIPT", "style", "font", "image", ""}
+	ases := []string{"-", "script", "SCRIPT", "style", "font", "image", "", "fetch", "Fetch"}
 	rapid.Check(t, func(rt *rapid.T) {
 		ns := rapid.SampledFrom([]string{"html", "svg"}).Draw(rt, "ns")
 		tag := rapid.SampledFrom([]string{"script", "link", "img", "a", "image", "use"}).Draw(rt, "tag")

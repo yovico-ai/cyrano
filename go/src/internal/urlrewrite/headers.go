@@ -12,8 +12,8 @@ import (
 // <…>) is edited where it stands: the target proxified, imagesrcset
 // rewritten as a srcset, integrity taken out (the proxied bytes are not
 // the ones it names: Shop Pay's modulepreload was blocked), crossorigin
-// made use-credentials as the <link>'s attribute is (not on a font
-// preload/prefetch). A link-value the browser ignores is left as written.
+// made use-credentials as the <link>'s attribute is (not on a font or
+// fetch preload/prefetch). A link-value the browser ignores is left as written.
 func RewriteLinkHeader(v string, base *url.URL, cfg ProxyConfig) string {
 	values := linkSplit(v, true, ',')
 	for i, lv := range values {
@@ -178,7 +178,9 @@ func rewriteLinkValue(v string, rwd func(string, Dest) string) string {
 		}
 	}
 	as, hasAs := first("as")
-	fontHint := strings.EqualFold(as, "font") && (rels["preload"] || rels["prefetch"])
+	// A font or fetch hint keeps its crossorigin (spec fontHint): the
+	// @font-face or fetch() it serves keeps its own credentials mode.
+	fontHint := (strings.EqualFold(as, "font") || strings.EqualFold(as, "fetch")) && (rels["preload"] || rels["prefetch"])
 	dest := linkDest(rels, strings.ToLower(as), hasAs)
 
 	var b strings.Builder

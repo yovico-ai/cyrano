@@ -15,10 +15,12 @@ import { createServer, type Server } from "node:http";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { rewriteCspContent } from "../../src/patches/html-rewriter";
+
 const bundlePath = resolve(__dirname, "../../../../go/assets/client/rewriter.js");
 const wanted = process.env.CYRANO_BROWSER === "1" && existsSync(bundlePath);
 
-type Page = { goto(u: string): Promise<unknown>; evaluate<T>(f: () => T | Promise<T>): Promise<T> };
+type Page = { close(): Promise<void>; goto(u: string): Promise<unknown>; evaluate<T>(f: () => T | Promise<T>): Promise<T> };
 type Browser = { newPage(): Promise<Page>; close(): Promise<void> };
 
 describe.skipIf(!wanted)("workers in Chromium", () => {
@@ -53,7 +55,15 @@ describe.skipIf(!wanted)("workers in Chromium", () => {
                 res.writeHead(200, { "content-type": "text/plain" });
                 return res.end("ok");
             }
-            res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+            if (u.startsWith("/direct/")) {
+                res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+                return res.end("<!doctype html><head></head><body></body>");
+            }
+            // A policy whose connect-src admits no blob: (Costco), as the
+            // server hands it over.
+            const csp = u.startsWith("/cyrano/https/example.com/csp/")
+                ? { "content-security-policy": rewriteCspContent("default-src 'self'; script-src 'self' 'unsafe-inline' blob:", o) } : {};
+            res.writeHead(200, { "content-type": "text/html; charset=utf-8", ...csp });
             return res.end(`<!doctype html><head><script src="/rewriter.js"></script><script>window.$rewriter=window.$rewriter_init(window,${config(o)}).inject();$rewriter.set_location("https://example.com/p/");</script></head><body></body>`);
         });
         await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
@@ -86,6 +96,76 @@ describe.skipIf(!wanted)("workers in Chromium", () => {
         expect(result.classic).toEqual(["object", "https://example.com/p/"]);
         expect(result.module).toEqual(["object", "https://example.com/p/"]);
         expect(seen.sort()).toEqual(["/cyrano/https/example.com/from-classic", "/cyrano/https/example.com/from-module"]);
+    }, 60_000);
+
+    // Costco: the runtime reads a page's blob: worker script with an XHR
+    // the page does not make; under connect-src 'self' that read was a
+    // violation, fired at the page (and reported), and the worker ran
+    // without the runtime. The translated policy admits it (spec/Csp.agda
+    // readable).
+    it("a blob worker under a policy that admits no blob: connections: no violation, the runtime", async () => {
+        const page = await browser.newPage();
+        await page.goto(`${origin}/cyrano/https/example.com/csp/`);
+        const result = await page.evaluate(async () => {
+            const violations: string[] = [];
+            document.addEventListener("securitypolicyviolation", (e) => violations.push(`${e.violatedDirective} ${e.blockedURI}`));
+            // No type: not recorded at construction, read back when the Worker is made.
+            const w = new Worker(URL.createObjectURL(new Blob(["postMessage(typeof $rewriter)"])));
+            const got = await new Promise<unknown>((done) => { w.onmessage = (e) => done(e.data); setTimeout(() => done("timeout"), 5000); });
+            await new Promise((r) => setTimeout(r, 100));
+            return { got, violations };
+        });
+        expect(result).toEqual({ got: "object", violations: [] });
+    }, 60_000);
+
+    // A page that wraps XMLHttpRequest (Dynatrace's wrapper was in the
+    // runtime's read path on Walgreens) and makes open asynchronous: the
+    // runtime's synchronous read of a worker's blob came back empty and the
+    // worker ran without the runtime. It reads with the XMLHttpRequest saved at load.
+    it("a blob worker gets the runtime though the page wrapped XMLHttpRequest and revoked the URL", async () => {
+        const page = await browser.newPage();
+        await page.goto(`${origin}/cyrano/https/example.com/p/`);
+        const result = await page.evaluate(async () => {
+            const open = XMLHttpRequest.prototype.open;
+            XMLHttpRequest.prototype.open = function (this: XMLHttpRequest, m: string, u: string | URL) { return open.call(this, m, u, true); } as typeof open;
+            const url = URL.createObjectURL(new Blob(["postMessage(typeof $rewriter)"]));
+            const w = new Worker(url);
+            URL.revokeObjectURL(url);
+            return await new Promise<unknown>((done) => { w.onmessage = (e) => done(e.data); w.onerror = () => done("error"); setTimeout(() => done("timeout"), 5000); });
+        });
+        expect(result).toBe("object");
+    }, 60_000);
+
+    // Akamai's sensor (Walgreens, CVS, Kohl's, Gap) revokes a blob URL and
+    // then makes a SharedWorker of it: natively that fails, even in the
+    // same turn — the runtime must not start it (its source is still known).
+    it("a worker made from a URL revoked in the same turn fails, as direct", async () => {
+        const probe = async (url: string): Promise<unknown> => {
+            const page = await browser.newPage();
+            await page.goto(url);
+            const r = await page.evaluate(async () => {
+                const wait = (w: Worker | SharedWorker): Promise<unknown> => new Promise((done) => {
+                    const port = "port" in w ? w.port : w;
+                    port.onmessage = (e: MessageEvent) => done(e.data);
+                    w.onerror = () => done("error");
+                    if ("port" in w) w.port.start();
+                    setTimeout(() => done("timeout"), 5000);
+                });
+                const mk = (src: string) => URL.createObjectURL(new Blob([src], { type: "application/javascript" }));
+                const s = mk("onconnect = function (e) { e.ports[0].postMessage('shared ' + typeof location.href); };");
+                URL.revokeObjectURL(s);
+                const shared = new SharedWorker(s);
+                const d = mk("postMessage('dedicated ' + typeof location.href);");
+                URL.revokeObjectURL(d);
+                const dedicated = new Worker(d);
+                return [await wait(shared), await wait(dedicated)];
+            });
+            await page.close();
+            return r;
+        };
+        const direct = await probe(`${origin}/direct/`);
+        expect(direct).toEqual(["error", "error"]);
+        expect(await probe(`${origin}/cyrano/https/example.com/p/`)).toEqual(direct);
     }, 60_000);
 
     // Mapbox: a worker's fetch names its page as referrer. Directly the

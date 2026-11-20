@@ -48,6 +48,7 @@ import { patchSendBeacon } from "./beacon";
 import { patchWindowOpen } from "./window-open";
 import { patchServiceWorker } from "./service-worker";
 import { patchDocumentCookie } from "./document-cookie";
+import { patchCookieStore } from "./cookie-store";
 import { patchPostMessage } from "./post-message";
 import { patchMessageEventOrigin } from "./message-event";
 
@@ -58,6 +59,10 @@ export function installPatches(
     config: ClientConfig,
     internals: Internals,
 ): void {
+    // Whether the browser gives this document an opaque origin (sandboxed):
+    // read before location.ts wraps `origin`.
+    let opaqueOrigin = false;
+    try { opaqueOrigin = String((targetWindow as unknown as { origin?: unknown }).origin) === "null"; } catch { /* not opaque */ }
 
     // A URL a script hands over resolves against the document's base URL —
     // a <base href> where the page has one (hackage's points at another
@@ -114,7 +119,7 @@ export function installPatches(
     step("patchAnchorUrlReflection", () => patchAnchorUrlReflection(targetWindow, unwrapOne, rewriteOne));
     // Requests to other origins are under CORS (patches/cors.ts).
     const cors = config.identity ? undefined
-        : { origin: () => getCurrentBaseUrl().origin, href: () => getCurrentBaseUrl().href, proxy: new URL(config.apiBaseURL).origin };
+        : { origin: () => getCurrentBaseUrl().origin, href: () => getCurrentBaseUrl().href, proxy: new URL(config.apiBaseURL).origin, opaque: opaqueOrigin };
     step("patchFetch", () => patchFetch(targetWindow, rewriteOne, unwrapOne, getCurrentBaseUrl, cors));
     step("patchXmlHttpRequest", () => patchXmlHttpRequest(targetWindow, rewriteOne, unwrapOne, getCurrentBaseUrl, cors));
     step("patchWebSocket", () => patchWebSocket(targetWindow, rewriteOne, unwrapOne, () => getCurrentBaseUrl().origin));
@@ -162,6 +167,8 @@ export function installPatches(
     const prefix = storagePrefix(targetWindow, () => getCurrentBaseUrl().origin);
     step("patchWebStorage", () => patchWebStorage(targetWindow, prefix, unwrapOne));
     step("patchStorageNames", () => patchStorageNames(targetWindow, prefix));
+    // Before document.cookie is wrapped: it writes with the native setter.
+    step("patchCookieStore", () => patchCookieStore(targetWindow, getCurrentBaseUrl));
     // (config.skip "cookieGet" / "cookieSet": one half only — development aid.)
     step("patchDocumentCookie", () => patchDocumentCookie(targetWindow, getCurrentBaseUrl,
         skip.has("cookieGet") ? "set" : skip.has("cookieSet") ? "get" : undefined));

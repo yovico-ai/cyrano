@@ -46,6 +46,8 @@ export interface JsRewriteOptions {
     wrapStaticImport: boolean;
     /** With `baseUrl`: import.meta.url becomes that URL as a string literal. */
     wrapImportMetaUrl: boolean;
+    /** R15: import.meta.resolve is the runtime's (resolves as import() does, gives the original URL). */
+    wrapImportMetaResolve: boolean;
     /** The script's own URL (module specifiers resolve against it). */
     baseUrl?: string;
     /** Proxifies a module specifier; returns it unchanged to leave it (a bare specifier). */
@@ -74,6 +76,7 @@ export function defaultJsRewriteOptions(): JsRewriteOptions {
         stripDebugger: true,
         wrapStaticImport: true,
         wrapImportMetaUrl: true,
+        wrapImportMetaResolve: true,
     };
 }
 
@@ -284,6 +287,8 @@ function memberHelper(name: string, called: boolean, o: JsRewriteOptions): strin
  *      (a literal s, when it can be proxified now, is replaced instead)
  *  R8  import … from "s" / export … from "s"  →  the specifier proxified
  *  R9  import.meta.url  →  "<script URL>"
+ *  R15 import.meta.resolve  →  $rewriter.wrap_meta_resolve(import.meta)
+ *      (not as the target of =, op= or a postfix ++/--)
  *  R10 new Worker(u) / new SharedWorker(u)  →  new Worker($rewriter.wrap_worker_url(u))
  *  R11 new C…, where C now starts with a call  →  new (C)…
  *  R12 debugger;  →  ;     (a no-op unless DevTools is open, where scripts
@@ -301,6 +306,8 @@ function memberHelper(name: string, called: boolean, o: JsRewriteOptions): strin
 class Splicer {
     readonly edits: Edit[] = [];
     private seq = 0;
+    /** Targets of `=`, `op=` and postfix `++` / `--` (R15 leaves them). */
+    private readonly assigned = new SafeWeakSet<object>();
     /** Nodes an edit now wraps in a call (for R11). */
     private readonly wrapped = new SafeWeakSet<object>();
 
@@ -398,12 +405,14 @@ class Splicer {
                 return; // specifiers name bindings and exports: not reads
 
             case "AssignmentExpression":
+                this.assigned.add(n["left"] as N);
                 this.visit(n["left"], n["operator"] === "=" ? "target" : "modify", false);
                 this.visit(n["right"], "expr", false);
                 if (n["operator"] === "=") this.wrapPatternSource(n["left"] as N, n["right"] as N);
                 return;
 
             case "UpdateExpression":
+                if (!n["prefix"]) this.assigned.add(n["argument"] as N);
                 this.visit(n["argument"], "modify", false);
                 return;
 
@@ -573,6 +582,13 @@ class Splicer {
         if (!computed && obj.type === "MetaProperty" && prop["name"] === "url" && this.o.wrapImportMetaUrl && this.o.baseUrl &&
             (obj["meta"] as N)["name"] === "import") {
             this.replace(m.start, m.end - m.start, JSON.stringify(this.o.baseUrl));
+            return;
+        }
+        // R15
+        if (!computed && obj.type === "MetaProperty" && prop["name"] === "resolve" && this.o.wrapImportMetaResolve &&
+            (obj["meta"] as N)["name"] === "import" && !this.assigned.has(m)) {
+            this.replace(m.start, m.end - m.start, "$rewriter.wrap_meta_resolve(import.meta)");
+            this.wrapped.add(m);
             return;
         }
         this.visit(obj, "expr", false);

@@ -68,8 +68,14 @@ async function visit(browser, url, viaProxy) {
       if (process.env.SHOWTEXT) out.push(`  --- direct text:\n${d.p.text.slice(0, 1500)}\n  --- cyrano text:\n${v.p.text.slice(0, 1500)}`);
     }
     out.push(`  errors ${d.errors.length} | ${v.errors.length}   failed requests ${d.failed.length} | ${v.failed.length}   escaped the proxy: ${v.escaped.length}`);
-    const de = new Set(d.errors);
-    for (const e of [...new Set(v.errors)].filter((e) => !de.has(e)).slice(0, 5)) out.push(`    cyrano-only error: ${e}`);
+    // Errors compared with proxied URLs read as the originals (marks and
+    // policy taken out) and blob: origins dropped, so a message naming a URL
+    // matches its direct twin. (Which blob: is not compared.)
+    const plain = (e) => String(e)
+      .replace(/https?:\/\/localhost:\d+\/cyrano\/(https?)(?:![a-z-]+)*\//g, "$1://")
+      .replace(/blob:[^\s'")]+/g, "blob:");
+    const de = new Set(d.errors.map(plain));
+    for (const e of [...new Set(v.errors)].filter((e) => !de.has(plain(e))).slice(0, 5)) out.push(`    cyrano-only error: ${e}`);
     for (const e of [...new Set(v.escaped)].slice(0, 4)) out.push(`    escaped: ${e}`);
     for (const e of [...new Set(v.failed)].slice(0, 3)) out.push(`    cyrano failed: ${e}`);
     console.log(out.join("\n"));

@@ -47,6 +47,8 @@ export interface RewriterApi {
     wrap_eval_arg(evalFn: typeof eval, source: unknown): unknown;
     wrap_eval_memexp(obj: unknown): unknown;
     wrap_import_arg(specifier: unknown, scriptUrl?: unknown): unknown;
+    /** R15: import.meta.resolve, resolving as import() does and giving the original URL. */
+    wrap_meta_resolve(meta: unknown): unknown;
     wrap_worker_url(url: unknown): unknown;
 
     // ── HTML attribute hooks (injected by the server-side HTML rewriter) ───

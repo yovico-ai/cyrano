@@ -107,6 +107,18 @@ export interface CorsContext {
     href: () => string;
     /** The browser sends no Referer from this context: name the origin on every request. */
     always?: boolean;
+    /** The context's own origin is opaque to the browser (a sandboxed document, a data: worker): it runs CORS itself. */
+    opaque?: boolean;
+}
+
+/**
+ * Whether a request names its context in Crn-I / Crn-C (spec/Fetch.agda
+ * namesContext): never from an opaque context — the browser then runs the
+ * protocol itself, and the headers would cause a preflight — else where it
+ * crosses original origins or the context sends no Referer.
+ */
+export function namesContext(opaque: boolean, cross: boolean, unreferred: boolean): boolean {
+    return !opaque && (cross || unreferred);
 }
 
 /** XHRs opened to another origin → the requesting origin. */

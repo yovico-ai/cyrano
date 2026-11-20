@@ -22,8 +22,9 @@
 --   * integrity is taken out (the proxied response is not the bytes it
 --     names: a modulepreload with it is blocked — Shop Pay);
 --   * crossorigin becomes use-credentials, as the <link>'s attribute does,
---     except on a font preload or prefetch (as=font), which stays as the
---     anonymous @font-face fetch it serves.
+--     except on a font or fetch preload or prefetch (as=font, as=fetch),
+--     which stays as the @font-face fetch or the page's own fetch() it
+--     serves.
 module Link where
 
 open import Data.Bool.Base using (Bool; true; false; _∨_; _∧_; not; if_then_else_)
@@ -245,8 +246,11 @@ rewriteLinkValue rw srcset v with piecesOf v | readLink v
   newTarget (just u) = u
   newTarget nothing  = t
   fontHint : Bool
-  fontHint = eqStr (lowerS (fromMaybe [] (valueOf (toList "as") xs))) (toList "font")
+  fontHint = (eqStr asLower (toList "font") ∨ eqStr asLower (toList "fetch"))
              ∧ (hasS (toList "preload") (rels xs) ∨ hasS (toList "prefetch") (rels xs))
+    where
+    asLower : Str
+    asLower = lowerS (fromMaybe [] (valueOf (toList "as") xs))
   -- A parameter's text, edited: its name, and whatever precedes the value.
   edit : Str → Maybe Str
   edit raw with readParam raw

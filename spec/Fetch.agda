@@ -56,6 +56,21 @@ includesCredentials credSameOrigin sameOriginReq = sameOriginReq
 includesCredentials credInclude    sameOriginReq = true
 
 ------------------------------------------------------------------------
+-- Who runs the protocol. A request goes to the proxy, so the browser runs
+-- CORS only where that is cross-origin to it: from a context whose own
+-- origin is opaque (a sandboxed document, a data: worker; every other
+-- proxied context has the proxy's origin). There the request is as direct
+-- to the browser — it sends Origin "null", decides credentials and checks
+-- the response itself — and a Crn-I / Crn-C header would make a simple
+-- request non-simple: a preflight the page did not cause, which the
+-- upstream refuses (Target's PerimeterX frame, 2026-11-19). Elsewhere the
+-- runtime names its context where the request crosses original origins,
+-- or where the context sends no Referer (a blob: worker).
+
+namesContext : (opaqueCtx cross unreferred : Bool) → Bool
+namesContext opaqueCtx cross unreferred = not opaqueCtx ∧ (cross ∨ unreferred)
+
+------------------------------------------------------------------------
 -- Header values.
 
 -- What HTTP parsing strips around a field value (RFC 9110 OWS).

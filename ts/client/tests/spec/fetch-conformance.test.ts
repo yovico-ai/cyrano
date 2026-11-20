@@ -10,7 +10,7 @@
 import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { corsAllows, exposedBy, includesCredentials } from "../../src/patches/cors";
+import { corsAllows, exposedBy, includesCredentials, namesContext } from "../../src/patches/cors";
 import { OracleClient, locateOracle, oracleRequired } from "./oracle-client";
 
 const located = locateOracle();
@@ -39,6 +39,14 @@ describe.skipIf(located.skip !== "")("fetch / CORS: spec conformance", () => {
                 const want = (await oracle.ask("credentials", [mode, same ? "same" : "cross"])) === "yes";
                 expect(includesCredentials(mode, same), `${mode} ${same}`).toBe(want);
             }
+        }
+    });
+
+    it("namesContext", async () => {
+        const yn = (b: boolean) => (b ? "yes" : "no");
+        for (const o of [false, true]) for (const c of [false, true]) for (const u of [false, true]) {
+            const want = (await oracle.ask("namescontext", [yn(o), yn(c), yn(u)])) === "yes";
+            expect(namesContext(o, c, u), `${o} ${c} ${u}`).toBe(want);
         }
     });
 

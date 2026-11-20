@@ -40,7 +40,8 @@ export function patchWindowLocation(
         // The setter is kept a no-op only in effect: domain relaxation is
         // meaningless when every frame already shares the proxy origin.
         wrapAccessor<string>(doc, "domain", {
-            get: () => baseOf().hostname,
+            // An opaque origin's domain is "" (HTML document.domain).
+            get: () => (String((targetWindow as unknown as { origin?: unknown }).origin) === "null" ? "" : baseOf().hostname),
             set: () => { /* see above */ },
         });
     }
@@ -52,5 +53,7 @@ export function patchWindowLocation(
             get: (get, self) => unwrapOne(ncall(get, self)),
         });
     }
-    wrapAccessor<string>(targetWindow, "origin", { get: () => baseOf().origin });
+    // An opaque origin (a sandboxed document) reads "null", as direct: the
+    // browser gives the proxied document the same sandbox.
+    wrapAccessor<string>(targetWindow, "origin", { get: (get, self) => (ncall(get, self) === "null" ? "null" : baseOf().origin) });
 }

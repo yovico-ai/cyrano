@@ -25,7 +25,7 @@ const seed = Number(process.env.CYRANO_SEED ?? Date.now() % 1e9);
 type Page = { goto(u: string): Promise<unknown>; evaluate<T>(f: () => T): Promise<T>; waitForTimeout(ms: number): Promise<void>; close(): Promise<void> };
 type Browser = { newPage(): Promise<Page>; close(): Promise<void> };
 
-const NAMES = ["script-src", "script-src-elem", "script-src-attr", "default-src", "img-src", "Script-Src"];
+const NAMES = ["script-src", "script-src-elem", "script-src-attr", "default-src", "img-src", "Script-Src", "sandbox", "Sandbox"];
 // A probe for each kind of source: an inline script, a nonced one, a
 // hashed one (HASHED's hash), same-origin and cross-host external
 // scripts, and an inline handler (HANDLER's hash for 'unsafe-hashes').
@@ -35,6 +35,8 @@ const sha = (s: string): string => `'sha256-${createHash("sha256").update(s).dig
 const VALUES = ["'none'", "", "'self'", "'unsafe-inline'", "'none' 'self'", "'NONE'", "*", "'self' 'unsafe-inline'", "'unsafe-eval'", "'report-sample' 'none'",
     "'unsafe-inline' 'nonce-abc'", "'unsafe-inline' 'strict-dynamic'", `'unsafe-hashes' ${sha(HANDLER)}`, `'unsafe-inline' ${sha(HASHED)}`, "http://other.example:PORT",
     "'strict-dynamic' 'nonce-abc'", `'strict-dynamic' ${sha(HASHED)}`, "'nonce-abc'"];
+// A sandbox's own tokens (without allow-scripts nothing runs).
+const SANDBOX = ["", "allow-scripts", "ALLOW-SCRIPTS allow-forms", "allow-same-origin", "allow-scripts allow-same-origin", "'none'"];
 
 describe.skipIf(!wanted || located.skip !== "")("Documents where no script runs: the spec is Chromium", () => {
     let oracle: OracleClient;
@@ -67,7 +69,7 @@ describe.skipIf(!wanted || located.skip !== "")("Documents where no script runs:
     });
 
     it("nothing runs exactly when the spec says so", async () => {
-        const directive = fc.tuple(fc.constantFrom(...NAMES), fc.constantFrom(...VALUES)).map(([n, v]) => `${n} ${v}`.trim());
+        const directive = fc.constantFrom(...NAMES).chain((n) => fc.constantFrom(...(/^sandbox$/i.test(n) ? SANDBOX : VALUES)).map((v) => `${n} ${v}`.trim()));
         const policy = fc.array(directive, { minLength: 1, maxLength: 3 }).map((ds) => ds.join("; "));
         const draws = fc.sample(fc.array(policy, { minLength: 1, maxLength: 2 }), { numRuns: 60, seed });
         const bad: string[] = [];

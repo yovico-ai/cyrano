@@ -114,14 +114,22 @@ cross-origin stylesheet of another type gets `nosniff` (it would apply in
 a quirks document only same-origin: Disposition.agda `proxied-sheet`); an unmarked
 one goes by Sec-Fetch-Dest; a fetch() of the same file gets the origin's
 bytes under a different URL, so the browser's cache never hands a script
-the data copy. Unwrap ignores the marks.
+the data copy. Unwrap ignores the marks. A cross-origin script response
+Chromium's ORB blocks (JSON, HTML, PDF… — spec/Orb.agda, checked against
+Chromium) is failed by the proxy when it has no Access-Control-Allow-Origin and
+is not a redirect (adform's 301 has an HTML body; the browser follows it)
+(`proxy/orb.go`: scripts are forced crossorigin, so the page's mode is
+unknown; without ACAO both modes fail natively). A typeless response stays
+typeless (net/http would sniff one: `typelessWriter`).
 
 ## Known gaps
 
 - **Reading markup back** is done for attributes, script/style text
   (set by scripts, or rewritten by the server: the marked edits are taken
   out), an ancestor's `textContent`, a script's text node, and
-  serialization (`native/originals.ts`, `patches/read-back.ts`; the server
+  serialization, isEqualNode (Next.js's head manager re-inserted a rewritten
+  script it found unequal: washingtonpost.com ran its ads twice)
+  (`native/originals.ts`, `patches/read-back.ts`; the server
   carries originals in the `crn-o` attribute, consumed before page scripts
   run). Still open: `attributes` / `getAttributeNames` list what the
   element holds (a dropped `integrity` is missing from the list); a
@@ -130,13 +138,18 @@ the data copy. Unwrap ignores the marks.
   `crossOrigin` reads the forced value.
 - **JS source**: scripts are not re-printed; edits are spliced in and
   marked, and taken out again for `toString()` and script text
-  (`spec/js-rewrite/README.md`). Open: stack-trace columns are the
-  rewritten text's; a server-rewritten inline script's text is restored
+  (`spec/js-rewrite/README.md`). Code made with `new Function` names the
+  page's calling frame as its eval origin, not the runtime's stand-in
+  (a //# sourceURL tag the stack formatter puts back; spec/Stack.agda
+  evalOrigin, untag; Kasada reads it). Open: stack-trace columns are the
+  rewritten text's (a Function body's first line: the preamble's); a server-rewritten inline script's text is restored
   only through the read-back paths (not CSS attribute selectors etc.).
 - **CSP** is weakened, not translated — spec/Csp.agda (both runtimes
   checked against it; `csp-vs-chromium`: whatever loads directly loads
   proxied, and the bootstrap runs): source lists gain the proxy origin,
-  Trusted Types directives are kept and enforced; framing (frame-ancestors,
+  Trusted Types directives are kept and enforced; the connect policy
+  also admits blob: and data: (the runtime reads a page's blob worker
+  script with an XHR the page does not make: Costco); framing (frame-ancestors,
   X-Frame-Options) is judged by the proxy for the real embedder, checked
   against Chromium (`framing-vs-chromium`). A faithful translation
   (host-sources → proxied path prefixes, rehashed inline scripts) is not
@@ -201,11 +214,46 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   Chrome speaks h3, `featurePolicy.getAllowlistForFeature` naming the proxy
   origin; a stand-in's `.caller` throws (strict function) and V8's own
   messages print its source (`Reflect.construct(Object, [], fetch)`).
-  CORS gaps: no preflight, no opaque responses.
+  A response that varies on Origin is told to the browser as varying on
+  Crn-I too (`proxy/vary.go`, spec/Carry.agda varyForBrowser): one cached
+  copy went to every page (bbc.com was handed bbc.co.uk's, failed CORS and
+  bounced back). The runtime's Crn-I / Crn-C on a fetch init are handed to
+  the native as pairs: a Headers is read by its iterator, which hides them
+  (until 2026-11-20 they were never sent from fetch(url[, init])).
+  CORS gaps: no preflight, no opaque responses. A sandboxed (opaque-origin)
+  document is cross-origin to the proxy, so the browser runs CORS there
+  itself: the runtime adds no Crn-I/Crn-C (they forced preflights), and
+  the proxy sends Origin "null", cross-site, as direct (spec/Fetch.agda
+  namesContext, Referrer.agda originHeaderOpaque); it reads `origin`
+  "null". The Cookie Store API reads and writes the same jar as
+  document.cookie (spec/Cookies.agda cookieStoreSet; `patches/cookie-store.ts`:
+  Google's ad tag stores __gads/__gpi/__eoi with it, every write was refused);
+  its refusals are the native's own, and change events still list the
+  wire cookies. `import.meta.resolve` is the runtime's (R15: it resolved against
+  the proxied module URL; IKEA's Vite preloads).
+  The postMessage trampoline is compiled only for a realm other than the
+  runtime's own (under Trusted Types a compile is a violation: Pinterest;
+  Chrome's Function takes no TrustedScript). A fetch preload keeps its
+  crossorigin (Attrs.agda crossoriginValue: Spotify fetched its JSON twice).
   Trusted Types gaps: a page's *default* policy is handed the rewritten
   text; `setTimeout(string)` and `javascript:` URLs are not sinks the
   runtime handles.
-  Google search answers `/sorry` through the proxy. Akamai Bot Manager's
+  Kasada (Costco, 2026-11-20) passes through the proxy: its fingerprint
+  read the runtime's `new Function` stand-in as eval origin and V8's own
+  message for `class extends Function.prototype.toString` (now padded to
+  print as native: `native/padded.ts`; other stand-ins still print their
+  source in such messages). Its report is XOR'd with "omgtopkek" — decode
+  it before guessing. Open: PerimeterX on Zillow refuses /graphql through
+  the proxy (px-captcha) while it passes direct; bisected to its sensor
+  `/HYx10rg3/init.js` being rewritten, but turning the location rules off
+  "passes" only by breaking the sensor (it fails open) — the tell is in
+  what the working sensor reports: decode its payload next. Target's
+  redsky API answers 435 to store_location_v1 / nearby_stores_v1 through
+  the proxy (200 direct, same headers upstream; `_px*` cookies): the
+  same PerimeterX tell. On the way:
+  `location` reached by reflection (Reflect.get, the window's/document's
+  own getter, __lookupGetter__) is the view, as by name
+  (`patches/location-reflect.ts`). Google search answers `/sorry` through the proxy. Akamai Bot Manager's
   sensor (ibm.com) runs clean. `run.sh` kills every running cyrano: start
   a second (TLS) instance after it.
 - **OAuth / social sign-in** (2026-11-18): from a relying site's "Sign in
@@ -230,7 +278,9 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   Fixed from it: selectors on URL attributes match the original URL
   (`patches/selectors.ts`; Squarespace ran its scripts twice); the page's
   own Request goes to fetch as is (a rebuilt one has a stream body HTTP/1.1
-  cannot send); minified `@import"…"` (both runtimes); `fetchLater`,
+  cannot send), judged by the URL it holds, not its `url` (YouTube's
+  blocker bait: a data: Request subclass naming its player API); minified `@import"…"` (both runtimes); CSS handed to a constructed sheet
+  (replace, replaceSync, addRule: Google Pay's button on Bloomberg); `fetchLater`,
   `new Audio(url)`; the CORS check is enforced by the proxy for scripts'
   cross-origin requests (`proxy/cors.go`: the connection is broken, a
   network error to page code); script URLs resolve against `<base href>`;
@@ -255,6 +305,9 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
 - **Measuring pages with many requests (ads): serve the proxy over TLS.**
   Over plain HTTP the browser keeps 6 connections to the proxy for every
   site's traffic and queues the rest; over TLS it multiplexes on HTTP/2.
+  Load races are lost that way too: TikTok's "a.init is not a function"
+  (its Slardar SDK queued 1.5 s behind the app chunk that needs it) is
+  gone over TLS, as direct.
   Second instance: `CYRANO_PUBLIC_URL=https://localhost:9443 CYRANO_PORT=9443
   CYRANO_HTTPS_ENABLED=true CYRANO_SSL_CERT=… CYRANO_SSL_KEY=… go/assets/cyrano
   --assets go/assets` (self-signed cert; Playwright `ignoreHTTPSErrors`).
@@ -300,7 +353,9 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   `nqueueMicrotask`, and the methods polyfills replace: `sStarts`,
   `sEnds`, `sIncludes`, `sPadStart`, `aIncludes` — mountaineers.org's
   Plone bundle made startsWith a RegExp and every cookie write threw),
-  never the page-writable globals — keep it so in new code (write
+  never the page-writable globals (the worker-script read uses the
+  XMLHttpRequest saved at load, not a page's wrapper of it) —
+  keep it so in new code (write
   `sStarts(s, p)`, not `s.startsWith(p)`). tldts (the public-suffix list)
   is routed to them by a Vite transform (`vite.config.ts`); acorn calls
   none of them. Still live: the other Array/String/RegExp methods and
@@ -338,6 +393,10 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   declarations, assignments — Transcend's consent manager), not in a
   parameter's or a nested pattern; a document under which no script of its own can run gets no runtime
   (spec/Csp.agda noScriptsRun; frames judge it by its proxified URL).
+  A CSP `sandbox` directive without allow-scripts counts (no runtime).
+  Not yet: a frame whose `sandbox` attribute lacks allow-scripts still
+  gets the bootstrap — blocked, so only the console tells (Microsoft's
+  company-target sync frame); the server cannot see the attribute.
   `fetchLater` keeps its quota per original origin (spec/FetchLater.agda)
   and defers what the
   proxy makes the native refuse (`patches/fetch-later.ts`; tumblr) — the

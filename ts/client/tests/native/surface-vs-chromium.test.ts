@@ -110,6 +110,12 @@ function snapshot(): Record<string, string> {
     // The global symbol registry: keys a script can ask for by name.
     out["@registry"] = JSON.stringify(["rewriter.patched", "cyrano.native.postMessage", "cyrano.postMessage.send"].map((k) =>
         Object.getOwnPropertySymbols(window).some((sy) => Symbol.keyFor(sy) === k)));
+    // V8's own messages print a function's source without calling
+    // toString (Kasada: "Class extends value … is not a constructor");
+    // the stand-ins V8 prints as natives (src/native/padded.ts).
+    for (const [k, f] of [["Function.prototype.toString", Function.prototype.toString]] as const) {
+        try { const C = f as unknown as new () => object; out[`extends ${k}`] = String(class extends C {}); } catch (e) { out[`extends ${k}`] = (e as Error).message; }
+    }
     return out;
 }
 

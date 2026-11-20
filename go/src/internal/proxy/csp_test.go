@@ -20,8 +20,8 @@ func TestRewriteCSP(t *testing.T) {
 		// ── Nonce stripping (proxyOrigin = "") ─────────────────────────────
 		{
 			name: "no nonce — untouched",
-			in:   "default-src 'self'; script-src 'self' 'unsafe-eval'",
-			want: "default-src 'self'; script-src 'self' 'unsafe-eval'",
+			in:   "default-src 'self'; script-src 'self' 'unsafe-eval'; connect-src 'self' blob: data:",
+			want: "default-src 'self'; script-src 'self' 'unsafe-eval'; connect-src 'self' blob: data:",
 		},
 		{
 			name: "a nonce is kept as written",
@@ -50,13 +50,13 @@ func TestRewriteCSP(t *testing.T) {
 		},
 		{
 			name: "multi-directive: only script-src touched",
-			in:   "default-src 'self'; script-src 'nonce-xyz'; img-src *",
-			want: "default-src 'self'; script-src 'nonce-xyz'; img-src *",
+			in:   "default-src 'self'; script-src 'nonce-xyz'; img-src *; connect-src 'self' blob: data:",
+			want: "default-src 'self'; script-src 'nonce-xyz'; img-src *; connect-src 'self' blob: data:",
 		},
 		{
 			name: "default-src nonce kept",
-			in:   "default-src 'nonce-abc' 'unsafe-eval'",
-			want: "default-src 'nonce-abc' 'unsafe-eval'",
+			in:   "default-src 'nonce-abc' 'unsafe-eval'; connect-src 'nonce-abc' 'unsafe-eval' blob: data:",
+			want: "default-src 'nonce-abc' 'unsafe-eval'; connect-src 'nonce-abc' 'unsafe-eval' blob: data:",
 		},
 		{
 			name: "style-src nonce kept",
@@ -70,8 +70,8 @@ func TestRewriteCSP(t *testing.T) {
 		},
 		{
 			name: "non-script directive with nonce-like token untouched",
-			in:   "connect-src 'nonce-abc'",
-			want: "connect-src 'nonce-abc'",
+			in:   "connect-src 'nonce-abc' blob: data:",
+			want: "connect-src 'nonce-abc' blob: data:",
 		},
 		{
 			name: "empty string",
@@ -90,7 +90,7 @@ func TestRewriteCSP(t *testing.T) {
 			name:        "proxy origin added to every *-src directive",
 			in:          "default-src 'self'; script-src https://cdn.example.com; img-src *; connect-src 'self'",
 			proxyOrigin: "https://proxy.example.com",
-			want:        "default-src 'self' https://proxy.example.com; script-src https://cdn.example.com https://proxy.example.com; img-src * https://proxy.example.com; connect-src 'self' https://proxy.example.com",
+			want:        "default-src 'self' https://proxy.example.com; script-src https://cdn.example.com https://proxy.example.com; img-src * https://proxy.example.com; connect-src 'self' https://proxy.example.com blob: data:",
 		},
 		{
 			name:        "proxy origin not duplicated when already present",
@@ -148,9 +148,16 @@ func TestRewriteCSP(t *testing.T) {
 			want: "trusted-types " + urlrewrite.TrustedTypesPolicy + "; require-trusted-types-for 'script'",
 		},
 		{
+			// x.com: 'none' with 'report-sample' allows nothing; the proxy
+			// origin beside it made the browser ignore the 'none'.
+			name: "'none' 'report-sample' allows nothing: left as it is",
+			in:   "script-src-attr 'none' 'report-sample'; object-src 'none' 'report-sample'",
+			want: "script-src-attr 'none' 'report-sample'; object-src 'none' 'report-sample'",
+		},
+		{
 			name: "both directives together",
 			in:   "default-src 'self'; trusted-types default; require-trusted-types-for 'script'; script-src 'nonce-abc'",
-			want: "default-src 'self'; trusted-types default " + urlrewrite.TrustedTypesPolicy + "; require-trusted-types-for 'script'; script-src 'nonce-abc'",
+			want: "default-src 'self'; trusted-types default " + urlrewrite.TrustedTypesPolicy + "; require-trusted-types-for 'script'; script-src 'nonce-abc'; connect-src 'self' blob: data:",
 		},
 	}
 

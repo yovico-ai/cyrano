@@ -15,6 +15,11 @@
 -- the end of the original URL past its host is still one of the proxied
 -- URL). Each proxied value is admitted unmarked and marked js and css, as
 -- an element's URL may be held (a script's src: /cyrano/https!js/…).
+-- On srcset and imagesrcset (a URL list) an = or ^= value with no ASCII
+-- whitespace or comma is the first candidate's URL, or its beginning, and
+-- is widened as a URL is (Adobe's Edge Delivery finds a fragment's images
+-- by source[srcset^="./media_"] to fix their base); any other test on
+-- them is left alone.
 -- Not covered: a relative value in a *= or $= test (the element holds it
 -- resolved); a relative ^= prefix ending in "." of a path going on with
 -- "." ([src^="."] on ../up.js: "." resolves to the directory, the path to
@@ -166,6 +171,14 @@ urlAttr n = anyS (map toList ("src" ∷ "href" ∷ "action" ∷ "formaction" ∷
   anyS [] = false
   anyS (x ∷ xs) = eqStr (map lowerAscii n) x ∨ anyS xs
 
+srcsetAttr : Str → Bool
+srcsetAttr n = eqStr (map lowerAscii n) (toList "srcset") ∨ eqStr (map lowerAscii n) (toList "imagesrcset")
+
+-- No ASCII whitespace, no comma: one URL of a srcset's first candidate.
+oneUrl : Str → Bool
+oneUrl [] = true
+oneUrl (c ∷ cs) = not (is 32 c ∨ is 9 c ∨ is 10 c ∨ is 12 c ∨ is 13 c ∨ is 44 c) ∧ oneUrl cs
+
 skipped : Str → Bool
 skipped v = isEmpty v ∨ startsWithL (toList "#") v ∨ anyP ("data:" ∷ "blob:" ∷ "javascript:" ∷ "mailto:" ∷ "tel:" ∷ "about:" ∷ [])
   where
@@ -254,10 +267,17 @@ widenAttribute : RW → Str → Str → Str
 widenAttribute rw proxyBase whole with parseAttr whole
 ... | nothing = whole
 ... | just a =
-  if not (urlAttr (name a)) ∨ skipped v then whole else byOp (op a)
+  if skipped v then whole
+  else if urlAttr (name a) then byOp (op a)
+  else if srcsetAttr (name a) ∧ oneUrl v ∧ eqOrPre (op a) then byOp (op a)
+  else whole
   where
   v : Str
   v = unescape (raw a)
+  eqOrPre : Op → Bool
+  eqOrPre eq  = true
+  eqOrPre pre = true
+  eqOrPre _   = false
   flagText : Str
   flagText with flag a
   ... | just f  = ' ' ∷ f ∷ []
