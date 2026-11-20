@@ -89,7 +89,6 @@ both sides — is in [REQUIREMENTS.md](REQUIREMENTS.md).
 │   ├── src/
 │   │   ├── cmd/cyrano/          binary entry
 │   │   └── internal/
-│   │       ├── b64u/             URL-safe base64 — wire-compatible with TS
 │   │       ├── urlrewrite/       URL containment scheme — Rewrite() / Unwrap()
 │   │       ├── proxy/            ReverseProxy + body-rewrite pipeline
 │   │       ├── wsproxy/          WebSocket upgrade hijack + bidir pipe

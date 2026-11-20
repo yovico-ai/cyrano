@@ -28,12 +28,11 @@ func mustURL(t *testing.T, raw string) *url.URL {
 func rewrite(t *testing.T, in string, opts ...func(*Config)) string {
 	t.Helper()
 	cfg := Config{
-		BaseURL:           mustURL(t, "https://example.com/"),
-		Proxy:             devProxy,
-		RewriterJSPath:    "/rewriter.js",
-		HeadInjectionPath: "/head-injection",
-		InjectBootstrap:   false,
-		NoOriginals:       true, // most tests compare the rewritten markup itself
+		BaseURL:         mustURL(t, "https://example.com/"),
+		Proxy:           devProxy,
+		RewriterJSPath:  "/rewriter.js",
+		InjectBootstrap: false,
+		NoOriginals:     true, // most tests compare the rewritten markup itself
 	}
 	for _, o := range opts {
 		o(&cfg)

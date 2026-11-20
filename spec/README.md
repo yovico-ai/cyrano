@@ -128,4 +128,5 @@ entry when its module lands):
 
 
 Low: challenge heuristics, debug-variable parsing, boot/worker-init query
-JSON, base64url.
+JSON. (base64url: the head-injection endpoint, its only user, was dead —
+removed with both codecs, 2026-11-19.)

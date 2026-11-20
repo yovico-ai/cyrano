@@ -120,13 +120,12 @@ func startProxy(t *testing.T) *httptest.Server {
 	cfg := &config.File{
 		Servers: []config.Server{{Port: port}},
 		VHosts: []config.VHost{{
-			Hostnames:         []string{"127.0.0.1", "localhost", "fixture-a.test", "fixture-b.test"},
-			Mode:              "webproxy",
-			SecretCookieName:  "crnsct",
-			RewriterJSPath:    "/rewriter.js",
-			HeadInjectionPath: "/head-injection",
-			CookiesJSONPath:   "/cookies.json",
-			PublicURL:         proxyOrigin,
+			Hostnames:        []string{"127.0.0.1", "localhost", "fixture-a.test", "fixture-b.test"},
+			Mode:             "webproxy",
+			SecretCookieName: "crnsct",
+			RewriterJSPath:   "/rewriter.js",
+			CookiesJSONPath:  "/cookies.json",
+			PublicURL:        proxyOrigin,
 		}},
 	}
 

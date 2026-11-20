@@ -91,12 +91,11 @@ func TestServer_RewriterJSNotProxiedViaReferer(t *testing.T) {
 	cfg := &config.File{
 		Servers: []config.Server{{Port: 9081}},
 		VHosts: []config.VHost{{
-			Hostnames:         []string{"localhost"},
-			HTTPPort:          9081,
-			Mode:              "webproxy",
-			RewriterJSPath:    "/rewriter.js",
-			HeadInjectionPath: "/head-injection",
-			CookiesJSONPath:   "/cookies.json",
+			Hostnames:       []string{"localhost"},
+			HTTPPort:        9081,
+			Mode:            "webproxy",
+			RewriterJSPath:  "/rewriter.js",
+			CookiesJSONPath: "/cookies.json",
 		}},
 	}
 	srv := New(cfg, tmpDir, nil)
@@ -131,12 +130,11 @@ func TestServer_RefererRouting(t *testing.T) {
 	cfg := &config.File{
 		Servers: []config.Server{{Port: 9081}},
 		VHosts: []config.VHost{{
-			Hostnames:         []string{"localhost"},
-			HTTPPort:          9081,
-			Mode:              "webproxy",
-			RewriterJSPath:    "/rewriter.js",
-			HeadInjectionPath: "/head-injection",
-			CookiesJSONPath:   "/cookies.json",
+			Hostnames:       []string{"localhost"},
+			HTTPPort:        9081,
+			Mode:            "webproxy",
+			RewriterJSPath:  "/rewriter.js",
+			CookiesJSONPath: "/cookies.json",
 		}},
 	}
 	srv := New(cfg, t.TempDir(), nil)
@@ -173,12 +171,11 @@ func TestServer_RefererRouting_307_PreservesMethod(t *testing.T) {
 	cfg := &config.File{
 		Servers: []config.Server{{Port: 9081}},
 		VHosts: []config.VHost{{
-			Hostnames:         []string{"localhost"},
-			HTTPPort:          9081,
-			Mode:              "webproxy",
-			RewriterJSPath:    "/rewriter.js",
-			HeadInjectionPath: "/head-injection",
-			CookiesJSONPath:   "/cookies.json",
+			Hostnames:       []string{"localhost"},
+			HTTPPort:        9081,
+			Mode:            "webproxy",
+			RewriterJSPath:  "/rewriter.js",
+			CookiesJSONPath: "/cookies.json",
 		}},
 	}
 	srv := New(cfg, t.TempDir(), nil)
@@ -207,12 +204,11 @@ func TestServer_FaviconSilencedEvenWithReferer(t *testing.T) {
 	cfg := &config.File{
 		Servers: []config.Server{{Port: 9081}},
 		VHosts: []config.VHost{{
-			Hostnames:         []string{"localhost"},
-			HTTPPort:          9081,
-			Mode:              "webproxy",
-			RewriterJSPath:    "/rewriter.js",
-			HeadInjectionPath: "/head-injection",
-			CookiesJSONPath:   "/cookies.json",
+			Hostnames:       []string{"localhost"},
+			HTTPPort:        9081,
+			Mode:            "webproxy",
+			RewriterJSPath:  "/rewriter.js",
+			CookiesJSONPath: "/cookies.json",
 		}},
 	}
 	srv := New(cfg, t.TempDir(), nil)
@@ -235,12 +231,11 @@ func TestServer_FaviconSilencedWithoutReferer(t *testing.T) {
 	cfg := &config.File{
 		Servers: []config.Server{{Port: 9081}},
 		VHosts: []config.VHost{{
-			Hostnames:         []string{"localhost"},
-			HTTPPort:          9081,
-			Mode:              "webproxy",
-			RewriterJSPath:    "/rewriter.js",
-			HeadInjectionPath: "/head-injection",
-			CookiesJSONPath:   "/cookies.json",
+			Hostnames:       []string{"localhost"},
+			HTTPPort:        9081,
+			Mode:            "webproxy",
+			RewriterJSPath:  "/rewriter.js",
+			CookiesJSONPath: "/cookies.json",
 		}},
 	}
 	srv := New(cfg, t.TempDir(), nil)
@@ -272,12 +267,11 @@ func TestServer_RoutesGotoRequest(t *testing.T) {
 	cfg := &config.File{
 		Servers: []config.Server{{Port: 9081}},
 		VHosts: []config.VHost{{
-			Hostnames:         []string{"localhost"},
-			HTTPPort:          9081,
-			Mode:              "webproxy",
-			RewriterJSPath:    "/rewriter.js",
-			HeadInjectionPath: "/head-injection",
-			CookiesJSONPath:   "/cookies.json",
+			Hostnames:       []string{"localhost"},
+			HTTPPort:        9081,
+			Mode:            "webproxy",
+			RewriterJSPath:  "/rewriter.js",
+			CookiesJSONPath: "/cookies.json",
 		}},
 	}
 	srv := New(cfg, t.TempDir(), nil)
@@ -449,12 +443,11 @@ func makeTestServer(t *testing.T) http.Handler {
 	cfg := &config.File{
 		Servers: []config.Server{{Port: 9081}},
 		VHosts: []config.VHost{{
-			Hostnames:         []string{"localhost"},
-			HTTPPort:          9081,
-			Mode:              "sslvpn",
-			RewriterJSPath:    "/rewriter.js",
-			HeadInjectionPath: "/head-injection",
-			CookiesJSONPath:   "/cookies.json",
+			Hostnames:       []string{"localhost"},
+			HTTPPort:        9081,
+			Mode:            "sslvpn",
+			RewriterJSPath:  "/rewriter.js",
+			CookiesJSONPath: "/cookies.json",
 		}},
 	}
 	return New(cfg, t.TempDir(), nil).Handler()
@@ -499,12 +492,11 @@ func TestServer_CdnCgiChallengeFallback_EmptyJS(t *testing.T) {
 	cfg := &config.File{
 		Servers: []config.Server{{Port: 9081}},
 		VHosts: []config.VHost{{
-			Hostnames:         []string{"localhost"},
-			HTTPPort:          9081,
-			Mode:              "sslvpn",
-			RewriterJSPath:    "/rewriter.js",
-			HeadInjectionPath: "/head-injection",
-			CookiesJSONPath:   "/cookies.json",
+			Hostnames:       []string{"localhost"},
+			HTTPPort:        9081,
+			Mode:            "sslvpn",
+			RewriterJSPath:  "/rewriter.js",
+			CookiesJSONPath: "/cookies.json",
 		}},
 	}
 	srv := New(cfg, t.TempDir(), nil)

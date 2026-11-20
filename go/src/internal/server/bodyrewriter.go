@@ -161,7 +161,6 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				BaseURL:           target,
 				Proxy:             proxyCfg,
 				RewriterJSPath:    vhost.RewriterJSPath,
-				HeadInjectionPath: vhost.HeadInjectionPath,
 				// Every page gets the one runtime. Its patches keep the native
 				// surface (ts/client/src/native/surface.ts), so a challenge's
 				// integrity and fingerprint checks see native APIs; a challenge

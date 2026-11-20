@@ -29,11 +29,6 @@ type Config struct {
 	// at (defaults to /rewriter.js).
 	RewriterJSPath string
 
-	// HeadInjectionPath is the URL path of the per-page state script that
-	// installs the page's effective base URL + initial cookies (defaults
-	// to /head-injection).
-	HeadInjectionPath string
-
 	// InjectBootstrap controls whether the rewriter injects the <script>
 	// chain that wires window.$rewriter into the page. Disabled for embedded
 	// fragments (link rel=import, srcdoc subtrees).

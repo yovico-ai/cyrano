@@ -24,7 +24,6 @@ export CYRANO_SECRET_COOKIE=crnsct
 
 # ── Endpoint paths ────────────────────────────────────────────────────────────
 export CYRANO_REWRITER_JS_PATH=/rewriter.js
-export CYRANO_HEAD_INJECTION_PATH=/head-injection
 export CYRANO_COOKIES_JSON_PATH=/cookies.json
 
 # ── Locate binary and assets relative to this script ─────────────────────────

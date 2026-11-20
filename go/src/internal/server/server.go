@@ -163,9 +163,6 @@ func (s *Server) Handler() http.Handler {
 		// from accidentally proxying it to the upstream origin when the browser
 		// includes a Referer pointing at a proxied page (e.g. hard reload).
 		switch r.URL.Path {
-		case vhost.HeadInjectionPath:
-			headInjectionHandler(vhost).ServeHTTP(w, r)
-			return
 		case vhost.CookiesJSONPath:
 			cookiesJSONHandler(vhost).ServeHTTP(w, r)
 			return

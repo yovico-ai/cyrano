@@ -43,7 +43,6 @@ type VHost struct {
 	Version             string         `json:"version"`
 	SecretCookieName    string         `json:"secretCookieName"`
 	RewriterJSPath      string         `json:"rewriterJsPath"`
-	HeadInjectionPath   string         `json:"headInjectionPath"`
 	CookiesJSONPath     string         `json:"cookiesJsonPath"`
 	// PublicURL is the scheme+host[:port] the browser uses to reach this proxy
 	// (e.g. "https://vpn.example.com" or "http://localhost:9081"). When set it
@@ -88,7 +87,6 @@ func Load(path string) (*File, error) {
 //	CYRANO_MODE              Proxy mode: "webproxy" or "transparent" (default "webproxy")
 //	CYRANO_SECRET_COOKIE     Name of the session secret cookie (default "crnsct")
 //	CYRANO_REWRITER_JS_PATH  URL path serving rewriter.js (default "/rewriter.js")
-//	CYRANO_HEAD_INJECTION_PATH  URL path for head-injection endpoint (default "/head-injection")
 //	CYRANO_COOKIES_JSON_PATH URL path for cookies.json endpoint (default "/cookies.json")
 func FromEnv() (*File, error) {
 	port, err := envInt("CYRANO_PORT", 9081)
@@ -120,7 +118,6 @@ func FromEnv() (*File, error) {
 			Mode:              envStr("CYRANO_MODE", "webproxy"),
 			SecretCookieName:  envStr("CYRANO_SECRET_COOKIE", "crnsct"),
 			RewriterJSPath:    envStr("CYRANO_REWRITER_JS_PATH", "/rewriter.js"),
-			HeadInjectionPath: envStr("CYRANO_HEAD_INJECTION_PATH", "/head-injection"),
 			CookiesJSONPath:   envStr("CYRANO_COOKIES_JSON_PATH", "/cookies.json"),
 			PublicURL:         envStr("CYRANO_PUBLIC_URL", ""),
 		}},
