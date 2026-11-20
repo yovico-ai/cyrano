@@ -20,7 +20,8 @@
 
 import { SafeSet, nO, nOP, nR, ncall, aIncludes } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
-import { rewriteUrl, unwrapProxiedUrl } from "../url/containment";
+import { rewriteUrl, unwrapProxiedUrl, type Dest } from "../url/containment";
+import { childFrameDest, opaqueLocationView } from "../native/cross-origin";
 import { maskAs, standIn } from "../native/surface";
 import { originalOrigin } from "../messaging/target-origin";
 
@@ -41,12 +42,13 @@ export interface LocationViewOptions {
      * The window is a child frame of the one navigating it: the URL it is
      * given is marked as a frame's from its parent (spec Frames embedderOf).
      */
-    childFrame?(): boolean;
+    /** The mark for a URL this view's window is sent to, when it is a child frame of the viewer. */
+    childFrame?(): Dest | undefined;
 }
 
 export function makeLocationView(real: Location, o: LocationViewOptions): Location {
     const navigate = (method: "assign" | "replace", url: string): void => {
-        real[method](rewriteUrl(String(url), o.base(), o.config, undefined, o.childFrame?.() ? "frame" : undefined));
+        real[method](rewriteUrl(String(url), o.base(), o.config, undefined, o.childFrame?.()));
     };
     const setPart = (part: Part, value: string): void => {
         const next = new URL(o.base().href);
@@ -132,7 +134,10 @@ export function foreignLocationView(win: unknown, config: ClientConfig, viewer?:
         real = (win as { location: Location }).location;
         void real.href;
     } catch {
-        return (win as { location?: unknown })?.location;
+        // Cross-origin to the browser itself (a sandboxed frame): navigable,
+        // not readable — through the proxy, as the viewer's document would.
+        const native = (win as { location?: unknown })?.location;
+        return (typeof native === "object" && native !== null ? opaqueLocationView(win as object, viewer) : undefined) ?? native;
     }
     const base = (): URL => {
         const r = (win as { $rewriter?: { get_base_url?: () => URL | null } }).$rewriter;
@@ -147,9 +152,7 @@ export function foreignLocationView(win: unknown, config: ClientConfig, viewer?:
         return real;
     }
     // A parent navigating its own child frame gives it its URL, as by its src.
-    const childFrame = (): boolean => {
-        try { return viewer !== undefined && win !== viewer && (win as Window).parent === viewer; } catch { return false; }
-    };
+    const childFrame = (): Dest | undefined => childFrameDest(win, viewer);
     return makeLocationView(real, { base, config, win: win as Window, childFrame });
 }
 

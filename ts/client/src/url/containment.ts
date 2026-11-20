@@ -143,8 +143,31 @@ function cyranoTarget(pathname: string): { scheme: string; policy: string | null
 // "frame": the document a frame is given by the document that holds it —
 // nothing of how the response is rewritten; it tells the proxy that the
 // requesting document is the frame's parent (spec Frames embedderOf).
-export type Dest = "js" | "css" | "frame";
-const isDest = (t: string): boolean => t === "js" || t === "css" || t === "frame";
+// "inert": such a frame in which no script runs (an iframe sandboxed
+// without allow-scripts: frameDest) — its document gets no runtime.
+export type Dest = "js" | "css" | "frame" | "inert";
+const isDest = (t: string): boolean => t === "js" || t === "css" || t === "frame" || t === "inert";
+
+/**
+ * The mark of the document an iframe is given (spec Frames.frameDest):
+ * "inert" when its sandbox attribute (null: absent) has no allow-scripts —
+ * tokens on ASCII whitespace, compared ASCII case-insensitively.
+ */
+export function frameDest(sandbox: string | null): Dest {
+    if (sandbox === null) return "frame";
+    let token = "";
+    const allows = (): boolean => token === "allow-scripts";
+    for (let i = 0; i < sandbox.length; i++) {
+        const c = sandbox.charCodeAt(i);
+        if (c === 9 || c === 10 || c === 12 || c === 13 || c === 32) {
+            if (allows()) return "frame";
+            token = "";
+        } else {
+            token += c >= 65 && c <= 90 ? String.fromCharCode(c + 32) : sandbox[i]!;
+        }
+    }
+    return allows() ? "frame" : "inert";
+}
 
 /** What a proxified URL's request was marked for (spec targetDest), or null. */
 export function targetDest(href: string): Dest | null {

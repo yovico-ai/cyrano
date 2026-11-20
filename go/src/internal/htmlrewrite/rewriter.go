@@ -200,6 +200,12 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 	as, hasAs := getAttr(attrs, "as")
 	rewriteOne := func(raw string, opts urlOpts) string {
 		dest := URLDest(svg, tag, opts.attr, strings.Fields(strings.ToLower(rel)), strings.ToLower(as), hasAs)
+		// An iframe sandboxed without allow-scripts runs nothing: its
+		// document gets no runtime (spec Frames.frameDest).
+		if dest == urlrewrite.DestFrame && tag == "iframe" && !svg {
+			sandbox, has := getAttr(attrs, "sandbox")
+			dest = urlrewrite.FrameDest(sandbox, has)
+		}
 		return urlrewrite.RewriteMarked(raw, cfg.BaseURL, cfg.Proxy, urlrewrite.Mark{Policy: policy, Dest: dest})
 	}
 

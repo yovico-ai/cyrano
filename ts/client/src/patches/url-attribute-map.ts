@@ -1,6 +1,6 @@
 import { rewriteCssText } from "../css/rewriter";
 import { heldAttr } from "../native/originals";
-import type { Dest } from "../url/containment";
+import { frameDest, type Dest } from "../url/containment";
 // Single source of truth for the URL-bearing attribute list.
 //
 // Three consumers:
@@ -179,7 +179,9 @@ export function urlDestOf(el: Element, attr: string): Dest | null {
         const tag = svg ? el.localName : el.localName.toLowerCase();
         if (tag !== "script" && tag !== "link" && tag !== "iframe" && tag !== "frame" && tag !== "embed" && tag !== "object") return null;
         const as = heldAttr(el, "as");
-        return urlDest(svg, tag, attr.toLowerCase(), relTokens(heldAttr(el, "rel")), as === null ? null : lowerA(as));
+        const dest = urlDest(svg, tag, attr.toLowerCase(), relTokens(heldAttr(el, "rel")), as === null ? null : lowerA(as));
+        // An iframe sandboxed without allow-scripts runs nothing (spec Frames.frameDest).
+        return dest === "frame" && tag === "iframe" && !svg ? frameDest(heldAttr(el, "sandbox")) : dest;
     } catch {
         return null;
     }

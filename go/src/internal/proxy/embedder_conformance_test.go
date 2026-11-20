@@ -33,3 +33,26 @@ func TestSpecConformance_EmbedderOf(t *testing.T) {
 		}
 	})
 }
+
+func TestSpecConformance_InertFrame(t *testing.T) {
+	oracle := specoracle.Need(t)
+	b := func(v bool) string {
+		if v {
+			return "1"
+		}
+		return "0"
+	}
+	for _, mi := range []bool{false, true} {
+		for _, m := range []bool{false, true} {
+			for _, r := range []bool{false, true} {
+				want, _, err := oracle.Ask("inertframe", b(mi), b(m), b(r))
+				if err != nil {
+					t.Fatalf("oracle: %v", err)
+				}
+				if got := inertFrame(mi, m, r); got != (want == "yes") {
+					t.Errorf("inertFrame(%v, %v, %v) = %v, spec %s", mi, m, r, got, want)
+				}
+			}
+		}
+	}
+}

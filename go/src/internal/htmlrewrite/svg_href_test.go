@@ -37,3 +37,16 @@ func TestRewrite_SVGPresentationURLAttrs(t *testing.T) {
 		}
 	}
 }
+
+// An iframe sandboxed without allow-scripts is marked inert (spec
+// Frames.frameDest): its document gets no runtime. Other frames: frame.
+func TestRewrite_FrameMarks(t *testing.T) {
+	out := rewrite(t, `<iframe src="/a"></iframe><iframe sandbox src="/b"></iframe><iframe sandbox="allow-forms" src="/c"></iframe>`+
+		`<iframe sandbox="allow-same-origin ALLOW-SCRIPTS" src="/d"></iframe><embed src="/e"><object data="/f"></object>`, withBaseURL("https://site.example/page"))
+	for _, want := range []string{"/cyrano/https!frame/site.example/a", "/cyrano/https!inert/site.example/b", "/cyrano/https!inert/site.example/c",
+		"/cyrano/https!frame/site.example/d", "/cyrano/https!frame/site.example/e", "/cyrano/https!frame/site.example/f"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in %s", want, out)
+		}
+	}
+}

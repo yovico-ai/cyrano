@@ -149,7 +149,9 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				// …except a page under which no script of its own can run
 				// (spec/Csp.agda noScriptsRun): it has nothing for the runtime
 				// to serve, and natively runs nothing.
-				InjectBootstrap:   !urlrewrite.NoScriptsRun(originalPolicies(resp)),
+				// …nor a frame sandboxed without allow-scripts (spec/Frames.agda
+				// inertFrame; the frame's URL says so).
+				InjectBootstrap:   !urlrewrite.NoScriptsRun(originalPolicies(resp)) && !proxy.InertFrame(resp),
 				ClientPassthrough: pageConfig(clientPassthrough, resp),
 				ScriptNonce:       proxy.ScriptNonce(originalPolicies(resp)),
 				ExternalBootstrap: !urlrewrite.InlineScriptAllowed(originalPolicies(resp)),

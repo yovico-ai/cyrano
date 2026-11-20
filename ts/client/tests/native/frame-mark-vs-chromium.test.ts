@@ -6,7 +6,8 @@
 // from the parent — the request the proxy sees is marked; a frame
 // navigating itself (its own location, a link in it) asks unmarked, which
 // is how the proxy tells a frame's parent from the frame's own previous
-// document. And the page reads back what it wrote, as direct.
+// document. And the page reads back what it wrote, as direct. An iframe
+// sandboxed without allow-scripts asks marked inert (Frames.agda frameDest).
 //
 // Needs the built bundle and Playwright's Chromium; `make browser-check`.
 
@@ -33,6 +34,11 @@ var p = document.createElement("iframe"); p.id = "p"; p.src = "/f/prop"; documen
 var a = document.createElement("iframe"); a.id = "a"; a.setAttribute("src", "/f/attr"); document.body.appendChild(a);
 var l = document.createElement("iframe"); l.id = "l"; l.src = "/f/first"; document.body.appendChild(l);
 l.onload = function () { l.onload = null; l.contentWindow.location.href = "/f/by-parent"; };
+// Sandboxed frames: without allow-scripts nothing runs in them (marked inert).
+document.body.insertAdjacentHTML("beforeend", '<iframe sandbox src="/f/sb-markup"></iframe><iframe sandbox="allow-forms ALLOW-SCRIPTS" src="/f/sb-scripts"></iframe>');
+var s1 = document.createElement("iframe"); s1.setAttribute("sandbox", "allow-same-origin"); s1.src = "/f/sb-prop"; document.body.appendChild(s1);
+var s2 = document.createElement("iframe"); s2.sandbox = "allow-forms"; s2.src = "/f/sb-first"; document.body.appendChild(s2);
+s2.onload = function () { s2.onload = null; s2.contentWindow.location.href = "/f/sb-by-parent"; };
 read.src = [document.getElementById("m").src, p.src, a.getAttribute("src"), a.src].map(function (u) { return u.replace(location.origin, ""); });
 window.read = read;
 `;
@@ -78,7 +84,7 @@ describe.skipIf(!wanted)("the frame mark in Chromium", () => {
     const run = async (url: string): Promise<unknown> => {
         const page = await browser.newPage();
         await page.goto(url);
-        await page.waitForFunction("window.read !== undefined && frames.length === 4");
+        await page.waitForFunction("window.read !== undefined && frames.length === 8");
         await new Promise((r) => setTimeout(r, 700)); // the frames' own navigations
         const got = await page.evaluate(() => (window as unknown as { read: unknown }).read);
         await page.close();
@@ -92,6 +98,7 @@ describe.skipIf(!wanted)("the frame mark in Chromium", () => {
         expect(await run(`http://127.0.0.1:${port}/cyrano/http/localhost:${port}/p/page`)).toEqual(direct);
         expect(asked.slice().sort()).toEqual([
             "/f/attr !frame", "/f/by-itself", "/f/by-parent !frame", "/f/first !frame", "/f/markup !frame", "/f/prop !frame",
+            "/f/sb-by-parent !inert", "/f/sb-first !inert", "/f/sb-markup !inert", "/f/sb-prop !inert", "/f/sb-scripts !frame",
         ]);
     }, 30_000);
 });

@@ -19,7 +19,7 @@ func TestStorageAccess_CrossSiteFrameChain(t *testing.T) {
 			r.Header.Set(InitiatorHeader, from)
 		}
 		u, _ := url.Parse(target)
-		h.storageAccess(r, u, "sa", false)
+		h.storageAccess(r, u, "sa", "")
 		return r.Header.Get("Sec-Fetch-Storage-Access")
 	}
 	for _, c := range []struct{ target, from, mode, dest, want string }{

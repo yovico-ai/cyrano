@@ -33,7 +33,7 @@ open import Data.String.Base using (String; toList)
 open import Url using (Str; is; eqStr; lowerAscii; dropWhile; break)
 import Url
 open import Data.Nat.Base using (ℕ; zero; suc)
-open import Containment using (Dest; destScript; destStyle; destFrame)
+open import Containment using (Dest; destScript; destStyle; destFrame; destInert)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl)
 
 data Kind : Set where
@@ -159,6 +159,7 @@ responseKind : Maybe Dest → Maybe Str → Maybe Str → Bool → Kind
 responseKind (just destScript) _ _ _ = asJs
 responseKind (just destStyle)  _ _ _ = asCss
 responseKind (just destFrame)  sfd ct sniffed = unmarked sfd ct sniffed
+responseKind (just destInert)  sfd ct sniffed = unmarked sfd ct sniffed
 responseKind nothing           sfd ct sniffed = unmarked sfd ct sniffed
 
 ------------------------------------------------------------------------

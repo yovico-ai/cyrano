@@ -27,7 +27,7 @@ import { rewriteByKind, urlAttrKind, urlDest } from "./url-attribute-map";
 const lowerAscii = (s: string): string => s.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
 const relOf = (v: string | null): string[] => (v === null ? [] : lowerAscii(v).split(/[\t\n\f\r ]+/).filter((t) => t !== ""));
 import { tokenize, withBootstrap, type Ns, type Tok, type TokAttr } from "./html-tokens";
-import { isReferrerPolicy } from "../url/containment";
+import { frameDest, isReferrerPolicy } from "../url/containment";
 import { isRefreshEquiv, rewriteRefresh } from "../url/refresh";
 import { rewriteAllow } from "../url/allow";
 import { crossoriginValue } from "../url/crossorigin";
@@ -227,7 +227,9 @@ function editStartTag(src: string, t: Extract<Tok, { kind: "start" }>, rewriteOn
         if (kind === "none" || kind === "reflected") continue;
         // A script's or stylesheet's URL says so (spec/Attrs.agda urlDest).
         const as = value("as");
-        const dest = urlDest(!html, t.name, a.name, relOf(value("rel")), as === null ? null : lowerAscii(as));
+        const dest0 = urlDest(!html, t.name, a.name, relOf(value("rel")), as === null ? null : lowerAscii(as));
+        // An iframe sandboxed without allow-scripts runs nothing (spec Frames.frameDest).
+        const dest = dest0 === "frame" && html && t.name === "iframe" ? frameDest(value("sandbox")) : dest0;
         const rwd = dest && rewriteOne.withMark ? (u: string) => rewriteOne.withMark!(u, policyMark, dest) : rw;
         change(a, a.name, rewriteByKind(kind, v, rwd, rewriteSrcsetAttribute));
     }

@@ -12,7 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ClientConfig } from "../../src/config";
 import { netDestination } from "../../src/patches/navigation";
 import { rewriteSrcsetAttribute } from "../../src/patches/srcset";
-import { PROXIFIABLE_SCHEMES, rewriteUrl, targetDest, unwrapProxiedUrl, type Dest } from "../../src/url/containment";
+import { PROXIFIABLE_SCHEMES, frameDest, rewriteUrl, targetDest, unwrapProxiedUrl, type Dest } from "../../src/url/containment";
 import { bases, policies, proxiedHref, proxies, srcset, url } from "./gen";
 import { OracleClient, OutOfModel, checkSchemes, locateOracle, oracleRequired } from "./oracle-client";
 
@@ -76,7 +76,7 @@ describe.skipIf(located.skip !== "")("spec conformance", () => {
     // A script's or stylesheet's URL: marked (spec rewriteUrlWith), read back (targetDest).
     it("rewriteUrl with a destination mark, and targetDest", async () => {
         const input = fc.constantFrom(...proxies).chain((proxy) =>
-            fc.tuple(fc.constant(proxy), fc.constantFrom(...bases), fc.constantFrom("-", "-", ...policies), fc.constantFrom("-", "js", "css", "frame"), url(proxy), proxiedHref(proxy)));
+            fc.tuple(fc.constant(proxy), fc.constantFrom(...bases), fc.constantFrom("-", "-", ...policies), fc.constantFrom("-", "js", "css", "frame", "inert"), url(proxy), proxiedHref(proxy)));
         await fc.assert(fc.asyncProperty(input, async ([proxy, base, pol, dest, raw, href]) => {
             fc.pre(!nodeIsNotChromium(raw) && !nodeIsNotChromium(href));
             const want = await ask(() => oracle.ask("rewritemark", [proxy, base, pol, dest, raw]));
@@ -103,6 +103,18 @@ describe.skipIf(located.skip !== "")("spec conformance", () => {
             const want = await ask(() => oracle.ask("netdest", [proxy, dest]));
             const got = netDestination(dest, new URL(proxy).origin, (u) => rewriteUrl(u, new URL(base), config(proxy)));
             expect(got ?? "none", `netDestination(${JSON.stringify(dest)}) under ${proxy}`).toBe(want);
+        }), runs);
+    });
+
+    // An iframe's sandbox attribute: the mark its document's URL gets (spec Frames.frameDest).
+    it("frameDest", async () => {
+        const token = fc.constantFrom("allow-scripts", "ALLOW-SCRIPTS", "Allow-Scripts", "allow-same-origin", "allow-forms", "allow-scriptsx", "xallow-scripts", "allow", "allow-scripts,", "");
+        const sep = fc.constantFrom(" ", "  ", "\t", "\n", "\f", "\r", "\v", ",");
+        const input = fc.tuple(fc.boolean(), fc.array(fc.tuple(sep, token), { maxLength: 4 }), fc.constantFrom("", " ", "\t", "\v"));
+        await fc.assert(fc.asyncProperty(input, async ([has, parts, tail]) => {
+            const sandbox = parts.map(([a, b]) => a + b).join("") + tail;
+            const want = await oracle.ask("framedest", [has ? "1" : "0", sandbox]);
+            expect(frameDest(has ? sandbox : null), `frameDest(${JSON.stringify(has ? sandbox : null)})`).toBe(want);
         }), runs);
     });
 

@@ -35,6 +35,13 @@ func originOf(u *url.URL) string { return u.Scheme + "://" + u.Host }
 // frame's document) keeps its embedder: support.microsoft.com's silent
 // sign-in frame, back from login.microsoftonline.com by a form POST, was
 // judged against login.microsoftonline.com and refused.
+// inertFrame: whether a framed document being navigated to gets no runtime
+// (spec/Frames.agda inertFrame) — its URL says so, or it is unmarked (a
+// frame navigating itself) and the Referer's document was an inert frame's.
+func inertFrame(markInert, marked, recorded bool) bool {
+	return markInert || (!marked && recorded)
+}
+
 func embedderOf(marked bool, recorded, referer string) string {
 	if !marked && recorded != "" {
 		return recorded

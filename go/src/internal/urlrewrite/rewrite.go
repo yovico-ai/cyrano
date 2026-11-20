@@ -203,7 +203,25 @@ const (
 	DestScript Dest = "js"
 	DestStyle  Dest = "css"
 	DestFrame  Dest = "frame"
+	// DestInert: such a frame in which no script runs (an iframe sandboxed
+	// without allow-scripts: FrameDest) — its document gets no runtime.
+	DestInert Dest = "inert"
 )
+
+// FrameDest is the mark of the document an iframe is given (spec
+// Frames.frameDest): DestInert when its sandbox attribute has no
+// allow-scripts (tokens on ASCII whitespace, ASCII case-insensitive).
+func FrameDest(sandbox string, hasSandbox bool) Dest {
+	if !hasSandbox {
+		return DestFrame
+	}
+	for _, t := range strings.FieldsFunc(sandbox, func(r rune) bool { return r == '\t' || r == '\n' || r == '\f' || r == '\r' || r == ' ' }) {
+		if asciiLower(t) == "allow-scripts" {
+			return DestFrame
+		}
+	}
+	return DestInert
+}
 
 // Mark is what a proxified URL carries besides its target (spec Mark): a
 // referrer policy of its own, what the request is for. The scheme
@@ -325,7 +343,7 @@ func schemeSegment(seg string) (scheme string, m Mark, ok bool) {
 		return "", Mark{}, false
 	}
 	dest := func(t string) Dest {
-		if t == string(DestScript) || t == string(DestStyle) || t == string(DestFrame) {
+		if t == string(DestScript) || t == string(DestStyle) || t == string(DestFrame) || t == string(DestInert) {
 			return Dest(t)
 		}
 		return ""

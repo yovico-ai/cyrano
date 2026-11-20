@@ -28,6 +28,8 @@
 --   fetchlatersize <href> <headers k:v, LF> <none|text|params|buffer|blob:type> <body bytes> → {"out":"<n>"|"unknown-length"}
 --   frameorigin <object 0|1> <srcdoc 0|1> <src as read> <creator origin> → {"out":"same"|"cross"|"opaque"}
 --   netdest <proxy> <destination>      → {"out":"<where the navigation goes instead>"|"none"} (Route.netDestination)
+--   framedest <has sandbox 0|1> <sandbox>  → {"out":"frame"|"inert"} (Frames.frameDest)
+--   inertframe <mark inert 0|1> <marked 0|1> <recorded 0|1> → {"out":"yes"|"no"} (Frames.inertFrame)
 --   embedder <marked 0|1> <recorded embedder|"-"> <referer document> → {"out":"<the embedder>"} (Frames.embedderOf)
 --   selforigin <native origin> <original origin> → {"out":"<self.origin>"} (Frames.selfOrigin)
 --   documentdomain <native origin> <original host> → {"out":"<document.domain>"} (Frames.documentDomain)
@@ -391,6 +393,8 @@ dispatch op args =
   else if eqStr op (toList "untag") then threeArgs (λ t o f → Stack.untag t o f) args
   else if eqStr op (toList "frameoriginof") then frameOriginOfReq args
   else if eqStr op (toList "embedder") then embedderReq args
+  else if eqStr op (toList "framedest") then frameDestReq args
+  else if eqStr op (toList "inertframe") then inertFrameReq args
   else if eqStr op (toList "netdest") then netDestReq args
   else if eqStr op (toList "selforigin") then twoArgs Frames.selfOrigin args
   else if eqStr op (toList "documentdomain") then twoArgs Frames.documentDomain args
@@ -478,6 +482,7 @@ dispatch op args =
             else if eqStr t (toList "js") then just (just destScript)
             else if eqStr t (toList "css") then just (just destStyle)
             else if eqStr t (toList "frame") then just (just destFrame)
+            else if eqStr t (toList "inert") then just (just destInert)
             else nothing
     byMark : Maybe (Maybe Policy) → Maybe (Maybe Dest) → Str
     byMark (just x) (just d) = answerReply raw (rewriteUrlWith px (mark x d) base raw)
@@ -536,7 +541,8 @@ dispatch op args =
     where
     dst : Maybe Dest
     dst = if eqStr m (toList "js") then just destScript else if eqStr m (toList "css") then just destStyle
-          else if eqStr m (toList "frame") then just destFrame else nothing
+          else if eqStr m (toList "frame") then just destFrame
+          else if eqStr m (toList "inert") then just destInert else nothing
     opt : Str → Str → Maybe Str
     opt p v = if eqStr p (toList "1") then just v else nothing
   dispositionReq _ = errorReply "BadRequest"
@@ -690,6 +696,15 @@ dispatch op args =
   toolbarRightReq as with nats as
   ... | just (vw ∷ w ∷ []) = out (Url.showN (Toolbar.rightEnd vw w))
   ... | _ = errorReply "BadRequest"
+
+  frameDestReq : List Str → Str
+  frameDestReq (h ∷ sb ∷ []) = out (toList (Containment.destName (Frames.frameDest (if eqStr h (toList "1") then just sb else nothing))))
+  frameDestReq (h ∷ []) = out (toList (Containment.destName (Frames.frameDest (if eqStr h (toList "1") then just [] else nothing))))
+  frameDestReq _ = errorReply "BadRequest"
+
+  inertFrameReq : List Str → Str
+  inertFrameReq (a ∷ b ∷ c ∷ []) = yn (Frames.inertFrame (eqStr a (toList "1")) (eqStr b (toList "1")) (eqStr c (toList "1")))
+  inertFrameReq _ = errorReply "BadRequest"
 
   embedderReq : List Str → Str
   embedderReq (m ∷ rec ∷ ref ∷ []) =

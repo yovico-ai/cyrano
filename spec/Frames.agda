@@ -99,3 +99,46 @@ embedderOf true  _        referer = referer
 embedderOf false (just e) referer = e
 embedderOf false nothing  referer = referer
 
+------------------------------------------------------------------------
+-- A frame in which no script runs: an iframe whose sandbox attribute has
+-- no allow-scripts (its tokens split on ASCII whitespace, compared ASCII
+-- case-insensitively). Natively nothing runs there, and the runtime's
+-- bootstrap would be the only script — blocked, with a console message
+-- (Microsoft's company-target sync frame). The document holding the
+-- iframe says so in the frame's mark (`frameDest`: destInert in place of
+-- destFrame), and the proxy gives such a document no runtime
+-- (`inertFrame`), nor the documents that frame then navigates itself to:
+-- the sandbox stays with the frame. (As for a CSP under which no script
+-- runs: Csp noScriptsRun.) Not covered: a sandbox attribute changed
+-- after the frame's URL was given and the frame was inserted.
+
+open import Containment using (Dest; destFrame; destInert)
+open import Data.Bool.Base using (not)
+open import Data.Char.Base using (Char)
+open import Url using (is; lowerAscii)
+open import Data.List.Base using (map)
+
+sandboxAllowsScripts : Str → Bool
+sandboxAllowsScripts s = go s []
+  where
+  ws : Char → Bool
+  ws c = is 9 c ∨ is 10 c ∨ is 12 c ∨ is 13 c ∨ is 32 c
+  isAllow : Str → Bool
+  isAllow rev = eqStr (map lowerAscii (Data.List.Base.reverse rev)) (toList "allow-scripts")
+  -- acc: the current token, reversed
+  go : Str → Str → Bool
+  go [] acc = isAllow acc
+  go (c ∷ cs) acc = if ws c then (isAllow acc ∨ go cs []) else go cs (c ∷ acc)
+
+-- sandbox: the iframe's sandbox attribute, when it has one.
+frameDest : Maybe Str → Dest
+frameDest nothing  = destFrame
+frameDest (just s) = if sandboxAllowsScripts s then destFrame else destInert
+
+-- Whether a framed document being navigated to gets no runtime.
+--   markInert: its URL carries the inert mark; marked: it carries a frame
+--   mark of either kind; recorded: the Referer's document was itself
+--   recorded as an inert frame's.
+inertFrame : Bool → Bool → Bool → Bool
+inertFrame markInert marked recorded = markInert ∨ (not marked ∧ recorded)
+

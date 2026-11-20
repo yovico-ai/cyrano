@@ -399,3 +399,51 @@ func TestE2E_RedirectKeepsWhatTheRequestIsFor(t *testing.T) {
 		}
 	}
 }
+
+// TestE2E_InertFrameGetsNoRuntime — a frame sandboxed without
+// allow-scripts runs no script (spec/Frames.agda frameDest, inertFrame):
+// its document, marked inert by the document holding it, gets no
+// bootstrap — nor does what that frame then navigates itself to. A frame
+// that may run scripts gets it as ever.
+func TestE2E_InertFrameGetsNoRuntime(t *testing.T) {
+	up := startInlineServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = io.WriteString(w, `<!doctype html><title>t</title><a href="/next">n</a>`)
+	})
+	proxy := startProxy(t)
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+	get := func(target, referer, dest, mark string) string {
+		u := strings.Replace(gotoURL(proxy, target), "/cyrano/http/", "/cyrano/http"+mark+"/", 1)
+		req, _ := http.NewRequest("GET", u, nil)
+		req.Header.Set("Sec-Fetch-Mode", "navigate")
+		req.Header.Set("Sec-Fetch-Dest", dest)
+		if referer != "" {
+			req.Header.Set("Referer", gotoURL(proxy, referer))
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", target, err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+	runtime := func(body string) bool { return strings.Contains(body, "/rewriter.js") }
+	if !runtime(get(up.URL+"/page", "", "document", "")) {
+		t.Fatal("the page itself has no runtime")
+	}
+	if body := get(up.URL+"/sandboxed", up.URL+"/page", "iframe", "!inert"); runtime(body) || !strings.Contains(body, "/cyrano/http/") {
+		t.Errorf("an inert frame: runtime %v, want none and its URLs rewritten:\n%.300s", runtime(body), body)
+	}
+	if body := get(up.URL+"/next", up.URL+"/sandboxed", "iframe", ""); runtime(body) {
+		t.Errorf("an inert frame navigating itself got the runtime:\n%.300s", body)
+	}
+	if !runtime(get(up.URL+"/frame", up.URL+"/page", "iframe", "!frame")) {
+		t.Error("a frame that may run scripts has no runtime")
+	}
+	// The same URL loaded as a page afterwards is a page again.
+	if !runtime(get(up.URL+"/next", "", "document", "")) {
+		t.Error("a top-level document that was once an inert frame's has no runtime")
+	}
+}

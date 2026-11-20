@@ -457,9 +457,15 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   parameter's or a nested pattern; a document under which no script of its own can run gets no runtime
   (spec/Csp.agda noScriptsRun; frames judge it by its proxified URL).
   A CSP `sandbox` directive without allow-scripts counts (no runtime).
-  Not yet: a frame whose `sandbox` attribute lacks allow-scripts still
-  gets the bootstrap — blocked, so only the console tells (Microsoft's
-  company-target sync frame); the server cannot see the attribute.
+  An iframe whose `sandbox` attribute lacks allow-scripts gets none
+  either: its URL is marked `!inert` in place of `!frame` by the document
+  holding it (spec/Frames.agda frameDest, inertFrame; both runtimes), and
+  what that frame then navigates itself to inherits it. Open: a sandbox
+  attribute changed after the frame was given its URL. A parent
+  navigating a child frame the browser holds cross-origin (sandboxed,
+  opaque) goes through a location view that can be set, not read
+  (`native/cross-origin.ts` opaqueLocationView); reading another member
+  of it throws the runtime's SecurityError, not the browser's own object.
   `fetchLater` keeps its quota per original origin (spec/FetchLater.agda)
   and defers what the
   proxy makes the native refuse (`patches/fetch-later.ts`; tumblr) — the

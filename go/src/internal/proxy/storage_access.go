@@ -43,6 +43,21 @@ type frameContext struct {
 	// embedder: the document that embeds this one (its original URL), when
 	// it was loaded as a frame; "" for a top-level document.
 	embedder string
+	// inert: no script runs in it (a frame sandboxed without
+	// allow-scripts, and what that frame then navigates itself to).
+	inert bool
+}
+
+type inertKey struct{}
+
+// InertFrame reports whether the document resp answers is a frame's in
+// which no script runs (spec Frames.inertFrame): it gets no runtime.
+func InertFrame(resp *http.Response) bool {
+	if resp == nil || resp.Request == nil {
+		return false
+	}
+	v, _ := resp.Request.Context().Value(inertKey{}).(bool)
+	return v
 }
 
 // topSiteStore remembers, per session, the context of framed documents by
@@ -107,7 +122,8 @@ func (h *Handler) requestingDocument(req *http.Request) *url.URL {
 // direct browser would, and notes the top-level site of a document being
 // navigated to. It reads the proxied Referer and the runtime's headers: call
 // it before directFetchHeaders replaces them.
-func (h *Handler) storageAccess(req *http.Request, target *url.URL, sessionID string, frameMarked bool) {
+func (h *Handler) storageAccess(req *http.Request, target *url.URL, sessionID string, mark urlrewrite.Dest) {
+	frameMarked := mark == urlrewrite.DestFrame || mark == urlrewrite.DestInert
 	mode := strings.ToLower(req.Header.Get("Sec-Fetch-Mode"))
 	dest := strings.ToLower(req.Header.Get("Sec-Fetch-Dest"))
 	credentials := strings.ToLower(req.Header.Get(CredentialsHeader))
@@ -120,10 +136,13 @@ func (h *Handler) storageAccess(req *http.Request, target *url.URL, sessionID st
 	// Its parent: the Referer's document when that document gave the frame
 	// this URL (marked), the embedder of the Referer's document when a
 	// frame navigates itself (spec Frames embedderOf).
-	framedBy := ""
+	framedBy, inert := "", false
 	if navigation && dest != "document" && from != nil {
 		recorded, _ := topSites.get(sessionID, pageKey(from))
 		framedBy = embedderOf(frameMarked, recorded.embedder, pageKey(from))
+		if inert = inertFrame(mark == urlrewrite.DestInert, frameMarked, recorded.inert); inert {
+			*req = *req.WithContext(context.WithValue(req.Context(), inertKey{}, true))
+		}
 		if by, err := url.Parse(framedBy); err == nil {
 			*req = *req.WithContext(context.WithValue(req.Context(), framedByKey{}, by))
 		}
@@ -143,7 +162,7 @@ func (h *Handler) storageAccess(req *http.Request, target *url.URL, sessionID st
 	req.Header.Del("Sec-Fetch-Storage-Access")
 	targetSite := siteOf(target)
 	if navigation {
-		topSites.set(sessionID, pageKey(target), frameContext{top: ctx.top, cross: ctx.cross || targetSite != ctx.top, embedder: framedBy})
+		topSites.set(sessionID, pageKey(target), frameContext{top: ctx.top, cross: ctx.cross || targetSite != ctx.top, embedder: framedBy, inert: inert})
 	}
 	cred := credentials
 	if cred == "" {

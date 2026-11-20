@@ -24,13 +24,19 @@
 
 import { SafeWeakMap, SafeWeakSet, nO, ncall, aIncludes } from "./intrinsics";
 import { internalsOf } from "./internals";
+import { heldAttr } from "./originals";
+import { frameDest, type Dest } from "../url/containment";
+
+type Navigate = ((url: string) => string) & { withMark?: (url: string, policy: string | null, dest: Dest | null) => string };
 
 // Per viewing window: the runtime is one module shared by a page and the
 // empty frames it initializes, so nothing here may be module-wide.
 interface Viewer {
     win: Window;
     origin: () => string;
-    navigate: (url: string) => string;
+    navigate: Navigate;
+    /** Really cross-origin windows' location views (one per window). */
+    locations: WeakMap<object, object>;
     opener: ((this: Window) => unknown) | undefined;
     views: WeakMap<object, object>;
     /** Windows page code of this realm already holds as themselves. */
@@ -44,9 +50,9 @@ let nativeContentWindow: ((this: unknown) => Window | null) | undefined;
 const reals = new SafeWeakMap<object, Window>();
 
 /** Sets up `win`'s views: its original origin, and how it proxifies a URL it navigates to. */
-export function initCrossOrigin(win: Window, origin: () => string, rewriteOne: (url: string) => string, unwrapOne: (url: string) => string = (u) => u): void {
+export function initCrossOrigin(win: Window, origin: () => string, rewriteOne: Navigate, unwrapOne: (url: string) => string = (u) => u): void {
     viewers.set(win, {
-        win, origin, navigate: rewriteOne, unwrap: unwrapOne, views: new SafeWeakMap(), handedOut: new SafeWeakSet(),
+        win, origin, navigate: rewriteOne, unwrap: unwrapOne, views: new SafeWeakMap(), locations: new SafeWeakMap(), handedOut: new SafeWeakSet(),
         opener: nO.getOwnPropertyDescriptor(win, "opener")?.get as Viewer["opener"],
     });
     if (!nativeContentWindow) {
@@ -219,9 +225,50 @@ function makeView(t: Window, v: Viewer): object {
     return view;
 }
 
+/**
+ * The mark of a URL `viewer` sends `win` to, when `win` is a child frame
+ * of it: the parent gives the frame its URL, as by its src (spec Frames
+ * embedderOf), and the frame's sandbox stays with it (frameDest). The
+ * frame's element is looked for in the viewer's document; one in a shadow
+ * tree is not found, and counts as unsandboxed.
+ */
+export function childFrameDest(win: unknown, viewer: Window | undefined): Dest | undefined {
+    try {
+        if (viewer === undefined || win === viewer || (win as Window).parent !== viewer) return undefined;
+        const frames = viewer.document.getElementsByTagName("iframe");
+        for (let i = 0; i < frames.length; i++) {
+            if (contentWindowOf(frames[i]) === win) return frameDest(heldAttr(frames[i]!, "sandbox"));
+        }
+        return "frame";
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * The location of a window the browser itself holds cross-origin to
+ * `from` (a sandboxed frame's opaque origin): natively it can be navigated
+ * and not read, and the URL is resolved against the navigating document's
+ * base — the page's original one, here. Undefined when `from` has no views.
+ */
+export function opaqueLocationView(target: object, from: object | undefined): object | undefined {
+    const v = from ? viewers.get(from) : undefined;
+    if (!v) return undefined;
+    let view = v.locations.get(target);
+    if (!view) {
+        view = makeLocationView(target as Window, v);
+        v.locations.set(target, view);
+    }
+    return view;
+}
+
 /** A cross-origin Location: it can be navigated, not read. */
 function makeLocationView(t: Window, v: Viewer): object {
-    const replace = (url: unknown): void => t.location.replace(v.navigate(String(url)));
+    const to = (url: string): string => {
+        const dest = childFrameDest(t, v.win);
+        return dest && v.navigate.withMark ? v.navigate.withMark(url, null, dest) : v.navigate(url);
+    };
+    const replace = (url: unknown): void => t.location.replace(to(String(url)));
     return new Proxy({}, {
         get: (_o, p) => {
             if (p === "replace") return replace;
@@ -230,7 +277,7 @@ function makeLocationView(t: Window, v: Viewer): object {
         },
         set: (_o, p, value) => {
             if (p !== "href") throw securityError(v);
-            t.location.href = v.navigate(String(value));
+            t.location.href = to(String(value));
             return true;
         },
         has: (_o, p) => {
