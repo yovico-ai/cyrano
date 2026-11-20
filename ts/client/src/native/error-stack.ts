@@ -20,7 +20,7 @@
 // Heuristic (REQUIREMENTS.md): V8 only; a page that captured the built-in
 // before cyrano ran, or that compares realms' intrinsics, can still tell.
 
-import { SafeWeakSet, nO, nOP, nR, nbind, ncall } from "./intrinsics";
+import { SafeWeakSet, nO, nOP, nR, nbind, ncall, sStarts } from "./intrinsics";
 import { maskAs, replaceValue, standIn } from "./surface";
 
 type CallSite = {
@@ -59,8 +59,70 @@ export function rawStackUrls(ErrorCtor: ErrorConstructor): string[] {
         E.stackTraceLimit = limit;
         if (hadPrep) E.prepareStackTrace = prep;
     }
+    return stackUrls(stack);
+}
+
+// spec/Stack.agda: a V8 frame is "at LOCATION" or "at NAME (LOCATION)"; a
+// location is URL:LINE:COL (the URL unescaped: it may hold parentheses),
+// a URL alone, or "eval at NAME (LOCATION), POSITION".
+const schemeOK = (s: string): boolean => sStarts(s, "http:") || sStarts(s, "https:") || sStarts(s, "blob:") || sStarts(s, "file:");
+const locStart = (s: string): boolean => sStarts(s, "eval at ") || schemeOK(s);
+
+/** The text after the first " (" that a location follows, or null. */
+function openAt(s: string, from = 0): string | null {
+    for (let i = from; i + 1 < s.length; i++) {
+        if (s.charCodeAt(i) === 32 && s.charCodeAt(i + 1) === 40 && locStart(s.slice(i + 2))) return s.slice(i + 2);
+    }
+    return null;
+}
+
+function location(rest: string): string {
+    if (rest.length > 0 && rest.charCodeAt(rest.length - 1) === 41) {
+        const loc = openAt(rest);
+        if (loc !== null) return loc.slice(0, -1);
+    }
+    if (sStarts(rest, "async ") && locStart(rest.slice(6))) return rest.slice(6); // a bare async frame
+    return rest;
+}
+
+const isDigit = (c: number): boolean => c >= 48 && c <= 57;
+
+/** URL:LINE:COL → URL; a URL without a position as it is. */
+function stripPos(u: string): string {
+    let i = u.length;
+    const digitsBack = (): boolean => { const end = i; while (i > 0 && isDigit(u.charCodeAt(i - 1))) i--; return i < end; };
+    if (!digitsBack() || i === 0 || u.charCodeAt(--i) !== 58) return u;
+    if (!digitsBack() || i === 0 || u.charCodeAt(--i) !== 58) return u;
+    return u.slice(0, i);
+}
+
+function urlOf(loc: string, fuel: number): string | null {
+    if (fuel <= 0) return null;
+    if (sStarts(loc, "eval at ")) {
+        const r = loc.slice(8);
+        // NAME (LOCATION) and a position, or (an inner eval) none
+        const close = r.length > 0 && r.charCodeAt(r.length - 1) === 41 ? r.length - 1 : r.lastIndexOf("), ");
+        if (close === -1) return null;
+        const inner = openAt(r.slice(0, close));
+        return inner === null ? null : urlOf(inner, fuel - 1);
+    }
+    return schemeOK(loc) ? stripPos(loc) : null;
+}
+
+/** The http(s), blob: and file: script URLs of a V8 stack, innermost first. */
+export function stackUrls(stack: string): string[] {
     const out: string[] = [];
-    for (const m of stack.matchAll(/((?:https?|blob|file):[^\s()]+?):\d+:\d+/g)) out.push(m[1]!);
+    const lines = stack.split("\n");
+    for (let k = 0; k < lines.length; k++) {
+        let l = lines[k]!;
+        let a = 0;
+        while (a < l.length && l.charCodeAt(a) === 32) a++;
+        l = l.slice(a);
+        if (!sStarts(l, "at ")) continue;
+        const rest = l.slice(3);
+        const u = urlOf(location(rest), rest.length);
+        if (u !== null) out[out.length] = u;
+    }
     return out;
 }
 

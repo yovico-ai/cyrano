@@ -26,6 +26,9 @@
 --   dictoffer <request header name>     → {"out":"yes"|"no"} (removed: a dictionary offer)
 --   priority <dest> <mode> <method> <purpose> → {"out":"<Priority>"|"none"}
 --   fetchlatersize <href> <headers k:v, LF> <none|text|params|buffer|blob:type> <body bytes> → {"out":"<n>"|"unknown-length"}
+--   frameorigin <object 0|1> <srcdoc 0|1> <src as read> <creator origin> → {"out":"same"|"cross"|"opaque"}
+--   frameoriginof <object 0|1> <srcdoc 0|1> <src as read> → {"out":"<origin>"|"creator"|"opaque"}
+--   stackurls <V8 stack text>          → {"out":"<script URLs, innermost first, LF-separated>"}
 --   workerruns <module 0|1> <mime>      → {"out":"yes"|"no"} (a blob:/data: worker runs)
 --   fetchlateradmit <used> <size>       → {"out":"ok"|"<the QuotaExceededError message>"}
 --   storagekey <ancestors> <site> <origin> → {"out":"<the partition key>"}
@@ -156,6 +159,8 @@ import Dictionary
 import Priority
 import FetchLater
 import WorkerSource
+import Frames
+import Stack
 import Messaging
 import Selectors
 open import Html using (ScriptKind; scriptClassic; scriptModule; scriptImportMap; scriptSpeculation; scriptData; scriptKind; documentBase; BaseURL; baseOf′; aboutBlank; beyond)
@@ -327,6 +332,9 @@ dispatch op args =
   else if eqStr op (toList "fetchlatersize") then fetchLaterSizeReq args
   else if eqStr op (toList "fetchlateradmit") then fetchLaterAdmitReq args
   else if eqStr op (toList "workerruns") then workerRunsReq args
+  else if eqStr op (toList "frameorigin") then frameOriginReq args
+  else if eqStr op (toList "stackurls") then oneArg (λ st → joinNL (Stack.stackUrls st)) args
+  else if eqStr op (toList "frameoriginof") then frameOriginOfReq args
   else if eqStr op (toList "dictae") then oneArg Dictionary.acceptEncoding args
   else if eqStr op (toList "dictreg") then oneArg Dictionary.noRegistration args
   else if eqStr op (toList "dictoffer") then oneArg (λ n → if Dictionary.offerHeader n then toList "yes" else toList "no") args
@@ -549,6 +557,26 @@ dispatch op args =
       else if eqStr (Data.List.Base.take 5 x) (toList "blob:") then FetchLater.blob (Data.List.Base.drop 5 x)
       else FetchLater.noBody
   fetchLaterSizeReq _ = errorReply "BadRequest"
+
+  joinNL : List Str → Str
+  joinNL [] = []
+  joinNL (x ∷ []) = x
+  joinNL (x ∷ xs) = x ++ fromℕ 10 ∷ joinNL xs
+
+  frameOriginReq : List Str → Str
+  frameOriginReq (ob ∷ d ∷ src ∷ mine ∷ []) with Frames.frameOrigin (eqStr ob (toList "1")) (eqStr d (toList "1")) src
+  ... | Frames.originOf o = out (if eqStr o mine then toList "same" else toList "cross")
+  ... | Frames.creator    = out (toList "same")
+  ... | Frames.opaqueF    = out (toList "opaque")
+  frameOriginReq _ = errorReply "BadRequest"
+
+  frameOriginOfReq : List Str → Str
+  frameOriginOfReq (ob ∷ d ∷ src ∷ []) with Frames.frameOrigin (eqStr ob (toList "1")) (eqStr d (toList "1")) src
+  ... | Frames.originOf o = out o
+  ... | Frames.creator    = out (toList "creator")
+  ... | Frames.opaqueF    = out (toList "opaque")
+  frameOriginOfReq (ob ∷ d ∷ []) = frameOriginOfReq (ob ∷ d ∷ [] ∷ [])
+  frameOriginOfReq _ = errorReply "BadRequest"
 
   workerRunsReq : List Str → Str
   workerRunsReq (m ∷ t ∷ []) = out (if WorkerSource.runs (eqStr m (toList "1")) t then toList "yes" else toList "no")

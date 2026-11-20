@@ -15,12 +15,14 @@ import { wrapAccessor, wrapMethod } from "../native/surface";
  * The origin a frame element's document is, or is about to be, from: its
  * src as the page wrote it (the src property reads back the original URL).
  * Null when it has none or it is not an http(s) URL (about:blank, srcdoc,
- * javascript:, blob: — those are their creator's origin).
+ * javascript:, blob: — those are their creator's origin; data: is opaque,
+ * kept cross-origin by the browser itself). spec/Frames.agda frameOrigin.
  */
-function pendingOrigin(frame: unknown): string | null {
+export function pendingOrigin(frame: unknown): string | null {
     try {
         const el = frame as HTMLIFrameElement;
-        if (typeof el.hasAttribute === "function" && el.hasAttribute("srcdoc")) return null;
+        // srcdoc is an iframe's (an <object srcdoc> is nothing)
+        if ("srcdoc" in (el as object) && typeof el.hasAttribute === "function" && el.hasAttribute("srcdoc")) return null;
         const src = (el as { src?: unknown; data?: unknown }).src ?? (el as { data?: unknown }).data;
         if (typeof src !== "string" || !/^https?:/i.test(src)) return null;
         return new URL(src).origin;
