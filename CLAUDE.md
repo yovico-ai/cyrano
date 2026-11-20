@@ -312,7 +312,8 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   an SVG element's `href.baseVal` (SVGAnimatedString; setAttribute /
   setAttributeNS are rewritten). URL-bearing attributes are one table in
   both runtimes (spec/Attrs.agda, checked against what Chromium fetches):
-  `ping` / `attributionsrc` are URL lists; `cite` / `longdesc` / `lowsrc` /
+  `ping` / `attributionsrc` are URL lists (and window.open's
+  attributionsrc features: spec/Features.agda); `cite` / `longdesc` / `lowsrc` /
   `codebase` stay as written, their getters unwrapped. Markup is tokenized
   as the browser does (spec/HtmlTok.agda, checked against Chromium): raw
   text only for HTML elements (`<svg><style>` holds markup), the

@@ -32,6 +32,8 @@
 --   h1orders <connection bytes>         → {"out":"<a,b,…><…>…"} (each recorded request's header names)
 --   refererroute <proxy> <referer> <raw path> <"?query"|""> → {"out":"<redirect path>"|"none"}
 --   cspnoscripts <header lines>        → {"out":"yes"|"no"} (no page script runs: no runtime)
+--   featuresources <features>          → {"out":"<attributionsrc values, LF-separated>"}
+--   featuresmap <features>              → {"out":"<the string, each such value v as [v]>"}
 --   workerruns <module 0|1> <mime>      → {"out":"yes"|"no"} (a blob:/data: worker runs)
 --   fetchlateradmit <used> <size>       → {"out":"ok"|"<the QuotaExceededError message>"}
 --   storagekey <ancestors> <site> <origin> → {"out":"<the partition key>"}
@@ -166,6 +168,7 @@ import Frames
 import Stack
 import H1
 import Route
+import Features
 import Messaging
 import Selectors
 open import Html using (ScriptKind; scriptClassic; scriptModule; scriptImportMap; scriptSpeculation; scriptData; scriptKind; documentBase; BaseURL; baseOf′; aboutBlank; beyond)
@@ -338,6 +341,8 @@ dispatch op args =
   else if eqStr op (toList "fetchlateradmit") then fetchLaterAdmitReq args
   else if eqStr op (toList "workerruns") then workerRunsReq args
   else if eqStr op (toList "frameorigin") then frameOriginReq args
+  else if eqStr op (toList "featuresources") then oneArg (λ f → joinNL (Features.sources f)) args
+  else if eqStr op (toList "featuresmap") then oneArg (Features.mapSources (λ v → fromℕ 91 ∷ v ++ fromℕ 93 ∷ [])) args
   else if eqStr op (toList "refererroute") then refererRouteReq args
   else if eqStr op (toList "h1orders") then oneArg (λ st → Data.List.Base.concatMap (λ ns → fromℕ 60 ∷ joinComma ns ++ fromℕ 62 ∷ []) (H1.recordsOf st)) args
   else if eqStr op (toList "stackurls") then oneArg (λ st → joinNL (Stack.stackUrls st)) args

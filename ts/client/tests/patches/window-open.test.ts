@@ -24,6 +24,19 @@ const rewriteOne = (u: string): string =>
     /^https?:\/\//.test(u) ? "https://cyrano.test/cyrano/https/" + u.replace(/^https?:\/\//, "") : u;
 
 describe("patchWindowOpen", () => {
+    // The browser requests a feature's attributionsrc URL itself: it went
+    // out unproxied (spec/Features.agda).
+    it("proxifies attributionsrc URLs in the features, the rest as written", () => {
+        const { w, calls } = makeWindow();
+        patchWindowOpen(w, rewriteOne);
+        const features = "popup, attributionsrc=" + encodeURIComponent("https://ads.example/r?a=1") + " AttributionSrc = https://t.example/x,noopener";
+        w.open("https://site.example/", "_blank", features);
+        expect(calls[0]![2]).toBe("popup, attributionsrc=" + encodeURIComponent("https://cyrano.test/cyrano/https/ads.example/r?a=1") +
+            " AttributionSrc = " + encodeURIComponent("https://cyrano.test/cyrano/https/t.example/x") + ",noopener");
+        w.open("https://site.example/", "_blank", "attributionsrc noopener");
+        expect(calls[1]![2]).toBe("attributionsrc noopener"); // no value: the navigation itself is eligible
+    });
+
     it("proxifies an absolute URL and preserves target + features", () => {
         const { w, calls } = makeWindow();
         patchWindowOpen(w, rewriteOne);
