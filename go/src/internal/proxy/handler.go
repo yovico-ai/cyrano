@@ -305,6 +305,7 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		// so forward the browser's Accept-Encoding verbatim (Chrome sends
 		// "gzip, deflate, br, zstd"). readDecompressedBody decodes gzip, br, and
 		// zstd; the fallback below matches Chrome for the rare empty-header case.
+		*req = *withBrowserEncodings(req) // what a rewritten body may be sent back in (compress.go)
 		if req.Header.Get("Accept-Encoding") == "" {
 			req.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
 		}
@@ -442,6 +443,7 @@ func (h *Handler) translateResponse(resp *http.Response) error {
 			return err
 		}
 	}
+	compressForBrowser(resp)
 	return nil
 }
 

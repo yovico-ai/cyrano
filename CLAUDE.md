@@ -278,14 +278,14 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   message for `class extends Function.prototype.toString` (now padded to
   print as native: `native/padded.ts`; other stand-ins still print their
   source in such messages). Its report is XOR'd with "omgtopkek" — decode
-  it before guessing. Open: PerimeterX on Zillow refuses /graphql through
-  the proxy (px-captcha) while it passes direct; bisected to its sensor
-  `/HYx10rg3/init.js` being rewritten, but turning the location rules off
-  "passes" only by breaking the sensor (it fails open) — the tell is in
-  what the working sensor reports: decode its payload next. Target's
-  redsky API answers 435 to store_location_v1 / nearby_stores_v1 through
-  the proxy (200 direct, same headers upstream; `_px*` cookies): the
-  same PerimeterX tell. On the way:
+  it before guessing. PerimeterX (Zillow /graphql, Target's
+  redsky store_location_v1 / nearby_stores_v1) passes through the proxy
+  in real Chrome (2026-11-20, after written members stayed as written and
+  `location` by reflection; not bisected to one of them). Judge it in
+  real Chrome only: a Playwright-driven Chrome is refused direct as well
+  (Zillow 403, Target 435 on the direct side), so that harness tells
+  nothing about the proxy. Its sensor's serialized events do not carry
+  `PX<n>` names any more (a JSON.stringify hook matched none). On the way:
   `location` reached by reflection (Reflect.get, the window's/document's
   own getter, __lookupGetter__) is the view, as by name
   (`patches/location-reflect.ts`). Google search answers `/sorry` through the proxy. Akamai Bot Manager's
@@ -357,6 +357,18 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   no Proxy trap — `native/brand.ts`). A 12-site sample (2026-11-20): median
   load 1.2x direct over TLS; the runtime ~20% of main-thread time on a
   script-heavy page.
+- **Rewritten bodies go to the browser compressed** (`proxy/compress.go`:
+  zstd, else br, else gzip, by the browser's own Accept-Encoding; only a
+  body a rewriter replaced — the rest streams as the origin sent it). They
+  went out raw: cnn.com's 720 kB brotli document was 7.9 MB to the
+  browser. The page reads the origin's Content-Encoding / Content-Length
+  (Crn-H) and sizes (crnb). On localhost this does not show in load times;
+  measure it by bytes, or over a throttled link. Server CPU on a large
+  document: `CYRANO_PPROF` — CSS text that names no URL is not tokenized
+  (as the client: a third of cnn.com's rewrite was `style` attributes);
+  the CSS tokenizer still materializes its tokens (35 MB/s; the JS
+  recognizer does 60). Still open: the document is rewritten whole before
+  its first byte is sent (no streaming), so first paint trails direct.
 - **Measuring pages with many requests (ads): serve the proxy over TLS.**
   Over plain HTTP the browser keeps 6 connections to the proxy for every
   site's traffic and queues the rest; over TLS it multiplexes on HTTP/2.

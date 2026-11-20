@@ -72,7 +72,19 @@ type tokenizer struct {
 }
 
 func newTokenizer(s string) *tokenizer {
-	t := &tokenizer{s: s}
+	ascii := true
+	for i := 0; i < len(s) && ascii; i++ {
+		ascii = s[i] < utf8.RuneSelf
+	}
+	if ascii {
+		// One byte per code point: offsets are the indices themselves (off nil).
+		t := &tokenizer{s: s, r: make([]rune, len(s))}
+		for i := 0; i < len(s); i++ {
+			t.r[i] = rune(s[i])
+		}
+		return t
+	}
+	t := &tokenizer{s: s, r: make([]rune, 0, len(s)), off: make([]int, 0, len(s)+1)}
 	for i := 0; i < len(s); {
 		c, n := utf8.DecodeRuneInString(s[i:])
 		t.r = append(t.r, c)
@@ -91,7 +103,12 @@ func (t *tokenizer) at(i int) rune {
 }
 
 // text is the input's own bytes for code points [i, j).
-func (t *tokenizer) text(i, j int) string { return t.s[t.off[i]:t.off[j]] }
+func (t *tokenizer) text(i, j int) string {
+	if t.off == nil {
+		return t.s[i:j]
+	}
+	return t.s[t.off[i]:t.off[j]]
+}
 
 func isNewline(c rune) bool    { return c == '\n' || c == '\r' || c == '\f' }
 func isWhitespace(c rune) bool { return isNewline(c) || c == '\t' || c == ' ' }
@@ -105,6 +122,13 @@ func isNonPrintable(c rune) bool {
 }
 
 func lowerASCII(s string) string {
+	upper := false
+	for i := 0; i < len(s) && !upper; i++ {
+		upper = s[i] >= 'A' && s[i] <= 'Z'
+	}
+	if !upper {
+		return s // as it is: no copy
+	}
 	b := []byte(s)
 	for i, c := range b {
 		if c >= 'A' && c <= 'Z' {
@@ -160,6 +184,14 @@ func (t *tokenizer) escape(i int) (string, int) {
 }
 
 func (t *tokenizer) name(i int) (string, int) {
+	// Without an escape a name's value is its own text: no copy.
+	plain := i
+	for plain < len(t.r) && t.r[plain] != '\\' && isNameChar(t.r[plain]) {
+		plain++
+	}
+	if plain >= len(t.r) || t.r[plain] != '\\' {
+		return t.text(i, plain), plain
+	}
 	var val strings.Builder
 	for i < len(t.r) {
 		if t.r[i] == '\\' {
@@ -361,7 +393,7 @@ func (t *tokenizer) identLike(i int) (tok, int) {
 
 func tokenize(s string) []tok {
 	t := newTokenizer(s)
-	var out []tok
+	out := make([]tok, 0, len(t.r)/2+8) // dense CSS is about two characters a token: grown rarely
 	for i := 0; i < len(t.r); {
 		tk, j := t.token(i)
 		out = append(out, tk)
@@ -460,6 +492,41 @@ func serializeString(s string) string {
 	return b.String()
 }
 
+// mayNameURL: whether s holds "url", "import" or "image-set" in any ASCII
+// case, or a backslash (an escape can spell any of them).
+func mayNameURL(s string) bool {
+	fold := func(i int, w string) bool {
+		if len(s)-i < len(w) {
+			return false
+		}
+		for j := 0; j < len(w); j++ {
+			c := s[i+j]
+			if c >= 'A' && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			if c != w[j] {
+				return false
+			}
+		}
+		return true
+	}
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			return true
+		case 'u', 'U':
+			if fold(i, "url") {
+				return true
+			}
+		case 'i', 'I':
+			if fold(i, "import") || fold(i, "image-set") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // URLs is what a stylesheet names, in order (spec cssUrls).
 func URLs(s string) []string {
 	toks := tokenize(s)
@@ -482,6 +549,12 @@ func RewriteText(s string, rewrite func(string) string) string {
 // RewriteTextDest is RewriteText with an @import's URL marked as a
 // stylesheet's (spec rewriteCss).
 func RewriteTextDest(s string, rewrite func(string, urlrewrite.Dest) string) string {
+	// Cheap exit, as the client's (ts/client/src/css/rewriter.ts): no URL
+	// can be named without one of these, and text that names none is kept
+	// as written.
+	if !mayNameURL(s) {
+		return s
+	}
 	toks := tokenize(s)
 	rs := roles(toks)
 	var b strings.Builder

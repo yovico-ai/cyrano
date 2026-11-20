@@ -3,6 +3,8 @@
 package e2e
 
 import (
+	"bytes"
+	"compress/gzip"
 	"io"
 	"net"
 	"net/http"
@@ -445,5 +447,54 @@ func TestE2E_InertFrameGetsNoRuntime(t *testing.T) {
 	// The same URL loaded as a page afterwards is a page again.
 	if !runtime(get(up.URL+"/next", "", "document", "")) {
 		t.Error("a top-level document that was once an inert frame's has no runtime")
+	}
+}
+
+// TestE2E_RewrittenBodyIsCompressed — a body the proxy rewrote goes to the
+// browser in a coding it accepts (proxy/compress.go), and a script still
+// reads the origin's Content-Encoding (Crn-H: none here); a browser that
+// accepts no coding gets it plain.
+func TestE2E_RewrittenBodyIsCompressed(t *testing.T) {
+	page := `<!doctype html><title>t</title>` + strings.Repeat(`<a href="/next">a link to rewrite</a>`+"\n", 200)
+	up := startInlineServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = io.WriteString(w, page)
+	})
+	proxy := startProxy(t)
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar, Transport: &http.Transport{DisableCompression: true}}
+	get := func(accept string) (*http.Response, []byte) {
+		req, _ := http.NewRequest("GET", gotoURL(proxy, up.URL+"/page"), nil)
+		req.Header.Set("Sec-Fetch-Mode", "navigate")
+		req.Header.Set("Sec-Fetch-Dest", "document")
+		if accept != "" {
+			req.Header.Set("Accept-Encoding", accept)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp, b
+	}
+	plainResp, plain := get("")
+	if plainResp.Header.Get("Content-Encoding") != "" || !strings.Contains(string(plain), "/cyrano/http/") {
+		t.Fatalf("no Accept-Encoding: Content-Encoding %q, rewritten %v", plainResp.Header.Get("Content-Encoding"), strings.Contains(string(plain), "/cyrano/http/"))
+	}
+	resp, enc := get("gzip, deflate")
+	if resp.Header.Get("Content-Encoding") != "gzip" || len(enc) >= len(plain) {
+		t.Fatalf("Accept-Encoding gzip: Content-Encoding %q, %d bytes (plain %d)", resp.Header.Get("Content-Encoding"), len(enc), len(plain))
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(enc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(zr)
+	if string(got) != string(plain) {
+		t.Errorf("the encoded body decodes to %d bytes, the plain one is %d", len(got), len(plain))
+	}
+	if h := resp.Header.Get("Crn-H"); !strings.Contains(h, `"content-encoding":null`) {
+		t.Errorf("Crn-H does not say the origin sent no Content-Encoding: %s", h)
 	}
 }

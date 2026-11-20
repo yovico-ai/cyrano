@@ -202,3 +202,25 @@ func TestCSSEscapedParensUnquoted(t *testing.T) {
 	}
 }
 
+
+// The cheap exit agrees with the tokenizer: text it lets through unread
+// names no URL, and text that names one is never let through.
+func TestMayNameURL(t *testing.T) {
+	for _, s := range []string{"color:red", "display:none;width:10px", "", "background:#fff", "font: 12px/1 Arial", "cur: l; impor: t; image-se: t"} {
+		if mayNameURL(s) {
+			t.Errorf("mayNameURL(%q) = true", s)
+		}
+		if got := URLs(s); len(got) != 0 {
+			t.Errorf("URLs(%q) = %v", s, got)
+		}
+	}
+	for _, s := range []string{"background:url(a.png)", "background:URL(a.png)", `@IMPORT "a.css";`, `background:image-set("a.png" 1x)`, `background:-WEBKIT-IMAGE-SET("a.png" 1x)`, `background:u\72l(a.png)`, `@\69mport "a.css";`} {
+		if !mayNameURL(s) {
+			t.Errorf("mayNameURL(%q) = false", s)
+		}
+		got := RewriteText(s, func(u string) string { return "X" + u })
+		if !strings.Contains(got, "Xa.") {
+			t.Errorf("RewriteText(%q) = %q: URL not rewritten", s, got)
+		}
+	}
+}

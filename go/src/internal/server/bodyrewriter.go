@@ -367,7 +367,7 @@ func kindOf(resp *http.Response) bodyKind {
 // replaceBody substitutes resp.Body with the given bytes, fixing
 // Content-Length and dropping any incompatible Transfer-Encoding header.
 func replaceBody(resp *http.Response, body []byte) {
-	resp.Body = io.NopCloser(bytes.NewReader(body))
+	resp.Body = proxy.RewrittenBody(body)
 	resp.ContentLength = int64(len(body))
 	resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
 	resp.Header.Del("Transfer-Encoding")
