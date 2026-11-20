@@ -212,12 +212,8 @@ func (s *Server) Handler() http.Handler {
 		// Redirect to the canonical /cyrano/<scheme>/<host><path> URL so the
 		// browser's address bar stays correct and client-side routing works.
 		proxyCfgForReferer := s.proxyEndpoints(vhost)
-		if origin := inferOriginFromReferer(r, proxyCfgForReferer.PublicURL); origin != nil {
-			dest := proxyCfgForReferer.PublicURL.String() +
-				urlrewrite.ProxifiedPath(origin.Scheme, origin.Host, r.URL.EscapedPath())
-			if r.URL.RawQuery != "" || r.URL.ForceQuery {
-				dest += "?" + r.URL.RawQuery
-			}
+		if route := refererRoute(r, proxyCfgForReferer); route != "" {
+			dest := strings.TrimSuffix(proxyCfgForReferer.PublicURL.String(), "/") + route
 			// 307 (not 302) so POST method and body are preserved when
 			// challenge scripts redirect their API calls through here.
 			http.Redirect(w, r, dest, http.StatusTemporaryRedirect)
@@ -304,36 +300,19 @@ func (s *Server) ListenAndServe() error {
 	return <-errs
 }
 
-// inferOriginFromReferer returns the scheme+host of the proxied page that
-// sent this request, as inferred from the Referer header. Returns nil when:
-//   - Referer is absent or unparseable
-//   - Referer host doesn't match publicURL (not from this proxy)
-//   - Referer has no /cyrano/ path, or it can't be parsed
-//   - The decoded target scheme is not http or https
-//
-// Only called for requests that didn't match any known proxy route, so it
-// enables transparent forwarding of bare-path resources (webpack chunks,
-// Cloudflare /cdn-cgi/ scripts, etc.) to the right upstream.
-func inferOriginFromReferer(r *http.Request, publicURL *url.URL) *url.URL {
+// refererRoute is where a bare-path request goes by its Referer (spec/Route.agda,
+// urlrewrite.RefererRoute): the path and query exactly as the browser sent
+// them, or "".
+func refererRoute(r *http.Request, cfg urlrewrite.ProxyConfig) string {
 	referer := r.Header.Get("Referer")
 	if referer == "" {
-		return nil
+		return ""
 	}
-	ref, err := url.Parse(referer)
-	if err != nil {
-		return nil
+	query := ""
+	if r.URL.RawQuery != "" || r.URL.ForceQuery {
+		query = "?" + r.URL.RawQuery
 	}
-	if !strings.EqualFold(ref.Host, publicURL.Host) {
-		return nil
-	}
-	target, ok := urlrewrite.ParseCyranoURL(ref)
-	if !ok {
-		return nil
-	}
-	if target.Scheme != "http" && target.Scheme != "https" {
-		return nil
-	}
-	return &url.URL{Scheme: target.Scheme, Host: target.Host}
+	return urlrewrite.RefererRoute(referer, r.URL.EscapedPath(), query, cfg)
 }
 
 // isChallengeplatformPath reports whether the path is a Cloudflare

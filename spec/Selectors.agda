@@ -16,7 +16,9 @@
 -- URL). Each proxied value is admitted unmarked and marked js and css, as
 -- an element's URL may be held (a script's src: /cyrano/https!js/…).
 -- Not covered: a relative value in a *= or $= test (the element holds it
--- resolved); a URL carrying a referrer-policy mark. Checked against Chromium: selectors-
+-- resolved); a relative ^= prefix ending in "." of a path going on with
+-- "." ([src^="."] on ../up.js: "." resolves to the directory, the path to
+-- its parent); a URL carrying a referrer-policy mark. Checked against Chromium: selectors-
 -- vs-chromium — an element holding a proxied URL is matched by the widened
 -- selector exactly when the page's selector matches the page's URL, for a
 -- page that writes the URL in one form (a page writing it relative in the

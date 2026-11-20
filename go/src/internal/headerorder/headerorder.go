@@ -13,6 +13,8 @@
 // attaches each request's recorded order to its context, where FromContext
 // finds it (the upstream transport sends its headers in that order).
 //
+// The framing is spec/H1.agda's (conformance: headerorder_conformance_test).
+//
 // HTTP/2 connections from the browser (a TLS deployment) are not covered:
 // their header blocks are HPACK-coded inside the TLS stream. There the
 // browser's own order is not recoverable this way.
@@ -83,16 +85,16 @@ func (c *conn) feed(b []byte) {
 				c.buf = append(c.buf, b...)
 				return
 			}
-			line := strings.TrimRight(string(append(c.buf, b[:i]...)), "\r")
+			line := strings.TrimSuffix(string(append(c.buf, b[:i]...)), "\r")
 			c.buf = c.buf[:0]
 			b = b[i+1:]
 			switch c.chunk {
 			case chunkCRLF:
 				c.chunk = chunkSize
 			case chunkSize:
-				size, perr := strconv.ParseInt(strings.TrimSpace(strings.SplitN(line, ";", 2)[0]), 16, 64)
+				size, ok := hexSize(trimOWS(strings.SplitN(line, ";", 2)[0]))
 				switch {
-				case perr != nil || size < 0:
+				case !ok:
 					c.dead = true
 				case size == 0:
 					c.chunk = chunkTrailers
@@ -133,14 +135,17 @@ func (c *conn) header(block string) {
 		if !ok {
 			continue
 		}
-		lname := strings.ToLower(strings.TrimSpace(name))
+		lname := lowerASCII(trimOWS(name))
 		names = append(names, lname)
-		value = strings.TrimSpace(value)
+		value = trimOWS(value)
 		switch lname {
 		case "content-length":
-			length, _ = strconv.ParseInt(value, 10, 64)
+			length = 0
+			if digitsOnly(value) {
+				length, _ = strconv.ParseInt(value, 10, 64)
+			}
 		case "transfer-encoding":
-			chunked = strings.Contains(strings.ToLower(value), "chunked")
+			chunked = strings.Contains(lowerASCII(value), "chunked")
 		case "upgrade":
 			upgrade = true
 		}
@@ -154,6 +159,55 @@ func (c *conn) header(block string) {
 	case length > 0:
 		c.skip = length
 	}
+}
+
+// The framing's lexical rules, as spec/H1.agda has them: optional
+// whitespace is SP and HTAB only, names and codings are ASCII-lowercased.
+func trimOWS(s string) string { return strings.Trim(s, " \t") }
+
+func lowerASCII(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 32
+		}
+	}
+	return string(b)
+}
+
+func digitsOnly(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// hexSize reads a chunk size: hex digits only, below 2^63.
+func hexSize(s string) (int64, bool) {
+	if s == "" {
+		return 0, false
+	}
+	var n int64
+	for i := 0; i < len(s); i++ {
+		var d int64
+		switch c := s[i]; {
+		case '0' <= c && c <= '9':
+			d = int64(c - '0')
+		case 'a' <= c && c <= 'f':
+			d = int64(c-'a') + 10
+		case 'A' <= c && c <= 'F':
+			d = int64(c-'A') + 10
+		default:
+			return 0, false
+		}
+		if n > (1<<63-1-d)/16 {
+			return 0, false
+		}
+		n = n*16 + d
+	}
+	return n, true
 }
 
 // next claims the oldest recorded order.

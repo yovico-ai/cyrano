@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/yovico/cyrano/internal/config"
+	"github.com/yovico/cyrano/internal/urlrewrite"
 )
 
 var testPublicURL = &url.URL{Scheme: "http", Host: "localhost:9081"}
@@ -19,75 +20,51 @@ func cyranoURL(target string) string {
 	return "http://localhost:9081/cyrano/" + u.Scheme + "/" + u.Host + u.EscapedPath()
 }
 
-// ── inferOriginFromReferer ──────────────────────────────────────────────────
+// ── refererRoute (spec/Route.agda) ──────────────────────────────────────────
 
-func TestInferOriginFromReferer_ValidReferer(t *testing.T) {
-	req := httptest.NewRequest("GET", "/chunk-abc.js", nil)
-	req.Header.Set("Referer", "http://localhost:9081/cyrano/https/github.com/")
+func route(t *testing.T, pub *url.URL, target, referer string) string {
+	t.Helper()
+	req := httptest.NewRequest("GET", target, nil)
+	if referer != "" {
+		req.Header.Set("Referer", referer)
+	}
+	return refererRoute(req, urlrewrite.ProxyConfig{PublicURL: pub})
+}
 
-	got := inferOriginFromReferer(req, testPublicURL)
-	if got == nil {
-		t.Fatal("expected non-nil origin, got nil")
-	}
-	if got.Scheme != "https" {
-		t.Errorf("scheme: got %q want https", got.Scheme)
-	}
-	if got.Host != "github.com" {
-		t.Errorf("host: got %q want github.com", got.Host)
-	}
-	if got.Path != "" {
-		t.Errorf("returned origin should have no path, got %q", got.Path)
+func TestRefererRoute_ValidReferer(t *testing.T) {
+	if got := route(t, testPublicURL, "/chunk-abc.js?v=1", "http://localhost:9081/cyrano/https/github.com/"); got != "/cyrano/https/github.com/chunk-abc.js?v=1" {
+		t.Errorf("got %q", got)
 	}
 }
 
-func TestInferOriginFromReferer_NoReferer(t *testing.T) {
-	req := httptest.NewRequest("GET", "/chunk.js", nil)
-	if got := inferOriginFromReferer(req, testPublicURL); got != nil {
-		t.Errorf("expected nil for missing Referer, got %v", got)
+func TestRefererRoute_NotRouted(t *testing.T) {
+	for name, ref := range map[string]string{
+		"none":             "",
+		"foreign host":     "http://evil.com/cyrano/https/github.com/",
+		"not proxified":    "http://localhost:9081/",
+		"malformed":        "http://localhost:9081/cyrano/",
+		"file scheme":      "http://localhost:9081/cyrano/file/etc/passwd",
+		"ws scheme":        "http://localhost:9081/cyrano/wss/h.example/",
+		"other proxy port": "http://localhost:9082/cyrano/https/github.com/",
+	} {
+		if got := route(t, testPublicURL, "/chunk.js", ref); got != "" {
+			t.Errorf("%s: routed to %q", name, got)
+		}
 	}
 }
 
-func TestInferOriginFromReferer_DifferentHost(t *testing.T) {
-	// Referer is from an external origin — must not trust it.
-	req := httptest.NewRequest("GET", "/chunk.js", nil)
-	req.Header.Set("Referer", "http://evil.com/cyrano/https/github.com/")
-	if got := inferOriginFromReferer(req, testPublicURL); got != nil {
-		t.Errorf("expected nil for foreign Referer host, got %v", got)
-	}
-}
-
-func TestInferOriginFromReferer_NoLoadParam(t *testing.T) {
-	req := httptest.NewRequest("GET", "/chunk.js", nil)
-	req.Header.Set("Referer", "http://localhost:9081/")
-	if got := inferOriginFromReferer(req, testPublicURL); got != nil {
-		t.Errorf("expected nil when no goto= param, got %v", got)
-	}
-}
-
-func TestInferOriginFromReferer_MalformedCyranoPath(t *testing.T) {
-	req := httptest.NewRequest("GET", "/chunk.js", nil)
-	req.Header.Set("Referer", "http://localhost:9081/cyrano/")
-	if got := inferOriginFromReferer(req, testPublicURL); got != nil {
-		t.Errorf("expected nil for malformed cyrano path, got %v", got)
-	}
-}
-
-func TestInferOriginFromReferer_NonHTTPScheme(t *testing.T) {
-	// Target has a non-http/https scheme — must reject.
-	req := httptest.NewRequest("GET", "/chunk.js", nil)
-	req.Header.Set("Referer", "http://localhost:9081/cyrano/file/etc/passwd")
-	if got := inferOriginFromReferer(req, testPublicURL); got != nil {
-		t.Errorf("expected nil for file:// scheme, got %v", got)
-	}
-}
-
-func TestInferOriginFromReferer_CaseInsensitiveHost(t *testing.T) {
-	pubURL := &url.URL{Scheme: "http", Host: "Proxy.Example.COM:9081"}
-	req := httptest.NewRequest("GET", "/chunk.js", nil)
-	req.Header.Set("Referer", "http://proxy.example.com:9081/cyrano/https/target.com/")
-	got := inferOriginFromReferer(req, pubURL)
-	if got == nil {
+func TestRefererRoute_CaseInsensitiveHost(t *testing.T) {
+	pub := &url.URL{Scheme: "http", Host: "Proxy.Example.COM:9081"}
+	if got := route(t, pub, "/chunk.js", "http://proxy.example.com:9081/cyrano/https/target.com/"); got == "" {
 		t.Error("expected match for same host with different case")
+	}
+}
+
+// The path is the browser's, byte for byte; the origin is read as unwrap
+// reads it (userinfo dropped, the host segment as an authority).
+func TestRefererRoute_PathAsSentOriginAsUnwrapped(t *testing.T) {
+	if got := route(t, testPublicURL, "/a/%2e%2e/100%25.js?", "http://localhost:9081/cyrano/https/u:p@H.example:443/page"); got != "/cyrano/https/h.example/a/%252e%252e/100%2525.js?" {
+		t.Errorf("got %q", got)
 	}
 }
 

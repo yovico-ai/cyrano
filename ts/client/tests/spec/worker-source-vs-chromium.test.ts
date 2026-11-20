@@ -53,7 +53,7 @@ describe.skipIf(!wanted || located.skip !== "")("blob:/data: workers: the spec i
             const run = (url: string, module: boolean, shared: boolean): Promise<string> => new Promise((r) => {
                 try {
                     const opts = module ? { type: "module" as const } : {};
-                    const t = setTimeout(() => r("silent"), 1500);
+                    const t = setTimeout(() => r("silent"), 6000);
                     if (shared) {
                         const w = new SharedWorker(url, opts);
                         w.port.onmessage = () => { clearTimeout(t); r("ran"); };

@@ -406,6 +406,28 @@ func Unwrap(proxiedHref string, cfg ProxyConfig) string {
 	return scheme + "://" + auth + pathText(orig) + queryText(a.query) + fragText(a.frag)
 }
 
+// RefererRoute is where a request for a bare path on the proxy origin goes
+// when its Referer is a proxified http(s) page (spec/Route.agda
+// refererRoute): the proxified URL of that path, exactly as sent, and
+// query ("?…" or "") on the page's origin; "" when the Referer is not such
+// a page. The Referer is read as Unwrap reads it.
+func RefererRoute(referer, rawPath, query string, cfg ProxyConfig) string {
+	a, res := parseRef(nil, preprocess(referer))
+	proxy, pres := parseRef(nil, APIBase(cfg))
+	if res != parsedURL || pres != parsedURL || a.scheme != proxy.scheme || hostPort(a.auth) != hostPort(proxy.auth) {
+		return ""
+	}
+	scheme, seg, _, ok := cyranoTarget(a.path)
+	if !ok || (scheme != "http" && scheme != "https") {
+		return ""
+	}
+	auth, after, ares := authority(scheme, []rune(pctDecode(seg)))
+	if ares != parsedURL || len(after) != 0 {
+		return ""
+	}
+	return ProxifiedPath(scheme, hostPort(auth), rawPath) + query
+}
+
 // DocumentBase is the document base URL given its first <base href>
 // (spec/Html.agda documentBase): href parsed against the document's URL;
 // about:blank when it does not parse (Chromium). A base of a scheme outside

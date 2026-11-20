@@ -6,7 +6,7 @@
 .PHONY: typecheck oracle spec-check browser-check chrome-check
 
 AGDA ?= agda
-SAFE_MODULES := Scheme Url Containment Srcset Referrer Cookies Fetch Csp Css Html ImportMap Attrs HtmlTok Link Disposition Refresh WsOrigin Carry Query Sf Hints Upgrades Permissions Allow Storage Metadata Dictionary Priority FetchLater WorkerSource Messaging Frames Stack Selectors Oracle
+SAFE_MODULES := Scheme Url Containment Srcset Referrer Cookies Fetch Csp Css Html ImportMap Attrs HtmlTok Link Disposition Refresh WsOrigin Carry Query Sf Hints Upgrades Permissions Allow Storage Metadata Dictionary Priority FetchLater WorkerSource Messaging Frames Stack H1 Route Selectors Oracle
 ORACLE := $(CURDIR)/spec/build/Main
 
 # Every rule module is checked under --safe on its own; Main.agda (the IO
@@ -26,7 +26,7 @@ oracle: typecheck
 # The conformance tests refuse to skip here: the oracle must exist.
 spec-check: oracle
 	cd go/src && CYRANO_ORACLE=$(ORACLE) CYRANO_REQUIRE_ORACLE=1 \
-		go test ./internal/urlrewrite ./internal/htmlrewrite ./internal/proxy ./internal/cssrewrite ./internal/server ./internal/upstream -run SpecConformance -count=1 -rapid.checks=1000
+		go test ./internal/urlrewrite ./internal/htmlrewrite ./internal/proxy ./internal/cssrewrite ./internal/server ./internal/upstream ./internal/headerorder -run SpecConformance -count=1 -rapid.checks=1000
 	cd ts/client && CYRANO_ORACLE=$(ORACLE) CYRANO_REQUIRE_ORACLE=1 npx vitest run tests/spec
 
 # The spec against a real browser: the spec's `direct` must equal headless

@@ -5,7 +5,9 @@
 // when the page's selector matches the page's URL directly — for a page
 // that writes the URL in one form, and a prefix or part that runs past the
 // host (cut inside a host, the proxied URL has a "/" there: a known gap;
-// so is a relative value in a *= or $= test). Scripts and stylesheets hold
+// so is a relative value in a *= or $= test, and a relative ^= prefix
+// ending in "." of a path going on with "." — "." resolves to the
+// directory, "../" to its parent). Scripts and stylesheets hold
 // their URLs marked (`rewritemark`).
 //
 // Needs the oracle and Playwright's Chromium; `make browser-check`.
@@ -58,7 +60,8 @@ describe.skipIf(!wanted || located.skip !== "")("Selectors on URL attributes: th
                 if ((op === "*=" || op === "$=") && !/^[a-z]+:/.test(v) && !/^\/\//.test(v) && v.indexOf("/") !== -1 && !abs) v = other; // a relative value: the known gap
                 return { o, op, v, attr, tag };
             })
-            .filter(({ o, op, v }) => !((op === "*=" || op === "$=") && !/^[a-z]+:/.test(o) && o.endsWith(v)));
+            .filter(({ o, op, v }) => !((op === "*=" || op === "$=") && !/^[a-z]+:/.test(o) && o.endsWith(v)))
+            .filter(({ o, op, v }) => !(op === "^=" && /(^|\/)\.$/.test(v) && o.startsWith(v + ".")));
         const draws = fc.sample(kase, { numRuns: 200, seed });
         const rows: { o: string; held: string; sel: string; wide: string; attr: string; tag: string }[] = [];
         for (const { o, op, v, attr, tag } of draws) {

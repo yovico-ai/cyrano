@@ -39,6 +39,8 @@ The rules both runtimes must follow byte for byte, written once:
 | `WorkerSource.agda` | whether a worker from a blob: or data: URL runs: classic always, module only with a JavaScript MIME type (the runtime makes its rewritten copy only then) | `ts/client/src/patches/blob-worker-source.ts`, `script-kind.ts` (`workerRuns`) |
 | `Frames.agda` | the origin a frame is taken to be from before its navigation commits (srcdoc, src / data, data:, an object's javascript:) | `ts/client/src/patches/cross-origin-windows.ts` (`pendingOrigin`) |
 | `Stack.agda` | the script URLs of a V8 stack trace (bare, named, async and eval frames; URLs holding parentheses) | `ts/client/src/native/error-stack.ts` (`stackUrls`) |
+| `H1.agda` | HTTP/1.1 request framing as the header-order recorder follows it (header blocks, Content-Length, chunked bodies, upgrades) | `internal/headerorder` (`conn.feed`; checked also against net/http's server on the same stream) |
+| `Route.agda` | Referer-based routing: where a bare-path request whose Referer is a proxified page is redirected (the Referer read as `unwrap` reads it, the path as sent) | `urlrewrite.RefererRoute`, `server.refererRoute` |
 | `Metadata.agda` | the request headers sent only to potentially trustworthy targets (Sec-Fetch-*, client hints): none to an http name | `urlrewrite.SecureOnlyHeader`, `upstream.copyHeaders` |
 | `Messaging.agda` | postMessage's targetOrigin: delivered, dropped, or a SyntaxError (opaque origins throw; file:/ftp: drop), compared as the windows' original origins | TS `messaging/target-origin.ts` (`delivery`) |
 | `Selectors.agda` | CSS attribute selectors on URL attributes widened to the proxied values (marked js/css too; *= and $= across the scheme) | TS `patches/selectors.ts` (`widenSelector`) |
@@ -124,9 +126,6 @@ both runtimes (owner, 2026-11-18: "Agda completeness … super important for
 upkeep"). What remains, by priority (inventory of 2026-11-18; remove an
 entry when its module lands):
 
-
-Medium: the header-order recorder (HTTP/1.1 framing);
-Referer-based routing.
 
 Low: challenge heuristics, debug-variable parsing, boot/worker-init query
 JSON, base64url.

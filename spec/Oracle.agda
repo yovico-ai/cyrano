@@ -29,6 +29,8 @@
 --   frameorigin <object 0|1> <srcdoc 0|1> <src as read> <creator origin> → {"out":"same"|"cross"|"opaque"}
 --   frameoriginof <object 0|1> <srcdoc 0|1> <src as read> → {"out":"<origin>"|"creator"|"opaque"}
 --   stackurls <V8 stack text>          → {"out":"<script URLs, innermost first, LF-separated>"}
+--   h1orders <connection bytes>         → {"out":"<a,b,…><…>…"} (each recorded request's header names)
+--   refererroute <proxy> <referer> <raw path> <"?query"|""> → {"out":"<redirect path>"|"none"}
 --   workerruns <module 0|1> <mime>      → {"out":"yes"|"no"} (a blob:/data: worker runs)
 --   fetchlateradmit <used> <size>       → {"out":"ok"|"<the QuotaExceededError message>"}
 --   storagekey <ancestors> <site> <origin> → {"out":"<the partition key>"}
@@ -161,6 +163,8 @@ import FetchLater
 import WorkerSource
 import Frames
 import Stack
+import H1
+import Route
 import Messaging
 import Selectors
 open import Html using (ScriptKind; scriptClassic; scriptModule; scriptImportMap; scriptSpeculation; scriptData; scriptKind; documentBase; BaseURL; baseOf′; aboutBlank; beyond)
@@ -333,6 +337,8 @@ dispatch op args =
   else if eqStr op (toList "fetchlateradmit") then fetchLaterAdmitReq args
   else if eqStr op (toList "workerruns") then workerRunsReq args
   else if eqStr op (toList "frameorigin") then frameOriginReq args
+  else if eqStr op (toList "refererroute") then refererRouteReq args
+  else if eqStr op (toList "h1orders") then oneArg (λ st → Data.List.Base.concatMap (λ ns → fromℕ 60 ∷ joinComma ns ++ fromℕ 62 ∷ []) (H1.recordsOf st)) args
   else if eqStr op (toList "stackurls") then oneArg (λ st → joinNL (Stack.stackUrls st)) args
   else if eqStr op (toList "frameoriginof") then frameOriginOfReq args
   else if eqStr op (toList "dictae") then oneArg Dictionary.acceptEncoding args
@@ -557,6 +563,19 @@ dispatch op args =
       else if eqStr (Data.List.Base.take 5 x) (toList "blob:") then FetchLater.blob (Data.List.Base.drop 5 x)
       else FetchLater.noBody
   fetchLaterSizeReq _ = errorReply "BadRequest"
+
+  refererRouteReq : List Str → Str
+  refererRouteReq (p ∷ r ∷ pa ∷ q ∷ []) with proxyOf p
+  ... | nothing = errorReply "BadProxy"
+  ... | just px with Route.refererRoute px r pa q
+  ...   | just d  = out d
+  ...   | nothing = out (toList "none")
+  refererRouteReq _ = errorReply "BadRequest"
+
+  joinComma : List Str → Str
+  joinComma [] = []
+  joinComma (x ∷ []) = x
+  joinComma (x ∷ xs) = x ++ fromℕ 44 ∷ joinComma xs
 
   joinNL : List Str → Str
   joinNL [] = []
