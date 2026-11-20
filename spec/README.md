@@ -123,10 +123,26 @@ without Nix, and a stale oracle never passes silently.
 Every hand-written parser or decision rule over URLs, headers, HTML/CSS
 text or another wire format is meant to be specified here and checked in
 both runtimes (owner, 2026-11-18: "Agda completeness … super important for
-upkeep"). What remains, by priority (inventory of 2026-11-18; remove an
-entry when its module lands):
+upkeep"). The inventory of 2026-11-18 is through: every medium and high
+entry has its module above. Loose ends (runtime behaviour, not parsers):
+`default-src 'none'` documents still get the runtime; dynamic-iframe's
+URL attributes by tag; `attributionsrc` in `window.open`; a tag or inline
+script split across `document.write` chunks; quirks-mode stylesheet
+leniency; a meta CSP set through setAttribute; the selector gaps named in
+Selectors.agda.
 
-
-Low: challenge heuristics, debug-variable parsing, boot/worker-init query
-JSON. (base64url: the head-injection endpoint, its only user, was dead —
-removed with both codecs, 2026-11-19.)
+Low — settled without a module (2026-11-19):
+- base64url: its only user, the head-injection endpoint, was dead;
+  removed with both codecs.
+- boot / worker-init query JSON: cyrano's own wire format, no standard to
+  read it by; its law (what the script hands the runtime is what was
+  written) is a property test (`server/boot_roundtrip_test.go`, and
+  `blob-worker-source.test.ts` for the client's writer).
+- debug variables: operator input, not web input; CYRANO_DEBUG_R5's
+  grammar is `server.debugR5For`, unit-tested.
+- challenge heuristics: Cloudflare's own markers, which now only decide
+  whether a session's challenge origin is recorded for routing a bare
+  /cdn-cgi/challenge-platform/ request without a Referer; unit-tested
+  (`server/challenge_test.go`). Open: with no recorded origin, such a
+  request for a .js is answered with an empty script — a response the
+  origin never sent; to go once a live challenge run shows it unused.

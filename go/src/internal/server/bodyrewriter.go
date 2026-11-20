@@ -73,28 +73,9 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 		// of the [lo, hi) ranges; a leading "!" applies it to the scripts
 		// not matching.
 		// The first spec that applies wins.
-		for _, spec := range strings.Split(os.Getenv("CYRANO_DEBUG_R5"), ";") {
-			f := strings.Fields(spec)
-			if len(f) < 3 || len(f)%2 == 0 || scriptURL == nil {
-				continue
-			}
-			pat, invert := strings.CutPrefix(f[0], "!")
-			if re, err := regexp.Compile(pat); err == nil && re.MatchString(scriptURL.String()) != invert {
-				var ranges [][2]int
-				for i := 1; i+1 < len(f); i += 2 {
-					lo, _ := strconv.Atoi(f[i])
-					hi, _ := strconv.Atoi(f[i+1])
-					ranges = append(ranges, [2]int{lo, hi})
-				}
-				opts.DebugR5At = func(pos int) bool {
-					for _, r := range ranges {
-						if pos >= r[0] && pos < r[1] {
-							return true
-						}
-					}
-					return false
-				}
-				break
+		if scriptURL != nil {
+			if at := debugR5For(os.Getenv("CYRANO_DEBUG_R5"), scriptURL.String()); at != nil {
+				opts.DebugR5At = at
 			}
 		}
 		return func(src []byte) []byte { return jsrewrite.Rewrite(src, opts) }
@@ -639,6 +620,40 @@ func readDecoded(resp *http.Response, raw io.Reader) ([]byte, error) {
 	default:
 		return io.ReadAll(raw)
 	}
+}
+
+// debugR5For reads CYRANO_DEBUG_R5 ("[!]<url regexp> <lo> <hi> [<lo> <hi>
+// …][; …]") for the script at scriptURL: whether R5 applies to the access
+// whose "[" is at pos, or nil when no spec applies (R5 everywhere). A spec
+// with no ranges, an odd count or a bad regexp is skipped; the first that
+// applies wins; a number that does not parse is 0.
+func debugR5For(env, scriptURL string) func(pos int) bool {
+	for _, spec := range strings.Split(env, ";") {
+		f := strings.Fields(spec)
+		if len(f) < 3 || len(f)%2 == 0 {
+			continue
+		}
+		pat, invert := strings.CutPrefix(f[0], "!")
+		re, err := regexp.Compile(pat)
+		if err != nil || re.MatchString(scriptURL) == invert {
+			continue
+		}
+		var ranges [][2]int
+		for i := 1; i+1 < len(f); i += 2 {
+			lo, _ := strconv.Atoi(f[i])
+			hi, _ := strconv.Atoi(f[i+1])
+			ranges = append(ranges, [2]int{lo, hi})
+		}
+		return func(pos int) bool {
+			for _, r := range ranges {
+				if pos >= r[0] && pos < r[1] {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	return nil
 }
 
 // workerPreamble is what runs first in a Worker script cyrano serves

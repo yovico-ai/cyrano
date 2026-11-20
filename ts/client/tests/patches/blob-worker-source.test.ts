@@ -106,5 +106,17 @@ describe("patchBlobWorkerSource", () => {
         type = "text/livescript";
         expect(scriptFor("data:text/livescript,postMessage(1)", true)).toBeDefined();
     });
+
+    // The module worker's init import carries the page URL in ?u= (the Go
+    // server's workerInitHandler reads it back): what it reads is the URL.
+    it("a module worker's init import carries the page URL exactly", async () => {
+        for (const href of ["https://h.example/p?a=b&u=c#f", "https://h.example/%25/x+y/é?q=a b;c", "https://h.example/😀?</script>"]) {
+            const scriptFor = setUp(href);
+            const priv = scriptFor(win.URL.createObjectURL(new win.Blob(["1"], { type: "text/javascript" })), true)!;
+            const text = await made.get(priv)!.text();
+            const spec = JSON.parse(text.slice(text.indexOf("import ") + 7, text.indexOf(";\n"))) as string;
+            expect(new URL(spec).searchParams.get("u")).toBe(new URL(href).href);
+        }
+    });
 });
 

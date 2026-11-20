@@ -67,7 +67,7 @@ func bootstrapScript(cfg *Config) string {
 	if cfg.ExternalBootstrap {
 		// No inline script runs under this page's policy: the same two
 		// steps as external scripts, the second parameterized by its URL.
-		boot := BootPath + "?c=" + url.QueryEscape(string(configJSON)) + "&u=" + url.QueryEscape(cfg.BaseURL.String())
+		boot := BootURL(configJSON, cfg.BaseURL)
 		return fmt.Sprintf(`<script`+nonce+` src="%s"></script><script`+nonce+` src="%s"></script>`,
 			cfg.RewriterJSPath, html.EscapeString(boot))
 	}
@@ -82,6 +82,13 @@ func bootstrapScript(cfg *Config) string {
 		string(configJSON),
 		string(originalURLLit),
 	) + after
+}
+
+// BootURL is the external bootstrap's URL (BootPath): the runtime's config
+// and the page's URL in its query. server.bootHandler reads them back to
+// exactly what the inline bootstrap would have had (its round-trip test).
+func BootURL(configJSON []byte, base *url.URL) string {
+	return BootPath + "?c=" + url.QueryEscape(string(configJSON)) + "&u=" + url.QueryEscape(base.String())
 }
 
 // jsStringLiteral renders s as a double-quoted JS string with the minimum
