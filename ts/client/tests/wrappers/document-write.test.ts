@@ -38,7 +38,7 @@ describe("wrapDocumentWrite — Document target", () => {
         const wrapper = wrapDocumentWrite({ obj: doc }, tag);
         wrapper.writeln('<a href="/x">link</a>');
 
-        const written = doc.writeln.mock.calls[0]?.[0] as string;
+        const written = doc.write.mock.calls[0]?.[0] as string;
         expect(written).toContain('href="/x?proxified=1"');
     });
 
@@ -117,7 +117,7 @@ describe("wrapDocumentWrite — head bootstrap injection", () => {
         const wrapper = wrapDocumentWrite({ obj: doc }, tag, getBootstrapHtml);
         wrapper.writeln("<html><head></head><body>content</body></html>");
 
-        const written = doc.writeln.mock.calls[0]?.[0] as string;
+        const written = doc.write.mock.calls[0]?.[0] as string;
         expect(written).toContain(`<head>${BOOTSTRAP}`);
     });
 
@@ -179,7 +179,7 @@ describe("wrapDocumentWrite — script-fragment bootstrap injection", () => {
         const wrapper = wrapDocumentWrite({ obj: doc }, tag, getBootstrapHtml);
         wrapper.writeln("<script>var x = 1;<\/script>");
 
-        const written = doc.writeln.mock.calls[0]?.[0] as string;
+        const written = doc.write.mock.calls[0]?.[0] as string;
         expect(written).toContain(BOOTSTRAP);
         expect(written.indexOf(BOOTSTRAP)).toBeLessThan(written.indexOf("<script>"));
     });

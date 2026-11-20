@@ -19,11 +19,11 @@
 // check (`nodeType === 9`, the spec value for DOCUMENT_NODE). Cross-realm
 // safe — doesn't depend on `instanceof Document` against this realm's class.
 
-import { SafeSet, SafeWeakMap, SafeWeakSet, nO, nOP, nR, napply, ncall } from "../native/intrinsics";
+import { SafeSet, SafeWeakMap, SafeWeakSet, nO, nOP, nR, napply, ncall, nqueueMicrotask } from "../native/intrinsics";
 import { isDocumentObject } from "../native/brand";
 import { isTrustedValue, trusted } from "../native/trusted";
 import { rewriteHtmlString } from "../patches/html-rewriter";
-import { withBootstrap } from "../patches/html-tokens";
+import { tokenize, withBootstrap } from "../patches/html-tokens";
 import { sinkText } from "../patches/dynamic-html";
 import { injectFramesIn } from "../patches/dynamic-iframe";
 import { wrapMethod } from "../native/surface";
@@ -69,6 +69,45 @@ function maybeInjectBootstrap(
     return withBootstrap(rewrittenHtml, getBootstrapHtml());
 }
 
+// ── Writes that split a construct ───────────────────────────────────────
+//
+// Each write is tokenized from the data state, so a tag, comment or
+// <script> / raw-text element split across writes (write("<scr");
+// write("ipt src=…></script>")) was handed to the browser unrewritten. A
+// write that ends inside one keeps that tail back and the next write of
+// the document is read after it: the browser's parser could not act on an
+// unfinished construct before more input came either. What is kept back is
+// written when no write follows — at the next microtask (still the writing
+// script's turn), or at document.close().
+const carried = new SafeWeakMap<object, string>();
+
+/** Writes `text` (the page's, already joined) to `doc` through its native write, rewritten. */
+function writeThrough(doc: WriteCapable, nativeWrite: (...a: unknown[]) => unknown, text: string, asTrusted: boolean,
+    rewrite: (html: string) => string, realm: object): unknown {
+    const all = (carried.get(doc) ?? "") + text;
+    carried.delete(doc);
+    const tail = { at: -1 };
+    tokenize(all, (doc as unknown as Document).defaultView !== null, undefined, tail);
+    let now = all;
+    if (tail.at >= 0) {
+        now = all.slice(0, tail.at);
+        carried.set(doc, all.slice(tail.at));
+        nqueueMicrotask(() => flushCarried(doc, nativeWrite, rewrite, realm));
+    }
+    const rewritten = rewrite(now);
+    return ncall(nativeWrite, doc, asTrusted ? trusted(realm, "HTML", rewritten) : rewritten);
+}
+
+function flushCarried(doc: WriteCapable, nativeWrite: (...a: unknown[]) => unknown, rewrite: (html: string) => string, realm: object): void {
+    const rest = carried.get(doc);
+    if (rest === undefined) return;
+    carried.delete(doc);
+    try { ncall(nativeWrite, doc, trusted(realm, "HTML", rewrite(rest))); } catch { /* as the page's own late write would */ }
+}
+
+// The flush of each document at close(), registered by its writer.
+const flushers = new SafeWeakMap<object, () => void>();
+
 // One pair of writers per document: `document.write === document.write`.
 const writers = new SafeWeakMap<object, DocumentWriteWrapper>();
 // Documents whose write / writeln the page replaced (through the setter below).
@@ -110,11 +149,13 @@ export function wrapDocumentWrite(
         const make = (name: "write" | "writeln") => (...args: unknown[]): unknown => {
             const native = target[name] as (...a: unknown[]) => unknown;
             if (!allStrings(args)) return napply(native, target, args);
-            const joined = args.map((a) => sinkText(a) ?? "").join("");
-            const ctx = { scripting: (self as unknown as Document).defaultView !== null };
-            let rewritten = rewriteHtmlString(joined, rewriteOne, proxyOrigin, undefined, ctx);
-            if (getBootstrapHtml) rewritten = maybeInjectBootstrap(target, joined, rewritten, getBootstrapHtml);
-            return ncall(native, target, args.some(isTrustedValue) ? trusted(globalThis, "HTML", rewritten) : rewritten);
+            const joined = args.map((a) => sinkText(a) ?? "").join("") + (name === "writeln" ? "\n" : "");
+            const ctx = { scripting: (target as unknown as Document).defaultView !== null };
+            const rewrite = (html: string): string => {
+                const r = rewriteHtmlString(html, rewriteOne, proxyOrigin, undefined, ctx);
+                return getBootstrapHtml ? maybeInjectBootstrap(target, html, r, getBootstrapHtml) : r;
+            };
+            return writeThrough(target, nativeWriteOf(target), joined, args.some(isTrustedValue), rewrite, globalThis);
         };
         w = { write: make("write"), writeln: make("writeln") };
         writers.set(target, w);
@@ -126,6 +167,15 @@ export function wrapDocumentWrite(
         get writeln() { return isNativeMethod(target, "writeln") ? writer.writeln : target.writeln!; },
         set writeln(v) { markReplaced(target, "writeln"); target.writeln = v; },
     };
+}
+
+/** The browser's write for `doc`: its own, unless the page replaced it, then its prototypes'. */
+function nativeWriteOf(doc: WriteCapable): (...a: unknown[]) => unknown {
+    if (isNativeMethod(doc, "write")) return doc.write as (...a: unknown[]) => unknown;
+    for (let p: object | null = nO.getPrototypeOf(doc) as object | null; p; p = nO.getPrototypeOf(p) as object | null) {
+        if (ncall(nOP.hasOwnProperty, p, "write")) return (p as Record<string, unknown>)["write"] as (...a: unknown[]) => unknown;
+    }
+    return doc.write as (...a: unknown[]) => unknown;
 }
 
 function markReplaced(target: object, name: string): void {
@@ -163,18 +213,27 @@ export function patchDocumentWrite(
     let holder: object | null = D;
     while (holder && !ncall(nOP.hasOwnProperty, holder, "write")) holder = nO.getPrototypeOf(holder) as object | null;
     if (!holder || nativelyWrapped.has(holder)) return;
+    const nativeWrite = (holder as Record<string, unknown>)["write"] as (...a: unknown[]) => unknown;
     for (const key of ["write", "writeln"]) {
         wrapMethod<(...a: unknown[]) => unknown>(holder, key, (native, self, args) => {
             if (!isDocumentLike(self) || !allStrings(args)) return nR.apply(native, self, args);
-            const joined = args.map((a) => sinkText(a) ?? "").join("");
+            const joined = args.map((a) => sinkText(a) ?? "").join("") + (key === "writeln" ? "\n" : "");
             // Markup for the document's parser, where it stands.
             const ctx = { scripting: (self as unknown as Document).defaultView !== null };
-            let rewritten = rewriteHtmlString(joined, rewriteOne, proxyOrigin, bootstrap, ctx);
-            rewritten = maybeInjectBootstrap(self, joined, rewritten, bootstrap);
-            const out = nR.apply(native, self, [args.some(isTrustedValue) ? trusted(targetWindow, "HTML", rewritten) : rewritten]);
+            const rewrite = (html: string): string =>
+                maybeInjectBootstrap(self, html, rewriteHtmlString(html, rewriteOne, proxyOrigin, bootstrap, ctx), bootstrap);
+            if (!flushers.has(self)) flushers.set(self, () => flushCarried(self, nativeWrite, rewrite, targetWindow));
+            const out = writeThrough(self, nativeWrite, joined, args.some(isTrustedValue), rewrite, targetWindow);
             // Frames the written markup made: the page may write into them next.
             if (/<iframe/i.test(joined)) injectFramesIn(targetWindow, self);
             return out;
+        });
+    }
+    // close() ends the input: what a split write kept back goes first.
+    if (ncall(nOP.hasOwnProperty, holder, "close")) {
+        wrapMethod<(...a: unknown[]) => unknown>(holder, "close", (native, self, args) => {
+            if (typeof self === "object" && self !== null) flushers.get(self)?.();
+            return nR.apply(native, self, args);
         });
     }
     nativelyWrapped.add(holder);

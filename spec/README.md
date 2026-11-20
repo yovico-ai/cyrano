@@ -127,9 +127,7 @@ text or another wire format is meant to be specified here and checked in
 both runtimes (owner, 2026-11-18: "Agda completeness … super important for
 upkeep"). The inventory of 2026-11-18 is through: every medium and high
 entry has its module above. Loose ends (runtime behaviour, not parsers):
-a tag or inline
-script split across `document.write` chunks; the selector gaps named in
-Selectors.agda.
+the selector gaps named in Selectors.agda.
 
 Low — settled without a module (2026-11-19):
 - base64url: its only user, the head-injection endpoint, was dead;

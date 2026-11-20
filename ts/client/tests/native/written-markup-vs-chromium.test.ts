@@ -68,6 +68,40 @@ describe.skipIf(!wanted)("written markup makes the direct tree, in Chromium", ()
         server?.close();
     });
 
+    // The tree a document written in these chunks makes (open, the writes, close).
+    const splitShapes = async (url: string, chunks: string[][]): Promise<string[]> => {
+        const page = await browser.newPage();
+        await page.goto(url);
+        const out = await page.evaluate((list: string[][]) => {
+            const walk = (n: Node, rawParent: boolean): string => {
+                if (n.nodeType === 10) return `<!DOCTYPE ${(n as DocumentType).name}>`;
+                if (n.nodeType === 8) return `<!--${(n as Comment).data}-->`;
+                if (n.nodeType === 3 || n.nodeType === 4) return rawParent ? "#" : JSON.stringify((n as Text).data);
+                if (n.nodeType === 1) {
+                    const e = n as Element;
+                    if (e.localName === "script" && (((e.getAttribute("src") ?? "").endsWith("/rewriter.js")) || (e.textContent ?? "").includes("$rewriter"))) return "";
+                    const names = Array.from(e.attributes).map((a) => a.name).filter((a) => a !== "crn-o" && !a.startsWith("data-crn")).sort();
+                    const raw = e.localName === "script" || e.localName === "style";
+                    return `<${e.localName} ${names.join(" ")}>${Array.from(e.childNodes).map((c) => walk(c, raw)).join("")}</>`;
+                }
+                return Array.from(n.childNodes).map((c) => walk(c, false)).join("");
+            };
+            return list.map((cs) => {
+                const f = document.createElement("iframe");
+                document.body.appendChild(f);
+                const d = f.contentDocument!;
+                d.open();
+                for (const c of cs) d.write(c);
+                d.close();
+                const w = walk(d, false);
+                f.remove();
+                return w;
+            });
+        }, chunks);
+        await page.close();
+        return out;
+    };
+
     const shapes = async (url: string, ms: string[]): Promise<Shape[]> => {
         const page = await browser.newPage();
         await page.goto(url);
@@ -129,6 +163,26 @@ describe.skipIf(!wanted)("written markup makes the direct tree, in Chromium", ()
         expect(bad.slice(0, 8), `${bad.length} differ (seed ${seed})`).toEqual([]);
     }, 300_000);
 
+    // Each write was tokenized from the data state: a tag or script split
+    // across writes went to the browser unrewritten (wrappers/document-write.ts
+    // keeps the unfinished tail for the next write).
+    it("markup split across writes makes the direct tree", async () => {
+        const draws = fc.sample(fc.tuple(fc.oneof(markupArb(10), documentArb()), fc.array(fc.nat(1000), { maxLength: 4 }))
+            .map(([m, cuts]) => {
+                const at = [...new Set(cuts.map((c) => c % (m.length + 1)))].sort((a, b) => a - b);
+                const out: string[] = [];
+                let prev = 0;
+                for (const c of at) { out.push(m.slice(prev, c)); prev = c; }
+                out.push(m.slice(prev));
+                return out;
+            }), { numRuns: 200, seed });
+        const direct = await splitShapes(`${origin}/direct`, draws);
+        const proxied = await splitShapes(`${origin}/cyrano/https/site.example/page`, draws);
+        const bad: string[] = [];
+        for (let k = 0; k < draws.length; k++) if (direct[k] !== proxied[k]) bad.push(`${JSON.stringify(draws[k])}\n  proxied ${proxied[k]}\n  direct  ${direct[k]}`);
+        expect(bad.slice(0, 6), `${bad.length} differ (seed ${seed})`).toEqual([]);
+    }, 300_000);
+
     it("nothing a written document loads escapes the proxy; chunked writes stay open", async () => {
         const page = await browser.newPage();
         const escaped: string[] = [];
@@ -185,6 +239,17 @@ describe.skipIf(!wanted)("written markup makes the direct tree, in Chromium", ()
             cd.write(`<img src="${E}w-chunk.png">`);
             cd.write("text</div><p>after</p>");
             cd.close();
+            // A tag and a script split across writes.
+            const sp = document.createElement("iframe");
+            document.body.appendChild(sp);
+            const sd = sp.contentDocument!;
+            sd.open();
+            sd.write(`<img sr`);
+            sd.write(`c="${E}w-split-img.png"><scr`);
+            sd.write(`ipt src="${E}w-split.js"></scr`);
+            sd.write("ipt><script>new Image().src = ");
+            sd.write(`"${E}w-split-inline.png"</script>`);
+            sd.close();
             // A noscript's content is the page's text.
             const n = document.createElement("div");
             n.innerHTML = `<noscript><img src="${E}w-ns.png" data-x=1></noscript>`;

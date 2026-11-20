@@ -328,9 +328,9 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   bootstrap goes where the server's goes (after the first `<head>` /
   `<body>`, else before the first other element) for documents, srcdoc
   and writes into empty frames. A `<noscript>`'s content is kept as
-  written (text with scripting on). Open: an inline script or a start tag
-  split across `document.write` chunks is left unrewritten (each chunk
-  is tokenized from the data state); a page's parse inside
+  written (text with scripting on). A tag, comment or script split across
+  `document.write` calls is kept back until it is complete (the next
+  write, the next microtask, or close()). Open: a page's parse inside
   `<select>` or after `<frameset>` is not modelled. The
   Navigation API is wrapped (`patches/navigation.ts`; Shopify). Open from
   random-site testing (2026-11-18): `location` / `top` / `parent` read by

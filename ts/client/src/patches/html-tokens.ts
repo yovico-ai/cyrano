@@ -196,8 +196,13 @@ const isWS = (n: number): boolean => n === 9 || n === 10 || n === 12 || n === 13
 const isAlpha = (n: number): boolean => (n >= 65 && n <= 90) || (n >= 97 && n <= 122);
 const low = (n: number): string => String.fromCharCode(n >= 65 && n <= 90 ? n + 32 : n);
 
-/** The tokens of markup (spec `tokens`): `scripting` makes noscript raw text. */
-export function tokenize(s: string, scripting: boolean, within?: { ns: Ns; name: string; encoding?: string | null }): Tok[] {
+/**
+ * The tokens of markup (spec `tokens`): `scripting` makes noscript raw text.
+ * `tail`, when given, is set to where an unfinished construct at the end
+ * begins — a tag, comment, doctype or CDATA section, or the start tag of a
+ * script or raw-text element whose end tag has not come — or -1.
+ */
+export function tokenize(s: string, scripting: boolean, within?: { ns: Ns; name: string; encoding?: string | null }, tail?: { at: number }): Tok[] {
     const out: Tok[] = [];
     const tr = new Tracker(within);
     const n = s.length;
@@ -213,6 +218,9 @@ export function tokenize(s: string, scripting: boolean, within?: { ns: Ns; name:
     let vf = 0;          // where the value began
     let buf = "";        // temporary buffer (end tag names in raw text, double escapes)
     let rawName = "";    // the element whose end tag ends RAW
+    let rawFrom = -1;    // where the start tag of the open script / raw-text element began
+    let inRaw = false;   // inside one (its end tag not yet emitted)
+    if (tail) tail.at = -1;
     const push = (t: Tok): void => { out[out.length] = t; tr.settle(); };
     const setV = (vt: number): void => {
         if (!attrs.length) return;
@@ -224,15 +232,17 @@ export function tokenize(s: string, scripting: boolean, within?: { ns: Ns; name:
             push({ kind: "end", name, from: p, to });
             tr.end(name);
             st = S.Data;
+            inRaw = false;
             return;
         }
         const ns = tr.start(name, attrs, selfClosing);
         push({ kind: "start", name, attrs, selfClosing, ns, from: p, to });
         st = S.Data;
+        rawFrom = p;
         if (ns === "html") {
-            if (name === "script") st = S.Scr;
+            if (name === "script") { st = S.Scr; inRaw = true; }
             else if (name === "plaintext") st = S.Plaintext;
-            else if (RAW[name] || (scripting && name === "noscript")) { st = S.Raw; rawName = name; }
+            else if (RAW[name] || (scripting && name === "noscript")) { st = S.Raw; rawName = name; inRaw = true; }
         }
     };
     const eofToken = (): void => {
@@ -454,6 +464,7 @@ export function tokenize(s: string, scripting: boolean, within?: { ns: Ns; name:
                 i = n; break;
         }
     }
+    if (tail) tail.at = inRaw ? rawFrom : st === S.Data || st === S.Plaintext ? -1 : p;
     eofToken();
     return out;
 }
