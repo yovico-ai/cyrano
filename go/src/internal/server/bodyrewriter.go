@@ -146,7 +146,10 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				// surface (ts/client/src/native/surface.ts), so a challenge's
 				// integrity and fingerprint checks see native APIs; a challenge
 				// page's own scripts are rewritten like any other (below).
-				InjectBootstrap:   true,
+				// …except a page under which no script of its own can run
+				// (spec/Csp.agda noScriptsRun): it has nothing for the runtime
+				// to serve, and natively runs nothing.
+				InjectBootstrap:   !urlrewrite.NoScriptsRun(originalPolicies(resp)),
 				ClientPassthrough: pageConfig(clientPassthrough, resp),
 				ScriptNonce:       proxy.ScriptNonce(originalPolicies(resp)),
 				ExternalBootstrap: !urlrewrite.InlineScriptAllowed(originalPolicies(resp)),

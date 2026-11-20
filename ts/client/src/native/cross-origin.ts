@@ -35,6 +35,8 @@ interface Viewer {
     views: WeakMap<object, object>;
     /** Windows page code of this realm already holds as themselves. */
     handedOut: WeakSet<object>;
+    /** A proxified URL's original (unchanged when it is not one). */
+    unwrap: (url: string) => string;
 }
 const viewers = new SafeWeakMap<object, Viewer>();
 let nativeContentWindow: ((this: unknown) => Window | null) | undefined;
@@ -42,9 +44,9 @@ let nativeContentWindow: ((this: unknown) => Window | null) | undefined;
 const reals = new SafeWeakMap<object, Window>();
 
 /** Sets up `win`'s views: its original origin, and how it proxifies a URL it navigates to. */
-export function initCrossOrigin(win: Window, origin: () => string, rewriteOne: (url: string) => string): void {
+export function initCrossOrigin(win: Window, origin: () => string, rewriteOne: (url: string) => string, unwrapOne: (url: string) => string = (u) => u): void {
     viewers.set(win, {
-        win, origin, navigate: rewriteOne, views: new SafeWeakMap(), handedOut: new SafeWeakSet(),
+        win, origin, navigate: rewriteOne, unwrap: unwrapOne, views: new SafeWeakMap(), handedOut: new SafeWeakSet(),
         opener: nO.getOwnPropertyDescriptor(win, "opener")?.get as Viewer["opener"],
     });
     if (!nativeContentWindow) {
@@ -71,11 +73,18 @@ export function isView(x: unknown): boolean {
     return typeof x === "object" && x !== null && reals.has(x);
 }
 
-/** The original origin of a window that has a runtime, or null. */
-function originalOriginOf(w: unknown): string | null {
+/**
+ * The original origin of a window: its runtime's, or — a proxied document
+ * that got no runtime (no script of its own can run there: spec/Csp.agda
+ * noScriptsRun) — its proxified URL's. Null when neither tells.
+ */
+function originalOriginOf(w: unknown, unwrap: (url: string) => string): string | null {
     try {
         const base = internalsOf(w)?.api.get_base_url();
-        return base ? base.origin : null;
+        if (base) return base.origin;
+        const href = (w as Window).location.href;
+        const orig = unwrap(href);
+        return orig !== href ? new URL(orig).origin : null;
     } catch {
         return null;
     }
@@ -103,7 +112,7 @@ export function crossOriginView<T>(target: T, pendingOrigin: string | null = nul
     // before the navigation commits must hold the same object it will later
     // see as a message's source — a browser has one WindowProxy throughout.
     const mine = v.origin();
-    const theirs = originalOriginOf(target);
+    const theirs = originalOriginOf(target, v.unwrap);
     const cross = pendingOrigin !== null ? pendingOrigin !== mine : theirs !== null && theirs !== mine;
     // A browser has one WindowProxy for a frame through all its
     // navigations: page code that took it while the frame was still its own

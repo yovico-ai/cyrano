@@ -333,7 +333,8 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   random-site testing (2026-11-18): `location` / `top` / `parent` read by
   destructuring is handled where the pattern has a source (R14:
   declarations, assignments — Transcend's consent manager), not in a
-  parameter's or a nested pattern; a document whose CSP is `default-src 'none'` still gets the runtime.
+  parameter's or a nested pattern; a document under which no script of its own can run gets no runtime
+  (spec/Csp.agda noScriptsRun; frames judge it by its proxified URL).
   `fetchLater` keeps its quota per original origin (spec/FetchLater.agda)
   and defers what the
   proxy makes the native refuse (`patches/fetch-later.ts`; tumblr) — the

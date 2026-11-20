@@ -28,6 +28,22 @@ function viewer(origin: string): Window {
 }
 
 describe("crossOriginView", () => {
+    // A document under which no script can run gets no runtime
+    // (spec/Csp.agda noScriptsRun): its original origin is its proxified
+    // URL's. Read as having none, it was handed out as same-origin.
+    it("a window without a runtime is judged by its proxified URL", () => {
+        const page: Window = (() => {
+            const { win } = fakeWindow("https://page.example");
+            initCrossOrigin(win, () => "https://page.example", (u) => u, (u) => u.replace(/^http:\/\/p\.example\/cyrano\/https\/([^/]+)/, "https://$1"));
+            return win;
+        })();
+        const bare = (href: string): Window => { const w: Record<string, unknown> = {}; w["window"] = w; w["location"] = { href }; return w as unknown as Window; };
+        const other = bare("http://p.example/cyrano/https/other.example/x");
+        expect(isView(crossOriginView(other, null, page))).toBe(true);
+        const same = bare("http://p.example/cyrano/https/page.example/y");
+        expect(crossOriginView(same, null, page)).toBe(same);
+    });
+
     // reCAPTCHA's challenge frame finds its anchor frame by name in its
     // cross-origin parent: parent.frames["a-…"] (uncaught SecurityError, the
     // challenge never wired up, on mountaineers.org).

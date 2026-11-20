@@ -269,6 +269,70 @@ func InlineScriptAllowed(headers []string) bool {
 	return true
 }
 
+// NoScriptsRun reports whether no page script runs at all under these
+// policies (header values as sent; spec/Csp.agda noScriptsRun): some
+// policy's element directive and some policy's attribute directive each
+// allow nothing. Sound, not complete, across several policies. Such a
+// document gets no runtime.
+func NoScriptsRun(headers []string) bool {
+	var pols [][]cspDirective
+	for _, h := range headers {
+		pols = append(pols, parseCSPHeader(h)...)
+	}
+	pick := func(p []cspDirective, names ...string) ([]string, bool) {
+		for _, n := range names {
+			for _, d := range p {
+				if d.name == n {
+					return d.vals, true
+				}
+			}
+		}
+		return nil, false
+	}
+	has := func(vs []string, f func(string) bool) bool {
+		for _, v := range vs {
+			if f(strings.ToLower(v)) {
+				return true
+			}
+		}
+		return false
+	}
+	nonceOrHash := func(l string) bool { return strings.HasPrefix(l, "'nonce-") || isHashSource(l) }
+	noSource := func(l string) bool {
+		switch l {
+		case "'none'", "'unsafe-eval'", "'wasm-unsafe-eval'", "'report-sample'", "'unsafe-hashes'", "'inline-speculation-rules'":
+			return true
+		}
+		return false
+	}
+	elemNothing := func(p []cspDirective) bool {
+		vs, ok := pick(p, "script-src-elem", "script-src", "default-src")
+		if !ok {
+			return false
+		}
+		if has(vs, func(l string) bool { return l == "'strict-dynamic'" }) {
+			return !has(vs, nonceOrHash) // only a nonce or a hash admits then
+		}
+		return !has(vs, func(l string) bool { return !noSource(l) })
+	}
+	attrNothing := func(p []cspDirective) bool {
+		vs, ok := pick(p, "script-src-attr", "script-src", "default-src")
+		if !ok {
+			return false
+		}
+		inline := has(vs, func(l string) bool { return l == "'unsafe-inline'" }) &&
+			!has(vs, func(l string) bool { return nonceOrHash(l) || l == "'strict-dynamic'" })
+		hashes := has(vs, func(l string) bool { return l == "'unsafe-hashes'" }) && has(vs, isHashSource)
+		return !inline && !hashes
+	}
+	elem, attr := false, false
+	for _, p := range pols {
+		elem = elem || elemNothing(p)
+		attr = attr || attrNothing(p)
+	}
+	return elem && attr
+}
+
 // FrameAncestors is a CSP header value's frame-ancestors verdict for a
 // document at self framed by an embedder at ancestor (URLs; spec/Csp.agda
 // frameAncestors, checked against Chromium): present reports whether a

@@ -90,7 +90,7 @@ export function installPatches(
     initTrusted(targetWindow, config.tt);
     // First: every wrapper below reads as the native it replaces.
     installToStringMask(targetWindow as unknown as typeof globalThis);
-    initCrossOrigin(targetWindow, () => getCurrentBaseUrl().origin, rewriteOne);
+    initCrossOrigin(targetWindow, () => getCurrentBaseUrl().origin, rewriteOne, unwrapOne);
     initOriginals(targetWindow); // captures natives: before anything wraps them
     // One patch failing must not leave the window without a runtime: in a
     // sandboxed frame (an opaque origin) natives such as

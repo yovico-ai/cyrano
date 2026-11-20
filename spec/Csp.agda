@@ -46,7 +46,7 @@ open import Data.List.Base using (List; []; _∷_; _++_; reverse; map)
 open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.Nat.Base using (ℕ; zero; suc; _<ᵇ_; _≡ᵇ_)
 open import Data.Product.Base using (_×_; _,_)
-open import Data.String.Base using (toList)
+open import Data.String.Base using (String; toList)
 
 open import Scheme using (Scheme; schemeChars; defaultPort; http; https)
 open import Url
@@ -284,6 +284,71 @@ inlineScriptAllowed headers = allP (concatPolicies headers)
   allP (ds ∷ dss) with governing ds
   ... | nothing = allP dss
   ... | just vs = anyL admits vs ∧ allP dss
+
+-- Whether no page script runs at all under the policies (header values as
+-- sent; report-only ones not passed): some policy's script-element
+-- directive (script-src-elem, else script-src, else default-src) and some
+-- policy's attribute directive (script-src-attr, else script-src, else
+-- default-src) each allow nothing. An element directive allows nothing
+-- when none of its tokens is a source (only 'none', 'unsafe-eval',
+-- 'wasm-unsafe-eval', 'report-sample', 'unsafe-hashes',
+-- 'inline-speculation-rules', or no token) — under 'strict-dynamic', when
+-- it has no nonce or hash; an attribute directive — inline
+-- handlers — unless it has 'unsafe-inline' and no nonce, hash or
+-- 'strict-dynamic', or 'unsafe-hashes' and a hash. Then the
+-- document needs no runtime (nothing of the page's reads anything), and
+-- gets none: natively it runs no script, and neither does it proxied.
+-- It is sound, not complete, over several policies: a script must pass
+-- each, so two that admit different scripts (one a nonce, one a hash)
+-- may together admit none, which this does not see — the runtime is then
+-- injected, needlessly. Checked against Chromium (no-scripts-vs-chromium):
+-- exact for one policy; for two, "none" here is none there.
+noScriptsRun : List Str → Bool
+noScriptsRun headers = anyP elem pols ∧ anyP attr pols
+  where
+  pols : List (List Directive)
+  pols = concatPolicies headers
+    where
+    concatPolicies : List Str → List (List Directive)
+    concatPolicies []       = []
+    concatPolicies (h ∷ hs) = parseHeader h ++ concatPolicies hs
+
+  find : Str → List Directive → Maybe (List Str)
+  find n []              = nothing
+  find n ((m , vs) ∷ xs) = if eqStr n m then just vs else find n xs
+
+  pick : List Directive → List Str → Maybe (List Str)
+  pick ds []       = nothing
+  pick ds (n ∷ ns) with find n ds
+  ... | just vs = just vs
+  ... | nothing = pick ds ns
+
+  kw : String → Str → Bool
+  kw k t = eqStr (lowerAll t) (toList k)
+
+  noSource : Str → Bool
+  noSource t = kw "'none'" t ∨ kw "'unsafe-eval'" t ∨ kw "'wasm-unsafe-eval'" t ∨ kw "'report-sample'" t
+             ∨ kw "'unsafe-hashes'" t ∨ kw "'inline-speculation-rules'" t
+
+  -- under 'strict-dynamic' only a nonce or a hash admits a script
+  elemNothing : Maybe (List Str) → Bool
+  elemNothing (just vs) =
+    if anyL (kw "'strict-dynamic'") vs then not (anyL (λ t → isNonce t ∨ hashSource t) vs)
+    else not (anyL (λ t → not (noSource t)) vs)
+  elemNothing nothing   = false
+
+  attrNothing : Maybe (List Str) → Bool
+  attrNothing (just vs) = not ((anyL (kw "'unsafe-inline'") vs ∧ not (anyL (λ t → isNonce t ∨ hashSource t ∨ kw "'strict-dynamic'" t) vs))
+                               ∨ (anyL (kw "'unsafe-hashes'") vs ∧ anyL hashSource vs))
+  attrNothing nothing   = false
+
+  elem attr : List Directive → Bool
+  elem ds = elemNothing (pick ds (toList "script-src-elem" ∷ toList "script-src" ∷ toList "default-src" ∷ []))
+  attr ds = attrNothing (pick ds (toList "script-src-attr" ∷ toList "script-src" ∷ toList "default-src" ∷ []))
+
+  anyP : (List Directive → Bool) → List (List Directive) → Bool
+  anyP f []         = false
+  anyP f (ds ∷ dss) = f ds ∨ anyP f dss
 
 ------------------------------------------------------------------------
 -- Source expressions against an ancestor's origin (CSP3 §6.7.2.8–9), for

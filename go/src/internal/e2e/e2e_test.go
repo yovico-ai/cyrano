@@ -183,3 +183,38 @@ func TestE2E_ScriptByMarkNotByType(t *testing.T) {
 		t.Errorf("script by Sec-Fetch-Dest not rewritten")
 	}
 }
+
+// TestE2E_NoRuntimeWhereNoScriptRuns — a page under which no script of its
+// own can run (spec/Csp.agda noScriptsRun) gets no bootstrap; natively it
+// runs nothing, and the runtime would be the only script there. Its URLs
+// are still rewritten.
+func TestE2E_NoRuntimeWhereNoScriptRuns(t *testing.T) {
+	page := `<!doctype html><title>x</title><a href="/next">n</a><script>1</script>`
+	for csp, wantRuntime := range map[string]bool{
+		"":                             true,
+		"default-src 'none'":           false,
+		"script-src 'none'; img-src *": false,
+		"script-src 'self'":            true,
+		"script-src-elem 'none'":       true, // inline handlers are governed by nothing: they run
+		"default-src 'none'; script-src 'unsafe-inline'": true,
+	} {
+		up := startInlineServer(t, func(w http.ResponseWriter, r *http.Request) {
+			if csp != "" {
+				w.Header().Set("Content-Security-Policy", csp)
+			}
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = io.WriteString(w, page)
+		})
+		proxy := startProxy(t)
+		status, body := getVia(t, proxy, up.URL+"/")
+		if status != 200 {
+			t.Fatalf("%q: status %d", csp, status)
+		}
+		if got := strings.Contains(body, "/rewriter.js"); got != wantRuntime { // inline or external bootstrap
+			t.Errorf("%q: runtime injected %v, want %v\n%.300s", csp, got, wantRuntime, body)
+		}
+		if !strings.Contains(body, "/cyrano/http/") {
+			t.Errorf("%q: the page's URLs are not rewritten:\n%.300s", csp, body)
+		}
+	}
+}

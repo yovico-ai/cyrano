@@ -31,6 +31,7 @@
 --   stackurls <V8 stack text>          → {"out":"<script URLs, innermost first, LF-separated>"}
 --   h1orders <connection bytes>         → {"out":"<a,b,…><…>…"} (each recorded request's header names)
 --   refererroute <proxy> <referer> <raw path> <"?query"|""> → {"out":"<redirect path>"|"none"}
+--   cspnoscripts <header lines>        → {"out":"yes"|"no"} (no page script runs: no runtime)
 --   workerruns <module 0|1> <mime>      → {"out":"yes"|"no"} (a blob:/data: worker runs)
 --   fetchlateradmit <used> <size>       → {"out":"ok"|"<the QuotaExceededError message>"}
 --   storagekey <ancestors> <site> <origin> → {"out":"<the partition key>"}
@@ -369,6 +370,7 @@ dispatch op args =
   else if eqStr op (toList "csp") then cspReq args
   else if eqStr op (toList "cspnonce") then cspNonceReq args
   else if eqStr op (toList "cspinline") then cspInlineReq args
+  else if eqStr op (toList "cspnoscripts") then oneArg (λ hs → if noScriptsRun (fieldLines hs) then toList "yes" else toList "no") args
   else if eqStr op (toList "scriptkind") then scriptKindReq args
   else if eqStr op (toList "docbase") then docBaseReq args
   else if eqStr op (toList "importmap") then importMapReq args

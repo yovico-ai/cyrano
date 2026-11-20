@@ -15,11 +15,11 @@ var (
 		"img-src", "connect-src", "frame-src", "object-src", "worker-src", "font-src", "media-src", "child-src",
 		"frame-ancestors", "base-uri", "form-action", "report-uri", "report-to", "trusted-types",
 		"require-trusted-types-for", "upgrade-insecure-requests", "block-all-mixed-content", "sandbox",
-		"foo-src", "navigate-to", "é-src"}
+		"foo-src", "navigate-to", "é-src", "script-src-attr"}
 	cspValues = []string{"'self'", "'none'", "'NONE'", "'unsafe-inline'", "'unsafe-eval'", "'strict-dynamic'",
 		"'nonce-abc'", "'Nonce-XyZ'", "'nonce-'", "'sha256-AAAA'", "'SHA384-bb'", "https:", "data:", "blob:", "*",
 		"https://cdn.example", "*.example.com", "http://localhost:9081", "HTTP://LOCALHOST:9081", "/r", "'script'",
-		"default", "allow-scripts", "_crnpolicy"}
+		"default", "allow-scripts", "_crnpolicy", "'unsafe-hashes'", "'report-sample'", "'wasm-unsafe-eval'", "'inline-speculation-rules'"}
 	cspSpaces = []string{" ", "  ", "\t", "\n", "\f", "\r", "\v", " ", ""}
 )
 
@@ -85,6 +85,10 @@ func TestSpecConformance_CSPBootstrap(t *testing.T) {
 		inline, _ := ask(rt, oracle, "cspinline", joined)
 		if got := InlineScriptAllowed(headers); got != (inline == "yes") {
 			rt.Fatalf("InlineScriptAllowed(%q) = %v; spec says %s", headers, got, inline)
+		}
+		none, _ := ask(rt, oracle, "cspnoscripts", joined)
+		if got := NoScriptsRun(headers); got != (none == "yes") {
+			rt.Fatalf("NoScriptsRun(%q) = %v; spec says %s", headers, got, none)
 		}
 	})
 }
