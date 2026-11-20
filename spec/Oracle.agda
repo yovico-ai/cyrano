@@ -34,6 +34,8 @@
 --   cspnoscripts <header lines>        → {"out":"yes"|"no"} (no page script runs: no runtime)
 --   featuresources <features>          → {"out":"<attributionsrc values, LF-separated>"}
 --   featuresmap <features>              → {"out":"<the string, each such value v as [v]>"}
+--   sheetapplies <quirks 0|1> <same-origin 0|1> <ct|"-"> <nosniff 0|1> → {"out":"yes"|"no"} (Chromium applies the stylesheet)
+--   sheetnosniff <same-origin 0|1> <ct|"-"> <nosniff 0|1> → {"out":"yes"|"no"} (the proxy adds nosniff)
 --   workerruns <module 0|1> <mime>      → {"out":"yes"|"no"} (a blob:/data: worker runs)
 --   fetchlateradmit <used> <size>       → {"out":"ok"|"<the QuotaExceededError message>"}
 --   storagekey <ancestors> <site> <origin> → {"out":"<the partition key>"}
@@ -341,6 +343,8 @@ dispatch op args =
   else if eqStr op (toList "fetchlateradmit") then fetchLaterAdmitReq args
   else if eqStr op (toList "workerruns") then workerRunsReq args
   else if eqStr op (toList "frameorigin") then frameOriginReq args
+  else if eqStr op (toList "sheetapplies") then sheetReq args
+  else if eqStr op (toList "sheetnosniff") then sheetNosniffReq args
   else if eqStr op (toList "featuresources") then oneArg (λ f → joinNL (Features.sources f)) args
   else if eqStr op (toList "featuresmap") then oneArg (Features.mapSources (λ v → fromℕ 91 ∷ v ++ fromℕ 93 ∷ [])) args
   else if eqStr op (toList "refererroute") then refererRouteReq args
@@ -570,6 +574,20 @@ dispatch op args =
       else if eqStr (Data.List.Base.take 5 x) (toList "blob:") then FetchLater.blob (Data.List.Base.drop 5 x)
       else FetchLater.noBody
   fetchLaterSizeReq _ = errorReply "BadRequest"
+
+  yn : Bool → Str
+  yn b = out (toList (if b then "yes" else "no"))
+
+  ctArg : Str → Maybe Str
+  ctArg t = if eqStr t (toList "-") then nothing else just t
+
+  sheetReq : List Str → Str
+  sheetReq (q ∷ so ∷ ct ∷ ns ∷ []) = yn (Disposition.sheetApplies (eqStr q (toList "1")) (eqStr so (toList "1")) (ctArg ct) (eqStr ns (toList "1")))
+  sheetReq _ = errorReply "BadRequest"
+
+  sheetNosniffReq : List Str → Str
+  sheetNosniffReq (so ∷ ct ∷ ns ∷ []) = yn (Disposition.addNosniff (eqStr so (toList "1")) (ctArg ct) (eqStr ns (toList "1")))
+  sheetNosniffReq _ = errorReply "BadRequest"
 
   refererRouteReq : List Str → Str
   refererRouteReq (p ∷ r ∷ pa ∷ q ∷ []) with proxyOf p

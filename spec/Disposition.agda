@@ -34,6 +34,7 @@ open import Url using (Str; is; eqStr; lowerAscii; dropWhile; break)
 import Url
 open import Data.Nat.Base using (ℕ; zero; suc)
 open import Containment using (Dest; destScript; destStyle)
+open import Relation.Binary.PropositionalEquality using (_≡_; refl)
 
 data Kind : Set where
   asJs asCss asHtml asIs : Kind
@@ -153,3 +154,73 @@ responseKind nothing nothing (just t) _ =
   else if isCssType (essence t) then asCss
   else asIs
 responseKind nothing nothing nothing _ = asIs
+
+------------------------------------------------------------------------
+-- Whether a stylesheet applies (Chromium, checked: quirks-sheets-vs-
+-- chromium): of type text/css (its essence), or — without
+-- X-Content-Type-Options: nosniff — untyped (no Content-Type, or an empty
+-- one), or any type in a quirks-mode document when the sheet is
+-- same-origin. Under the proxy every sheet is same-origin, so a
+-- cross-origin sheet of another type would apply in a quirks document
+-- where directly it does not: the proxy adds nosniff to it (`addNosniff`;
+-- Go: proxy addStylesheetNosniff), and then it applies exactly where it
+-- would directly, in either mode (`proxied-sheet`, below). Not covered: a
+-- Content-Type listing several types ("text/css,text/plain"), which Blink
+-- reads by its first and, cross-origin under nosniff, ORB by its last.
+
+applies : Bool → Bool → Bool → Bool → Bool → Bool
+applies css untyped quirks sameOrigin nosniff = css ∨ (not nosniff ∧ (untyped ∨ (quirks ∧ sameOrigin)))
+
+added : Bool → Bool → Bool → Bool → Bool
+added css untyped sameOrigin nosniff = not sameOrigin ∧ not nosniff ∧ not css ∧ not untyped
+
+cssTyped untypedSheet : Maybe Str → Bool
+cssTyped (just t) = isCssType (essence t)
+cssTyped nothing  = false
+untypedSheet (just t) = Data.List.Base.null (essence t)
+untypedSheet nothing  = true
+
+sheetApplies : Bool → Bool → Maybe Str → Bool → Bool
+sheetApplies quirks so ct ns = applies (cssTyped ct) (untypedSheet ct) quirks so ns
+
+addNosniff : Bool → Maybe Str → Bool → Bool
+addNosniff so ct ns = added (cssTyped ct) (untypedSheet ct) so ns
+
+appliesLaw : ∀ c u q so ns → applies c u q true (ns ∨ added c u so ns) ≡ applies c u q so ns
+appliesLaw true true true true true = refl
+appliesLaw true true true true false = refl
+appliesLaw true true true false true = refl
+appliesLaw true true true false false = refl
+appliesLaw true true false true true = refl
+appliesLaw true true false true false = refl
+appliesLaw true true false false true = refl
+appliesLaw true true false false false = refl
+appliesLaw true false true true true = refl
+appliesLaw true false true true false = refl
+appliesLaw true false true false true = refl
+appliesLaw true false true false false = refl
+appliesLaw true false false true true = refl
+appliesLaw true false false true false = refl
+appliesLaw true false false false true = refl
+appliesLaw true false false false false = refl
+appliesLaw false true true true true = refl
+appliesLaw false true true true false = refl
+appliesLaw false true true false true = refl
+appliesLaw false true true false false = refl
+appliesLaw false true false true true = refl
+appliesLaw false true false true false = refl
+appliesLaw false true false false true = refl
+appliesLaw false true false false false = refl
+appliesLaw false false true true true = refl
+appliesLaw false false true true false = refl
+appliesLaw false false true false true = refl
+appliesLaw false false true false false = refl
+appliesLaw false false false true true = refl
+appliesLaw false false false true false = refl
+appliesLaw false false false false true = refl
+appliesLaw false false false false false = refl
+
+-- Proxied (same-origin, nosniff added where `addNosniff` says) a sheet
+-- applies exactly where it does directly.
+proxied-sheet : ∀ quirks so ct ns → sheetApplies quirks true ct (ns ∨ addNosniff so ct ns) ≡ sheetApplies quirks so ct ns
+proxied-sheet quirks so ct ns = appliesLaw (cssTyped ct) (untypedSheet ct) quirks so ns

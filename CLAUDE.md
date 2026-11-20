@@ -109,7 +109,9 @@ writes — `<script src>`, `<link rel=stylesheet>`, their preloads, the Link
 header, `@import`, import maps, module specifiers, `importScripts`, the
 runtime's setters — as `/cyrano/https!js/…` or `!css` (after a policy mark,
 `!origin!js`; spec/Containment.agda, Attrs.agda `urlDest`). A marked
-response is rewritten as such even when served `text/plain`; an unmarked
+response is rewritten as such even when served `text/plain`; a
+cross-origin stylesheet of another type gets `nosniff` (it would apply in
+a quirks document only same-origin: Disposition.agda `proxied-sheet`); an unmarked
 one goes by Sec-Fetch-Dest; a fetch() of the same file gets the origin's
 bytes under a different URL, so the browser's cache never hands a script
 the data copy. Unwrap ignores the marks.
@@ -340,8 +342,9 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   and defers what the
   proxy makes the native refuse (`patches/fetch-later.ts`; tumblr) — the
   requests it defers go out with keepalive (64 KiB in flight at unload). DOM insertion by any
-  method gives inserted empty frames the runtime (`dynamic-iframe.ts`); the
-  URL fix-up before insert is still only appendChild/insertBefore/replaceChild.
+  method gives inserted empty frames the runtime (`dynamic-iframe.ts`); and
+  the URL fix-up before insert (spec/Attrs.agda's table, originals recorded)
+  runs for every insertion method too.
 - Live check: `ts/e2e/tools/live-compare.cjs` (direct vs proxied, same
   browser). Last run clean: example.com, news.ycombinator.com,
   en.wikipedia.org, developer.mozilla.org, github.com, stackoverflow.com,

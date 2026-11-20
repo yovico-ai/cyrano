@@ -350,6 +350,7 @@ func (e rewriteError) Unwrap() error { return e.error }
 
 func (h *Handler) translateResponse(resp *http.Response) error {
 	translatePermissionsPolicy(resp.Header)
+	addStylesheetNosniff(resp)
 	if resp.Header.Get("Alt-Svc") != "" {
 		resp.Header.Set("Alt-Svc", "clear")
 	}
