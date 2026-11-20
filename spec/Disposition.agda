@@ -220,6 +220,26 @@ appliesLaw false false false true false = refl
 appliesLaw false false false false true = refl
 appliesLaw false false false false false = refl
 
+-- Whether a response's X-Content-Type-Options says nosniff (Fetch
+-- "determine nosniff"): its field lines combined and split on ",", each
+-- value HTTP-whitespace-trimmed; the first value, ASCII case aside, is
+-- "nosniff" ("nosniff;x", "foo, nosniff" are not). Checked against
+-- Chromium (quirks-sheets-vs-chromium). Go: proxy.hasNosniff.
+nosniff : List Str → Bool
+nosniff lines = first (Url.splitOn (is 44) (joinC lines))
+  where
+  joinC : List Str → Str
+  joinC [] = []
+  joinC (x ∷ []) = x
+  joinC (x ∷ xs) = x Data.List.Base.++ (',' ∷ joinC xs)
+  ws : _ → Bool
+  ws c = is 32 c ∨ is 9 c
+  trim : Str → Str
+  trim t = reverse (dropWhile ws (reverse (dropWhile ws t)))
+  first : List Str → Bool
+  first [] = false
+  first (v ∷ _) = eqStr (map lowerAscii (trim v)) (toList "nosniff")
+
 -- Proxied (same-origin, nosniff added where `addNosniff` says) a sheet
 -- applies exactly where it does directly.
 proxied-sheet : ∀ quirks so ct ns → sheetApplies quirks true ct (ns ∨ addNosniff so ct ns) ≡ sheetApplies quirks so ct ns

@@ -52,12 +52,14 @@ func sheetEssence(ct string) string {
 	return lowerASCII(strings.Trim(ct, " \t\r\n"))
 }
 
+// hasNosniff is Disposition.agda nosniff (Fetch "determine nosniff"): the
+// field lines combined, the first comma-separated value, trimmed, is
+// "nosniff" (ASCII case aside).
 func hasNosniff(h http.Header) bool {
-	for _, v := range h.Values("X-Content-Type-Options") {
-		first, _, _ := strings.Cut(v, ",")
-		if strings.EqualFold(strings.Trim(first, " \t"), "nosniff") {
-			return true
-		}
+	vs := h.Values("X-Content-Type-Options")
+	if len(vs) == 0 {
+		return false
 	}
-	return false
+	first, _, _ := strings.Cut(strings.Join(vs, ","), ",")
+	return lowerASCII(strings.Trim(first, " \t")) == "nosniff"
 }

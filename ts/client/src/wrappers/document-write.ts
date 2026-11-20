@@ -76,7 +76,8 @@ function maybeInjectBootstrap(
 // write("ipt src=…></script>")) was handed to the browser unrewritten. A
 // write that ends inside one keeps that tail back and the next write of
 // the document is read after it: the browser's parser could not act on an
-// unfinished construct before more input came either. What is kept back is
+// unfinished construct before more input came either (spec/HtmlTok.agda
+// tail says where it begins). What is kept back is
 // written when no write follows — at the next microtask (still the writing
 // script's turn), or at document.close().
 const carried = new SafeWeakMap<object, string>();

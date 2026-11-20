@@ -70,6 +70,10 @@ data Kind : Set where
   kStart   : Str → List Attr → Bool → Ns3 → Kind   -- name, attributes, self-closing, namespace
   kEnd     : Str → Kind
   kComment kDoctype kCdata : Kind
+  -- Markers at the end of the input, never in `tokens`: an unfinished
+  -- tag, comment, doctype or CDATA section began at the token's start
+  -- (kOpen); the input ended in a script or raw-text element (kOpenRaw).
+  kOpen kOpenRaw : Kind
 
 data Tok : Set where
   tok : Kind → ℕ → ℕ → Tok
@@ -415,7 +419,7 @@ module Run (sc : Bool) (n : ℕ) where
     dataS ts ((i , c) ∷ I) = if lt c then tagOpen ts i I else dataS (settle ts) I
 
     tagOpen : Tracker → ℕ → IStr → List Tok
-    tagOpen ts p []            = []
+    tagOpen ts p []            = tok kOpen p n ∷ []
     tagOpen ts p ((i , c) ∷ I) =
       if bang c then markup ts p I
       else if sl c then endOpen ts p I
@@ -424,7 +428,7 @@ module Run (sc : Bool) (n : ℕ) where
       else dataS (settle ts) ((i , c) ∷ I)
 
     endOpen : Tracker → ℕ → IStr → List Tok
-    endOpen ts p []            = []
+    endOpen ts p []            = tok kOpen p n ∷ []
     endOpen ts p ((i , c) ∷ I) =
       if isAlpha c then tagName ts p true (lowerAscii c ∷ []) I
       else if gt c then dataS (settle ts) I
@@ -432,7 +436,7 @@ module Run (sc : Bool) (n : ℕ) where
 
     -- k: an end tag; nm: the name so far, reversed
     tagName : Tracker → ℕ → Bool → Str → IStr → List Tok
-    tagName ts p k nm []            = []
+    tagName ts p k nm []            = tok kOpen p n ∷ []
     tagName ts p k nm ((i , c) ∷ I) =
       if W c then beforeAttr ts p k (reverse nm) [] I
       else if sl c then selfClose ts p k (reverse nm) [] I
@@ -441,21 +445,21 @@ module Run (sc : Bool) (n : ℕ) where
 
     -- as: the attributes so far, the latest first
     beforeAttr : Tracker → ℕ → Bool → Str → List Attr → IStr → List Tok
-    beforeAttr ts p k nm as []            = []
+    beforeAttr ts p k nm as []            = tok kOpen p n ∷ []
     beforeAttr ts p k nm as ((i , c) ∷ I) =
       if W c then beforeAttr ts p k nm as I
       else if sl c ∨ gt c then afterAttr ts p k nm as ((i , c) ∷ I)
       else attrName ts p k nm as i (lowerAscii c ∷ []) I
 
     attrName : Tracker → ℕ → Bool → Str → List Attr → ℕ → Str → IStr → List Tok
-    attrName ts p k nm as f an []            = []
+    attrName ts p k nm as f an []            = tok kOpen p n ∷ []
     attrName ts p k nm as f an ((i , c) ∷ I) =
       if W c ∨ sl c ∨ gt c then afterAttr ts p k nm (attr (reverse an) f i [] i i ∷ as) ((i , c) ∷ I)
       else if eqc c then beforeValue ts p k nm (attr (reverse an) f i [] i i ∷ as) I
       else attrName ts p k nm as f (lowerAscii c ∷ an) I
 
     afterAttr : Tracker → ℕ → Bool → Str → List Attr → IStr → List Tok
-    afterAttr ts p k nm as []            = []
+    afterAttr ts p k nm as []            = tok kOpen p n ∷ []
     afterAttr ts p k nm as ((i , c) ∷ I) =
       if W c then afterAttr ts p k nm as I
       else if sl c then selfClose ts p k nm as I
@@ -464,7 +468,7 @@ module Run (sc : Bool) (n : ℕ) where
       else attrName ts p k nm as i (lowerAscii c ∷ []) I
 
     beforeValue : Tracker → ℕ → Bool → Str → List Attr → IStr → List Tok
-    beforeValue ts p k nm as []            = []
+    beforeValue ts p k nm as []            = tok kOpen p n ∷ []
     beforeValue ts p k nm as ((i , c) ∷ I) =
       if W c then beforeValue ts p k nm as I
       else if dq c then valueQ ts p k nm as 34 i [] I
@@ -474,20 +478,20 @@ module Run (sc : Bool) (n : ℕ) where
 
     -- q: the quote; vf: where the value began (its opening quote)
     valueQ : Tracker → ℕ → Bool → Str → List Attr → ℕ → ℕ → Str → IStr → List Tok
-    valueQ ts p k nm as q vf v []            = []
+    valueQ ts p k nm as q vf v []            = tok kOpen p n ∷ []
     valueQ ts p k nm as q vf v ((i , c) ∷ I) =
       if is q c then afterValueQ ts p k nm (setV (reverse v) vf (suc i) as) I
       else valueQ ts p k nm as q vf (c ∷ v) I
 
     valueU : Tracker → ℕ → Bool → Str → List Attr → ℕ → Str → IStr → List Tok
-    valueU ts p k nm as vf v []            = []
+    valueU ts p k nm as vf v []            = tok kOpen p n ∷ []
     valueU ts p k nm as vf v ((i , c) ∷ I) =
       if W c then beforeAttr ts p k nm (setV (reverse v) vf i as) I
       else if gt c then emit ts p (suc i) k nm (setV (reverse v) vf i as) false I
       else valueU ts p k nm as vf (c ∷ v) I
 
     afterValueQ : Tracker → ℕ → Bool → Str → List Attr → IStr → List Tok
-    afterValueQ ts p k nm as []            = []
+    afterValueQ ts p k nm as []            = tok kOpen p n ∷ []
     afterValueQ ts p k nm as ((i , c) ∷ I) =
       if W c then beforeAttr ts p k nm as I
       else if sl c then selfClose ts p k nm as I
@@ -495,7 +499,7 @@ module Run (sc : Bool) (n : ℕ) where
       else beforeAttr ts p k nm as ((i , c) ∷ I)
 
     selfClose : Tracker → ℕ → Bool → Str → List Attr → IStr → List Tok
-    selfClose ts p k nm as []            = []
+    selfClose ts p k nm as []            = tok kOpen p n ∷ []
     selfClose ts p k nm as ((i , c) ∷ I) =
       if gt c then emit ts p (suc i) k nm as true I
       else beforeAttr ts p k nm as ((i , c) ∷ I)
@@ -530,37 +534,37 @@ module Run (sc : Bool) (n : ℕ) where
     markup7 ts p I = bogus ts p I
 
     doctype : Tracker → ℕ → IStr → List Tok
-    doctype ts p []            = tok kDoctype p n ∷ []
+    doctype ts p []            = tok kDoctype p n ∷ tok kOpen p n ∷ []
     doctype ts p ((i , c) ∷ I) = if gt c then tok kDoctype p (suc i) ∷ dataS (settle ts) I else doctype ts p I
 
     bogus : Tracker → ℕ → IStr → List Tok
-    bogus ts p []            = tok kComment p n ∷ []
+    bogus ts p []            = tok kComment p n ∷ tok kOpen p n ∷ []
     bogus ts p ((i , c) ∷ I) = if gt c then tok kComment p (suc i) ∷ dataS (settle ts) I else bogus ts p I
 
     cStart : Tracker → ℕ → IStr → List Tok
-    cStart ts p []            = tok kComment p n ∷ []
+    cStart ts p []            = tok kComment p n ∷ tok kOpen p n ∷ []
     cStart ts p ((i , c) ∷ I) =
       if dash c then cStartDash ts p I
       else if gt c then tok kComment p (suc i) ∷ dataS (settle ts) I
       else cBody ts p ((i , c) ∷ I)
 
     cStartDash : Tracker → ℕ → IStr → List Tok
-    cStartDash ts p []            = tok kComment p n ∷ []
+    cStartDash ts p []            = tok kComment p n ∷ tok kOpen p n ∷ []
     cStartDash ts p ((i , c) ∷ I) =
       if dash c then cEnd ts p I
       else if gt c then tok kComment p (suc i) ∷ dataS (settle ts) I
       else cBody ts p ((i , c) ∷ I)
 
     cBody : Tracker → ℕ → IStr → List Tok
-    cBody ts p []            = tok kComment p n ∷ []
+    cBody ts p []            = tok kComment p n ∷ tok kOpen p n ∷ []
     cBody ts p ((i , c) ∷ I) = if dash c then cEndDash ts p I else cBody ts p I
 
     cEndDash : Tracker → ℕ → IStr → List Tok
-    cEndDash ts p []            = tok kComment p n ∷ []
+    cEndDash ts p []            = tok kComment p n ∷ tok kOpen p n ∷ []
     cEndDash ts p ((i , c) ∷ I) = if dash c then cEnd ts p I else cBody ts p ((i , c) ∷ I)
 
     cEnd : Tracker → ℕ → IStr → List Tok
-    cEnd ts p []            = tok kComment p n ∷ []
+    cEnd ts p []            = tok kComment p n ∷ tok kOpen p n ∷ []
     cEnd ts p ((i , c) ∷ I) =
       if gt c then tok kComment p (suc i) ∷ dataS (settle ts) I
       else if bang c then cEndBang ts p I
@@ -568,22 +572,22 @@ module Run (sc : Bool) (n : ℕ) where
       else cBody ts p ((i , c) ∷ I)
 
     cEndBang : Tracker → ℕ → IStr → List Tok
-    cEndBang ts p []            = tok kComment p n ∷ []
+    cEndBang ts p []            = tok kComment p n ∷ tok kOpen p n ∷ []
     cEndBang ts p ((i , c) ∷ I) =
       if dash c then cEndDash ts p I
       else if gt c then tok kComment p (suc i) ∷ dataS (settle ts) I
       else cBody ts p ((i , c) ∷ I)
 
     cdata : Tracker → ℕ → IStr → List Tok
-    cdata ts p []            = tok kCdata p n ∷ []
+    cdata ts p []            = tok kCdata p n ∷ tok kOpen p n ∷ []
     cdata ts p ((i , c) ∷ I) = if rb c then cdataB ts p I else cdata ts p I
 
     cdataB : Tracker → ℕ → IStr → List Tok
-    cdataB ts p []            = tok kCdata p n ∷ []
+    cdataB ts p []            = tok kCdata p n ∷ tok kOpen p n ∷ []
     cdataB ts p ((i , c) ∷ I) = if rb c then cdataBB ts p I else cdata ts p ((i , c) ∷ I)
 
     cdataBB : Tracker → ℕ → IStr → List Tok
-    cdataBB ts p []            = tok kCdata p n ∷ []
+    cdataBB ts p []            = tok kCdata p n ∷ tok kOpen p n ∷ []
     cdataBB ts p ((i , c) ∷ I) =
       if rb c then cdataBB ts p I
       else if gt c then tok kCdata p (suc i) ∷ dataS (settle ts) I
@@ -591,20 +595,20 @@ module Run (sc : Bool) (n : ℕ) where
 
     -- RCDATA / RAWTEXT, ended by an appropriate end tag (nm).
     raw : Tracker → Str → IStr → List Tok
-    raw ts nm []            = []
+    raw ts nm []            = tok kOpenRaw n n ∷ []
     raw ts nm ((i , c) ∷ I) = if lt c then rawLt ts nm i I else raw ts nm I
 
     rawLt : Tracker → Str → ℕ → IStr → List Tok
-    rawLt ts nm p []            = []
+    rawLt ts nm p []            = tok kOpenRaw n n ∷ []
     rawLt ts nm p ((i , c) ∷ I) = if sl c then rawEndOpen ts nm p I else raw ts nm ((i , c) ∷ I)
 
     rawEndOpen : Tracker → Str → ℕ → IStr → List Tok
-    rawEndOpen ts nm p []            = []
+    rawEndOpen ts nm p []            = tok kOpenRaw n n ∷ []
     rawEndOpen ts nm p ((i , c) ∷ I) =
       if isAlpha c then rawEndName ts nm p (lowerAscii c ∷ []) I else raw ts nm ((i , c) ∷ I)
 
     rawEndName : Tracker → Str → ℕ → Str → IStr → List Tok
-    rawEndName ts nm p buf []            = []
+    rawEndName ts nm p buf []            = tok kOpenRaw n n ∷ []
     rawEndName ts nm p buf ((i , c) ∷ I) =
       if isAlpha c then rawEndName ts nm p (lowerAscii c ∷ buf) I
       else if eqStr (reverse buf) nm ∧ W c then beforeAttr ts p true nm [] I
@@ -614,23 +618,23 @@ module Run (sc : Bool) (n : ℕ) where
 
     -- Script data, and its escaped and double-escaped states.
     scr : Tracker → IStr → List Tok
-    scr ts []            = []
+    scr ts []            = tok kOpenRaw n n ∷ []
     scr ts ((i , c) ∷ I) = if lt c then scrLt ts i I else scr ts I
 
     scrLt : Tracker → ℕ → IStr → List Tok
-    scrLt ts p []            = []
+    scrLt ts p []            = tok kOpenRaw n n ∷ []
     scrLt ts p ((i , c) ∷ I) =
       if sl c then scrEndOpen ts p I
       else if bang c then escStart ts I
       else scr ts ((i , c) ∷ I)
 
     scrEndOpen : Tracker → ℕ → IStr → List Tok
-    scrEndOpen ts p []            = []
+    scrEndOpen ts p []            = tok kOpenRaw n n ∷ []
     scrEndOpen ts p ((i , c) ∷ I) =
       if isAlpha c then scrEndName ts p (lowerAscii c ∷ []) I else scr ts ((i , c) ∷ I)
 
     scrEndName : Tracker → ℕ → Str → IStr → List Tok
-    scrEndName ts p buf []            = []
+    scrEndName ts p buf []            = tok kOpenRaw n n ∷ []
     scrEndName ts p buf ((i , c) ∷ I) =
       if isAlpha c then scrEndName ts p (lowerAscii c ∷ buf) I
       else if eqLit (reverse buf) "script" ∧ W c then beforeAttr ts p true (toList "script") [] I
@@ -639,25 +643,25 @@ module Run (sc : Bool) (n : ℕ) where
       else scr ts ((i , c) ∷ I)
 
     escStart : Tracker → IStr → List Tok
-    escStart ts []            = []
+    escStart ts []            = tok kOpenRaw n n ∷ []
     escStart ts ((i , c) ∷ I) = if dash c then escStartDash ts I else scr ts ((i , c) ∷ I)
 
     escStartDash : Tracker → IStr → List Tok
-    escStartDash ts []            = []
+    escStartDash ts []            = tok kOpenRaw n n ∷ []
     escStartDash ts ((i , c) ∷ I) = if dash c then escDD ts I else scr ts ((i , c) ∷ I)
 
     esc : Tracker → IStr → List Tok
-    esc ts []            = []
+    esc ts []            = tok kOpenRaw n n ∷ []
     esc ts ((i , c) ∷ I) =
       if dash c then escD ts I else if lt c then escLt ts i I else esc ts I
 
     escD : Tracker → IStr → List Tok
-    escD ts []            = []
+    escD ts []            = tok kOpenRaw n n ∷ []
     escD ts ((i , c) ∷ I) =
       if dash c then escDD ts I else if lt c then escLt ts i I else esc ts I
 
     escDD : Tracker → IStr → List Tok
-    escDD ts []            = []
+    escDD ts []            = tok kOpenRaw n n ∷ []
     escDD ts ((i , c) ∷ I) =
       if dash c then escDD ts I
       else if lt c then escLt ts i I
@@ -665,19 +669,19 @@ module Run (sc : Bool) (n : ℕ) where
       else esc ts I
 
     escLt : Tracker → ℕ → IStr → List Tok
-    escLt ts p []            = []
+    escLt ts p []            = tok kOpenRaw n n ∷ []
     escLt ts p ((i , c) ∷ I) =
       if sl c then escEndOpen ts p I
       else if isAlpha c then dblStart ts [] ((i , c) ∷ I)
       else esc ts ((i , c) ∷ I)
 
     escEndOpen : Tracker → ℕ → IStr → List Tok
-    escEndOpen ts p []            = []
+    escEndOpen ts p []            = tok kOpenRaw n n ∷ []
     escEndOpen ts p ((i , c) ∷ I) =
       if isAlpha c then escEndName ts p (lowerAscii c ∷ []) I else esc ts ((i , c) ∷ I)
 
     escEndName : Tracker → ℕ → Str → IStr → List Tok
-    escEndName ts p buf []            = []
+    escEndName ts p buf []            = tok kOpenRaw n n ∷ []
     escEndName ts p buf ((i , c) ∷ I) =
       if isAlpha c then escEndName ts p (lowerAscii c ∷ buf) I
       else if eqLit (reverse buf) "script" ∧ W c then beforeAttr ts p true (toList "script") [] I
@@ -686,24 +690,24 @@ module Run (sc : Bool) (n : ℕ) where
       else esc ts ((i , c) ∷ I)
 
     dblStart : Tracker → Str → IStr → List Tok
-    dblStart ts buf []            = []
+    dblStart ts buf []            = tok kOpenRaw n n ∷ []
     dblStart ts buf ((i , c) ∷ I) =
       if W c ∨ sl c ∨ gt c then (if eqLit (reverse buf) "script" then dbl ts I else esc ts I)
       else if isAlpha c then dblStart ts (lowerAscii c ∷ buf) I
       else esc ts ((i , c) ∷ I)
 
     dbl : Tracker → IStr → List Tok
-    dbl ts []            = []
+    dbl ts []            = tok kOpenRaw n n ∷ []
     dbl ts ((i , c) ∷ I) =
       if dash c then dblD ts I else if lt c then dblLt ts I else dbl ts I
 
     dblD : Tracker → IStr → List Tok
-    dblD ts []            = []
+    dblD ts []            = tok kOpenRaw n n ∷ []
     dblD ts ((i , c) ∷ I) =
       if dash c then dblDD ts I else if lt c then dblLt ts I else dbl ts I
 
     dblDD : Tracker → IStr → List Tok
-    dblDD ts []            = []
+    dblDD ts []            = tok kOpenRaw n n ∷ []
     dblDD ts ((i , c) ∷ I) =
       if dash c then dblDD ts I
       else if lt c then dblLt ts I
@@ -711,11 +715,11 @@ module Run (sc : Bool) (n : ℕ) where
       else dbl ts I
 
     dblLt : Tracker → IStr → List Tok
-    dblLt ts []            = []
+    dblLt ts []            = tok kOpenRaw n n ∷ []
     dblLt ts ((i , c) ∷ I) = if sl c then dblEnd ts [] I else dbl ts ((i , c) ∷ I)
 
     dblEnd : Tracker → Str → IStr → List Tok
-    dblEnd ts buf []            = []
+    dblEnd ts buf []            = tok kOpenRaw n n ∷ []
     dblEnd ts buf ((i , c) ∷ I) =
       if W c ∨ sl c ∨ gt c then (if eqLit (reverse buf) "script" then esc ts I else dbl ts I)
       else if isAlpha c then dblEnd ts (lowerAscii c ∷ buf) I
@@ -723,8 +727,39 @@ module Run (sc : Bool) (n : ℕ) where
 
 -- The tokens of a document (or of markup parsed in a <template>: no
 -- element open, the tokenizer in its data state).
+marker : Tok → Bool
+marker (tok kOpen _ _)    = true
+marker (tok kOpenRaw _ _) = true
+marker _                  = false
+
+unmarked : List Tok → List Tok
+unmarked []       = []
+unmarked (t ∷ ts) = if marker t then unmarked ts else t ∷ unmarked ts
+
 tokens : Bool → Str → List Tok
-tokens sc s = Run.dataS sc (len s) [] (index s)
+tokens sc s = unmarked (Run.dataS sc (len s) [] (index s))
+
+-- Where an unfinished construct at the end of the markup begins: a tag,
+-- comment, doctype or CDATA section; or the start tag of the script or
+-- raw-text element the markup ends in (an end tag of its begun counts
+-- as inside it); nothing when it ends in text (plaintext included). A
+-- document.write that ends so keeps that tail for the next write (TS:
+-- wrappers/document-write.ts, html-tokens.ts tokenize's tail): the
+-- browser's parser could not act on it before more input either.
+tail : Bool → Str → Maybe ℕ
+tail sc s = go nothing (Run.dataS sc (len s) [] (index s))
+  where
+  rawStart : Maybe Tok → Bool
+  rawStart (just (tok (kStart nm _ _ nsHtml) _ _)) = eqLit nm "script" ∨ rawName sc nm
+  rawStart _ = false
+  fromOf : Maybe Tok → Maybe ℕ
+  fromOf (just (tok _ f _)) = just f
+  fromOf nothing = nothing
+  go : Maybe Tok → List Tok → Maybe ℕ
+  go prev [] = nothing
+  go prev (tok kOpen p _ ∷ _) = if rawStart prev then fromOf prev else just p
+  go prev (tok kOpenRaw _ _ ∷ _) = fromOf prev
+  go prev (t ∷ ts) = go (just t) ts
 
 -- Markup parsed in an element (innerHTML's context; HTML "parsing HTML
 -- fragments"), checked against Chromium (html-tok-vs-chromium):
@@ -748,8 +783,8 @@ tokensIn sc ns nm enc s = start ns
   start : Ns3 → List Tok
   start nsHtml =
     if eqLit nm "script" ∨ eqLit nm "plaintext" ∨ rawName sc nm then []
-    else Run.dataS sc (len s) ts I
-  start _ = Run.dataS sc (len s) ts I
+    else unmarked (Run.dataS sc (len s) ts I)
+  start _ = unmarked (Run.dataS sc (len s) ts I)
 
 ------------------------------------------------------------------------
 -- Editing the text at token positions: (from, to, replacement), in order

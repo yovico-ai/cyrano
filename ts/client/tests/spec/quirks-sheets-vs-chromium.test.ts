@@ -39,6 +39,8 @@ describe.skipIf(!wanted || located.skip !== "")("Stylesheets by type, mode and o
                 const t = u.searchParams.get("t");
                 if (t !== null) res.setHeader("Content-Type", t); else res.removeHeader("Content-Type");
                 if (u.searchParams.get("ns") === "1") res.setHeader("X-Content-Type-Options", "nosniff");
+                const xs = u.searchParams.getAll("x");
+                if (xs.length > 0) res.setHeader("X-Content-Type-Options", xs);
                 res.end("p{color:rgb(1,2,3)}");
                 return;
             }
@@ -76,6 +78,18 @@ describe.skipIf(!wanted || located.skip !== "")("Stylesheets by type, mode and o
             const where = `${quirks ? "quirks" : "standards"} ${same ? "same" : "cross"}-origin ${JSON.stringify(t)}${ns ? " nosniff" : ""}`;
             if (direct !== spec) bad.push(`${where}: Chromium ${direct ? "applies" : "does not"}, spec ${spec ? "applies" : "does not"}`);
             if (proxied !== direct) bad.push(`${where}: proxied ${proxied ? "applies" : "does not"}, directly ${direct ? "applies" : "does not"}`);
+        }
+        // X-Content-Type-Options as Chromium reads it: a same-origin
+        // text/plain sheet in a quirks document applies unless nosniff.
+        const HEADERS: string[][] = [["nosniff"], ["NoSniff"], [" nosniff\t"], ["nosniff, foo"], ["foo, nosniff"], ["nosniff;x"], ["nosniffx"], [""], [","], [", nosniff"],
+            ["foo", "nosniff"], ["nosniff", "foo"], ["", "nosniff"], ["'nosniff'"]];
+        for (const lines of HEADERS) {
+            const h = `http://localhost:${port}/s.css?t=text/plain&${lines.map((l) => `x=${encodeURIComponent(l)}`).join("&")}`;
+            await page.goto(`http://localhost:${port}/?q=1&h=${encodeURIComponent(h)}`);
+            await page.waitForTimeout(30);
+            const appliedNow = await page.evaluate(() => getComputedStyle(document.querySelector("p")!).color === "rgb(1, 2, 3)");
+            const ns = (await oracle.ask("nosniff", [lines.join("\n")])) === "yes";
+            if (appliedNow === ns) bad.push(`X-Content-Type-Options ${JSON.stringify(lines)}: Chromium ${appliedNow ? "applies" : "blocks"}, spec nosniff ${ns}`);
         }
         await page.close();
         expect(bad.slice(0, 12), String(bad.length)).toEqual([]);

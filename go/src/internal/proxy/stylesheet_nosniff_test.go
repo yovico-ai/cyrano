@@ -37,6 +37,24 @@ func TestSpecConformance_StylesheetNosniff(t *testing.T) {
 	})
 }
 
+func TestSpecConformance_Nosniff(t *testing.T) {
+	oracle := specoracle.Need(t)
+	rapid.Check(t, func(rt *rapid.T) {
+		lines := rapid.SliceOfN(rapid.SampledFrom([]string{"nosniff", "NoSniff", " nosniff\t", "nosniff, foo", "foo, nosniff", "nosniff;x", "nosniffx", "", ",", ", nosniff", "foo"}), 0, 3).Draw(rt, "lines")
+		want, _, err := oracle.Ask("nosniff", strings.Join(lines, "\n"))
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		h := http.Header{}
+		for _, l := range lines {
+			h.Add("X-Content-Type-Options", l)
+		}
+		if got := hasNosniff(h); got != (want == "yes") {
+			rt.Fatalf("hasNosniff(%q) = %v, spec %s", lines, got, want)
+		}
+	})
+}
+
 // A cross-origin sheet served as text/plain applied in a quirks document
 // through the proxy, where directly it does not.
 func TestAddStylesheetNosniff(t *testing.T) {

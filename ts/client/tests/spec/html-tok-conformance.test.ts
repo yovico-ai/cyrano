@@ -30,6 +30,19 @@ describe.skipIf(located.skip !== "")("HTML tokenization: spec conformance", () =
     beforeAll(() => { oracle = new OracleClient(located.path); });
     afterAll(() => oracle?.close());
 
+    // Where a document.write that ends inside a construct is cut
+    // (wrappers/document-write.ts): markup cut anywhere, in code points.
+    it("the unfinished tail is htmltail", async () => {
+        await fc.assert(fc.asyncProperty(markupArb(), fc.nat(400), fc.boolean(), async (m0, cut, sc) => {
+            const cps = [...m0];
+            const m = cps.slice(0, cut % (cps.length + 1)).join("");
+            const tail = { at: -1 };
+            tokenize(m, sc, undefined, tail);
+            const got = tail.at < 0 ? "none" : String([...m.slice(0, tail.at)].length);
+            expect(got, JSON.stringify(m)).toBe(await oracle.ask("htmltail", [sc ? "1" : "0", m]));
+        }), { numRuns: 2000 });
+    });
+
     it("start tags and namespaces are htmltags", async () => {
         await fc.assert(fc.asyncProperty(markupArb(), fc.boolean(), async (m, sc) => {
             expect(startTags(m, sc), JSON.stringify(m)).toBe(await oracle.ask("htmltags", [sc ? "1" : "0", m]));

@@ -200,7 +200,8 @@ const low = (n: number): string => String.fromCharCode(n >= 65 && n <= 90 ? n + 
  * The tokens of markup (spec `tokens`): `scripting` makes noscript raw text.
  * `tail`, when given, is set to where an unfinished construct at the end
  * begins — a tag, comment, doctype or CDATA section, or the start tag of a
- * script or raw-text element whose end tag has not come — or -1.
+ * script or raw-text element whose end tag has not come — or -1
+ * (spec/HtmlTok.agda tail).
  */
 export function tokenize(s: string, scripting: boolean, within?: { ns: Ns; name: string; encoding?: string | null }, tail?: { at: number }): Tok[] {
     const out: Tok[] = [];

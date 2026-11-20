@@ -58,6 +58,9 @@ describe.skipIf(!wanted || located.skip !== "")("window.open's attributionsrc: t
             .map(([k, j, v]) => [k, j, v]);
         const draws = fc.sample(fc.array(fc.tuple(feature, fc.constantFrom(...PIECES, ",", ",", " ", " ")).map(([f, junk]) => [...f, junk]), { minLength: 1, maxLength: 4 })
             .map((fs) => fs.flat()), { numRuns: 80, seed });
+        // A few that always request, so no seed leaves the check vacuous.
+        draws.push(["attributionsrc", "=", "SRC"], ["AttributionSrc", "=", "ESRC", " ", "attributionsrc", "=", "SRC"],
+            ["popup", ",", "attributionsrc", " = ", "SRC"], ["attributionsrc", "=", "SRC", ",", "attributionsrc", "=", "ESRC"]);
         // Each SRC / ESRC piece a URL of its own: plain or percent-encoded.
         const cases = draws.map((ps, k) => { let j = 0; return ps.map((p) => p === "SRC" ? `/s/${k}/${j++}` : p === "ESRC" ? encodeURIComponent(`/s/${k}/${j++}`) : p).join(""); });
         const ctx = await browser.newContext();
@@ -67,18 +70,27 @@ describe.skipIf(!wanted || located.skip !== "")("window.open's attributionsrc: t
             await page.evaluate(([f, n]: [string, number]) => { window.open(`/nav/${n}`, `w${n}`, f); }, [cases[k]!, k] as [string, number]);
             await page.waitForTimeout(150);
         }
-        await page.waitForTimeout(1000);
+        // Under load the browser's attribution requests come late: wait
+        // until the counts settle.
+        let before = -1;
+        for (let i = 0; i < 20; i++) {
+            await page.waitForTimeout(500);
+            const now = [...seen.values()].reduce((a, s) => a + s.size, 0);
+            if (now === before) break;
+            before = now;
+        }
         await ctx.close();
         const bad: string[] = [];
-        let requested = 0;
+        let requested = 0, wanted = 0;
         for (let k = 0; k < cases.length; k++) {
             const spec = ((await oracle.ask("featuresources", [cases[k]!]))!).split("\n").filter((v) => v !== "").map((v) => decodeURIComponent(v));
             const want = new Set(spec.flatMap((p) => { return p.startsWith(`/s/${k}/`) ? [p.slice(`/s/${k}/`.length)] : []; }));
             const got = seen.get(String(k)) ?? new Set<string>();
-            requested += got.size;
+            requested += got.size; wanted += want.size;
             if ([...want].sort().join() !== [...got].sort().join()) bad.push(`${JSON.stringify(cases[k])}: Chromium requested ${JSON.stringify([...got])}, spec ${JSON.stringify([...want])}`);
         }
         expect(bad.slice(0, 10), `${bad.length} (seed ${seed})`).toEqual([]);
-        expect(requested).toBeGreaterThan(8);
+        expect(wanted).toBeGreaterThanOrEqual(6);
+        expect(requested).toBe(wanted);
     }, 120_000);
 });

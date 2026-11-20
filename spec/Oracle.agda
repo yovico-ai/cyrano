@@ -36,6 +36,8 @@
 --   featuresmap <features>              → {"out":"<the string, each such value v as [v]>"}
 --   sheetapplies <quirks 0|1> <same-origin 0|1> <ct|"-"> <nosniff 0|1> → {"out":"yes"|"no"} (Chromium applies the stylesheet)
 --   sheetnosniff <same-origin 0|1> <ct|"-"> <nosniff 0|1> → {"out":"yes"|"no"} (the proxy adds nosniff)
+--   htmltail <scripting 0|1> <markup>  → {"out":"<offset>"|"none"} (where an unfinished construct at the end begins)
+--   nosniff <field lines, LF>          → {"out":"yes"|"no"} (X-Content-Type-Options says nosniff)
 --   workerruns <module 0|1> <mime>      → {"out":"yes"|"no"} (a blob:/data: worker runs)
 --   fetchlateradmit <used> <size>       → {"out":"ok"|"<the QuotaExceededError message>"}
 --   storagekey <ancestors> <site> <origin> → {"out":"<the partition key>"}
@@ -343,6 +345,8 @@ dispatch op args =
   else if eqStr op (toList "fetchlateradmit") then fetchLaterAdmitReq args
   else if eqStr op (toList "workerruns") then workerRunsReq args
   else if eqStr op (toList "frameorigin") then frameOriginReq args
+  else if eqStr op (toList "htmltail") then htmlTailReq args
+  else if eqStr op (toList "nosniff") then oneArg (λ v → if Disposition.nosniff (if Data.List.Base.null v then [] else splitOn (is 10) v) then toList "yes" else toList "no") args
   else if eqStr op (toList "sheetapplies") then sheetReq args
   else if eqStr op (toList "sheetnosniff") then sheetNosniffReq args
   else if eqStr op (toList "featuresources") then oneArg (λ f → joinNL (Features.sources f)) args
@@ -574,6 +578,13 @@ dispatch op args =
       else if eqStr (Data.List.Base.take 5 x) (toList "blob:") then FetchLater.blob (Data.List.Base.drop 5 x)
       else FetchLater.noBody
   fetchLaterSizeReq _ = errorReply "BadRequest"
+
+  htmlTailReq : List Str → Str
+  htmlTailReq (f ∷ m ∷ []) with HtmlTok.tail (eqStr f (toList "1")) m
+  ... | just k  = out (showN k)
+  ... | nothing = out (toList "none")
+  htmlTailReq (f ∷ []) = out (toList "none")
+  htmlTailReq _ = errorReply "BadRequest"
 
   yn : Bool → Str
   yn b = out (toList (if b then "yes" else "no"))
