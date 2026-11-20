@@ -169,6 +169,28 @@ describe("patchDynamicIframeAppend — URL rewriting before insert", () => {
         expect(script.getAttribute("src")).toBe(rewriteUrl("/static/bundle.js", new URL(BASE_HREF), config));
     });
 
+    // The table was four tags and one attribute each, for three methods.
+    it("any URL attribute of the spec's table, by any insertion method", () => {
+        install();
+        const video = document.createElement("video");
+        video.setAttribute("poster", "https://cdn.example/p.jpg");
+        const a = document.createElement("a");
+        a.setAttribute("ping", "https://t.example/1 https://t.example/2");
+        document.body.append(video, a);
+        expect(video.getAttribute("poster")).toMatch(/\/cyrano\/https\/cdn\.example\/p\.jpg$/);
+        expect(a.getAttribute("ping")).toMatch(/^\S+\/cyrano\/https\/t\.example\/1 \S+\/cyrano\/https\/t\.example\/2$/);
+    });
+
+    it("a tree from another document is fixed whole", () => {
+        install();
+        const other = document.implementation.createHTMLDocument("");
+        const div = other.createElement("div");
+        div.innerHTML = '<img srcset="https://cdn.example/a.png 1x, https://cdn.example/b.png 2x"><form action="https://site.example/post"></form>';
+        document.body.prepend(div);
+        expect(document.body.querySelector("img")!.getAttribute("srcset")).toMatch(/cyrano\/https\/cdn\.example\/a\.png 1x, .*cyrano\/https\/cdn\.example\/b\.png 2x/);
+        expect(document.body.querySelector("form")!.getAttribute("action")).toMatch(/\/cyrano\/https\/site\.example\/post$/);
+    });
+
     it("rewrites upstream iframe.src before appendChild", () => {
         install();
         const iframe = document.createElement("iframe");

@@ -26,6 +26,9 @@ import { replaceValue, wrapMethod } from "../native/surface";
 import { unwrapProxiedUrl } from "../url/containment";
 import { injectIntoIframe } from "../runtime/iframe-injection";
 import { rewriteTextNode } from "./dynamic-html";
+import { rewriteSrcsetAttribute } from "./srcset";
+import { kindOf, rewriteByKind, urlAttrsOf } from "./url-attribute-map";
+import { originalAttr, recordAttr } from "../native/originals";
 
 interface SavedOriginals {
     proto: Record<string, unknown>;
@@ -38,15 +41,6 @@ const savedByWindow = new SafeWeakMap<Window, SavedOriginals>();
 // interface doesn't declare Node/HTMLIFrameElement as instance properties even
 // though browsers (and happy-dom) expose them there.
 type WindowGlobals = Record<string, { prototype: Record<string, unknown> } | undefined>;
-
-// URL-bearing attributes for each tag that we rewrite in appendChild/insertBefore.
-// Keyed by nodeName (upper-case).
-const URL_ATTRS_BY_TAG: Record<string, string> = {
-    SCRIPT: "src",
-    IFRAME: "src",
-    LINK:   "href",
-    IMG:    "src",
-};
 
 export function patchDynamicIframeAppend(
     targetWindow: Window,
@@ -80,24 +74,35 @@ export function patchDynamicIframeAppend(
 
     savedByWindow.set(targetWindow, { proto, origAppendChild, origInsertBefore });
 
-    // Rewrite URL-bearing attributes on node BEFORE it is inserted into the DOM,
-    // so the browser fetches the proxied URL immediately on append.
+    // An element whose URL attributes reached it by a route no setter saw
+    // (an attribute node's value, a tree from another document) still
+    // holds the page's URLs: they are proxified before the browser fetches
+    // them on insertion — by the spec's table (spec/Attrs.agda), the page's
+    // value recorded so it reads back. A tree from another document is
+    // walked whole; one of this document's, only its root (its own
+    // descendants went through the setters).
+    const fixElement = (el: Element): void => {
+        for (const name of urlAttrsOf(el)) {
+            if (originalAttr(el, name) !== undefined) continue; // the runtime's already
+            const raw = ncall(nativeGetAttr, el, name) as string | null;
+            if (!raw) continue;
+            const rewritten = rewriteByKind(kindOf(el, name), raw, rewriteOne, rewriteSrcsetAttribute);
+            if (rewritten === raw) continue;
+            ncall(nativeSetAttr, el, name, rewritten);
+            recordAttr(el, name, rewritten, raw);
+        }
+    };
     function rewriteUrlBeforeInsert(node: Node): void {
-        const tag = (node as Element).nodeName;
-        const attrName = URL_ATTRS_BY_TAG[tag];
-        if (!attrName) return;
         try {
-            const raw = ncall(nativeGetAttr, node as Element, attrName);
-            if (!raw) return;
-            // rewriteUrl keeps an already-proxified URL, and other schemes,
-            // as written (spec/Containment.agda).
-            const rewritten = rewriteOne(raw);
-            if (rewritten !== raw) {
-                ncall(nativeSetAttr, node as Element, attrName, rewritten);
+            if (node.nodeType === 1) fixElement(node as Element);
+            const foreign = node.ownerDocument !== null && node.ownerDocument !== targetWindow.document;
+            const q = (node as { querySelectorAll?: (s: string) => ArrayLike<Element> }).querySelectorAll;
+            if ((foreign || node.nodeType === 11) && typeof q === "function" && node.firstChild) {
+                const all = ncall(q, node, "*") as ArrayLike<Element>;
+                for (let i = 0; i < all.length; i++) fixElement(all[i]!);
             }
         } catch {
-            // Cross-realm DOM exceptions — skip; the element will load from its
-            // original URL and be flagged by the MutationObserver as a miss.
+            // Cross-realm DOM exceptions: the element loads as it is.
         }
     }
 
@@ -175,7 +180,10 @@ export function patchDynamicIframeAppend(
             if (!ncall(nOP.hasOwnProperty, holder, key)) continue;
             wrapMethod<(...a: unknown[]) => unknown>(holder, key, (native, self, args) => {
                 const frames: Node[] = [];
-                for (const n of nodesOf(args)) frames.push(...framesIn(n));
+                for (const n of nodesOf(args)) {
+                    if (n instanceof Object) rewriteUrlBeforeInsert(n as Node);
+                    frames.push(...framesIn(n));
+                }
                 return inserting(frames, () => nR.apply(native, self, args));
             });
         }
