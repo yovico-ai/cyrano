@@ -320,3 +320,34 @@ describe("patchDynamicHtml — crossorigin", () => {
         expect(font.getAttributeNS(null, "crossorigin")).toBe("anonymous");
     });
 });
+
+// A policy a script writes into a <meta> is applied by the browser when the
+// meta is inserted: untranslated it named the page's sources, which the
+// proxied URLs are not. By setAttribute, by the properties, http-equiv
+// first or last (spec/Csp.agda translateMeta).
+describe("patchDynamicHtml — a <meta> CSP written by script", () => {
+    const PROXY = "http://localhost:9081";
+    const csp = "script-src https://cdn.example; img-src 'self'";
+    const held = (m: Element): string => Element.prototype.getAttribute.call(m, "content") ?? "";
+
+    it("is translated however it is written", () => {
+        patchDynamicHtml(window, tag, (u) => u, PROXY);
+        const a = document.createElement("meta");
+        a.setAttribute("http-equiv", "Content-Security-Policy");
+        a.setAttribute("content", csp);
+        const b = document.createElement("meta");
+        b.setAttribute("content", csp);
+        b.setAttribute("http-equiv", "content-security-policy");
+        const c = document.createElement("meta");
+        c.httpEquiv = "Content-Security-Policy";
+        c.content = csp;
+        for (const m of [a, b, c]) {
+            expect(held(m)).toContain(PROXY);
+            expect(held(m)).toContain("https://cdn.example");
+        }
+        const plain = document.createElement("meta");
+        plain.setAttribute("content", csp);
+        plain.setAttribute("name", "description");
+        expect(held(plain)).toBe(csp);
+    });
+});

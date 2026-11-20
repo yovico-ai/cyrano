@@ -34,7 +34,7 @@
 import { SafeWeakMap, SafeWeakSet, nO, nOP, nR, ncall, sStarts } from "../native/intrinsics";
 import { rewriteCssText } from "../css/rewriter";
 import { defaultJsRewriteOptions, rewriteJsSource } from "../js/rewriter";
-import { captureNativeElementOps, contextOf, rewriteHtmlString, rewriteSrcdoc, type ParseContext } from "./html-rewriter";
+import { captureNativeElementOps, contextOf, rewriteCspContent, rewriteHtmlString, rewriteSrcdoc, type ParseContext } from "./html-rewriter";
 import { internalsOf } from "../native/internals";
 
 /** The bootstrap builder of the window `node` belongs to (each window has its own base URL). */
@@ -58,7 +58,7 @@ import { wrapAccessor, wrapMethod } from "../native/surface";
 import { injectFramesIn } from "./dynamic-iframe";
 import { rewriteImportMapText } from "../url/import-map";
 import { consume, heldAttr, originalAttr, recordAttr, recordText } from "../native/originals";
-import { trustedLike } from "../native/trusted";
+import { trustedLike, trustedPolicyName } from "../native/trusted";
 
 /**
  * The text of a value headed for an HTML or script sink: a string, or a
@@ -199,14 +199,16 @@ export function patchDynamicHtml(
         recordAttr(self as Element, args[0], v, given);
         // Its referrer policy changed: its URLs carry the new one.
         if (args[0].toLowerCase() === "referrerpolicy") remark(self as Element, rewriteOne);
-        // It became a refresh: its content's URL goes through the proxy.
-        if (args[0].toLowerCase() === "http-equiv" && isRefreshMeta(self as Element)) {
+        // It became a refresh or a policy: its content as the page wrote
+        // it is read again as such (or as nothing: no longer one).
+        if (args[0].toLowerCase() === "http-equiv") {
             const el = self as Element;
             const o = originalAttr(el, "content");
             const was = o ? o.value : heldAttr(el, "content");
             if (was !== null) {
-                const now = rewriteRefresh(was, rewriteOne);
-                if (now !== was) { nR.apply(native, el, ["content", now]); recordAttr(el, "content", now, was); }
+                const now = attributeValue(el, "content", was, rewriteOne, proxyOrigin) ?? was;
+                if (now !== heldAttr(el, "content")) nR.apply(native, el, ["content", now]);
+                recordAttr(el, "content", now, was);
             }
         }
         return;
@@ -214,6 +216,7 @@ export function patchDynamicHtml(
     patchIntegrityProperty(targetWindow);
     patchSrcdocProperty(targetWindow);
     patchAllowProperty(targetWindow);
+    patchMetaProperties(targetWindow);
 }
 
 /**
@@ -389,6 +392,12 @@ function isRefreshMeta(el: Element): boolean {
     return el.namespaceURI === "http://www.w3.org/1999/xhtml" && el.localName === "meta" && isRefreshEquiv(heldAttr(el, "http-equiv"));
 }
 
+/** An HTML <meta> whose http-equiv is content-security-policy. */
+function isCspMeta(el: Element): boolean {
+    return el.namespaceURI === "http://www.w3.org/1999/xhtml" && el.localName === "meta" &&
+        (heldAttr(el, "http-equiv") ?? "").replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32)) === "content-security-policy";
+}
+
 function attributeValue(el: Element, name: string, value: string, rewriteOne: (url: string) => string, proxyOrigin = ""): string | null {
     const lowerName = name.toLowerCase();
     if (lowerName === "integrity") return null;
@@ -399,6 +408,9 @@ function attributeValue(el: Element, name: string, value: string, rewriteOne: (u
     if (lowerName === "style") return rewriteCssText(value, rewriteOne);
     // A declarative refresh navigates like a link: through the proxy (spec/Refresh.agda).
     if (lowerName === "content" && isRefreshMeta(el)) return rewriteRefresh(value, rewriteOne);
+    // A policy written by script is translated as the server's is
+    // (spec/Csp.agda translateMeta): the browser applies it on insertion.
+    if (lowerName === "content" && proxyOrigin.length > 0 && isCspMeta(el)) return rewriteCspContent(value, proxyOrigin, trustedPolicyName());
     if (lowerName === "srcdoc" && el.tagName === "IFRAME") return rewriteSrcdoc(value, rewriteOne, proxyOrigin, bootstrapOf(el));
     // An origin in allow names nothing on the proxy (spec/Allow.agda).
     if (lowerName === "allow" && el.tagName === "IFRAME") return rewriteAllow(value);
@@ -445,6 +457,22 @@ function patchAllowProperty(targetWindow: Window): void {
         get: (_get, self) => (self as Element).getAttribute("allow") ?? "",
         set: (_set, self, v) => { (self as Element).setAttribute("allow", String(v)); },
     });
+}
+
+// meta.content / meta.httpEquiv reflect their attributes: set through
+// setAttribute, so a refresh or a policy is translated, and read back as
+// the page wrote them.
+function patchMetaProperties(targetWindow: Window): void {
+    const proto = (targetWindow as unknown as { HTMLMetaElement?: { prototype: object } }).HTMLMetaElement?.prototype;
+    if (!proto) return;
+    for (const [prop, attr] of [["content", "content"], ["httpEquiv", "http-equiv"]] as const) {
+        if (!nO.getOwnPropertyDescriptor(proto, prop)) continue;
+        save(proto, prop);
+        wrapAccessor<unknown>(proto, prop, {
+            get: (_get, self) => (self as Element).getAttribute(attr) ?? "",
+            set: (_set, self, v) => { (self as Element).setAttribute(attr, String(v)); },
+        });
+    }
 }
 
 function patchIntegrityProperty(targetWindow: Window): void {
