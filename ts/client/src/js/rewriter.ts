@@ -14,7 +14,7 @@
 // Failure policy: a script that does not parse is returned unchanged, as
 // is one already rewritten (it carries `$rewriter.wrap_`).
 
-import { SafeWeakSet, sIncludes } from "../native/intrinsics";
+import { SafeMap, SafeWeakSet, nO, sIncludes } from "../native/intrinsics";
 import { Parser } from "acorn";
 import { isUrlLikeSpecifier } from "../url/containment";
 import { canMark, fragment } from "./marks";
@@ -131,7 +131,77 @@ function withEvalPreamble(code: string): string {
  */
 export function rewriteJsSource(src: string, opts: JsRewriteOptions): string {
     if (typeof src !== "string" || src.length === 0) return src;
+    // Nothing a rule could touch: not parsed at all (mayEdit).
+    if (!mayEdit(src)) return src;
+    // A source compiled again is not parsed again: natively a repeated
+    // eval / new Function of the same text is all but free (V8 keeps the
+    // compiled code), and a page may lean on that — Cloudflare's Turnstile
+    // compiles its own 1.3 MB source fifteen times in a row.
+    const memo = memoFor(opts);
+    if (memo && src.length >= MEMO_MIN) {
+        const hit = memo.get(src);
+        if (hit !== undefined) return hit;
+        const out = rewriteJsSourceUncached(src, opts);
+        remember(memo, src, out);
+        return out;
+    }
+    return rewriteJsSourceUncached(src, opts);
+}
 
+/**
+ * Whether any rule could edit `src`: every rule needs one of these in the
+ * text — a `[` (R5, R14, a constant key), one of the names the rules know
+ * (R1–R4, R6: location, top, parent, eval, write/writeln, postMessage;
+ * R7–R9, R15: import, export; R10: Worker; R12: debugger), or a backslash
+ * (an escape can spell any of them). A source with none is the same
+ * rewritten, and is given back unparsed, as the browser all but does:
+ * Cloudflare's Turnstile times an eval of 1.3 MB of spaces around
+ * a regular expression and the time, twice a second — natively under a millisecond,
+ * through the parser 80 ms each (techcrunch.com froze, and the timing
+ * tells). The Go recognizer has the same exit (jsrewrite.mayEdit); a new
+ * rule adds its needle to both (tests/js/may-edit.test.ts holds every
+ * shared case to it).
+ */
+export function mayEdit(src: string): boolean {
+    for (let i = 0; i < NEEDLES.length; i++) if (sIncludes(src, NEEDLES[i]!)) return true;
+    return false;
+}
+const NEEDLES = ["[", "\\", "location", "top", "parent", "eval", "write", "postMessage", "import", "export", "Worker", "debugger"];
+
+// Sources below this are cheaper to parse than to keep.
+const MEMO_MIN = 4096;
+// What the memo may hold, in source characters, over all option sets.
+const MEMO_MAX_CHARS = 8 * 1024 * 1024;
+const memos = new SafeMap<string, Map<string, string>>();
+let memoChars = 0;
+
+/** The memo for these options, or null when the result depends on more than the text (a module's specifiers). */
+function memoFor(opts: JsRewriteOptions): Map<string, string> | null {
+    if (opts.proxify !== undefined || opts.baseUrl !== undefined) return null;
+    let key = "";
+    const names = nO.keys(opts); // every caller builds them the same way: one order
+    for (let i = 0; i < names.length; i++) key += names[i] + ((opts as unknown as Record<string, unknown>)[names[i]!] === true ? "+" : "-");
+    let m = memos.get(key);
+    if (!m) { m = new SafeMap<string, string>(); memos.set(key, m); }
+    return m;
+}
+
+function remember(memo: Map<string, string>, src: string, out: string): void {
+    if (src.length > MEMO_MAX_CHARS / 2) return;
+    memoChars += src.length;
+    memo.set(src, out);
+    // Over the limit: the oldest go first (a Map keeps insertion order).
+    for (const m of memos.values()) {
+        if (memoChars <= MEMO_MAX_CHARS) break;
+        for (const k of m.keys()) {
+            if (memoChars <= MEMO_MAX_CHARS || k === src) break;
+            m.delete(k);
+            memoChars -= k.length;
+        }
+    }
+}
+
+function rewriteJsSourceUncached(src: string, opts: JsRewriteOptions): string {
     let result: string;
     if (alreadyRewritten(src)) {
         result = src; // don't double-rewrite
@@ -281,7 +351,11 @@ function memberHelper(name: string, called: boolean, o: JsRewriteOptions): strin
  *      in an optional chain →  $rewriter.<h>({obj:X,opt:1})?.name
  *      (also X["location"] and the like: a constant key is a name)
  *  R4  X.eval  →  $rewriter.wrap_eval_memexp(X).eval          (not in an optional chain)
- *  R5  X[k], k not a constant, not in an optional chain, not followed by a plain `=`
+ *  R5  X[k], k not a constant, not in an optional chain, not followed by a plain `=`,
+ *      k not certainly a number (parentheses aside: a unary - + ~, a ++ / --,
+ *      a binary arithmetic or bitwise operation other than +) — such a key
+ *      names no member the rules know, and an interpreter's hot loop is
+ *      made of them (Cloudflare's Turnstile ran three times slower)
  *        →  $rewriter.wrap_member_expression(X,$__crn_key__=(k))[$__crn_key__]
  *      (a write stays as written: `obj[k] = function(){}` is named by V8
  *      from its target, and `window[k] = url` is caught by the runtime's
@@ -632,7 +706,7 @@ class Splicer {
             this.wrapped.add(m);
             return;
         }
-        if (name === undefined && !inChain && !written && this.o.wrapMemberExpression) { // R5
+        if (name === undefined && !inChain && !written && !certainlyNumber(m["property"] as N) && this.o.wrapMemberExpression) { // R5
             const lb = skipTrivia(this.src, obj.end);
             const rb = m.end - 1;
             if (this.src[lb] !== "[" || this.src[rb] !== "]") return;
@@ -696,4 +770,30 @@ function skipTrivia(src: string, i: number): number {
             return i;
         }
     }
+}
+
+/**
+ * Whether an expression's value is certainly a number (or a BigInt): it
+ * is, parentheses aside, a unary - + ~, a ++ / --, or a binary arithmetic
+ * or bitwise operation other than + (which also concatenates). Such a
+ * computed key names no member the rules know (R5).
+ */
+function certainlyNumber(key: N): boolean {
+    while (key.type === "ParenthesizedExpression") key = key["expression"] as N;
+    switch (key.type) {
+        case "UpdateExpression":
+            return true;
+        case "UnaryExpression": {
+            const op = key["operator"] as string;
+            return op === "-" || op === "+" || op === "~";
+        }
+        case "BinaryExpression":
+            switch (key["operator"] as string) {
+                case "|": case "^": case "&": case "<<": case ">>": case ">>>":
+                case "-": case "*": case "/": case "%": case "**":
+                    return true;
+            }
+            return false;
+    }
+    return false;
 }

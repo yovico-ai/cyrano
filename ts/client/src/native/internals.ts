@@ -38,6 +38,8 @@ export interface Internals {
     pendingSender?: Window | undefined;
     /** The runtime bootstrap as HTML, for documents this window creates from markup. */
     bootstrapHtml?: () => string;
+    /** Constant tables this window's runtime holds, for its frames to use (sharedData). */
+    data?: Record<string, unknown>;
 }
 
 const KEY = "_";
@@ -54,8 +56,34 @@ export function internalsOf(win: unknown): Internals | undefined {
     }
 }
 
+// Tables the runtime builds from constants — the public-suffix trie — are
+// built once for a page and its frames, not once per document: every frame
+// of a proxied page loads the runtime, and an ad-heavy page has well over
+// a hundred (techcrunch.com: the trie alone was 8 ms in each, on the one
+// main thread they all share through the proxy). A table is looked for in
+// this module's own, then in the runtimes of the window's relatives (top,
+// parent, opener), then built. Plain data, only ever read.
+const tables = nO.create(null) as Record<string, unknown>;
+
+export function sharedData<T>(key: string, make: () => T): T {
+    if (key in tables) return tables[key] as T;
+    let found: unknown;
+    const g = globalThis as unknown as { top?: unknown; parent?: unknown; opener?: unknown };
+    const relatives: Array<() => unknown> = [() => g.top, () => g.parent, () => g.opener];
+    for (let i = 0; i < relatives.length && found === undefined; i++) {
+        try {
+            const other = relatives[i]!();
+            if (other && other !== globalThis) found = internalsOf(other)?.data?.[key];
+        } catch { /* a really cross-origin relative */ }
+    }
+    const value = found !== undefined ? (found as T) : make();
+    tables[key] = value;
+    return value;
+}
+
 /** Attaches `internals` to `api` and publishes `api` as the window's `$rewriter`. */
 export function publish(win: Window, api: RewriterApi, internals: Internals): void {
+    internals.data = tables;
     nO.defineProperty(api, KEY, { value: internals, enumerable: false, configurable: true, writable: false });
     defineHidden(win, "$rewriter", api); // not enumerable: native/hidden-globals.ts
     register(win, internals);

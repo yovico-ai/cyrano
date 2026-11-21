@@ -346,6 +346,22 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   a meta-refresh page, readthedocs' and 1stdibs' challenges (direct too,
   once the IP is flagged).
   Known: blob: URLs carry the proxy's origin.
+- **Turnstile on a page's main thread** (techcrunch.com, 2026-11-20):
+  direct, its frame is another process; proxied, every frame shares the
+  page's thread, so what its interpreter costs the page feels. It froze
+  the page: R5 made the interpreter three times slower, and it times an
+  eval of 1.3 MB of spaces twice a second, which went through acorn
+  (80 ms each). Now: R5 skips keys that are certainly numbers, its helper
+  returns at once for anything else that is not this window's, a source
+  no rule could touch is not parsed (`mayEdit`, both runtimes), a
+  repeated source is not parsed again, and the public-suffix trie is
+  built once for a page and its frames (`native/internals.ts`
+  sharedData). Good runs are at direct's CPU. Open: about one run in six
+  the interpreter still runs a single task for tens of seconds — never
+  with R5 off for its script, so it is R5's remaining cost or something
+  it measures; not yet understood. Tools: scratchpad `loop.cjs` (CDP
+  profile by host, `NOISO=1` puts frames in one process for a like-for-like
+  direct profile), `pause2.cjs` (stack samples inside a hang).
 - **Speed: profile before guessing.** A page that feels slow proxied was
   the runtime's CPU, not the network: CDP `Network.loadingFinished` early
   but `responseReceived` late means the main thread is busy — take a

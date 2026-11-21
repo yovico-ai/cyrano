@@ -235,6 +235,22 @@ export function createRewriterApi(
             });
         },
         wrap_member_expression: (obj: unknown, prop: PropertyKey): unknown => {
+            // The common case first, and nothing else on its way: a key that
+            // is no string (an index, a symbol) on an object that is not this
+            // window names nothing the rules know. Rewritten code spends its
+            // time here when it is an interpreter — a challenge's bytecode
+            // loop runs unoptimized, where every operation and call counts
+            // (Cloudflare's Turnstile froze techcrunch.com for a minute).
+            // No code ran in between, so the key is as the caller set it.
+            if (obj !== targetWindow) {
+                if (typeof prop !== "string") return obj;
+                switch (prop) {
+                    case "location": case "top": case "parent": case "write": case "writeln": case "postMessage": case "eval":
+                        break; // memberHolder's
+                    default:
+                        return obj;
+                }
+            }
             const holder = memberHolder(obj, prop);
             (targetWindow as unknown as { $__crn_key__: unknown }).$__crn_key__ = prop;
             return holder;

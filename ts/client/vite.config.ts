@@ -7,11 +7,34 @@ import { resolve } from "node:path";
 // routed to the copies saved at load (src/native/intrinsics.ts). Acorn
 // calls none of the methods polyfills replace.
 const intrinsics = resolve(__dirname, "src/native/intrinsics.ts");
+const internals = resolve(__dirname, "src/native/internals.ts");
 function savedBuiltins(): Plugin {
     return {
         name: "cyrano-saved-builtins",
         transform(code, id) {
             if (!/node_modules[\\/]tldts/.test(id)) return null;
+            // The public-suffix tables are built on first use, and once for
+            // a page and its frames (src/native/internals.ts sharedData),
+            // not at load in every document.
+            if (/data[\\/]trie\.js$/.test(id)) {
+                let n = 0;
+                const out = code
+                    .replace(/export const (rules|exceptions) = \(function \(\) \{/g, (_m, name: string) => { n++; return `const __crn_make_${name} = (function () {`; })
+                    .replace(/\}\)\(\);/g, () => { n++; return "});"; });
+                if (n !== 4) this.error(`tldts trie: expected two tables, edited ${n} places in ${id}`);
+                return {
+                    code: `import { sharedData as __crn_shared } from ${JSON.stringify(internals)};\n${out}\n`
+                        + `export const rules = () => __crn_shared("psl.rules", __crn_make_rules);\n`
+                        + `export const exceptions = () => __crn_shared("psl.exceptions", __crn_make_exceptions);\n`,
+                    map: null,
+                };
+            }
+            if (/suffix-trie\.js$/.test(id)) {
+                let n = 0;
+                code = code.replace(/lookupInTrie\(hostnameParts, (rules|exceptions),/g, (_m, name: string) => { n++; return `lookupInTrie(hostnameParts, ${name}(),`; });
+                if (n !== 2) this.error(`tldts suffix-trie: expected two lookups, edited ${n} in ${id}`);
+                return { code, map: null };
+            }
             if (!/\.(startsWith|endsWith)\(/.test(code)) return null;
             const out = code
                 .replace(/\b([A-Za-z_$][\w$]*)\.startsWith\(/g, "__crn_sStarts($1, ")

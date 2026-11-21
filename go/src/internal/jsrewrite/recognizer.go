@@ -71,6 +71,11 @@ type expr struct {
 	meta       bool      // `import.meta`
 	pat        *patScope // the expression is exactly a (…), […] or {…}
 	paren      bool      // … and it is a parenthesized group
+	// num: its value is certainly a number (or a BigInt) — it is, parens
+	// aside, a unary - + ~, a ++ / --, or a binary arithmetic or bitwise
+	// operation other than + (R5: such a key names no member the rules
+	// know).
+	num bool
 }
 
 // patItem is an identifier edited inside a possible pattern.
@@ -125,6 +130,7 @@ type parser struct {
 	edits []edit
 	seq   int
 
+	numKey  bool // the computed key just parsed is certainly a number (expr.num)
 	noIn    bool // `in` is not an operator here (a for statement's head)
 	forInit bool // … and a trailing `in` / `of` ends the expression unread
 	fn      fnState
@@ -371,7 +377,7 @@ func (p *parser) member(obj *expr, name string, static, computed, optional bool,
 		}
 		return false
 	}
-	if !inChain && !written && p.o.WrapMemberExpression && (p.o.DebugR5At == nil || p.o.DebugR5At(lb)) { // R5
+	if !inChain && !written && !p.numKey && p.o.WrapMemberExpression && (p.o.DebugR5At == nil || p.o.DebugR5At(lb)) { // R5
 		p.open(obj.start, "$rewriter.wrap_member_expression(")
 		p.replace(lb, 1, ",$__crn_key__=(")
 		p.replace(rb, 1, "))[$__crn_key__]")
@@ -1199,6 +1205,20 @@ func (p *parser) binaryPrec() int {
 	return 0
 }
 
+// numericOp: the binary operator at the current token always gives a
+// number (or a BigInt): arithmetic and bitwise, but not + (which also
+// concatenates).
+func numericOp(p *parser) bool {
+	if p.tok.kind != tPunct {
+		return false
+	}
+	switch string(p.text()) {
+	case "|", "^", "&", "<<", ">>", ">>>", "-", "*", "/", "%", "**":
+		return true
+	}
+	return false
+}
+
 func (p *parser) binary(min int) expr {
 	left := p.unary()
 	for {
@@ -1207,6 +1227,7 @@ func (p *parser) binary(min int) expr {
 			return left
 		}
 		p.read(&left)
+		num := numericOp(p)
 		p.next()
 		next := prec
 		if prec == 12 {
@@ -1214,7 +1235,7 @@ func (p *parser) binary(min int) expr {
 		}
 		right := p.binary(next)
 		p.read(&right)
-		left = expr{start: left.start, end: right.end}
+		left = expr{start: left.start, end: right.end, num: num}
 	}
 }
 
@@ -1223,14 +1244,15 @@ func (p *parser) unary() expr {
 	if p.tok.kind == tPunct {
 		switch string(p.text()) {
 		case "!", "~", "+", "-":
+			num := p.src[p.tok.start] != '!'
 			p.next()
 			e := p.unaryOperand()
 			p.read(&e)
-			return expr{start: start, end: e.end}
+			return expr{start: start, end: e.end, num: num}
 		case "++", "--":
 			p.next()
 			e := p.unaryOperand() // a target: left as written
-			return expr{start: start, end: e.end}
+			return expr{start: start, end: e.end, num: true}
 		}
 	} else if p.tok.kind == tIdent {
 		switch string(p.text()) {
@@ -1255,7 +1277,7 @@ func (p *parser) unary() expr {
 	e := p.lhs(true)
 	if (p.is("++") || p.is("--")) && !p.tok.nl {
 		p.next() // a target: left as written
-		return expr{start: e.start, end: p.prevEnd}
+		return expr{start: e.start, end: p.prevEnd, num: true}
 	}
 	return e
 }
@@ -1373,7 +1395,9 @@ func (p *parser) index(obj expr, optional, calls bool) expr {
 	case litOther:
 		name, static = "#", true
 	}
+	p.numKey = key.num
 	applied := p.member(&obj, name, static, true, optional, 0, lb, rb, calls && p.calledNext())
+	p.numKey = false
 	return expr{start: obj.start, end: end, chain: obj.chain || optional, wrapped: obj.wrapped || applied}
 }
 
@@ -1639,19 +1663,23 @@ func (p *parser) group() expr {
 	p.noIn, p.forInit = false, false
 	scope := &patScope{}
 	p.scope = scope
+	items, num := 0, false
 	for !p.is(")") {
 		if p.tok.kind == tEOF {
 			p.failAt()
 		}
-		p.eat("...")
-		p.assign(true)
+		spread := p.eat("...")
+		item := p.assign(true)
+		items++
+		num = items == 1 && !spread && item.num // (e) is e; a sequence is not
 		if !p.is(")") {
 			p.expect(",")
+			num = false
 		}
 	}
 	p.next()
 	p.noIn, p.forInit, p.scope = noIn, forInit, outer
-	return expr{start: start, end: p.prevEnd, pat: scope, paren: true}
+	return expr{start: start, end: p.prevEnd, pat: scope, paren: true, num: num}
 }
 
 func (p *parser) arrayLiteral() expr {

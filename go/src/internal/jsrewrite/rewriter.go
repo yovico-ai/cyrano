@@ -116,8 +116,27 @@ func DefaultOptions() Options {
 // Rewrite applies the enabled rules to src and returns the rewritten
 // source. If src does not parse or is already rewritten it is returned
 // unchanged, so the proxy never breaks a page it cannot safely transform.
+// needles: every rule needs one of these in the text — a `[` (R5, R14, a
+// constant key), one of the names the rules know (R1–R4, R6; R7–R9, R15:
+// import, export; R10: Worker; R12: debugger), or a backslash (an escape
+// can spell any of them). The client's list (ts/client/src/js/rewriter.ts
+// mayEdit); a new rule adds its needle to both.
+var needles = [][]byte{[]byte("["), []byte("\\"), []byte("location"), []byte("top"), []byte("parent"), []byte("eval"), []byte("write"),
+	[]byte("postMessage"), []byte("import"), []byte("export"), []byte("Worker"), []byte("debugger")}
+
+// mayEdit: whether any rule could edit src. A source with no needle is the
+// same rewritten, and is given back unparsed.
+func mayEdit(src []byte) bool {
+	for _, n := range needles {
+		if bytes.Contains(src, n) {
+			return true
+		}
+	}
+	return false
+}
+
 func Rewrite(src []byte, opts Options) []byte {
-	if alreadyRewritten(src) {
+	if alreadyRewritten(src) || !mayEdit(src) {
 		return src
 	}
 	edits, ok := jsEdits(src, &opts)
