@@ -9,6 +9,11 @@
 import { sPadStart } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
 
+// The runtime did not load (its request failed): the document stops
+// loading, so none of its scripts runs without the runtime and reaches an
+// origin outside the proxy. Go: htmlrewrite.FailClosed (the same text).
+export const FAIL_CLOSED = 'if(!window.$rewriter_init){window.stop();throw new Error("cyrano: runtime not loaded")}';
+
 export function buildBootstrapHtml(config: ClientConfig, href: string): string {
     const src = config.apiBaseURL + config.source;
     // The written document has its own referrer: its creator's URL.
@@ -23,7 +28,7 @@ export function buildBootstrapHtml(config: ClientConfig, href: string): string {
     }
     return (
         `<script${nonce} src="${src}"></script>` +
-        `<script${nonce}>window.$rewriter=window.$rewriter_init(window,${htmlSafeJson(childConfig)}).inject();` +
+        `<script${nonce}>${FAIL_CLOSED}window.$rewriter=window.$rewriter_init(window,${htmlSafeJson(childConfig)}).inject();` +
         `$rewriter.set_location(${jsStringLiteral(href)});` +
         // Both bootstrap scripts leave the document once they have run (Go: inject.go).
         `(function(s,p){p=s.previousElementSibling;if(p&&p.src&&p.tagName==="SCRIPT")p.remove();s.remove()})(document.currentScript);</script>`

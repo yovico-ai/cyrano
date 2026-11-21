@@ -280,13 +280,26 @@ export function createRewriterApi(
         // A relative specifier resolves against the importing script's own URL
         // (`scriptUrl`, passed by the server-side rewriter), not the page's.
         wrap_import_arg: (specifier, scriptUrl) => {
-            if (typeof specifier !== "string" || !isUrlLikeSpecifier(specifier)) return specifier;
+            // import() takes the string of whatever it is given: a URL object
+            // (`import(new URL("/a.js", import.meta.url))`: Vite, Yext's
+            // subway.com pages) went to the origin. Its toString runs once,
+            // here; one that throws rejects the import, as natively (the
+            // native's own ToString then meets the same error).
+            if (typeof specifier === "symbol") return specifier; // the native's TypeError
+            if (typeof specifier !== "string") {
+                try {
+                    specifier = String(specifier);
+                } catch (e) {
+                    return { toString(): never { throw e; } };
+                }
+            }
+            if (!isUrlLikeSpecifier(specifier as string)) return specifier;
             let base = baseUrlState.get();
             if (typeof scriptUrl === "string") {
                 try { base = new URL(scriptUrl); } catch { /* keep the page's */ }
             }
             // A module's URL: marked as a script's (spec/Containment.agda Dest).
-            return rewriteUrl(specifier, base, config, undefined, "js");
+            return rewriteUrl(specifier as string, base, config, undefined, "js");
         },
         // JS_WRAP_NEW_WORKER — proxify the url argument of `new Worker(url)` /
         // `new SharedWorker(url)` at the source level so the Worker script is

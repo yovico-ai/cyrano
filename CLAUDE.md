@@ -399,6 +399,47 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   no Proxy trap — `native/brand.ts`). A 12-site sample (2026-11-20): median
   load 1.2x direct over TLS; the runtime ~20% of main-thread time on a
   script-heavy page.
+- **The runtime bundle is named by its content** (`static.RuntimeURL`:
+  `/rewriter.js?v=<hash>`, served immutable; any other name revalidated).
+  Served no-store, a page with 250 ad frames downloaded it 250 times, hit
+  Chrome's limit on requests in flight (ERR_INSUFFICIENT_RESOURCES) and
+  left frames without it. **The bootstrap fails closed**
+  (`htmlrewrite.FailClosed`, TS `FAIL_CLOSED`, held equal by a Go test):
+  without the runtime the document stops loading — those frames' scripts
+  had run unproxied and reached their origins (windowscentral.com;
+  `tests/native/fail-closed-vs-chromium`).
+- **HTTP/1.1 upstream requests are Chrome's** (spec/H1.agda h1Head,
+  `upstream/h1head.go`): Host first, `Connection: keep-alive`, client
+  hints lower case, other names Title-Case, no Priority. Applied in the
+  client trace's GotConn, once ALPN is known; HTTP/2 is untouched. http:
+  origins go through the impersonating client too (Go's transport wrote
+  its own order to them). A Cloudflare site that negotiates HTTP/1.1
+  refused Go's head (spokanecounty.gov). The TLS/H2 fingerprint checks never
+  saw this: compare an HTTP/1.1 head by capturing it (a local
+  http/1.1-only TLS server, direct Chrome vs `mitmprobe`).
+- **Random testing** (owner, 2026-11-21): 3 random words → a search → a
+  random result of a site not visited before → `live-compare.cjs` with
+  `CLICKS=3`, on a nested display the owner watches (`Xephyr :97`).
+  live-compare compares DOM structure (signatures outside ads), computed
+  styles of elements both sides have once, pixels, errors (proxied URLs
+  and quoted CSP read as direct), escapes; ads are masked on both sides
+  (`tools/ads.cjs`), never in the escape count. Challenges and bot
+  refusals go on `tools/human-assist.json` (`assist.cjs`) for a run with a
+  person: `LIST=human-assist.json HANDOFF_WAIT=… node tools/xdrive.cjs`.
+  Found and fixed by it: markup placed before or after an element parses
+  in the parent's context (insertAdjacentHTML after a <script> was read
+  as script text: flashtalking's creatives escaped); import() takes its
+  specifier's string (a URL object escaped); text reaching a <script> or
+  <style> by any route (a fragment's text: Marketo forms; append/prepend
+  /replaceChildren/after strings) is rewritten, each text node keeping its
+  original for read-back; http: and https: to one host
+  use separate upstream clients (tls-client caches a transport per host
+  and port, 443 by default). A closed connection through the proxy
+  (ERR_EMPTY_RESPONSE) is an upstream failure direct sees as its own net
+  error: no such host, refused, the CORS check, ORB.
+  Over plain HTTP the proxy keeps 6 connections, and ad-heavy pages
+  behave unlike direct (techcrunch re-runs its user syncs, never fires
+  load); judge those over TLS.
 - **Rewritten bodies go to the browser compressed** (`proxy/compress.go`:
   zstd, else br, else gzip, by the browser's own Accept-Encoding; only a
   body a rewriter replaced — the rest streams as the origin sent it). They
@@ -532,7 +573,17 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   compares the "auto" ones direct vs proxied and lists the "chrome" ones
   (bot-protected: refused in an automated browser on both sides) for a
   check in real Chrome. Run it before a commit that touches rewriting,
-  against the build to be committed (`PROXY=https://localhost:9443`). A
+  against the build to be committed (`PROXY=https://localhost:9443`). The
+  "chrome" ones run by themselves in `tools/xdrive.cjs`: a stock Chrome
+  on a hidden display, started as a person starts it and driven through
+  X input (xdotool) — no DevTools protocol, which is what those sites
+  refuse; read from outside by window title and screenshot
+  (`DISPLAY=:98 PROXY=… node tools/xdrive.cjs`; a site's steps are its
+  "x" in the list). It does not answer a challenge or a sign-in form: it
+  hands over to `XDRIVE_ON_CHALLENGE` / `XDRIVE_ON_LOGIN` (the owner's
+  commands), and `PROFILE=<dir>` keeps the session they leave. To watch
+  or take over by hand, run it on a nested display in a window:
+  `Xephyr :97 -screen 1600x1000 &` then `DISPLAY=:97 HANDOFF_WAIT=120 …`. A
   site-found bug also gets a distilled local test where it can be played
   without the site (`tests/native/*-vs-chromium`); add the site to the
   list in the same commit. The owner's instance (9081) runs a snapshot of

@@ -25,8 +25,8 @@
 module H1 where
 
 open import Data.Bool.Base using (Bool; true; false; _∨_; _∧_; not; if_then_else_)
-open import Data.Char.Base using (Char; toℕ)
-open import Data.List.Base using (List; []; _∷_; _++_; reverse; length; map)
+open import Data.Char.Base using (Char; toℕ; fromℕ)
+open import Data.List.Base using (List; []; _∷_; _++_; reverse; length; map; filterᵇ)
 open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.Nat.Base using (ℕ; zero; suc; _+_; _*_; _∸_; _≡ᵇ_; _≤ᵇ_)
 open import Data.Product.Base using (_×_; _,_; proj₁)
@@ -195,3 +195,42 @@ records (suc f) s with block s
 
 recordsOf : Str → List (List Str)
 recordsOf s = records (suc (length s)) s
+
+-- ---------------------------------------------------------------------
+-- A request's head as Chrome writes it over HTTP/1.1 (recorded: Chrome
+-- 139 against a server that offers only http/1.1). The proxy's upstream
+-- writes the same when the origin negotiates HTTP/1.1 (and to every
+-- http: origin): a bot manager compares the head with the browser the
+-- User-Agent names (spokanecounty.gov's Cloudflare refused one with Host
+-- last, no Connection, Go's casing and a Priority header).
+--
+--   * Host first, then Connection (its value keep-alive);
+--   * then the request's own headers, in their order;
+--   * client-hint names (sec-ch-…) in lower case, as Chrome's client-hint
+--     code adds them; every other name with each word capitalized
+--     (User-Agent, Sec-Fetch-Mode, Accept-Language);
+--   * no Priority: Chrome sends it on HTTP/2 and HTTP/3 only.
+--
+-- Its input is the request's header names (any case), in the order the
+-- proxy sends them; its output the names on the wire, in order.
+
+upperC : Char → Char
+upperC c = if (97 ≤ᵇ toℕ c) ∧ (toℕ c ≤ᵇ 122) then fromℕ (toℕ c ∸ 32) else c
+
+-- Each word (after the start or a "-") capitalized, the rest lower case.
+titleCase : Str → Str
+titleCase s = go true (map lowerAscii s)
+  where
+  go : Bool → Str → Str
+  go _ [] = []
+  go up (c ∷ cs) = (if up then upperC c else c) ∷ go (is 45 c) cs
+
+h1Name : Str → Str
+h1Name n = if hasPrefix (toList "sec-ch-") (map lowerAscii n) then map lowerAscii n else titleCase n
+
+-- Host and Connection are the head's own; Priority is not sent.
+placed : Str → Bool
+placed n = eqStr (map lowerAscii n) (toList "host") ∨ eqStr (map lowerAscii n) (toList "connection") ∨ eqStr (map lowerAscii n) (toList "priority")
+
+h1Head : List Str → List Str
+h1Head ns = toList "Host" ∷ toList "Connection" ∷ map h1Name (filterᵇ (λ n → not (placed n)) ns)

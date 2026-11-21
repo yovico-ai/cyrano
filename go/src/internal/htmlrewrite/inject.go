@@ -73,7 +73,7 @@ func bootstrapScript(cfg *Config) string {
 	}
 	return debug + fmt.Sprintf(
 		`<script`+nonce+` src="%s"></script>`+
-			`<script`+nonce+`>window.$rewriter=window.$rewriter_init(window,%s).inject();`+
+			`<script`+nonce+`>`+FailClosed+`window.$rewriter=window.$rewriter_init(window,%s).inject();`+
 			`$rewriter.set_location(%s);`+
 			// Both bootstrap scripts leave the document once they have run:
 			// the page must not find elements it did not write.
@@ -83,6 +83,14 @@ func bootstrapScript(cfg *Config) string {
 		string(originalURLLit),
 	) + after
 }
+
+// FailClosed starts the bootstrap's second step: when the runtime did not
+// load (its request failed: a page with hundreds of frames once ran into
+// Chrome's limit on requests in flight), the document stops loading — none
+// of its scripts runs, so none reaches an origin outside the proxy. Without
+// it the page's scripts ran with no runtime and went straight to their
+// origins (windowscentral.com's ad frames). TS: runtime/bootstrap-html.ts.
+const FailClosed = `if(!window.$rewriter_init){window.stop();throw new Error("cyrano: runtime not loaded")}`
 
 // BootURL is the external bootstrap's URL (BootPath): the runtime's config
 // and the page's URL in its query. server.bootHandler reads them back to

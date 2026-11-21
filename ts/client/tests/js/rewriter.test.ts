@@ -13,7 +13,7 @@ const all = defaultJsRewriteOptions();
 
 /** The rewritten code as it runs, without the preamble. */
 function code(out: string): string {
-    return unmarked(out).replace(/var \$rewriter=globalThis.*?\$__crn_key__\|\|0;/, "");
+    return unmarked(out).replace(/var \$rewriter=\(function\(_g\).*?\.\$__crn_key__\|\|0;/, "");
 }
 
 // The cases are shared with the Go rewriter (spec/js-rewrite/cases.json):

@@ -137,10 +137,49 @@ export function recordText(el: Element, now: string, was: string): void {
     recorded.any = true;
 }
 
+/**
+ * A text node the runtime rewrote on its way into a <script> or <style>
+ * (appended, in a fragment, a string the page appended): what it holds
+ * now and what the page wrote. The element's text is then read back from
+ * its children, whatever the place each was put.
+ */
+export function recordTextNode(node: object, now: string, was: string): void {
+    if (now === was) { textStore.delete(node); return; }
+    textStore.set(node, { now, was });
+    recorded.any = true;
+}
+
+/** A text node's data as the page wrote it, or undefined when the runtime did not change it (or the page has since). */
+function textNodeAsWritten(node: Node): string | undefined {
+    const t = textStore.get(node);
+    if (!t) return undefined;
+    let data: string | null;
+    try { data = ncall(nat!.textGet, node); } catch { return undefined; } // the native: data reads back as written
+    return data === t.now ? t.was : undefined;
+}
+
+/** An element's text gathered from its children as written, when any of them was rewritten. */
+function childrenAsWritten(el: Node): string | undefined {
+    let any = false, out = "";
+    for (let c = el.firstChild; c; c = c.nextSibling) {
+        if (c.nodeType !== 3 && c.nodeType !== 4) continue;
+        const w = textNodeAsWritten(c);
+        if (w !== undefined) any = true;
+        out += w ?? (ncall(nat!.textGet, c) ?? "");
+    }
+    return any ? out : undefined;
+}
+
 /** A script's or style's text as the page wrote it, or undefined to read natively. */
 export function originalText(el: unknown): string | undefined {
     if (!nat || typeof el !== "object" || el === null) return undefined;
     const t = textStore.get(el);
+    let current0: string | null = null;
+    if (t) { try { current0 = ncall(nat.textGet, el as Node); } catch { /* below */ } }
+    if (!t || current0 !== t.now) {
+        const fromChildren = childrenAsWritten(el as Node);
+        if (fromChildren !== undefined) return fromChildren;
+    }
     if (!t) {
         // A script as the server (or an HTML sink) rewrote it carries its
         // own original: the edits are marked in its text (js/marks.ts).
@@ -304,6 +343,8 @@ export function textAsWritten(node: unknown, raw: string): string {
         if (n.nodeType === 3 || n.nodeType === 4) {
             const parent = n.parentNode as Element | null;
             if (!parent || parent.nodeType !== 1 || (parent.tagName !== "SCRIPT" && parent.tagName !== "STYLE")) return raw;
+            const own = textNodeAsWritten(n);
+            if (own !== undefined) return own;
             if (!n.previousSibling && !n.nextSibling) return originalText(parent) ?? raw;
             return sIncludes(raw, MARK) ? original(raw) : raw;
         }

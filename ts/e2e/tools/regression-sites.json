@@ -20,12 +20,18 @@
   {"url": "https://www.mountaineers.org/", "how": "auto", "fixed": "page replaced String.prototype.startsWith: every cookie write threw"},
   {"url": "https://www.rugerforum.net/", "how": "auto", "fixed": "Ad-Shield hooks natives: R5 key overwritten"},
   {"url": "https://warframe.market/", "how": "auto", "fixed": "isWindowObject threw per obj.parent: 26 s of 35"},
-  {"url": "https://www.homedepot.com/", "how": "chrome", "fixed": "owner-reported; home page, then search 'cordless drill' from the box"},
+  {"url": "https://www.homedepot.com/", "how": "chrome", "fixed": "owner-reported; home page, then search 'cordless drill' from the box", "x": [{"wait": 3000}, {"click": [700, 218]}, {"type": "cordless drill"}, {"key": "Return"}, {"refuseTitle": "^Error Page"}, {"expectTitle": "cordless"}, {"shot": "search"}]},
   {"url": "https://www.costco.com/", "how": "chrome", "fixed": "Kasada: eval origin, padded natives; blob worker read"},
   {"url": "https://www.zillow.com/", "how": "chrome", "fixed": "PerimeterX: /graphql must answer 200"},
   {"url": "https://www.target.com/", "how": "chrome", "fixed": "PerimeterX: redsky store_location_v1 / nearby_stores_v1 must answer 200"},
   {"url": "https://x.com/", "how": "chrome", "fixed": "Cloudflare; per-session upstream pool"},
   {"url": "https://claude.ai/", "how": "chrome", "fixed": "Cloudflare managed challenge"},
   {"url": "https://www.scrapingcourse.com/cloudflare-challenge", "how": "chrome", "fixed": "managed challenge passes silently (Trusted Types kept)"},
-  {"url": "https://www.ibm.com/", "how": "chrome", "fixed": "Akamai Bot Manager sensor runs clean"}
+  {"url": "https://www.ibm.com/", "how": "chrome", "fixed": "Akamai Bot Manager sensor runs clean"},
+  {"url": "https://www.spokanecounty.gov/5519/SCRAPS---Regional-Animal-Protection", "how": "auto", "fixed": "Cloudflare refused the proxy for its HTTP/1.1 head (Host last, no Connection, Go casing, Priority); now Chrome's (h1head_test)"},
+  {"url": "https://www.windowscentral.com/", "how": "auto", "fixed": "250 ad frames: the runtime no-store, refetched per frame, ERR_INSUFFICIENT_RESOURCES, frames ran without it and escaped; content-hashed runtime, bootstrap fails closed (fail-closed-vs-chromium)"},
+  {"url": "https://restaurants.subway.com/united-states/va/ashburn/44110-ashburn-village-blvd", "how": "auto", "fixed": "import(new URL(...)) went to the origin and failed CORS; wrap_import_arg takes the specifier's string (dynamic-import-vs-chromium)"},
+  {"url": "https://thehill.com/country/us/", "how": "auto", "fixed": "flashtalking ad tags insert markup after their <script>: parsed as script text, the creative's iframe loaded from the origin; insertAdjacentHTML parses in the parent (insert-adjacent-vs-chromium); ads vary, so check for escapes over several runs"},
+  {"url": "https://www.scorpion.co/", "how": "auto", "fixed": "Marketo's form CSS reaches its <style> as text in a DocumentFragment: its images escaped; text into a script/style by any route is rewritten and read back as written (style-text-vs-chromium)"},
+  {"url": "https://help.twitch.tv/s/article/purchase-support-faq", "how": "auto", "fixed": "OPEN: Salesforce Lightning Web Security evaluates component code in a sandbox realm where the runtime is unreachable (globalThis undefined, Function('return this') undefined): R13's global lookup throws, Aura shows its error box. The eval preamble no longer trusts the name globalThis (sandboxed-eval-vs-chromium)"}
 ]

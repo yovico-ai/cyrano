@@ -294,7 +294,7 @@ func TestRewrite_BootstrapFallbackOnBody_WhenNoHead(t *testing.T) {
 func TestRewrite_BootstrapNotDoubleInjected_WithHeadAndBody(t *testing.T) {
 	// <head> AND <body> both present — bootstrap injected only once.
 	got := rewrite(t, `<html><head></head><body></body></html>`, withInject)
-	count := strings.Count(got, "$rewriter_init")
+	count := strings.Count(got, "window.$rewriter=window.$rewriter_init(")
 	if count != 1 {
 		t.Errorf("bootstrap injected %d times, want exactly 1: %s", count, got)
 	}
@@ -502,7 +502,7 @@ func TestRewrite_BootstrapWithoutHeadOrBody(t *testing.T) {
 	if boot < 0 || page < 0 || boot > page {
 		t.Errorf("bootstrap not before the page's first script: %s", got)
 	}
-	if strings.Count(got, "$rewriter_init") != 1 {
+	if strings.Count(got, "window.$rewriter=window.$rewriter_init(") != 1 {
 		t.Errorf("bootstrap injected more than once: %s", got)
 	}
 }

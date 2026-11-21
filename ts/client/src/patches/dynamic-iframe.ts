@@ -25,7 +25,7 @@ import type { ClientConfig } from "../config";
 import { replaceValue, wrapMethod } from "../native/surface";
 import { unwrapProxiedUrl } from "../url/containment";
 import { injectIntoIframe } from "../runtime/iframe-injection";
-import { rewriteTextNode } from "./dynamic-html";
+import { rawTextTarget, rewriteTextNode } from "./dynamic-html";
 import { rewriteSrcsetAttribute } from "./srcset";
 import { kindOf, rewriteByKind, urlAttrsOf } from "./url-attribute-map";
 import { originalAttr, recordAttr } from "../native/originals";
@@ -179,6 +179,10 @@ export function patchDynamicIframeAppend(
         for (const [key, nodesOf] of nO.entries(nodeArgs)) {
             if (!ncall(nOP.hasOwnProperty, holder, key)) continue;
             wrapMethod<(...a: unknown[]) => unknown>(holder, key, (native, self, args) => {
+                // Text (strings, text nodes, fragments) put into a <script>
+                // or <style>: its JS or CSS.
+                const raw = key === "insertAdjacentElement" || key === "moveBefore" ? null : rawTextTarget(self, key);
+                if (raw) args = args.map((a) => rewriteTextNode(raw, a, rewriteOne));
                 const frames: Node[] = [];
                 for (const n of nodesOf(args)) {
                     if (n instanceof Object) rewriteUrlBeforeInsert(n as Node);

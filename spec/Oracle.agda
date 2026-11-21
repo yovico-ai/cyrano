@@ -385,6 +385,7 @@ dispatch op args =
   else if eqStr op (toList "featuresources") then oneArg (λ f → joinNL (Features.sources f)) args
   else if eqStr op (toList "featuresmap") then oneArg (Features.mapSources (λ v → fromℕ 91 ∷ v ++ fromℕ 93 ∷ [])) args
   else if eqStr op (toList "refererroute") then refererRouteReq args
+  else if eqStr op (toList "h1head") then oneArg (λ v → joinNL (H1.h1Head (if Data.List.Base.null v then [] else splitOn (is 10) v))) args
   else if eqStr op (toList "h1orders") then oneArg (λ st → Data.List.Base.concatMap (λ ns → fromℕ 60 ∷ joinComma ns ++ fromℕ 62 ∷ []) (H1.recordsOf st)) args
   else if eqStr op (toList "framedlength") then framedLengthReq args
   else if eqStr op (toList "varyforbrowser") then oneArg Carry.varyForBrowser args

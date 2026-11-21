@@ -171,15 +171,22 @@ describe("createRewriterApi — wrap_import_arg", () => {
         expect(result as string).toContain("/cyrano/");
     });
 
-    it("passes non-string specifiers through unchanged (dynamic import with expression)", () => {
+    // import() takes the string of its specifier (ECMA-262 ToString), so
+    // the wrapper does: a URL object is proxified like its href.
+    it("takes the string of a non-string specifier, as import() does", () => {
         const api = createRewriterApi(window, config);
-        const expr = { notAString: true };
-        expect(api.wrap_import_arg(expr)).toBe(expr);
+        expect(api.wrap_import_arg({ toString: () => "bare-pkg" })).toBe("bare-pkg");
+        expect(api.wrap_import_arg(new URL("https://cdn.example/m.js"))).toBe(api.wrap_import_arg("https://cdn.example/m.js"));
+        expect(api.wrap_import_arg(null)).toBe("null");
+        expect(api.wrap_import_arg(undefined)).toBe("undefined");
     });
 
-    it("passes null/undefined through unchanged", () => {
+    it("leaves a symbol, and a toString that throws, for the native to reject", () => {
         const api = createRewriterApi(window, config);
-        expect(api.wrap_import_arg(null)).toBeNull();
-        expect(api.wrap_import_arg(undefined)).toBeUndefined();
+        const sym = Symbol("s");
+        expect(api.wrap_import_arg(sym)).toBe(sym);
+        const err = new RangeError("nope");
+        const out = api.wrap_import_arg({ toString() { throw err; } }) as { toString(): string };
+        expect(() => String(out)).toThrow(err);
     });
 });

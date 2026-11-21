@@ -22,6 +22,7 @@ import (
 	"github.com/yovico/cyrano/internal/htmlrewrite"
 	"github.com/yovico/cyrano/internal/jsrewrite"
 	"github.com/yovico/cyrano/internal/proxy"
+	"github.com/yovico/cyrano/internal/static"
 	"github.com/yovico/cyrano/internal/urlrewrite"
 )
 
@@ -139,9 +140,9 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			isChallenge := isChallengeHTML(body) || isChallengeHost(target.Hostname())
 
 			cfg := htmlrewrite.Config{
-				BaseURL:           target,
-				Proxy:             proxyCfg,
-				RewriterJSPath:    vhost.RewriterJSPath,
+				BaseURL:        target,
+				Proxy:          proxyCfg,
+				RewriterJSPath: static.RuntimeURL(vhost.RewriterJSPath),
 				// Every page gets the one runtime. Its patches keep the native
 				// surface (ts/client/src/native/surface.ts), so a challenge's
 				// integrity and fingerprint checks see native APIs; a challenge
@@ -222,7 +223,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				dest := strings.ToLower(resp.Request.Header.Get("Sec-Fetch-Dest"))
 				if dest == "worker" || dest == "sharedworker" {
 					module := strings.EqualFold(resp.Request.Header.Get("Sec-Fetch-Mode"), "cors")
-					pre := workerPreamble(urlrewrite.APIBase(proxyCfg), vhost.RewriterJSPath, clientPassthrough, target.String(), module)
+					pre := workerPreamble(urlrewrite.APIBase(proxyCfg), static.RuntimeURL(vhost.RewriterJSPath), clientPassthrough, target.String(), module)
 					rewritten = append(pre, rewritten...)
 					// Prevent the browser from caching the shimmed worker script.
 					// Without this the browser serves the pre-shim copy from cache
@@ -522,7 +523,6 @@ func isCSS(resp *http.Response) bool {
 	return strings.Contains(ct, "text/css")
 }
 
-
 // readDecompressedBody reads resp.Body, transparently decompressing gzip,
 // brotli, or zstd content. Removes Content-Encoding so the rewritten response
 // we substitute back is treated as plain text by the browser. zstd is included
@@ -707,7 +707,7 @@ func clientBase(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig) map[string
 	return map[string]any{
 		"apiBaseURL":            urlrewrite.APIBase(proxyCfg),
 		"cacheKey":              "",
-		"source":                vhost.RewriterJSPath,
+		"source":                static.RuntimeURL(vhost.RewriterJSPath),
 		"version":               vhost.Version,
 		"rewrite_css_selectors": false,
 		// The runtime's Trusted Types policy (urlrewrite.RewriteCSP admits it).
@@ -747,7 +747,7 @@ func workerInitHandler(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig) htt
 		if err != nil {
 			cfg = []byte("{}")
 		}
-		src, _ := json.Marshal(urlrewrite.APIBase(proxyCfg) + vhost.RewriterJSPath)
+		src, _ := json.Marshal(urlrewrite.APIBase(proxyCfg) + static.RuntimeURL(vhost.RewriterJSPath))
 		href, _ := json.Marshal(workerURL)
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
@@ -785,7 +785,7 @@ func bootHandler() http.Handler {
 		href, _ := json.Marshal(r.URL.Query().Get("u"))
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		_, _ = w.Write([]byte("window.$rewriter=window.$rewriter_init(window," + string(clean) + ").inject();" +
+		_, _ = w.Write([]byte(htmlrewrite.FailClosed + "window.$rewriter=window.$rewriter_init(window," + string(clean) + ").inject();" +
 			"$rewriter.set_location(" + string(href) + ");" +
 			`(function(s,p){p=s.previousElementSibling;if(p&&p.src&&p.tagName==="SCRIPT")p.remove();s.remove()})(document.currentScript);`))
 	})

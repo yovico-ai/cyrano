@@ -31,7 +31,7 @@
 //     2. Using the originals (saved in module-local vars) directly inside
 //        our patched implementations.
 
-import { SafeWeakMap, SafeWeakSet, nO, nOP, nR, ncall, sStarts } from "../native/intrinsics";
+import { SafeWeakMap, SafeWeakSet, nO, nOP, nR, ncall, sLower, sStarts } from "../native/intrinsics";
 import { rewriteCssText } from "../css/rewriter";
 import { defaultJsRewriteOptions, rewriteJsSource } from "../js/rewriter";
 import { captureNativeElementOps, contextOf, rewriteCspContent, rewriteHtmlString, rewriteSrcdoc, type ParseContext } from "./html-rewriter";
@@ -57,7 +57,7 @@ import { isReferrerPolicy } from "../url/containment";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 import { injectFramesIn } from "./dynamic-iframe";
 import { rewriteImportMapText } from "../url/import-map";
-import { consume, heldAttr, originalAttr, recordAttr, recordText } from "../native/originals";
+import { consume, heldAttr, originalAttr, recordAttr, recordText, recordTextNode } from "../native/originals";
 import { trustedLike, trustedPolicyName } from "../native/trusted";
 
 /**
@@ -157,7 +157,14 @@ export function patchDynamicHtml(
     wrapMethod<(...a: unknown[]) => void>(proto, "insertAdjacentHTML", (native, self, args) => {
         const next = args.slice();
         const text = sinkText(next[1]);
-        if (text !== null) next[1] = trustedLike(targetWindow, "HTML", args[1], rewriteHtmlString(text, rewriteOne, proxyOrigin, undefined, contextOf(self)));
+        // The markup is parsed where it lands (HTML: insertAdjacentHTML):
+        // before or after the element, in its parent; at its start or end,
+        // in the element itself. Placed after a <script> (flashtalking's ad
+        // tags), it was read as script text and left as written: its
+        // iframe went to the origin (time.now, thehill.com).
+        const where = typeof args[0] === "string" ? sLower(args[0]) : "";
+        const ctx = where === "beforebegin" || where === "afterend" ? (self as Node).parentNode : self;
+        if (text !== null) next[1] = trustedLike(targetWindow, "HTML", args[1], rewriteHtmlString(text, rewriteOne, proxyOrigin, undefined, contextOf(ctx)));
         nR.apply(native, self, next);
         consume((self as Node).parentNode ?? self);
         injectFramesIn(targetWindow, (self as Node).parentNode ?? self);
@@ -249,7 +256,12 @@ function patchHtmlParsers(targetWindow: Window, rewriteOne: (url: string) => str
     };
     const newDocument = (): ParseContext => ({ scripting: false });
     firstArg(g["DOMParser"]?.prototype, "parseFromString", newDocument, (a) => String(a[1]).toLowerCase() === "text/html");
-    firstArg(g["Range"]?.prototype, "createContextualFragment", (self) => contextOf((self as Range).startContainer));
+    // A range that starts in text parses in the text's parent (HTML:
+    // createContextualFragment).
+    firstArg(g["Range"]?.prototype, "createContextualFragment", (self) => {
+        const start = (self as Range).startContainer;
+        return contextOf(start && start.nodeType === 3 || start && start.nodeType === 4 || start && start.nodeType === 8 ? start.parentNode : start);
+    });
     firstArg(g["Element"]?.prototype, "setHTMLUnsafe", (self) => contextOf(self));
     firstArg(g["ShadowRoot"]?.prototype, "setHTMLUnsafe", (self) => contextOf(self));
     firstArg(g["Document"] as unknown as object | undefined, "parseHTMLUnsafe", newDocument);
@@ -361,13 +373,38 @@ function patchRawText(targetWindow: Window, rewriteOne: (url: string) => string)
 
 /** A string or Text node headed into a script/style: its text rewritten. */
 export function rewriteTextNode(parent: Element, node: unknown, rewriteOne: (url: string) => string): unknown {
-    if (typeof node === "string") return rawText(parent, node, rewriteOne) ?? node;
-    const n = node as { nodeType?: number; data?: string } | null;
+    if (typeof node === "string") {
+        // As the DOM does with a string, but a text node of ours: its
+        // original is kept for read-back.
+        const raw = rawText(parent, node, rewriteOne);
+        if (raw === null || raw === node) return node;
+        const doc = parent.ownerDocument;
+        if (!doc) return raw;
+        const t = doc.createTextNode(raw);
+        recordTextNode(t, raw, node);
+        return t;
+    }
+    const n = node as { nodeType?: number; data?: string; childNodes?: ArrayLike<unknown> } | null;
     if (n && n.nodeType === 3 && typeof n.data === "string") {
-        const raw = rawText(parent, n.data, rewriteOne);
-        if (raw !== null && raw !== n.data) n.data = raw;
+        const was = n.data;
+        const raw = rawText(parent, was, rewriteOne);
+        if (raw !== null && raw !== was) { n.data = raw; recordTextNode(n as object, raw, was); }
+    } else if (n && n.nodeType === 11 && n.childNodes) {
+        // A fragment's text becomes the element's text (Marketo's forms
+        // build their <style> that way: the CSS's images were fetched from
+        // the origin, scorpion.co).
+        for (let i = 0; i < n.childNodes.length; i++) rewriteTextNode(parent, n.childNodes[i], rewriteOne);
     }
     return node;
+}
+
+/** The element whose text `method` of `self` writes, when it is a <script> or <style>; else null. */
+export function rawTextTarget(self: unknown, method: string): Element | null {
+    const n = self as Node | null;
+    if (!n) return null;
+    const el = (method === "before" || method === "after" || method === "replaceWith" ? n.parentNode : n) as Element | null;
+    if (!el || el.nodeType !== 1 || el.namespaceURI !== "http://www.w3.org/1999/xhtml") return null;
+    return el.localName === "script" || el.localName === "style" ? el : null;
 }
 
 /** Test-only: undo the patches. */

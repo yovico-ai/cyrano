@@ -41,6 +41,7 @@ func New(cfg *config.File, assetsRoot string, logger *slog.Logger) *Server {
 	if err == nil {
 		assetsRoot = abs
 	}
+	static.SetRoot(assetsRoot)
 	return &Server{Config: cfg, AssetsRoot: assetsRoot, Logger: logger}
 }
 

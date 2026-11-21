@@ -1,0 +1,65 @@
+[
+ {
+  "url": "https://www.tripadvisor.com/Hotels-g28953-zfb9208-New_York-Hotels.html",
+  "why": "proxied: refused (403)",
+  "from": "random",
+  "seen": "2026-11-21T18:40",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.ebay.com/shop/toothy-plush?_nkw=toothy+plush&msockid=366e27764ef6683d36ae3f6e4fc0696f",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "random",
+  "seen": "2026-11-21T20:39",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.sciencedirect.com/science/article/pii/S0341816218304417",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "random",
+  "seen": "2026-11-21T21:01",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.nytimes.com/international/",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "random",
+  "seen": "2026-11-21T21:10",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.justanswer.com/tax/b2z5g-need-colorado-fed-id-number-1099-g-just-id-number.html?msockid=0f4bbbc815266fee3c9da3d014b26eaa",
+  "why": "direct: challenge page: \"Attention Required! | Cloudflare\"; proxied: challenge page: \"Attention Required! | Cloudflare\"",
+  "from": "random",
+  "seen": "2026-11-21T21:14",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.yelp.ca/search?find_desc=best+psychic&find_loc=San+Jose%2C+CA",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "random",
+  "seen": "2026-11-21T21:22",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.zazzle.com/bucking+buttons+buttons+pins?msockid=3a19e3fb2ea46f253dcafbe32f316e1d",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "random",
+  "seen": "2026-11-21T21:30",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.homedepot.com/b/Hardware-Chains-Ropes-Rope/N-5yc1vZc2gr",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "random",
+  "seen": "2026-11-21T21:55",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.researchgate.net/figure/Idealized-soil-behavior-from-Parry-and-Wroth-1976_fig6_239388970",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "random",
+  "seen": "2026-11-21T21:56",
+  "how": "assist"
+ }
+]

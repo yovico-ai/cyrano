@@ -60,7 +60,7 @@ export function nbind<F extends AnyFn | ((...a: never[]) => unknown)>(f: F, self
 }
 
 const SP = String.prototype;
-const nStartsWith = SP.startsWith, nEndsWith = SP.endsWith, nStrIncludes = SP.includes, nPadStart = SP.padStart;
+const nStartsWith = SP.startsWith, nEndsWith = SP.endsWith, nStrIncludes = SP.includes, nPadStart = SP.padStart, nToLowerCase = SP.toLowerCase;
 const nArrIncludes = Array.prototype.includes;
 /** `s.startsWith(p, at)`, as it was. */
 export const sStarts = (s: string, p: string, at?: number): boolean => reflectApply(nStartsWith as AnyFn, s, at === undefined ? [p] : [p, at]) as boolean;
@@ -70,6 +70,8 @@ export const sEnds = (s: string, p: string): boolean => reflectApply(nEndsWith a
 export const sIncludes = (s: string, p: string): boolean => reflectApply(nStrIncludes as AnyFn, s, [p]) as boolean;
 /** `s.padStart(n, f)`, as it was. */
 export const sPadStart = (s: string, n: number, f?: string): string => reflectApply(nPadStart as AnyFn, s, f === undefined ? [n] : [n, f]) as string;
+/** `s.toLowerCase()`, as it was. */
+export const sLower = (s: string): string => reflectApply(nToLowerCase as AnyFn, s, []) as string;
 /** `a.includes(x)`, as it was. */
 export const aIncludes = <T>(a: readonly T[], x: T): boolean => reflectApply(nArrIncludes as AnyFn, a, [x]) as boolean;
 

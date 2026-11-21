@@ -100,12 +100,21 @@ function alreadyRewritten(src: string): boolean {
 // globalThis, not window: the same source also runs in workers (Blob
 // workers' rewritten source), where there is no window — and a page's own
 // `var self` cannot shadow it. A worker has no parent: the walk stops.
+// The global object is found without trusting the name `globalThis`: a
+// sandbox that compiles page code can shadow it (Salesforce's Lightning
+// Locker passes it as undefined — "Cannot read properties of undefined
+// (reading '$rewriter')", and help.twitch.tv rendered Aura's error box).
+// Then (or when the one it names holds no runtime: a sandbox's window) a
+// sloppy function's `this` (strict code: the realm's Function).
+const EVAL_GLOBAL =
+    '(function(){var _g;try{_g=typeof globalThis!=="undefined"?globalThis:void 0;if(_g&&_g.$rewriter)return _g}catch(_e){}' +
+    'try{var _r=(function(){return this})()||(function(){}).constructor("return this")();if(_r)return _r}catch(_e){}return _g||{}})()';
 const EVAL_PREAMBLE =
-    'var $rewriter=globalThis.$rewriter||(function(){' +
-    'try{for(var _w=globalThis;_w.parent&&_w!==_w.parent;_w=_w.parent)' +
+    'var $rewriter=(function(_g){if(_g.$rewriter)return _g.$rewriter;' +
+    'try{for(var _w=_g;_w.parent&&_w!==_w.parent;_w=_w.parent)' +
     'if(_w.parent.$rewriter)return _w.parent.$rewriter;}' +
-    'catch(_e){}return null}()),' +
-    '$__crn_key__=globalThis.$__crn_key__||0;';
+    'catch(_e){}return null})(' + EVAL_GLOBAL + '),' +
+    '$__crn_key__=' + EVAL_GLOBAL + '.$__crn_key__||0;';
 
 /** Where the preamble goes: after a leading "use strict" directive, which must stay first. */
 function preambleOffset(code: string): number {

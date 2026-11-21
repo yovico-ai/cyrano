@@ -67,7 +67,6 @@ type clientEntry struct {
 // connection reuse possible at all). Safe for concurrent use.
 type RoundTripper struct {
 	skipVerify bool
-	plain      *http.Transport
 
 	mu        sync.Mutex
 	clients   map[string]*clientEntry // "sessionID\x00profileKey" → client
@@ -81,25 +80,14 @@ type RoundTripper struct {
 // NewRoundTripper returns a RoundTripper. skipVerify disables upstream TLS
 // certificate verification (dev-only; wired from the --insecure flag).
 func NewRoundTripper(skipVerify bool) *RoundTripper {
-	// Names resolve through the shared host cache (dnscache), as a browser's do.
-	tcpDialer := &dnscache.Dialer{Dialer: net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}}
 	return &RoundTripper{
 		skipVerify: skipVerify,
-		plain: &http.Transport{
-			DialContext:           tcpDialer.DialContext,
-			MaxIdleConns:          100,
-			MaxIdleConnsPerHost:   8,
-			IdleConnTimeout:       90 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-			ResponseHeaderTimeout: 15 * time.Second,
-		},
 		clients: make(map[string]*clientEntry),
 		aia:     make(map[string]*aiaState),
 	}
 }
 
-// RoundTrip dispatches req to the browser-impersonating client (https) or the
-// stdlib transport (everything else).
+// RoundTrip sends req through the browser-impersonating client.
 // ConnInfo, put in a request's context under ConnInfoKey, is filled with
 // the connection that carried the request.
 type ConnInfo struct {
@@ -111,19 +99,10 @@ type ConnInfo struct {
 type ConnInfoKey struct{}
 
 func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.URL.Scheme != "https" {
-		if p := exactPath(req.URL); p != "" {
-			// Send the exact path without altering the caller's request.
-			out := req.Clone(req.Context())
-			out.URL.Opaque = p
-			resp, err := rt.plain.RoundTrip(out)
-			if resp != nil {
-				resp.Request = req
-			}
-			return resp, err
-		}
-		return rt.plain.RoundTrip(req)
-	}
+	// http: as well as https: goes through the browser-impersonating client:
+	// over HTTP/1.1 with Chrome's head (h1head.go), as a direct Chrome's. Go's
+	// own transport wrote its own header order and Go's casing to every http
+	// origin.
 
 	profileKey, profile := selectProfile(req.Header.Get("User-Agent"))
 	// Scope the connection pool to the browser session: each session gets its
@@ -139,7 +118,11 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	// connection pool is per host anyway; per-host clients only stop the
 	// hosts from waiting for each other.
 	sessionID, _ := req.Context().Value(SessionKey{}).(string)
-	clientKey := sessionID + "\x00" + profileKey + "\x00" + strings.ToLower(req.URL.Host)
+	// And per scheme: the client keeps one transport per host and port as
+	// it dials them, defaulting the port to 443, so an http: request after
+	// an https: one to the same host met the HTTP/2 transport ("http2:
+	// unsupported scheme").
+	clientKey := sessionID + "\x00" + profileKey + "\x00" + strings.ToLower(req.URL.Scheme) + "://" + strings.ToLower(req.URL.Host)
 	client, err := rt.clientFor(clientKey, profile)
 	if err != nil {
 		return nil, err
@@ -148,15 +131,26 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Which connection carries the request (debug: a challenge's clearance
 	// is bound to the client address; see ConnInfo).
 	ctx := req.Context()
-	if info, ok := ctx.Value(ConnInfoKey{}).(*ConnInfo); ok {
-		ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(g httptrace.GotConnInfo) {
+	info, _ := ctx.Value(ConnInfoKey{}).(*ConnInfo)
+	var fReq *fhttp.Request
+	// Once the connection is up — its protocol known, nothing written yet:
+	// over HTTP/1.1 the head takes Chrome's HTTP/1.1 form (h1head.go).
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(g httptrace.GotConnInfo) {
+		if info != nil {
 			info.Reused = g.Reused
 			if g.Conn != nil {
 				info.Local, info.Remote = g.Conn.LocalAddr().String(), g.Conn.RemoteAddr().String()
 			}
-		}})
-	}
-	fReq, err := fhttp.NewRequestWithContext(ctx, req.Method, req.URL.String(), req.Body)
+		}
+		if fReq != nil && overHTTP1(g.Conn) {
+			host := fReq.Host
+			if host == "" {
+				host = fReq.URL.Host
+			}
+			asHTTP1(fReq.Header, host)
+		}
+	}})
+	fReq, err = fhttp.NewRequestWithContext(ctx, req.Method, req.URL.String(), req.Body)
 	if err != nil {
 		return nil, err
 	}
