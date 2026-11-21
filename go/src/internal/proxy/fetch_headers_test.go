@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -152,8 +153,8 @@ func TestDirectFetchHeaders(t *testing.T) {
 
 	t.Run("the page's own policy is applied", func(t *testing.T) {
 		page, _ := url.Parse(crossPage)
-		pagePolicies.set(pageKey(page), urlrewrite.NoReferrer)
-		defer pagePolicies.set(pageKey(page), "")
+		pagePolicies.set("", pageKey(page), urlrewrite.NoReferrer)
+		defer pagePolicies.set("", pageKey(page), "")
 		got := send("GET", upstream.URL+"/img.png", map[string]string{"Referer": proxied(crossPage), "Sec-Fetch-Dest": "image", "Sec-Fetch-Mode": "no-cors"})
 		if v, ok := got["Referer"]; ok {
 			t.Errorf("Referer = %q under no-referrer, want none", v)
@@ -199,8 +200,8 @@ func TestRecordPagePolicy(t *testing.T) {
 		Request: &http.Request{Header: http.Header{"Sec-Fetch-Dest": {"document"}}},
 	}
 	recordPagePolicy(resp, target)
-	defer pagePolicies.set(pageKey(target), "")
-	if p := pagePolicies.get(pageKey(target)); p != urlrewrite.SameOrigin {
+	defer pagePolicies.set("", pageKey(target), "")
+	if p := pagePolicies.get("", pageKey(target)); p != urlrewrite.SameOrigin {
 		t.Errorf("recorded policy = %q, want same-origin (the last recognized token)", p)
 	}
 	// The browser is told unsafe-url so the server always sees the full referrer.
@@ -211,7 +212,38 @@ func TestRecordPagePolicy(t *testing.T) {
 	img := &http.Response{Header: http.Header{"Referrer-Policy": {"origin"}}, Request: &http.Request{Header: http.Header{"Sec-Fetch-Dest": {"image"}}}}
 	other, _ := url.Parse("https://site.example/i.png")
 	recordPagePolicy(img, other)
-	if p := pagePolicies.get(pageKey(other)); p != urlrewrite.DefaultPolicy {
+	if p := pagePolicies.get("", pageKey(other)); p != urlrewrite.DefaultPolicy {
 		t.Errorf("an image recorded policy %q", p)
+	}
+}
+
+// One session's response for a URL does not set the policy of another
+// session's page at that URL (two users are served different responses).
+func TestPagePolicyIsPerSession(t *testing.T) {
+	target, _ := url.Parse("https://site.example/account")
+	in := func(session string) *http.Request {
+		r := &http.Request{Header: http.Header{"Sec-Fetch-Dest": {"document"}}}
+		return r.WithContext(context.WithValue(context.Background(), SessionContextKey{}, session))
+	}
+	a := &http.Response{Header: http.Header{"Referrer-Policy": {"no-referrer"}, "Content-Type": {"text/html"}}, Request: in("a")}
+	recordPagePolicy(a, target)
+	defer pagePolicies.set("a", pageKey(target), "")
+	if p := pagePolicies.get("a", pageKey(target)); p != urlrewrite.NoReferrer {
+		t.Fatalf("session a recorded %q", p)
+	}
+	if p := pagePolicies.get("b", pageKey(target)); p != urlrewrite.DefaultPolicy {
+		t.Errorf("session b reads session a's policy: %q", p)
+	}
+	// A <meta name=referrer> is recorded for the session it was served to.
+	b := &http.Response{Request: in("b")}
+	if !RecordMetaPolicy(b, target, "origin") {
+		t.Fatal("meta policy not recorded")
+	}
+	defer pagePolicies.set("b", pageKey(target), "")
+	if p := pagePolicies.get("a", pageKey(target)); p != urlrewrite.NoReferrer {
+		t.Errorf("session b's meta changed session a's policy to %q", p)
+	}
+	if p := pagePolicies.get("b", pageKey(target)); p != "origin" {
+		t.Errorf("session b recorded %q", p)
 	}
 }

@@ -9,10 +9,10 @@ import (
 	"github.com/yovico/cyrano/internal/urlrewrite"
 )
 
-// policyStore remembers each page's Referrer-Policy (by its original URL,
-// no fragment), as last served: the policy governs the Referer of requests
-// that page makes later. Bounded; an evicted page falls back to the default
-// policy.
+// policyStore remembers each page's Referrer-Policy (by session and its
+// original URL, no fragment), as last served to that session: the policy
+// governs the Referer of requests that page makes later. Bounded; an
+// evicted page falls back to the default policy.
 type policyStore struct {
 	mu sync.Mutex
 	m  map[string]urlrewrite.Policy
@@ -20,7 +20,8 @@ type policyStore struct {
 
 const policyStoreMax = 8192
 
-func (s *policyStore) set(page string, p urlrewrite.Policy) {
+func (s *policyStore) set(session, page string, p urlrewrite.Policy) {
+	page = session + "\x00" + page
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.m == nil {
@@ -39,7 +40,8 @@ func (s *policyStore) set(page string, p urlrewrite.Policy) {
 	s.m[page] = p
 }
 
-func (s *policyStore) get(page string) urlrewrite.Policy {
+func (s *policyStore) get(session, page string) urlrewrite.Policy {
+	page = session + "\x00" + page
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if p, ok := s.m[page]; ok {
@@ -48,9 +50,19 @@ func (s *policyStore) get(page string) urlrewrite.Policy {
 	return urlrewrite.DefaultPolicy
 }
 
-// pagePolicies is shared by every Handler: a page's policy is a property of
-// the page, not of a session.
+// pagePolicies holds every session's pages. A page's policy is what its
+// server sent that session: two users' responses for one URL differ (signed
+// in or not, an experiment), and one must not set the other's Referer.
 var pagePolicies policyStore
+
+// sessionIn is the session a request was made in ("" outside one).
+func sessionIn(req *http.Request) string {
+	if req == nil {
+		return ""
+	}
+	s, _ := req.Context().Value(SessionContextKey{}).(string)
+	return s
+}
 
 // pageKey is a page's original URL without userinfo or fragment.
 func pageKey(u *url.URL) string {
@@ -149,7 +161,7 @@ func (h *Handler) directFetchHeaders(req *http.Request, target *url.URL, request
 
 	page := pageKey(from)
 	// The request's own policy, where it has one, before its page's.
-	policy := pagePolicies.get(page)
+	policy := pagePolicies.get(sessionIn(req), page)
 	if requestPolicy != "" {
 		policy = requestPolicy
 	}
@@ -203,10 +215,10 @@ func recordPagePolicy(resp *http.Response, target *url.URL) {
 	p := urlrewrite.HeaderPolicy(strings.Join(resp.Header.Values("Referrer-Policy"), ","))
 	if p == "" && dest == "style" {
 		if page, ok := resp.Request.Context().Value(requesterKey{}).(string); ok {
-			p = pagePolicies.get(page)
+			p = pagePolicies.get(sessionIn(resp.Request), page)
 		}
 	}
-	pagePolicies.set(pageKey(target), p)
+	pagePolicies.set(sessionIn(resp.Request), pageKey(target), p)
 	if resp.Header.Get("Referrer-Policy") != "" && p != "" {
 		resp.Header.Set("Referrer-Policy", string(urlrewrite.UnsafeURL))
 	}
@@ -339,11 +351,15 @@ func noDictionaryRegistration(resp *http.Response) {
 // <meta name="referrer"> states it (the HTML rewriter gives the tag
 // unsafe-url, as recordPagePolicy does the header); false when content is
 // no policy.
-func RecordMetaPolicy(target *url.URL, content string) bool {
+func RecordMetaPolicy(resp *http.Response, target *url.URL, content string) bool {
 	p := urlrewrite.HeaderPolicy(content)
 	if p == "" {
 		return false
 	}
-	pagePolicies.set(pageKey(target), p)
+	var req *http.Request
+	if resp != nil {
+		req = resp.Request
+	}
+	pagePolicies.set(sessionIn(req), pageKey(target), p)
 	return true
 }

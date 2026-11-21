@@ -46,14 +46,14 @@ func policyResp(dest, target, policy string, requester string) *http.Response {
 func TestRecordPagePolicy_WorkersAndStylesheets(t *testing.T) {
 	r := policyResp("worker", "https://w.example/w.js", "origin", "")
 	recordPagePolicy(r, r.Request.URL)
-	if r.Header.Get("Referrer-Policy") != string(urlrewrite.UnsafeURL) || pagePolicies.get(pageKey(r.Request.URL)) != "origin" {
-		t.Errorf("worker: header %q, recorded %q", r.Header.Get("Referrer-Policy"), pagePolicies.get(pageKey(r.Request.URL)))
+	if r.Header.Get("Referrer-Policy") != string(urlrewrite.UnsafeURL) || pagePolicies.get("", pageKey(r.Request.URL)) != "origin" {
+		t.Errorf("worker: header %q, recorded %q", r.Header.Get("Referrer-Policy"), pagePolicies.get("", pageKey(r.Request.URL)))
 	}
 	doc, _ := url.Parse("https://d.example/page")
-	pagePolicies.set(pageKey(doc), "no-referrer")
+	pagePolicies.set("", pageKey(doc), "no-referrer")
 	s := policyResp("style", "https://cdn.example/a.css", "", pageKey(doc))
 	recordPagePolicy(s, s.Request.URL)
-	if got := pagePolicies.get(pageKey(s.Request.URL)); got != "no-referrer" || s.Header.Get("Referrer-Policy") != "" {
+	if got := pagePolicies.get("", pageKey(s.Request.URL)); got != "no-referrer" || s.Header.Get("Referrer-Policy") != "" {
 		t.Errorf("stylesheet: recorded %q, header %q", got, s.Header.Get("Referrer-Policy"))
 	}
 	sc := policyResp("script", "https://cdn.example/a.js", "origin", "")

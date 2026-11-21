@@ -156,7 +156,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				ScriptNonce:       proxy.ScriptNonce(originalPolicies(resp)),
 				ExternalBootstrap: !urlrewrite.InlineScriptAllowed(originalPolicies(resp)),
 			}
-			cfg.OnReferrerPolicy = func(content string) bool { return proxy.RecordMetaPolicy(target, content) }
+			cfg.OnReferrerPolicy = func(content string) bool { return proxy.RecordMetaPolicy(resp, target, content) }
 			if cfg.ExternalBootstrap {
 				cfg.ClientPassthrough["xb"] = true // documents this page writes need the same
 			}
