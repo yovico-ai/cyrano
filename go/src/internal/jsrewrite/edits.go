@@ -44,7 +44,7 @@ func (p *parser) replace(pos, del int, ins string) {
 // where this is undefined and no name is safe — a function compiled from
 // "return this", reached from a literal's constructor. R13 (TS: WITH_GLOBAL
 // in ts/client/src/js/rewriter.ts).
-const withGlobal = `((function(){return this})()||(function(){}).constructor("return this")()).`
+const withGlobal = `((typeof _crn$g!=="undefined"&&_crn$g)||(function(){return this})()||(function(){}).constructor("return this")()).`
 
 // rt is an edit's text as written where it lands: inside a with body the
 // runtime's names go through the global object (Vue's compiled templates

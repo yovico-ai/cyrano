@@ -33,6 +33,22 @@ const fake = new Proxy({}, { get: (t, k) => (k === "location" ? { href: "https:/
 run("globalThis a proxy window", () => Function("globalThis", "window", body)(fake, fake));
 run("with a sandbox", () => Function("sb", "with (sb) { return (function () {" + body + "})(); }")(new Proxy({}, { has: (t, k) => k === "globalThis", get: () => undefined })));
 run("indirect eval", () => (0, eval)("(function (globalThis) {" + body + "})")(undefined));
+// Salesforce's Locker evaluator: compiled with the realm's Function; its
+// with object claims every name the sandbox or the window has, and the
+// code is direct-eval'd, strict, inside it.
+const shell = Function("with (arguments[0]) { return function () { 'use strict'; return eval(arguments[0]); }; }");
+const sandbox = new Proxy({ Object, Array, String }, {
+    has: (t, k) => k === "eval" || (k !== "arguments" && (k in t || k in window)),
+    get: (t, k) => (k === "eval" ? eval : k === Symbol.unscopables ? undefined : t[k]),
+});
+const evaluator = shell(sandbox);
+// Its lockdown tames the Function constructor reached from a function: it
+// builds nothing (so Function("return this") gives no global).
+const ctorDesc = Object.getOwnPropertyDescriptor(Function.prototype, "constructor");
+Object.defineProperty(Function.prototype, "constructor", { value: function () { return function () {}; }, writable: true, configurable: true });
+run("locker evaluator", () => evaluator.call(sandbox, "(function () { var o = {a: 1, b: 2}, k = 'b'; return [o[k], typeof location].join(' '); })()"));
+run("locker evaluator, a with inside", () => evaluator.call(sandbox, "(function () { var o = {a: 1, b: 2}, k = 'a', r; with ({z: 1}) { r = o[k] + z; } return String(r); })()"));
+Object.defineProperty(Function.prototype, "constructor", ctorDesc);
 window.got = out;
 `;
 

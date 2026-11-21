@@ -38,7 +38,7 @@ export function patchFunctionConstructor(targetWindow: Window): void {
         const twin = nR.construct(NativeFunction, args) as object; // the page's own source; throws as natively
         const rewritten = args.slice();
         // Tagged: its frames show the page's calling frame as eval origin (native/error-stack.ts).
-        const code = tagFunctionBody(targetWindow, rewriteJsSource(body, defaultJsRewriteOptions()));
+        const code = tagFunctionBody(targetWindow, rewriteJsSource(body, { ...defaultJsRewriteOptions(), functionBody: true }));
         rewritten[rewritten.length - 1] = wasTrusted ? trusted(targetWindow, "Script", code) : code;
         const fn = nR.construct(NativeFunction, rewritten, (newTarget ?? NativeFunction) as FunctionConstructor) as object;
         return maskAs(fn, twin);

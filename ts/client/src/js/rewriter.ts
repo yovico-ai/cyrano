@@ -42,6 +42,13 @@ export interface JsRewriteOptions {
     wrapPattern: boolean;
     /** R12: `debugger` statements become empty statements. */
     stripDebugger: boolean;
+    /**
+     * The source is a Function constructor's body: its `var`s stay in its
+     * own scope, so the runtime holder (_crn$g) may be declared there. Never
+     * in global code, where a `var` becomes a property of the window — and
+     * a sandbox's with object claims every name the window has.
+     */
+    functionBody?: boolean;
     /** With `proxify`: import/export specifiers and literal import() are proxified in place. */
     wrapStaticImport: boolean;
     /** With `baseUrl`: import.meta.url becomes that URL as a string literal. */
@@ -109,8 +116,15 @@ function alreadyRewritten(src: string): boolean {
 const EVAL_GLOBAL =
     '(function(){var _g;try{_g=typeof globalThis!=="undefined"?globalThis:void 0;if(_g&&_g.$rewriter)return _g}catch(_e){}' +
     'try{var _r=(function(){return this})()||(function(){}).constructor("return this")();if(_r)return _r}catch(_e){}return _g||{}})()';
+// An enclosing compiled scope's holder (_crn$g, below) is taken first: a
+// sandbox that direct-evals page code inside its own `with` (Salesforce's
+// Locker) leaves no other way to the runtime — its with object claims every
+// name the window has, and its lockdown makes Function("return this") give
+// nothing — but a name the window lacks passes through to the enclosing
+// scope. Code that declares the holder itself does not see the outer one
+// (hoisting) and searches the global, which outside a `with` it reaches.
 const EVAL_PREAMBLE =
-    'var $rewriter=(function(_g){if(_g.$rewriter)return _g.$rewriter;' +
+    'var $rewriter=(typeof _crn$g!=="undefined"&&_crn$g&&_crn$g.$rewriter)||(function(_g){if(_g.$rewriter)return _g.$rewriter;' +
     'try{for(var _w=_g;_w.parent&&_w!==_w.parent;_w=_w.parent)' +
     'if(_w.parent.$rewriter)return _w.parent.$rewriter;}' +
     'catch(_e){}return null})(' + EVAL_GLOBAL + '),' +
@@ -123,9 +137,18 @@ function preambleOffset(code: string): number {
 }
 
 /** The preamble as a marked insertion: it adds no line, and `original` removes it. */
-function withEvalPreamble(code: string): string {
+// A Function body with R13 sites (a `with` body) holds the runtime and the
+// R5 key under _crn$g, a name no window has (it is never declared in global
+// code) and, `_`-prefixed, none Vue's with object claims: its R13 sites —
+// and code direct-eval'd in its scope — reach the runtime through it where
+// the global object is out of reach (Salesforce's Locker evaluator:
+// `with (sandbox) { … eval(src) }`, compiled with the realm's Function).
+const WITH_HOLDER = 'var _crn$g={$rewriter:$rewriter,$__crn_key__:$__crn_key__};';
+
+function withEvalPreamble(code: string, functionBody: boolean): string {
     const at = preambleOffset(code);
-    return code.slice(0, at) + fragment(EVAL_PREAMBLE, "") + code.slice(at);
+    const pre = EVAL_PREAMBLE + (functionBody && sIncludes(code, "_crn$g") ? WITH_HOLDER : "");
+    return code.slice(0, at) + fragment(pre, "") + code.slice(at);
 }
 
 /**
@@ -223,7 +246,7 @@ function rewriteJsSourceUncached(src: string, opts: JsRewriteOptions): string {
     // The preamble goes wherever the code references our runtime — freshly
     // rewritten or already rewritten by the server.
     if (sIncludes(result, "$rewriter.") || sIncludes(result, "$__crn_key__")) {
-        return withEvalPreamble(result);
+        return withEvalPreamble(result, opts.functionBody === true);
     }
     return result;
 }
@@ -314,7 +337,7 @@ const SET_LOCATION = "$rewriter.wrap_set_location(location, function(v){location
  * is undefined and no name is safe) a function compiled from "return this",
  * reached from a literal's constructor.
  */
-const WITH_GLOBAL = '((function(){return this})()||(function(){}).constructor("return this")()).';
+const WITH_GLOBAL = '((typeof _crn$g!=="undefined"&&_crn$g)||(function(){return this})()||(function(){}).constructor("return this")()).';
 function inWith(ins: string): string {
     return ins.replace(/\$rewriter\./g, WITH_GLOBAL + "$rewriter.").replace(/\$__crn_key__/g, WITH_GLOBAL + "$__crn_key__");
 }
