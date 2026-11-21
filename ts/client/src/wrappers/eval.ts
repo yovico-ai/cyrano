@@ -32,6 +32,7 @@ import { isWindowObject } from "../native/brand";
 import { isTrustedValue, realmOfFunction, trusted } from "../native/trusted";
 import { defaultJsRewriteOptions, rewriteJsSource } from "../js/rewriter";
 import { maskAs, standIn } from "../native/surface";
+import { sharedData } from "../native/shared";
 
 // A page that reads `eval` — `var f = eval`, `window.eval`, a challenge
 // script listing its own property names, its prototype and its source —
@@ -39,10 +40,12 @@ import { maskAs, standIn } from "../native/surface";
 // the source it runs (the page cannot tell): a Proxy of the native, so its
 // name, length, absent `prototype` and own keys are the native's, read by
 // Function.prototype.toString as the native, and the same object each time.
-const wrappers = new SafeWeakMap<object, object>();
-const wrapped = new SafeWeakSet<object>();
+// (One set for a page tree — native/shared.ts: a realm's eval has one
+// stand-in, whichever copy of the runtime is asked for it.)
+const wrappers = sharedData("eval.wrappers", () => new SafeWeakMap<object, object>());
+const wrapped = sharedData("eval.wrapped", () => new SafeWeakSet<object>());
 /** stand-in → the native eval it stands for. */
-const natives = new SafeWeakMap<object, typeof eval>();
+const natives = sharedData("eval.natives", () => new SafeWeakMap<object, typeof eval>());
 
 /** The stand-in for a realm's `eval`: rewrites a string source, then calls it (an indirect eval, as any call through a value is). */
 export function wrapEval(nativeEval: typeof eval): typeof eval {

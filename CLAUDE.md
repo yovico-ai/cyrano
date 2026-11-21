@@ -356,16 +356,36 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   no rule could touch is not parsed (`mayEdit`, both runtimes), a
   repeated source is not parsed again, and the public-suffix trie is
   built once for a page and its frames (`native/internals.ts`
-  sharedData). Good runs are at direct's CPU. The long hang was R5's
-  helper: some runs make hundreds of millions of string-keyed accesses,
-  and the helper compared each key with seven names (A/B, 10 runs each:
-  8 hung with R5 on for the script, 0 with it off, 0 with the helper a
-  pass-through). It now rejects a key by its length and first letter
-  (hangs: 8 of 10 before, 1 of 12 after; direct with the frame in the
-  page's process: 0 of 12). Open: that remaining run — the call per
-  access itself, about ten times a keyed load in unoptimized code. Count
-  hangs with scratchpad `hangstat.cjs` over 10+ runs; one run tells
-  nothing. Tools: scratchpad `loop.cjs` (CDP
+  sharedData). Good runs are at direct's CPU. The 20 s hangs that
+  remained were not cost at all but Turnstile's answer to a tell: it makes
+  an empty sandboxed frame (allow-same-origin, in a closed shadow root) as
+  a source of pristine natives and reads `eval` with that frame's
+  `Function.prototype.toString`; given our stand-in's source it
+  stringifies eval over a million times (8 in a good run) on the page's
+  thread. The stand-in showed because every loaded document has its own
+  copy of the runtime, each with a private table of what its stand-ins
+  stand for: a toString patched by one copy did not know another's. Such
+  registries are now one for a page tree (`native/shared.ts`: masks,
+  masked realms, eval stand-ins, recorded originals;
+  `tests/native/cross-window-surface-vs-chromium`). Saved specimen: 10 of
+  10 hung with marks stripped, 4 of 15 as rewritten; after, 0 of 23, and
+  0 of 8 live. Lessons: (1) a hang in a challenge's interpreter is first
+  a question of what it saw, not what it costs — count its native calls
+  (a good run against a hung one) before profiling; (2) "R5 off: 0 of 24
+  hung" proved nothing: without R5 the frame reads the proxy's location
+  and never reaches the check — an A/B is only as good as the proof that
+  both arms got as far; (3) a hung run's frame document can be replayed
+  (the hang comes before the first POST): scratchpad `replay.cjs` /
+  `replayroute.cjs` serve a saved one in place of the live one,
+  `variants.cjs` rewrites its edits fragment by fragment, `LOGCALLS=1`
+  logs every native the interpreter applies (`ring2.cjs` reads the log
+  inside the hang, through a debugger pause). Still per copy, so still
+  tells where two copies meet: window views (`native/cross-origin.ts`),
+  Trusted Types policies, stack tags, document.write state. An empty
+  frame runs on its creator's copy, so what the runtime makes for it
+  (promises, arrays, errors) is of the creator's realm. Open: a `srcdoc`
+  frame under Turnstile's CSP has an inline script refused (the committed
+  build too). Tools: scratchpad `loop.cjs` (CDP
   profile by host, `NOISO=1` puts frames in one process for a like-for-like
   direct profile), `pause2.cjs` (stack samples inside a hang).
 - **Speed: profile before guessing.** A page that feels slow proxied was

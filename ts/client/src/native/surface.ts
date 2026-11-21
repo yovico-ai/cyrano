@@ -23,14 +23,19 @@
 import { SafeWeakMap, SafeWeakSet, nO, nOP, nR, ncall } from "./intrinsics";
 import { original } from "../js/marks";
 import { PADDED_METHODS } from "./padded";
+import { sharedData } from "./shared";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyFn = (...args: any[]) => unknown;
 
-/** wrapper → the native it stands for (what toString reports). */
-const masks = new SafeWeakMap<object, object>();
+/**
+ * wrapper → the native it stands for (what toString reports). One for a
+ * page tree (native/shared.ts): a toString taken from another window
+ * answers for this window's stand-ins as its own.
+ */
+const masks = sharedData("surface.masks", () => new SafeWeakMap<object, object>());
 
-const installedRealms = new SafeWeakSet<object>();
+const installedRealms = sharedData("surface.realms", () => new SafeWeakSet<object>());
 
 /**
  * Makes Function.prototype.toString of `realm` report natives for wrappers.

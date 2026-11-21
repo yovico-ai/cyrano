@@ -9,7 +9,7 @@
   {"url": "https://www.theguardian.com/international", "how": "auto", "fixed": "matches direct except FedCM requests"},
   {"url": "https://www.ikea.com/us/en/", "how": "auto", "fixed": "import.meta.resolve (R15): Vite preloads"},
   {"url": "https://www.cnn.com/", "how": "auto", "fixed": "7.9 MB document now sent compressed; CSS fast path"},
-  {"url": "https://techcrunch.com/", "how": "auto", "fixed": "Turnstile on the main thread: page froze, ads did not show (check the page stays responsive and two ad slots fill)"},
+  {"url": "https://techcrunch.com/", "how": "auto", "fixed": "Turnstile on the main thread: page froze, ads did not show (check the page stays responsive and two ad slots fill); a toString from its probe frame showed a stand-in's source and it spun for 20 s (cross-window-surface-vs-chromium)"},
   {"url": "https://support.microsoft.com/en-us", "how": "auto", "fixed": "silent sign-in frame refused: frame-ancestors against the real embedder"},
   {"url": "https://www.washingtonpost.com/", "how": "auto", "fixed": "isEqualNode: Next.js re-inserted a rewritten script, ads ran twice"},
   {"url": "https://www.tractorsupply.com/", "how": "auto", "fixed": "Adobe Launch: function names in stack traces (written members as written)"},

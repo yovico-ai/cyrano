@@ -25,17 +25,20 @@
 import { SafeMap, SafeWeakMap, nO, ncall, sIncludes, sStarts } from "./intrinsics";
 import { trusted } from "./trusted";
 import { MARK, original } from "../js/marks";
+import { sharedData } from "./shared";
 
 export const ORIGINALS_ATTR = "crn-o";
 
 interface Entry { now: string | null; was: string | null }
 
-const attrStore = new SafeWeakMap<object, Map<string, Entry>>();
-const textStore = new SafeWeakMap<object, { now: string; was: string }>();
+// One for a page tree (native/shared.ts): a node moved to another document
+// is read there by that document's copy of the runtime.
+const attrStore = sharedData("originals.attrs", () => new SafeWeakMap<object, Map<string, Entry>>());
+const textStore = sharedData("originals.text", () => new SafeWeakMap<object, { now: string; was: string }>());
 
 /** False until anything is recorded: reads then take the native path at no cost. */
-let any = false;
-export const hasOriginals = (): boolean => any;
+const recorded = sharedData("originals.any", () => ({ any: false }));
+export const hasOriginals = (): boolean => recorded.any;
 
 interface Natives {
     getAttribute(this: Element, n: string): string | null;
@@ -107,7 +110,7 @@ export function recordAttr(el: Element, name: string, now: string | null, was: s
     let m = attrStore.get(el);
     if (!m) attrStore.set(el, (m = new SafeMap()));
     m.set(key, { now, was });
-    any = true;
+    recorded.any = true;
 }
 
 export function forgetAttr(el: Element, name: string): void {
@@ -119,7 +122,7 @@ export function forgetAttr(el: Element, name: string): void {
  * none" — or undefined when cyrano did not change it (read it natively).
  */
 export function originalAttr(el: unknown, name: string): { value: string | null } | undefined {
-    if (!any || !nat || typeof el !== "object" || el === null) return undefined;
+    if (!recorded.any || !nat || typeof el !== "object" || el === null) return undefined;
     const e = attrStore.get(el)?.get(lower(name));
     if (!e) return undefined;
     let current: string | null;
@@ -131,7 +134,7 @@ export function originalAttr(el: unknown, name: string): { value: string | null 
 export function recordText(el: Element, now: string, was: string): void {
     if (now === was) { textStore.delete(el); return; }
     textStore.set(el, { now, was });
-    any = true;
+    recorded.any = true;
 }
 
 /** A script's or style's text as the page wrote it, or undefined to read natively. */
@@ -201,7 +204,7 @@ function elementsOf(node: Node): Element[] {
 
 /** Gives `copy` (a clone of `source`, same shape) the originals `source` has. */
 export function copyOriginals(source: Node, copy: Node, deep: boolean): void {
-    if (!any) return;
+    if (!recorded.any) return;
     const from = deep ? elementsOf(source) : source.nodeType === 1 ? [source as Element] : [];
     const to = deep ? elementsOf(copy) : copy.nodeType === 1 ? [copy as Element] : [];
     if (from.length !== to.length) return;
@@ -304,8 +307,8 @@ export function textAsWritten(node: unknown, raw: string): string {
             if (!n.previousSibling && !n.nextSibling) return originalText(parent) ?? raw;
             return sIncludes(raw, MARK) ? original(raw) : raw;
         }
-        if (sIncludes(raw, MARK) && !any) return original(raw);
-        if (!any && !sIncludes(raw, MARK)) return raw;
+        if (sIncludes(raw, MARK) && !recorded.any) return original(raw);
+        if (!recorded.any && !sIncludes(raw, MARK)) return raw;
         // Texts kept in the store: read them off the as-written clone.
         const el = n as Element;
         if (typeof el.querySelector !== "function" || !el.querySelector("script,style")) return raw;
@@ -324,7 +327,7 @@ export function inertDocument(): Document | null {
 
 /** Whether `serialized` (native markup or text) may differ from what the page wrote. */
 export function mayDiffer(serialized: unknown): boolean {
-    return any || (typeof serialized === "string" && sIncludes(serialized, MARK));
+    return recorded.any || (typeof serialized === "string" && sIncludes(serialized, MARK));
 }
 
 /** `value` for attribute `name` of `el`, trusted where the attribute is a Trusted Types sink. */

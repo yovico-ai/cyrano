@@ -22,6 +22,7 @@ import { defaultJsRewriteOptions, rewriteJsSource } from "../js/rewriter";
 import { maskAs, replaceValue } from "../native/surface";
 import { tagFunctionBody } from "../native/error-stack";
 import { isTrustedValue, trusted } from "../native/trusted";
+import { sharedData } from "../native/shared";
 
 export function patchFunctionConstructor(targetWindow: Window): void {
     const g = targetWindow as unknown as { Function?: FunctionConstructor };
@@ -62,4 +63,4 @@ export function patchFunctionConstructor(targetWindow: Window): void {
     replaceValue(targetWindow, "Function", wrapper);
 }
 
-const maskedRealms = new SafeWeakSet<object>();
+const maskedRealms = sharedData("function.realms", () => new SafeWeakSet<object>());
