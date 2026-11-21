@@ -3,7 +3,8 @@
 //   node tools/live-compare.cjs https://example.com/ https://httpbin.org/headers
 // SHOWTEXT=1 prints both pages' text (httpbin shows what the upstream received).
 const { chromium } = require("playwright");
-const PROXY = "http://localhost:9081";
+const PROXY = process.env.PROXY || "http://localhost:9081"; // PROXY=https://localhost:9443 for a TLS instance
+const PROXY_HOST = PROXY.replace(/^https?:\/\//, "");
 const sites = process.argv.slice(2);
 const prox = (u) => { const x = new URL(u); return `${PROXY}/cyrano/${x.protocol.slice(0, -1)}/${x.host}${x.pathname}${x.search}`; };
 
@@ -20,7 +21,7 @@ const probe = () => {
 };
 
 async function visit(browser, url, viaProxy) {
-  const ctx = await browser.newContext();
+  const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
   const page = await ctx.newPage();
   const errors = [], failed = [], escaped = [];
   page.on("pageerror", (e) => errors.push(String(e.message).slice(0, 160)));
@@ -57,14 +58,14 @@ async function visit(browser, url, viaProxy) {
         if (d.p[k] !== v.p[k]) out.push(`  DIFF ${k}: direct ${JSON.stringify(d.p[k])} | cyrano ${JSON.stringify(v.p[k])}`);
       }
       out.push(`  elements ${d.p.elements} | ${v.p.elements}   text ${d.p.textLen} | ${v.p.textLen}   scripts ${d.p.scripts} | ${v.p.scripts}`);
-      const leak = (xs) => xs.filter((x) => x.includes("localhost:9081") || x.includes("/cyrano/"));
+      const leak = (xs) => xs.filter((x) => x.includes(PROXY_HOST) || x.includes("/cyrano/"));
       const ll = leak(v.p.links), li = leak(v.p.imgs);
       if (ll.length) out.push(`  LEAK a.href shows proxy URLs: ${ll.length} e.g. ${ll[0]}`);
       if (li.length) out.push(`  LEAK img.src shows proxy URLs: ${li.length} e.g. ${li[0]}`);
       const dl = new Set(d.p.links), miss = v.p.links.filter((x) => !dl.has(x));
       if (miss.length && !ll.length) out.push(`  links differ: ${miss.length} of ${v.p.links.length} not in direct, e.g. ${miss[0]}`);
       if (v.p.globals) out.push(`  globals visible: ${v.p.globals}`);
-      if (/localhost:9081|\/cyrano\//.test(v.p.text)) out.push(`  LEAK proxy URL in page text: ${(v.p.text.match(/.{0,60}(localhost:9081|\/cyrano\/).{0,60}/) || [""])[0].replace(/\n/g, " ")}`);
+      if (/localhost:\d+|\/cyrano\//.test(v.p.text)) out.push(`  LEAK proxy URL in page text: ${(v.p.text.match(/.{0,60}(localhost:\d+|\/cyrano\/).{0,60}/) || [""])[0].replace(/\n/g, " ")}`);
       if (process.env.SHOWTEXT) out.push(`  --- direct text:\n${d.p.text.slice(0, 1500)}\n  --- cyrano text:\n${v.p.text.slice(0, 1500)}`);
     }
     out.push(`  errors ${d.errors.length} | ${v.errors.length}   failed requests ${d.failed.length} | ${v.failed.length}   escaped the proxy: ${v.escaped.length}`);

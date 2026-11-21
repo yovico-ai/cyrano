@@ -356,10 +356,16 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   no rule could touch is not parsed (`mayEdit`, both runtimes), a
   repeated source is not parsed again, and the public-suffix trie is
   built once for a page and its frames (`native/internals.ts`
-  sharedData). Good runs are at direct's CPU. Open: about one run in six
-  the interpreter still runs a single task for tens of seconds — never
-  with R5 off for its script, so it is R5's remaining cost or something
-  it measures; not yet understood. Tools: scratchpad `loop.cjs` (CDP
+  sharedData). Good runs are at direct's CPU. The long hang was R5's
+  helper: some runs make hundreds of millions of string-keyed accesses,
+  and the helper compared each key with seven names (A/B, 10 runs each:
+  8 hung with R5 on for the script, 0 with it off, 0 with the helper a
+  pass-through). It now rejects a key by its length and first letter
+  (hangs: 8 of 10 before, 1 of 12 after; direct with the frame in the
+  page's process: 0 of 12). Open: that remaining run — the call per
+  access itself, about ten times a keyed load in unoptimized code. Count
+  hangs with scratchpad `hangstat.cjs` over 10+ runs; one run tells
+  nothing. Tools: scratchpad `loop.cjs` (CDP
   profile by host, `NOISO=1` puts frames in one process for a like-for-like
   direct profile), `pause2.cjs` (stack samples inside a hang).
 - **Speed: profile before guessing.** A page that feels slow proxied was
@@ -501,8 +507,20 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   method gives inserted empty frames the runtime (`dynamic-iframe.ts`); and
   the URL fix-up before insert (spec/Attrs.agda's table, originals recorded)
   runs for every insertion method too.
+- **Site regression list**: `ts/e2e/tools/regression-sites.json` — every
+  site a fix was made for and what was fixed; `tools/site-regress.cjs`
+  compares the "auto" ones direct vs proxied and lists the "chrome" ones
+  (bot-protected: refused in an automated browser on both sides) for a
+  check in real Chrome. Run it before a commit that touches rewriting,
+  against the build to be committed (`PROXY=https://localhost:9443`). A
+  site-found bug also gets a distilled local test where it can be played
+  without the site (`tests/native/*-vs-chromium`); add the site to the
+  list in the same commit. The owner's instance (9081) runs a snapshot of
+  a committed, gated build from its own copy of the assets — a client
+  rebuild overwrites `go/assets/client/rewriter.js`, which a server
+  running from `go/assets` serves at once; experiments go on other ports.
 - Live check: `ts/e2e/tools/live-compare.cjs` (direct vs proxied, same
-  browser). Last run clean: example.com, news.ycombinator.com,
+  browser; `PROXY=` picks the instance). Last run clean: example.com, news.ycombinator.com,
   en.wikipedia.org, developer.mozilla.org, github.com, stackoverflow.com,
   bbc.com/news; theguardian.com matches direct except three FedCM requests.
   Headless Chromium is itself challenged by x.com/claude.ai: check those in

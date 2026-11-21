@@ -244,6 +244,23 @@ export function createRewriterApi(
             // No code ran in between, so the key is as the caller set it.
             if (obj !== targetWindow) {
                 if (typeof prop !== "string") return obj;
+                // A string: told from the names below by its length and first
+                // letter before it is compared with them — unoptimized, each
+                // comparison of two strings is a call, and Turnstile makes
+                // tens of millions of string-keyed accesses a run. (No method
+                // of String is called: a page can have replaced them.)
+                // (Turnstile's commonest keys are one character, "length" and "push".)
+                const c = prop[0];
+                switch (prop.length) {
+                    case 3: if (c !== "t") return obj; break; // top
+                    case 4: if (c !== "e") return obj; break; // eval
+                    case 5: if (c !== "w") return obj; break; // write
+                    case 6: if (c !== "p") return obj; break; // parent
+                    case 7: if (c !== "w") return obj; break; // writeln
+                    case 8: if (c !== "l") return obj; break; // location
+                    case 11: if (c !== "p") return obj; break; // postMessage
+                    default: return obj;
+                }
                 switch (prop) {
                     case "location": case "top": case "parent": case "write": case "writeln": case "postMessage": case "eval":
                         break; // memberHolder's
