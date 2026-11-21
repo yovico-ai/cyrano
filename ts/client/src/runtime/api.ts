@@ -28,9 +28,10 @@ import {
 import { wrapDocumentWrite } from "../wrappers/document-write";
 import { wrapPostMessage } from "../wrappers/post-message";
 import {
-    wrapEval,
     wrapEvalArg,
+    wrapEvalArgs,
     wrapEvalMemexp,
+    registerEvaluator,
 } from "../wrappers/eval";
 import { injectIntoIframe } from "./iframe-injection";
 
@@ -72,6 +73,9 @@ export function createRewriterApi(
     targetWindow: Window,
     config: ClientConfig,
 ): RewriterApi {
+    // This realm's intrinsic eval, before any page code can replace it: a
+    // call of it, under any shape the rewriter sees, gets its source rewritten.
+    try { registerEvaluator((targetWindow as unknown as { eval: unknown }).eval); } catch { /* a closed or foreign window */ }
     // Initial base URL — derived from the configured public origin. The
     // server's bootstrap script will overwrite this via set_base_url() with
     // the actual page URL the proxy is masquerading.
@@ -122,8 +126,6 @@ export function createRewriterApi(
             case "postMessage":
                 markSender(obj, targetWindow);
                 return wrapPostMessage({ obj }, initialBaseUrl.origin, () => baseUrlState.get().origin, (h) => unwrapProxiedUrl(h, config));
-            case "eval":
-                return wrapEvalMemexp(obj);
         }
         // window[i]: a child frame of another origin is
         // the same object page code gets from the iframe's contentWindow
@@ -253,7 +255,6 @@ export function createRewriterApi(
                 const c = prop[0];
                 switch (prop.length) {
                     case 3: if (c !== "t") return obj; break; // top
-                    case 4: if (c !== "e") return obj; break; // eval
                     case 5: if (c !== "w") return obj; break; // write
                     case 6: if (c !== "p") return obj; break; // parent
                     case 7: if (c !== "w") return obj; break; // writeln
@@ -262,7 +263,7 @@ export function createRewriterApi(
                     default: return obj;
                 }
                 switch (prop) {
-                    case "location": case "top": case "parent": case "write": case "writeln": case "postMessage": case "eval":
+                    case "location": case "top": case "parent": case "write": case "writeln": case "postMessage":
                         break; // memberHolder's
                     default:
                         return obj;
@@ -272,8 +273,12 @@ export function createRewriterApi(
             (targetWindow as unknown as { $__crn_key__: unknown }).$__crn_key__ = prop;
             return holder;
         },
-        wrap_eval: wrapEval,
+        // A read of eval gives eval itself (spec/Eval.agda): what reads it
+        // may call it as eval(…), a direct eval only with the intrinsic.
+        // (Kept for scripts rewritten before R1 stopped wrapping eval.)
+        wrap_eval: (f: typeof eval): typeof eval => f,
         wrap_eval_arg: wrapEvalArg,
+        wrap_eval_args: wrapEvalArgs,
         wrap_eval_memexp: wrapEvalMemexp,
         // JS_WRAP_IMPORT_ARG — proxify dynamic import() specifiers so module
         // loads go through URL containment like all other resource fetches.

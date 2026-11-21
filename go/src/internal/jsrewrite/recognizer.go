@@ -76,6 +76,16 @@ type expr struct {
 	// operation other than + (R5: such a key names no member the rules
 	// know).
 	num bool
+	// evalName: the expression is eval, parenthesized or not (1), or a
+	// parenthesized sequence whose last item is (2): R6 / R17 when called.
+	evalName uint8
+	// evalRef: the expression is eval or X.eval / X["eval"] with X a name or
+	// this (R16's F); this_: the expression is `this`.
+	evalRef, this_ bool
+	evalKey        bool // obj["eval"]: a constant key eval
+	// evalMethod: the expression is F.call or F.apply (R16), F at fStart:fEnd.
+	evalMethod   string
+	fStart, fEnd int
 }
 
 // patItem is an identifier edited inside a possible pattern.
@@ -290,11 +300,9 @@ func (p *parser) identHelper(id uint8) string {
 		if p.o.WrapGetParentWindow {
 			return "wrap_get_top_window"
 		}
-	case idEval:
-		if p.o.WrapEval {
-			return "wrap_eval"
-		}
 	}
+	// eval read as a value is left as written (spec/Eval.agda): it gives the
+	// intrinsic itself, so a later eval(…) of it stays a direct eval.
 	return ""
 }
 
@@ -328,7 +336,7 @@ func (p *parser) memberHelper(name string, called bool) string {
 
 // read marks e as consumed for its value: R1 if it is a bare identifier.
 func (p *parser) read(e *expr) {
-	if e.lone >= idLocation && e.lone <= idEval {
+	if e.lone >= idLocation && e.lone <= idParent {
 		if h := p.identHelper(e.lone); h != "" {
 			p.open(e.start, "$rewriter."+h+"(")
 			p.close(e.end, ")")
@@ -370,7 +378,7 @@ func (p *parser) member(obj *expr, name string, static, computed, optional bool,
 			}
 			return true
 		}
-		if name == "eval" && p.o.WrapEvalMemexp && !inChain { // R4
+		if name == "eval" && called && p.o.WrapEvalMemexp && !inChain { // R4 (a call; a read gives eval itself)
 			p.open(obj.start, "$rewriter.wrap_eval_memexp(")
 			p.close(obj.end, ")")
 			return true
@@ -1135,6 +1143,9 @@ func (p *parser) assign(patPos bool) expr {
 	if left.lone != idNone {
 		e0 := len(p.edits)
 		id, start, end := left.lone, left.start, left.end
+		if id == idEval {
+			left.evalName = 1 // (eval) / (…, eval): R6 / R17 when the group is called
+		}
 		p.read(&left)
 		if patPos && p.scope != nil && len(p.edits) > e0 {
 			p.scope.items = append(p.scope.items, patItem{e0: e0, e1: len(p.edits), start: start, end: end, name: id})
@@ -1306,6 +1317,10 @@ func (p *parser) lhs(calls bool) expr {
 				return e
 			}
 			opPos := p.tok.start
+			// Taken before the read below forgets the identifier (R16).
+			objName := e.lone != idNone || e.this_
+			objEval := e.lone == idEval || e.evalRef
+			objStart, objEnd := e.start, e.end
 			if !e.super && !e.meta {
 				p.read(&e)
 			}
@@ -1339,12 +1354,23 @@ func (p *parser) lhs(calls bool) expr {
 			}
 			applied := p.member(&e, name, true, false, optional, opPos, 0, 0, calls && p.calledNext())
 			e = expr{start: e.start, end: nameEnd, chain: e.chain || optional, wrapped: e.wrapped || applied}
+			if !optional && !e.chain {
+				if name == "eval" && objName {
+					e.evalRef = true
+				} else if (name == "call" || name == "apply") && objEval {
+					e.evalMethod, e.fStart, e.fEnd = name, objStart, objEnd
+				}
+			}
 
 		case p.is("["):
+			objName := e.lone != idNone || e.this_
 			if !e.super {
 				p.read(&e)
 			}
 			e = p.index(e, false, calls)
+			if objName && e.evalKey && !e.chain {
+				e.evalRef = true
+			}
 
 		case p.is("(") && calls:
 			e = p.call(e, false)
@@ -1398,14 +1424,20 @@ func (p *parser) index(obj expr, optional, calls bool) expr {
 	p.numKey = key.num
 	applied := p.member(&obj, name, static, true, optional, 0, lb, rb, calls && p.calledNext())
 	p.numKey = false
-	return expr{start: obj.start, end: end, chain: obj.chain || optional, wrapped: obj.wrapped || applied}
+	return expr{start: obj.start, end: end, chain: obj.chain || optional, wrapped: obj.wrapped || applied, evalKey: static && name == "eval" && !optional}
 }
 
 // call parses (arguments) after callee (the `(` is current).
 func (p *parser) call(callee expr, optional bool) expr {
 	// async (…) => … looks like a call until the arrow.
 	asyncArrow := callee.lone == idAsync && !optional && !p.tok.nl
-	directEval := callee.lone == idEval && !optional && p.o.WrapEvalArg
+	// R6 eval(a) / (eval)(a); R17 (…, eval)(a).
+	directEval := (callee.lone == idEval || callee.evalName != 0) && !optional && p.o.WrapEvalArg
+	// R16 F.call(t, a) / F.apply(t, arr).
+	evalMethod := ""
+	if callee.evalMethod != "" && !optional && p.o.WrapEvalArg {
+		evalMethod = callee.evalMethod
+	}
 	if directEval {
 		// R6 needs a first argument that is not a spread.
 		t := p.peek()
@@ -1424,15 +1456,25 @@ func (p *parser) call(callee expr, optional bool) expr {
 		scope = &patScope{}
 		p.scope = scope
 	}
-	first := true
+	first, second, n := true, false, 0
 	for !p.is(")") {
 		if p.tok.kind == tEOF {
 			p.failAt()
 		}
+		n++
+		second = n == 2
 		spread := p.eat("...")
-		if first && directEval && !spread { // R6
+		if first && directEval && !spread { // R6 / R17
 			a := p.assign(false)
 			p.open(a.start, "$rewriter.wrap_eval_arg(eval,")
+			p.close(a.end, ")")
+		} else if second && evalMethod != "" && !spread { // R16
+			a := p.assign(false)
+			h := "wrap_eval_arg("
+			if evalMethod == "apply" {
+				h = "wrap_eval_args("
+			}
+			p.open(a.start, "$rewriter."+h+string(p.src[callee.fStart:callee.fEnd])+",")
 			p.close(a.end, ")")
 		} else {
 			p.assign(asyncArrow)
@@ -1534,7 +1576,7 @@ func (p *parser) primary() expr {
 			return expr{start: start, end: p.prevEnd}
 		case "this":
 			p.next()
-			return expr{start: start, end: p.prevEnd}
+			return expr{start: start, end: p.prevEnd, this_: true}
 		case "super":
 			p.next()
 			return expr{start: start, end: p.prevEnd, super: true}
@@ -1664,6 +1706,7 @@ func (p *parser) group() expr {
 	scope := &patScope{}
 	p.scope = scope
 	items, num := 0, false
+	var evalName uint8
 	for !p.is(")") {
 		if p.tok.kind == tEOF {
 			p.failAt()
@@ -1672,6 +1715,13 @@ func (p *parser) group() expr {
 		item := p.assign(true)
 		items++
 		num = items == 1 && !spread && item.num // (e) is e; a sequence is not
+		evalName = 0
+		if !spread && (item.lone == idEval || item.evalName == 1) {
+			evalName = 1
+			if items > 1 {
+				evalName = 2
+			}
+		}
 		if !p.is(")") {
 			p.expect(",")
 			num = false
@@ -1679,7 +1729,10 @@ func (p *parser) group() expr {
 	}
 	p.next()
 	p.noIn, p.forInit, p.scope = noIn, forInit, outer
-	return expr{start: start, end: p.prevEnd, pat: scope, paren: true, num: num}
+	if evalName == 1 && items > 1 {
+		evalName = 2
+	}
+	return expr{start: start, end: p.prevEnd, pat: scope, paren: true, num: num, evalName: evalName}
 }
 
 func (p *parser) arrayLiteral() expr {

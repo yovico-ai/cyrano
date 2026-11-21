@@ -167,6 +167,21 @@ navigate listeners see just the navigation that replaces it.
   `<meta http-equiv=content-security-policy>` reads its rewritten
   `content`; CSS attribute selectors match the rewritten values;
   `crossOrigin` reads the forced value.
+- **eval** (spec/Eval.agda, checked in Chromium by eval-calls-vs-chromium
+  against the oracle): every eval the source shows is rewritten — eval(…)
+  and (eval)(…) direct, X.eval(…), X["eval"](…), eval.call/apply (and
+  X.eval's), (…, eval)(…) — and nothing else is touched: the runtime's
+  wrap_eval_arg / wrap_eval_args rewrite only when the callee is an
+  evaluator (identity: each realm's runtime records its window's eval at
+  load), else pass the argument through. A read of eval, by any route,
+  gives the intrinsic (no stand-in): a stand-in made `var eval =
+  window.eval; eval(s)` indirect — Salesforce's Locker evaluates every
+  component that way inside its `with (sandbox)`, and they ran outside it
+  (help.twitch.tv; now as direct). Known limit, stated in the spec: the
+  intrinsic stored and called under another name (`const e = window.eval;
+  e(s)`) runs its source as written (guarding every call is not done).
+  A Trusted Types default policy sees every eval but may not change its
+  source (Chrome refuses), so it cannot be the catch-all.
 - **JS source**: scripts are not re-printed; edits are spliced in and
   marked, and taken out again for `toString()` and script text
   (`spec/js-rewrite/README.md`). Code made with `new Function` names the

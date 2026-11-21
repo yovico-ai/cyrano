@@ -196,6 +196,7 @@ import WorkerSource
 import Frames
 import Stack
 import H1
+import Eval
 import Route
 import Features
 import Messaging
@@ -385,6 +386,7 @@ dispatch op args =
   else if eqStr op (toList "featuresources") then oneArg (λ f → joinNL (Features.sources f)) args
   else if eqStr op (toList "featuresmap") then oneArg (Features.mapSources (λ v → fromℕ 91 ∷ v ++ fromℕ 93 ∷ [])) args
   else if eqStr op (toList "refererroute") then refererRouteReq args
+  else if eqStr op (toList "evalcall") then evalCallReq args
   else if eqStr op (toList "h1head") then oneArg (λ v → joinNL (H1.h1Head (if Data.List.Base.null v then [] else splitOn (is 10) v))) args
   else if eqStr op (toList "h1orders") then oneArg (λ st → Data.List.Base.concatMap (λ ns → fromℕ 60 ∷ joinComma ns ++ fromℕ 62 ∷ []) (H1.recordsOf st)) args
   else if eqStr op (toList "framedlength") then framedLengthReq args
@@ -711,6 +713,22 @@ dispatch op args =
   embedderReq (m ∷ rec ∷ ref ∷ []) =
     out (Frames.embedderOf (eqStr m (toList "1")) (if eqStr rec (toList "-") then nothing else just rec) ref)
   embedderReq _ = errorReply "BadRequest"
+
+  -- evalcall CALLEE SHAPE ARG [TEXT]: CALLEE intrinsic|notEval, SHAPE
+  -- named|seen|renamed, ARG text|script|other; the proxied outcome, the
+  -- rewrite marked R(…).
+  evalCallReq : List Str → Str
+  evalCallReq (c ∷ sh ∷ a ∷ rest) = out (Eval.show (Eval.proxied Eval.marked callee shape arg))
+    where
+    callee : Eval.Callee
+    callee = if eqStr c (toList "intrinsic") then Eval.intrinsic else Eval.notEval
+    shape : Eval.Shape
+    shape = if eqStr sh (toList "named") then Eval.named else (if eqStr sh (toList "seen") then Eval.seen else Eval.renamed)
+    body : Str
+    body = Data.List.Base.foldr (λ x acc → x) [] rest
+    arg : Eval.Arg
+    arg = if eqStr a (toList "text") then Eval.text body else (if eqStr a (toList "script") then Eval.script body else Eval.other)
+  evalCallReq _ = errorReply "BadRequest"
 
   orbReq : List Str → Str
   orbReq (ct ∷ b ∷ []) = yn (Orb.blocks (ctArg ct) b)
@@ -1360,3 +1378,4 @@ respond line with fields line
 
 evaluate : String → String
 evaluate line = fromList (respond (toList line))
+

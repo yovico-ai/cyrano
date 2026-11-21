@@ -132,17 +132,20 @@ describe("createRewriterApi — wrap_* surface", () => {
         expect(wrapped.a).toBe(1);
     });
 
-    it("wrap_eval / wrap_eval_arg now route JS source through the client-side rewriter", () => {
+    it("a read of eval gives eval itself; wrap_eval_arg rewrites only for an evaluator (spec/Eval.agda)", () => {
         const api = createRewriterApi(window, config);
-        // wrap_eval returns a wrapping function (not the eval identity).
         // eslint-disable-next-line no-eval
-        const wrapped = api.wrap_eval(eval);
-        expect(wrapped).not.toBe(eval);
-        expect(typeof wrapped).toBe("function");
-        // wrap_eval_arg rewrites JS source.
+        expect(api.wrap_eval(eval)).toBe(eval);
         // eslint-disable-next-line no-eval
         const rewritten = api.wrap_eval_arg(eval, "var x = location;");
         expect(unmarked(String(rewritten))).toContain("$rewriter.wrap_get_location(location)");
+        // Not eval: passthrough, whatever it is called.
+        const notEval = function (s: string): string { return s; };
+        Object.defineProperty(notEval, "name", { value: "eval" }); // named eval, still not eval
+        expect(api.wrap_eval_arg(notEval as unknown as typeof eval, "var x = location;")).toBe("var x = location;");
+        // eslint-disable-next-line no-eval
+        expect(api.wrap_eval_args(eval, ["var y = top;", 2])).toEqual([expect.stringContaining("wrap_get_top_window"), 2]);
+        expect(api.wrap_eval_args(notEval, ["var y = top;"])).toEqual(["var y = top;"]);
     });
 });
 

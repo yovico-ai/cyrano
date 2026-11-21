@@ -45,6 +45,7 @@ export interface RewriterApi {
     wrap_pattern(source: unknown): unknown;
     wrap_eval(evalFn: typeof eval): typeof eval;
     wrap_eval_arg(evalFn: typeof eval, source: unknown): unknown;
+    wrap_eval_args(evalFn: unknown, args: unknown): unknown;
     wrap_eval_memexp(obj: unknown): unknown;
     wrap_import_arg(specifier: unknown, scriptUrl?: unknown): unknown;
     /** R15: import.meta.resolve, resolving as import() does and giving the original URL. */

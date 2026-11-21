@@ -33,6 +33,13 @@ const fake = new Proxy({}, { get: (t, k) => (k === "location" ? { href: "https:/
 run("globalThis a proxy window", () => Function("globalThis", "window", body)(fake, fake));
 run("with a sandbox", () => Function("sb", "with (sb) { return (function () {" + body + "})(); }")(new Proxy({}, { has: (t, k) => k === "globalThis", get: () => undefined })));
 run("indirect eval", () => (0, eval)("(function (globalThis) {" + body + "})")(undefined));
+// eval read off the window and called by the name eval: natively a direct
+// eval (the callee is the intrinsic), so it sees the caller's scope.
+// (Compiled with Function, which the runtime rewrites, as the server
+// rewrites a page's scripts: window.eval is then the runtime's to hand out.)
+run("window.eval called as eval", () => Function('const captured = window.eval; return (function () { var x = "local"; var eval = captured; return eval("typeof x"); })();')());
+run("window['eval'] called as eval", () => Function('const captured = window["eval"]; return (function () { var x = "local"; var eval = captured; return eval("typeof x"); })();')());
+run("an object's eval read in a with", () => Function('var o = {eval: window.eval}; return (function () { var x = "local"; with (o) { return eval("typeof x"); } })();')());
 // Salesforce's Locker evaluator: compiled with the realm's Function; its
 // with object claims every name the sandbox or the window has, and the
 // code is direct-eval'd, strict, inside it.

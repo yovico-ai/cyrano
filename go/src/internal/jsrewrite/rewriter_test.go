@@ -184,10 +184,13 @@ func TestPostMessage_CalledThroughRuntime(t *testing.T) {
 
 // ── WRAP_EVAL / EVAL_ARG / EVAL_MEMEXP ──────────────────────────────────────
 
-func TestWrapEval_RvalueOnly(t *testing.T) {
-	got := rewrite(t, `var f = eval;`)
-	if !strings.Contains(got, `$rewriter.wrap_eval(eval)`) {
-		t.Errorf("wrap_eval missing: %s", got)
+// A read of eval is left as written: it gives the intrinsic, so a later
+// eval(…) of it stays direct (spec/Eval.agda).
+func TestEvalRead_AsWritten(t *testing.T) {
+	for _, src := range []string{`var f = eval;`, `var g = w.eval;`, `o = {e: w["eval"]};`} {
+		if got := rewrite(t, src); strings.Contains(got, "$rewriter") {
+			t.Errorf("a read of eval was rewritten: %s → %s", src, got)
+		}
 	}
 }
 

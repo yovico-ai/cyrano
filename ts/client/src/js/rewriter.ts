@@ -342,13 +342,29 @@ function inWith(ins: string): string {
     return ins.replace(/\$rewriter\./g, WITH_GLOBAL + "$rewriter.").replace(/\$__crn_key__/g, WITH_GLOBAL + "$__crn_key__");
 }
 
+function unparen(n: N): N {
+    while (n.type === "ParenthesizedExpression") n = n["expression"] as N;
+    return n;
+}
+function last(xs: N[]): N { return xs[xs.length - 1]!; }
+function isEvalName(n: N): boolean { return n.type === "Identifier" && n["name"] === "eval"; }
+/** eval, or X.eval / X["eval"] with X a name or this (read again by the wrapper: no side effects). */
+function evalReference(n: N): boolean {
+    if (isEvalName(n)) return true;
+    if (n.type !== "MemberExpression" || n["optional"]) return false;
+    const o = n["object"] as N, p = n["property"] as N;
+    const named = !n["computed"] ? p.type === "Identifier" && p["name"] === "eval"
+        : (p.type === "Literal" && p["value"] === "eval") ||
+          (p.type === "TemplateLiteral" && (p["expressions"] as N[]).length === 0 && ((p["quasis"] as N[])[0]!["value"] as { cooked?: string }).cooked === "eval");
+    return named && (o.type === "Identifier" || o.type === "ThisExpression");
+}
+
 /** R1: a bare identifier read → the helper its value goes through. */
 function identHelper(name: string, o: JsRewriteOptions): string | null {
     switch (name) {
         case "location": return o.wrapGetLocation ? "wrap_get_location" : null;
         case "top": return o.wrapGetTopWindow ? "wrap_get_top_window" : null;
         case "parent": return o.wrapGetParentWindow ? "wrap_get_top_window" : null;
-        case "eval": return o.wrapEval ? "wrap_eval" : null;
     }
     return null;
 }
@@ -382,7 +398,7 @@ function memberHelper(name: string, called: boolean, o: JsRewriteOptions): strin
  *      not: X.top / X.parent followed by a plain `=` (a write: as written)
  *      in an optional chain →  $rewriter.<h>({obj:X,opt:1})?.name
  *      (also X["location"] and the like: a constant key is a name)
- *  R4  X.eval  →  $rewriter.wrap_eval_memexp(X).eval          (not in an optional chain)
+ *  R4  X.eval called  →  $rewriter.wrap_eval_memexp(X).eval   (not in an optional chain)
  *  R5  X[k], k not a constant, not in an optional chain, not followed by a plain `=`,
  *      k not certainly a number (parentheses aside: a unary - + ~, a ++ / --,
  *      a binary arithmetic or bitwise operation other than +) — such a key
@@ -392,7 +408,14 @@ function memberHelper(name: string, called: boolean, o: JsRewriteOptions): strin
  *      (a write stays as written: `obj[k] = function(){}` is named by V8
  *      from its target, and `window[k] = url` is caught by the runtime's
  *      navigation net)
- *  R6  eval(a, …) called directly  →  eval($rewriter.wrap_eval_arg(eval,a), …)
+ *  R6  eval(a, …) called directly (also (eval)(a))  →  eval($rewriter.wrap_eval_arg(eval,a), …)
+ *  R16 F.call(t, a, …) / F.apply(t, arr), F the name eval or X.eval (X a name
+ *      or this)  →  F.call(t, $rewriter.wrap_eval_arg(F,a), …) / F.apply(t, $rewriter.wrap_eval_args(F,arr))
+ *  R17 (…, eval)(a, …)  →  (…, eval)($rewriter.wrap_eval_arg(eval,a), …)
+ *      A read of eval (R1) or of X.eval not called (R4) is left as written:
+ *      it gives eval itself, so a later `eval(s)` stays direct. The runtime's
+ *      wrap_eval_arg rewrites only when F is an evaluator (spec/Eval.agda:
+ *      passthrough). A call of eval under another name is not rewritten.
  *  R7  import(s)  →  import($rewriter.wrap_import_arg(s,"<script URL>"))
  *      (a literal s, when it can be proxified now, is replaced instead)
  *  R8  import … from "s" / export … from "s"  →  the specifier proxified
@@ -460,13 +483,31 @@ class Splicer {
                 const callee = n["callee"] as N;
                 const args = n["arguments"] as N[];
                 const a0 = args[0];
-                if (this.o.wrapEvalArg && callee.type === "Identifier" && callee["name"] === "eval" &&
-                    !n["optional"] && a0 && a0.type !== "SpreadElement") {
-                    this.visit(a0, "expr", false); // R6
+                const bare = unparen(callee);
+                if (this.o.wrapEvalArg && !n["optional"] && a0 && a0.type !== "SpreadElement" &&
+                    (isEvalName(bare) || (bare.type === "SequenceExpression" && isEvalName(unparen(last(bare["expressions"] as N[])))))) {
+                    // R6 eval(a) — (eval)(a) too: direct; R17 (…, eval)(a): indirect.
+                    if (bare !== callee || bare.type === "SequenceExpression") this.visit(callee, "expr", true);
+                    this.visit(a0, "expr", false);
                     this.open(a0.start, "$rewriter.wrap_eval_arg(eval,");
                     this.close(a0.end, ")");
                     this.all(args.slice(1), "expr");
                     return;
+                }
+                // R16 F.call(t, a, …) / F.apply(t, arr), F eval or X.eval (X a name or this).
+                if (this.o.wrapEvalArg && !n["optional"] && callee.type === "MemberExpression" && !callee["optional"] && !callee["computed"]) {
+                    const method = (callee["property"] as N)["name"];
+                    const f = callee["object"] as N; // as written: no parentheses looked through
+                    const arg = args[1];
+                    if ((method === "call" || method === "apply") && arg && arg.type !== "SpreadElement" && evalReference(f)) {
+                        this.visit(callee, "expr", true);
+                        this.visit(args[0], "expr", false);
+                        this.visit(arg, "expr", false);
+                        this.open(arg.start, "$rewriter." + (method === "call" ? "wrap_eval_arg(" : "wrap_eval_args(") + this.src.slice(f.start, f.end) + ",");
+                        this.close(arg.end, ")");
+                        this.all(args.slice(2), "expr");
+                        return;
+                    }
                 }
                 if (callee.type !== "Super") this.visit(callee, "expr", true);
                 this.all(args, "expr");
@@ -732,7 +773,7 @@ class Splicer {
             this.wrapped.add(m);
             return;
         }
-        if (name === "eval" && this.o.wrapEvalMemexp && !inChain) { // R4
+        if (name === "eval" && called && this.o.wrapEvalMemexp && !inChain) { // R4 (a call; a read gives eval itself: spec/Eval.agda)
             this.open(obj.start, "$rewriter.wrap_eval_memexp(");
             this.close(obj.end, ")");
             this.wrapped.add(m);
