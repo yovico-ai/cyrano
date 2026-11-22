@@ -149,8 +149,39 @@ export function recordTextNode(node: object, now: string, was: string): void {
     recorded.any = true;
 }
 
+// An element whose text the server rewrote, its text as written, until its
+// text node is there to record (the parser may add it after the element).
+const pendingText = new SafeWeakMap<object, string>();
+
+/** Records an element's (single) text child as written `was`; now, or once the node exists. */
+function recordElementText(el: Element, was: string): void {
+    const t = el.firstChild;
+    if (t && t.nodeType === 3 && t.nextSibling === null) {
+        let now: string;
+        try { now = ncall(nat!.textGet, t) as string; } catch { return; }
+        recordTextNode(t, now, was);
+        return;
+    }
+    pendingText.set(el, was);
+    recorded.any = true;
+}
+
+/** A pending element text recorded for its text node, the first time that node is read. */
+function resolvePending(node: Node): void {
+    const el = node.parentNode;
+    if (!el) return;
+    const was = pendingText.get(el);
+    if (was === undefined) return;
+    pendingText.delete(el);
+    if (el.firstChild !== node || node.nextSibling !== null) return;
+    let now: string;
+    try { now = ncall(nat!.textGet, node) as string; } catch { return; }
+    recordTextNode(node, now, was);
+}
+
 /** A text node's data as the page wrote it, or undefined when the runtime did not change it (or the page has since). */
 function textNodeAsWritten(node: Node): string | undefined {
+    if (!textStore.has(node)) resolvePending(node);
     const t = textStore.get(node);
     if (!t) return undefined;
     let data: string | null;
@@ -210,6 +241,9 @@ export function consume(root: unknown): void {
         if (typeof o !== "object" || o === null) return;
         for (const [name, was] of nO.entries(o)) {
             if (was !== null && typeof was !== "string") continue;
+            // The element's text as written (a <style> the server rewrote:
+            // Go htmlrewrite withTextOriginal).
+            if (name === "#text") { if (typeof was === "string") recordElementText(el, was); continue; }
             recordAttr(el, name, ncall(nat!.getAttribute, el, name), was);
         }
     };

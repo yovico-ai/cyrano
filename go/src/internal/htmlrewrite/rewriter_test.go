@@ -600,3 +600,38 @@ func TestRewrite_IframeAllowOrigins(t *testing.T) {
 		t.Errorf("original allow not carried: %s", out)
 	}
 }
+
+// A <style> whose text the rewriter changes carries the text as written
+// ("#text" in the originals attribute), so the page reads its own CSS
+// back: React's hydration compares a <style>'s textContent with what it
+// renders, and the rewritten url() was a mismatch (21kschool.com, error
+// #418). An unchanged style, and an SVG one, keep to the same rule.
+func TestRewrite_StyleTextOriginal(t *testing.T) {
+	// The CSS rewriter as a stand-in that changes url()s only.
+	css := func(cfg *Config) {
+		cfg.RewriteInlineCSS = func(src []byte) []byte { return bytes.ReplaceAll(src, []byte("url(/"), []byte("url(/cyrano/https/example.com/")) }
+	}
+	withOriginals := func(cfg *Config) { cfg.NoOriginals = false; css(cfg) }
+	got := rewrite(t, `<html><head><style>p{color:red}</style></head><body><style media="x">b{background:url(/bg.png)}</style><svg><style>c{fill:url(/f.svg)}</style></svg></body></html>`, withOriginals)
+	if !strings.Contains(got, `<style>p{color:red}</style>`) {
+		t.Errorf("an unchanged style got an originals attribute:\n%s", got)
+	}
+	for _, want := range []string{
+		`<style media="x" crn-o="{&#34;#text&#34;:&#34;b{background:url(/bg.png)}&#34;}">`,
+		`<style crn-o="{&#34;#text&#34;:&#34;c{fill:url(/f.svg)}&#34;}">`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %s in:\n%s", want, got)
+		}
+	}
+	// An attribute original and the text original in one object.
+	got = rewrite(t, `<html><body><style integrity="x">b{background:url(/bg.png)}</style></body></html>`, withOriginals)
+	if !strings.Contains(got, `&#34;#text&#34;:&#34;b{background:url(/bg.png)}&#34;}"`) || strings.Count(got, "crn-o=") != 1 {
+		t.Errorf("one originals attribute with both expected:\n%s", got)
+	}
+	// Without originals, nothing is added.
+	got = rewrite(t, `<html><body><style>b{background:url(/bg.png)}</style></body></html>`, func(cfg *Config) { cfg.NoOriginals = true; css(cfg) })
+	if strings.Contains(got, "crn-o") {
+		t.Errorf("originals written with NoOriginals:\n%s", got)
+	}
+}

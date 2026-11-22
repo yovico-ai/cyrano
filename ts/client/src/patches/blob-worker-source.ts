@@ -119,13 +119,18 @@ function saveXhr(targetWindow: Window): void {
 }
 
 function readScript(targetWindow: Window, url: string): { source: string; type: string } | undefined {
+    return readBlob(targetWindow, url, "text/javascript; charset=utf-8");
+}
+
+/** A blob: or data: URL's text and type, read synchronously with the XHR saved at load (undefined when it cannot be). */
+export function readBlob(targetWindow: Window, url: string, mime: string): { source: string; type: string } | undefined {
     if (!/^(blob|data):/i.test(url)) return undefined;
     const s = savedXhr.get(targetWindow);
     if (!s) return undefined;
     try {
         const x = nR.construct(s.Ctor, []) as XMLHttpRequest;
         ncall(s.open, x, "GET", url, false);
-        ncall(s.mime, x, "text/javascript; charset=utf-8");
+        ncall(s.mime, x, mime);
         ncall(s.send, x);
         const status = ncall(s.status, x) as number;
         if (status !== 200 && status !== 0) return undefined;

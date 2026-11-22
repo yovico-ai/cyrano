@@ -47,6 +47,7 @@ export function bootstrapOf(node: unknown): (() => string) | undefined {
     }
 }
 import { rewriteSrcsetAttribute } from "./srcset";
+import { elementBlobValue } from "./blob-document";
 import { XLINK_NS, kindOf, rewriteByKind } from "./url-attribute-map";
 import { remark, rewriteFor, type RewriteOne } from "./referrer-policy";
 import { isRefreshEquiv, rewriteRefresh } from "../url/refresh";
@@ -449,6 +450,9 @@ function attributeValue(el: Element, name: string, value: string, rewriteOne: (u
     // (spec/Csp.agda translateMeta): the browser applies it on insertion.
     if (lowerName === "content" && proxyOrigin.length > 0 && isCspMeta(el)) return rewriteCspContent(value, proxyOrigin, trustedPolicyName());
     if (lowerName === "srcdoc" && el.tagName === "IFRAME") return rewriteSrcdoc(value, rewriteOne, proxyOrigin, bootstrapOf(el));
+    // A blob: URL of a document or stylesheet the page built: rewritten (blob-document.ts).
+    const blobDoc = elementBlobValue(el, lowerName, value, rewriteOne, proxyOrigin, bootstrapOf(el));
+    if (blobDoc) return blobDoc;
     // An origin in allow names nothing on the proxy (spec/Allow.agda).
     if (lowerName === "allow" && el.tagName === "IFRAME") return rewriteAllow(value);
     // An element's own referrer policy: the browser is told unsafe-url, its

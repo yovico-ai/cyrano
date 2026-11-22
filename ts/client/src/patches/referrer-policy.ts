@@ -28,6 +28,14 @@ export interface RewriteOne {
     withPolicy?: (url: string, policy: string) => string;
     /** Marked: a referrer policy of its own, what it is requested for (spec/Containment.agda Mark). */
     withMark?: (url: string, policy: string | null, dest: Dest | null) => string;
+    /**
+     * The same, resolving against a document base set by `<base href>`
+     * (spec/Html.agda documentBase: parsed against the current base); null
+     * when the href does not parse.
+     */
+    withBase?: (href: string) => RewriteOne | null;
+    /** A <base href> withBase cannot resolve is passed over, not the end of the search (a blob document's). */
+    skipBase?: boolean;
 }
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";

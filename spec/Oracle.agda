@@ -388,6 +388,8 @@ dispatch op args =
   else if eqStr op (toList "featuresmap") then oneArg (Features.mapSources (λ v → fromℕ 91 ∷ v ++ fromℕ 93 ∷ [])) args
   else if eqStr op (toList "refererroute") then refererRouteReq args
   else if eqStr op (toList "evalcall") then evalCallReq args
+  else if eqStr op (toList "blobbase") then oneArg (λ t → if Frames.blobBase t then toList "yes" else toList "no") args
+  else if eqStr op (toList "blobdocument") then oneArg (λ t → if Frames.blobDocument t then toList "yes" else toList "no") args
   else if eqStr op (toList "storename") then twoArgs (λ k n → Storage.stored k n) args
   else if eqStr op (toList "storeshown") then storeShownReq args
   else if eqStr op (toList "lsfits") then lsFitsReq args

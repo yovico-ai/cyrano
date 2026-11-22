@@ -162,7 +162,11 @@ navigate listeners see just the navigation that replaces it.
   script it found unequal: washingtonpost.com ran its ads twice)
   (`native/originals.ts`, `patches/read-back.ts`; the server
   carries originals in the `crn-o` attribute, consumed before page scripts
-  run). Still open: `attributes` / `getAttributeNames` list what the
+  run; a `<style>` whose text a rewriter changed carries it as written in
+  `crn-o` under `#text`, both runtimes: React hydrates App Router pages
+  against the `<style>`'s textContent, 21kschool.com). Still open:
+  CharacterData methods (`substringData`) read the rewritten text;
+  `attributes` / `getAttributeNames` list what the
   element holds (a dropped `integrity` is missing from the list); a
   `<meta http-equiv=content-security-policy>` reads its rewritten
   `content`; CSS attribute selectors match the rewritten values;
@@ -371,7 +375,15 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   there: stamped.io's own init race, artfund's origin alternating 301 and
   a meta-refresh page, readthedocs' and 1stdibs' challenges (direct too,
   once the IP is flagged).
-  Known: blob: URLs carry the proxy's origin.
+  Known: blob: URLs carry the proxy's origin. A frame given a blob: URL
+  of an HTML document the page built (src, setAttribute, markup) gets that
+  document rewritten as a srcdoc is, its first `<base href>` the base of
+  what follows (spec/Frames.agda blobDocument, `patches/blob-document.ts`;
+  TradingView's chart on bitrue.com loaded its bundles from their origin);
+  the page reads back its own URL; the frame's location reads the
+  rewritten blob's. A blob stylesheet a link is given is rewritten too,
+  against the document's base (Chromium's); a blob document's references
+  without a scheme fail as directly (blobBase).
 - **Turnstile on a page's main thread** (techcrunch.com, 2026-11-20):
   direct, its frame is another process; proxied, every frame shares the
   page's thread, so what its interpreter costs the page feels. It froze

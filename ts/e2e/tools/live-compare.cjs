@@ -50,6 +50,20 @@ function unprox(u) {
 }
 const siteOf = (h) => { const p = h.toLowerCase().split("."); return p.length > 2 && p[p.length - 2].length <= 3 && p[p.length - 1].length === 2 ? p.slice(-3).join(".") : p.slice(-2).join("."); };
 
+// Waits until the page's title, URL and element count are unchanged for
+// `still` ms (at most `max`).
+async function settle(page, still = 1500, max = 10000) {
+  // A navigation a click starts late (a page transition first) destroys
+  // the context mid-wait: a failed read is a change, and the document must
+  // have finished loading.
+  const t0 = Date.now(); let last = "", since = Date.now();
+  while (Date.now() - t0 < max) {
+    const now = await page.evaluate(() => document.readyState === "complete" ? document.title + "|" + location.href + "|" + document.getElementsByTagName("*").length : "loading " + Math.random()).catch(() => "failed " + Math.random());
+    if (now !== last) { last = now; since = Date.now(); } else if (Date.now() - since >= still) return;
+    await page.waitForTimeout(250);
+  }
+}
+
 // Clicks around the proxied page as a person would: CLICKS times, a random
 // visible link of the same site, by a real click. Each step must stay on
 // the proxy and load; its destination is then loaded direct and compared.
@@ -90,6 +104,10 @@ async function clickAround(browser, url, n) {
       }
       await page.waitForLoadState("load", { timeout: 30000 }).catch(() => {});
       await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
+      // An in-app navigation (pushState) has no load to wait for: the app
+      // renders after it. Counted once title, URL and element count have
+      // stood still for 1.5 s (at most 10 s), as the direct load is complete.
+      await settle(page);
       page.off("response", onResp);
       const now = page.url(), orig = unprox(now);
       const title = await page.title().catch(() => "");
@@ -106,7 +124,7 @@ async function clickAround(browser, url, n) {
       // The same destination, direct.
       if (moved && orig) {
         const dctx = await browser.newContext(); const dp = await dctx.newPage(); let dstatus = 0;
-        try { const r = await dp.goto(orig, { waitUntil: "load", timeout: 45000 }); dstatus = r ? r.status() : 0; await dp.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {}); } catch {}
+        try { const r = await dp.goto(orig, { waitUntil: "load", timeout: 45000 }); dstatus = r ? r.status() : 0; await dp.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {}); await settle(dp); } catch {}
         const dtitle = await dp.title().catch(() => ""), dels = await dp.evaluate(() => document.getElementsByTagName("*").length).catch(() => 0);
         await dctx.close();
         line += `\n      proxied ${status || "-"} "${title.slice(0, 60)}" ${els} el | direct ${dstatus || "-"} "${dtitle.slice(0, 60)}" ${dels} el`;

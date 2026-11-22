@@ -83,12 +83,18 @@ export function installPatches(
     };
     // (withPolicy: the same, for a request made under its own referrer
     // policy — the proxified URL carries it; patches/referrer-policy.ts.)
-    const rewriteOne: RewriteOne = Object.assign((rawUrl: string): string =>
-        rewriteUrl(rawUrl, documentBase(), config), {
-        withPolicy: (rawUrl: string, policy: string): string => rewriteUrl(rawUrl, documentBase(), config, policy),
+    const rewriterFor = (base: () => URL): RewriteOne => Object.assign((rawUrl: string): string =>
+        rewriteUrl(rawUrl, base(), config), {
+        withPolicy: (rawUrl: string, policy: string): string => rewriteUrl(rawUrl, base(), config, policy),
         withMark: (rawUrl: string, policy: string | null, dest: Dest | null): string =>
-            rewriteUrl(rawUrl, documentBase(), config, policy ?? undefined, dest ?? undefined),
+            rewriteUrl(rawUrl, base(), config, policy ?? undefined, dest ?? undefined),
+        withBase: (href: string): RewriteOne | null => {
+            let b: URL;
+            try { b = new URL(href, base()); } catch { return null; }
+            return rewriterFor(() => b);
+        },
     });
+    const rewriteOne: RewriteOne = rewriterFor(documentBase);
     const unwrapOne = (proxiedUrl: string): string =>
         unwrapProxiedUrl(proxiedUrl, config);
 

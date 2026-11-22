@@ -142,3 +142,61 @@ frameDest (just s) = if sandboxAllowsScripts s then destFrame else destInert
 inertFrame : Bool → Bool → Bool → Bool
 inertFrame markInert marked recorded = markInert ∨ (not marked ∧ recorded)
 
+
+-- ---------------------------------------------------------------------
+-- A frame given a blob: URL of a document built in the browser
+-- (TypeScript: patches/blob-document.ts). Its markup never passes the
+-- server: the frame is given a blob: URL of the same document rewritten
+-- as a srcdoc is (URLs proxified, the bootstrap first), and the page reads
+-- back the URL it gave. Rewritten: a blob whose type Chromium renders as
+-- an HTML document — text/html, parameters aside, any case. Others (XML,
+-- SVG, text, images) load as given. Found: TradingView's chart frame
+-- (bitrue.com) loaded its bundles from their origin.
+blobDocument : Str → Bool
+blobDocument ty = eqLower (essence ty) (toList "text/html")
+  where
+  -- The type before any ";", spaces and tabs around it dropped.
+  essence : Str → Str
+  essence s = trim (upTo s)
+    where
+    upTo : Str → Str
+    upTo [] = []
+    upTo (c ∷ cs) = if Url.is 59 c then [] else c ∷ upTo cs
+    trim : Str → Str
+    trim s = Data.List.Base.reverse (dropWs (Data.List.Base.reverse (dropWs s)))
+      where
+      import Data.List.Base
+      dropWs : Str → Str
+      dropWs [] = []
+      dropWs (c ∷ cs) = if Url.is 32 c ∨ Url.is 9 c then dropWs cs else c ∷ cs
+
+-- A blob: URL cannot be a base (its path is opaque): in a blob document
+-- (before a <base href> that names its scheme) a reference resolves only
+-- when it names its scheme — after leading C0 controls and spaces, an
+-- ASCII letter, then letters, digits, "+", "-", ".", then ":". Others
+-- ("x", "/x", "//h/x") stay as written and fail proxied as directly; a
+-- <base href> that does not resolve is passed over, and the first that
+-- does is the base from there on. (Measured in Chromium. A blob
+-- stylesheet's references resolve against the document's base instead.)
+blobBase : Str → Bool
+blobBase s = start (dropC0 s)
+  where
+  open import Data.Nat.Base using (_≤ᵇ_)
+  code : _ → _
+  code c = Data.Char.Base.toℕ c
+    where import Data.Char.Base
+  dropC0 : Str → Str
+  dropC0 [] = []
+  dropC0 (c ∷ cs) = if code c ≤ᵇ 32 then dropC0 cs else c ∷ cs
+  alpha : _ → Bool
+  alpha c = ((65 ≤ᵇ code c) ∧ (code c ≤ᵇ 90)) ∨ ((97 ≤ᵇ code c) ∧ (code c ≤ᵇ 122))
+  digit : _ → Bool
+  digit c = (48 ≤ᵇ code c) ∧ (code c ≤ᵇ 57)
+  rest : Str → Bool
+  rest [] = false
+  rest (c ∷ cs) = if Url.is 58 c then true
+                  else if alpha c ∨ digit c ∨ Url.is 43 c ∨ Url.is 45 c ∨ Url.is 46 c then rest cs
+                  else false
+  start : Str → Bool
+  start [] = false
+  start (c ∷ cs) = alpha c ∧ rest cs

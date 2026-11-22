@@ -41,10 +41,12 @@ describe.skipIf(!wanted)("reading markup back in Chromium", () => {
             return res.end(`<!doctype html><html><head><script src="/rewriter.js"></script><script>window.$rewriter=window.$rewriter_init(window,{apiBaseURL:${JSON.stringify(o)},source:"/rewriter.js"}).inject();$rewriter.set_location("https://site.example/dir/page");document.currentScript.remove();</script>
 <script>window.seenByObserver=[];new MutationObserver(function(rs){rs.forEach(function(r){if(r.type==="attributes")seenByObserver.push(r.attributeName)})}).observe(document,{attributes:true,subtree:true});</script></head>
 <body><a id="a" class="k" href="${P}/up?q=1" ${orig({ href: "../up?q=1" })}>x</a><img id="i" alt="a" src="${P}/dir/i.png" srcset="${P}/dir/a.png 1x, ${P}/dir/b.png 2x" ${orig({ src: "i.png", srcset: "a.png 1x, b.png 2x" })}><link id="l" rel="stylesheet" href="${P}/s.css" ${orig({ href: "/s.css", integrity: "sha384-abc" })}>
+<style id="st" ${orig({ "#text": "body{background:url(/bg.png)}" })}>body{background:url(${P}/bg.png)}</style>
 <script>var a=document.getElementById("a"),i=document.getElementById("i"),l=document.getElementById("l");
 window.early={href:a.getAttribute("href"),resolved:a.href,src:i.getAttribute("src"),srcset:i.srcset,srcsetAttr:i.getAttribute("srcset"),
  integrity:l.getAttribute("integrity"),hasIntegrity:l.hasAttribute("integrity"),hasShadow:a.hasAttribute("crn"+"-o"),names:a.getAttributeNames().join(","),
- attrValue:a.getAttributeNode("href").value,outer:a.outerHTML,bodyHas:document.body.innerHTML.indexOf("crn"+"-o")>=0||document.body.innerHTML.indexOf("/cyr"+"ano/")>=0};</script>
+ attrValue:a.getAttributeNode("href").value,outer:a.outerHTML,
+ styleText:document.getElementById("st").textContent,styleData:document.getElementById("st").firstChild.data,styleInner:document.getElementById("st").innerHTML,styleOuter:document.getElementById("st").outerHTML,bodyHas:document.body.innerHTML.indexOf("crn"+"-o")>=0||document.body.innerHTML.indexOf("/cyr"+"ano/")>=0};</script>
 <div id="late"></div></body></html>`);
         });
         await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
@@ -75,12 +77,18 @@ window.early={href:a.getAttribute("href"),resolved:a.href,src:i.getAttribute("sr
             const s = document.createElement("script");
             s.textContent = "var where = location.href;";
             const clone = a.cloneNode(true) as HTMLAnchorElement;
+            // A <style> in markup a script sets: its text as written.
+            const sty = document.createElement("div");
+            sty.innerHTML = "<style>i{background:url(/w.png)}</style>";
+            document.body.appendChild(sty);
+            const writtenStyle = [sty.querySelector("style")!.textContent, sty.innerHTML];
             made.removeAttribute("href");
             return {
                 early: w.early, observer: w.seenByObserver,
                 lateInner: late.innerHTML, lateHref: a.getAttribute("href"), lateResolved: a.href, lateSrcset: img.srcset,
                 realLateHref: Object.getOwnPropertyDescriptor(Element.prototype, "getAttribute") ? a.outerHTML : "",
                 madeAfterRemove: made.getAttribute("href"), viaIdlAttr: viaIdl.getAttribute("src"), viaIdlProp: viaIdl.src,
+                writtenStyle,
                 scriptText: s.textContent, scriptInner: s.innerHTML, cloneHref: clone.getAttribute("href"),
                 serialized: new XMLSerializer().serializeToString(a),
                 getAttributeText: Function.prototype.toString.call(Element.prototype.getAttribute),
@@ -91,7 +99,10 @@ window.early={href:a.getAttribute("href"),resolved:a.href,src:i.getAttribute("sr
             href: "../up?q=1", resolved: "https://site.example/up?q=1", src: "i.png",
             srcset: "a.png 1x, b.png 2x", srcsetAttr: "a.png 1x, b.png 2x",
             integrity: "sha384-abc", hasIntegrity: true, hasShadow: false, names: "id,class,href",
-            attrValue: "../up?q=1", outer: '<a id="a" class="k" href="../up?q=1">x</a>', bodyHas: false,
+            attrValue: "../up?q=1", outer: '<a id="a" class="k" href="../up?q=1">x</a>',
+            // A <style> the server rewrote (htmlrewrite withTextOriginal): its text as written (21kschool.com's React hydration).
+            styleText: "body{background:url(/bg.png)}", styleData: "body{background:url(/bg.png)}", styleInner: "body{background:url(/bg.png)}",
+            styleOuter: '<style id="st">body{background:url(/bg.png)}</style>', bodyHas: false,
         });
         expect(r.observer).toEqual([]);
         expect(r.lateInner).toBe('<a href="../rel">r</a><img srcset="x.png 1x,  y.png 2x">');
@@ -99,6 +110,7 @@ window.early={href:a.getAttribute("href"),resolved:a.href,src:i.getAttribute("sr
         expect([r.madeAfterRemove, r.viaIdlAttr, r.viaIdlProp]).toEqual([null, "pic.png", "https://site.example/dir/pic.png"]);
         expect([r.scriptText, r.scriptInner]).toEqual(["var where = location.href;", "var where = location.href;"]);
         expect(r.cloneHref).toBe("../rel");
+        expect(r.writtenStyle).toEqual(["i{background:url(/w.png)}", "<style>i{background:url(/w.png)}</style>"]);
         expect(r.serialized).toContain('href="../rel"');
         expect(r.getAttributeText).toBe("function getAttribute() { [native code] }");
     }, 60_000);

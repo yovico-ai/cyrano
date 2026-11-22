@@ -42,9 +42,33 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 	emitRaw := func(p []byte) {
 		emitted.Write(p)
 	}
+	// A <style> start tag waits for its text: when the rewriter changes
+	// the text, the tag carries the text as written (OriginalsAttr "#text"),
+	// so the page reads its own CSS back (React's hydration compares a
+	// <style>'s textContent with what it renders: 21kschool.com).
+	type heldTag struct {
+		tt    html.TokenType
+		tag   string
+		attrs []html.Attribute
+	}
+	var held *heldTag
+	release := func(was, now []byte) {
+		if held == nil {
+			return
+		}
+		attrs := held.attrs
+		if was != nil && !bytes.Equal(was, now) && !cfg.NoOriginals {
+			attrs = withTextOriginal(attrs, string(was))
+		}
+		emitTag(&emitted, held.tt, held.tag, attrs)
+		held = nil
+	}
 
 	for {
 		tt := z.Next()
+		if held != nil && !(tt == html.TextToken && inStyle) {
+			release(nil, nil)
+		}
 		if tt == html.ErrorToken {
 			if err := flush(); err != nil {
 				return err
@@ -78,7 +102,11 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 				bootstrapDone = true
 			}
 
-			emitTag(&emitted, tt, tag, attrs)
+			if tt == html.StartTagToken && tag == "style" && cfg.RewriteInlineCSS != nil {
+				held = &heldTag{tt, tag, attrs}
+			} else {
+				emitTag(&emitted, tt, tag, attrs)
+			}
 
 			// Track <script> with rewritable content (no `src=`, no
 			// non-JS `type=`, and not self-closing). The next text token
@@ -133,11 +161,13 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 				// An SVG <script> / <style>: its text is ordinary markup
 				// text, character references decoded — the script is the
 				// decoded text, written back escaped.
-				src := []byte(z.Token().Data)
+				was := []byte(z.Token().Data)
+				var src []byte
 				if inScript {
-					src = cfg.RewriteInlineJS(src)
+					src = cfg.RewriteInlineJS(append([]byte(nil), was...))
 				} else {
-					src = cfg.RewriteInlineCSS(src)
+					src = cfg.RewriteInlineCSS(append([]byte(nil), was...))
+					release(was, src)
 				}
 				emitRaw([]byte(html.EscapeString(string(src))))
 			case inScript && cfg.RewriteInlineJS != nil:
@@ -152,7 +182,10 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 			case inStyle && cfg.RewriteInlineCSS != nil:
 				// Same NUL-sentinel concern for the CSS rewriter (also uses
 				// tdewolff/parse) — copy defensively.
-				emitRaw(cfg.RewriteInlineCSS(append([]byte(nil), z.Text()...)))
+				was := append([]byte(nil), z.Text()...)
+				now := cfg.RewriteInlineCSS(append([]byte(nil), was...))
+				release(was, now)
+				emitRaw(now)
 			case inNoscript:
 				// A <noscript>'s content is text to a page with scripting on
 				// (the tokenizer reads it as one raw text token): the page's
@@ -512,6 +545,21 @@ func elementReferrerPolicy(tag string, attrs []html.Attribute) urlrewrite.Policy
 // script runs (ts/client/src/native/originals.ts), so getAttribute,
 // outerHTML and the rest show the page its own markup.
 const OriginalsAttr = "crn-o"
+
+// withTextOriginal adds to OriginalsAttr the element's text as written,
+// under "#text" (no attribute has that name): the client records it for
+// the element's text node (ts/client/src/native/originals.ts consume).
+func withTextOriginal(attrs []html.Attribute, was string) []html.Attribute {
+	enc, _ := json.Marshal(was)
+	for i, a := range attrs {
+		if a.Namespace == "" && a.Key == OriginalsAttr && strings.HasSuffix(a.Val, "}") {
+			out := append([]html.Attribute(nil), attrs...)
+			out[i].Val = strings.TrimSuffix(a.Val, "}") + `,"#text":` + string(enc) + "}"
+			return out
+		}
+	}
+	return append(append([]html.Attribute(nil), attrs...), html.Attribute{Key: OriginalsAttr, Val: `{"#text":` + string(enc) + "}"})
+}
 
 // withOriginals appends OriginalsAttr to attrs when they differ from the
 // attributes as written.

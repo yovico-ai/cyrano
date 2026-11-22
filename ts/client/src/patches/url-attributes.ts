@@ -15,10 +15,12 @@
 
 import { rewriteFor, type RewriteOne } from "./referrer-policy";
 import { rewriteCssText } from "../css/rewriter";
-import { nO, nR, ncall, aIncludes } from "../native/intrinsics";
+import { nO, nR, ncall, aIncludes, sStarts } from "../native/intrinsics";
 import { isTrustedValue, trusted } from "../native/trusted";
 import { rewriteSrcsetAttribute } from "./srcset";
 import { URL_BEARING_ELEMENTS, isSrcsetAttr, kindOf, rewriteByKind, rewriteUrlList } from "./url-attribute-map";
+import { elementBlobValue } from "./blob-document";
+import { bootstrapOf } from "./dynamic-html";
 import { wrapConstructor, wrapAccessor } from "../native/surface";
 import { heldAttr, originalAttr, recordAttr } from "../native/originals";
 
@@ -69,6 +71,8 @@ export function patchUrlAttributes(
                         return srcset ? rewriteSrcsetAttribute(v, unwrapOne)
                             : kindOf(self as Element, attribute) === "urllist" ? rewriteUrlList(v, unwrapOne) : unwrapOne(v);
                     }
+                    // An element given rewritten blob: content reads back the page's URL.
+                    if (sStarts(v, "blob:")) { const o = originalAttr(self, attribute); if (o?.value != null && sStarts(o.value.trim().toLowerCase(), "blob:")) return o.value.trim(); }
                     return unwrapOne(v);
                 },
                 set: (set, self, value) => {
@@ -77,7 +81,8 @@ export function patchUrlAttributes(
                     if (value == null) return ncall(set, self, value);
                     const s = String(value);
                     const rw = rewriteFor(self as Element, rewriteOne, attribute);
-                    const now = rewriteByKind(kindOf(self as Element, attribute), s, rw, rewriteSrcsetAttribute);
+                    const now = elementBlobValue(self as Element, attribute, s, rw, "", bootstrapOf(self))
+                        ?? rewriteByKind(kindOf(self as Element, attribute), s, rw, rewriteSrcsetAttribute);
                     // A TrustedScriptURL (script.src under Trusted Types) stays trusted.
                     ncall(set, self, isTrustedValue(value) ? trusted(targetWindow, "ScriptURL", now) : now);
                     recordAttr(self as Element, attribute, now, s);

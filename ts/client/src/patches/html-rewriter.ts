@@ -23,6 +23,7 @@ import { ORIGINALS_ATTR } from "../native/originals";
 import { defaultJsRewriteOptions, rewriteJsSource } from "../js/rewriter";
 import { rewriteSrcsetAttribute } from "./srcset";
 import { rewriteByKind, urlAttrKind, urlDest } from "./url-attribute-map";
+import { blobValue } from "./blob-document";
 
 const lowerAscii = (s: string): string => s.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
 const relOf = (v: string | null): string[] => (v === null ? [] : lowerAscii(v).split(/[\t\n\f\r ]+/).filter((t) => t !== ""));
@@ -64,7 +65,7 @@ export function rewriteSrcdoc(
     proxyOrigin: string = "",
     bootstrap?: () => string,
 ): string {
-    const rewritten = rewriteHtmlString(html, rewriteOne, proxyOrigin, bootstrap, { scripting: true });
+    const rewritten = rewriteHtmlString(html, rewriteOne, proxyOrigin, bootstrap, { scripting: true, document: true });
     return bootstrap ? withBootstrap(rewritten, bootstrap()) : rewritten;
 }
 
@@ -73,7 +74,16 @@ export function rewriteSrcdoc(
  * browsing context: a noscript's content is text); `within`, the element
  * it is parsed in (innerHTML's context; none for a whole document).
  */
-export interface ParseContext { scripting?: boolean; within?: { ns: Ns; name: string; encoding?: string | null } }
+export interface ParseContext {
+    scripting?: boolean;
+    within?: { ns: Ns; name: string; encoding?: string | null };
+    /**
+     * A whole new document (srcdoc, a blob document): its first `<base
+     * href>` is the base of every URL after it (spec/Html.agda documentBase;
+     * Go: htmlrewrite's HTML_BASETAG, srcdoc included).
+     */
+    document?: boolean;
+}
 
 const NS: Record<string, Ns> = { "http://www.w3.org/2000/svg": "svg", "http://www.w3.org/1998/Math/MathML": "math" };
 
@@ -153,7 +163,7 @@ type Edit = [number, number, string];
  * ones (crn-o, referrerpolicy) added at the tag's end.
  */
 function editStartTag(src: string, t: Extract<Tok, { kind: "start" }>, rewriteOne: RewriteOne, proxyOrigin: string,
-    bootstrap: (() => string) | undefined, edits: Edit[]): void {
+    bootstrap: (() => string) | undefined, edits: Edit[], textWas?: string): void {
     if (t.ns === "math") return;
     const html = t.ns === "html";
     const first: TokAttr[] = [];
@@ -200,6 +210,12 @@ function editStartTag(src: string, t: Extract<Tok, { kind: "start" }>, rewriteOn
         if (a.name === "integrity") { change(a, "integrity", null); continue; }   // SRI cannot match rewritten content
         if (v === "") continue;
         if (a.name === "style") { change(a, "style", rewriteCssText(v, rewriteOne)); continue; }
+        // A blob: URL of a document or stylesheet built in the browser: the
+        // element gets it rewritten (blob-document.ts; TradingView's chart is such markup).
+        if (html && /^[\x00-\x20]*blob:/i.test(v)) {
+            const doc = blobValue(globalThis as unknown as Window, t.name, a.name, value("rel"), v, rewriteOne, proxyOrigin, bootstrap);
+            if (doc) { change(a, a.name, doc); continue; }
+        }
         if (html && t.name === "iframe" && a.name === "srcdoc") { change(a, "srcdoc", T("HTML", rewriteSrcdoc(v, rewriteOne, proxyOrigin, bootstrap))); continue; }
         // An origin in allow names nothing on the proxy (spec/Allow.agda; Go: htmlrewrite).
         if (html && t.name === "iframe" && a.name === "allow") { const now = rewriteAllow(v); if (now !== v) change(a, "allow", now); continue; }
@@ -233,6 +249,10 @@ function editStartTag(src: string, t: Extract<Tok, { kind: "start" }>, rewriteOn
         const rwd = dest && rewriteOne.withMark ? (u: string) => rewriteOne.withMark!(u, policyMark, dest) : rw;
         change(a, a.name, rewriteByKind(kind, v, rwd, rewriteSrcsetAttribute));
     }
+    // The element's text as written, when the rewriter changed it (a
+    // <style>; Go: htmlrewrite withTextOriginal): "#text", which no
+    // attribute is named (native/originals.ts consume).
+    if (textWas !== undefined) { originals["#text"] = textWas; changed = true; }
     if (!changed) return;
     set.set(ORIGINALS_ATTR, JSON.stringify(originals));
 
@@ -273,11 +293,34 @@ export function rewriteHtmlString(
         return html;
     }
     const edits: Edit[] = [];
-    const rw = rewriteOne as RewriteOne;
+    let rw = rewriteOne as RewriteOne;
+    let baseSeen = !context.document;
     for (let k = 0; k < toks.length; k++) {
         const t = toks[k]!;
         if (t.kind !== "start") continue;
-        editStartTag(html, t, rw, proxyOrigin, bootstrap, edits);
+        // A <style>'s text is rewritten first: its start tag records the text as written.
+        let styleEdit: Edit | null = null;
+        let textWas: string | undefined;
+        if (t.name === "style" && t.ns !== "math" && !(t.selfClosing && t.ns !== "html")) {
+            const next = toks[k + 1];
+            if (next && next.kind === "end" && next.name === "style" && next.from > t.to) {
+                const text = t.ns === "svg" ? decodedText(html.slice(t.to, next.from)) : html.slice(t.to, next.from);
+                const out = rewriteCssText(text, rw);
+                if (out !== text) { textWas = text; styleEdit = [t.to, next.from, t.ns === "svg" ? escapedText(out) : out]; }
+            }
+        }
+        editStartTag(html, t, rw, proxyOrigin, bootstrap, edits, textWas);
+        if (styleEdit) { edits[edits.length] = styleEdit; continue; }
+        // The first <base href> (itself resolved against the base before it).
+        if (!baseSeen && t.ns === "html" && t.name === "base") {
+            let href: string | null = null;
+            for (const a of t.attrs) if (a.name === "href") { href = decoded(html, a); break; }
+            if (href !== null) {
+                const next = rw.withBase?.(href);
+                if (next) { rw = next; baseSeen = true; }
+                else if (!rw.skipBase) baseSeen = true;
+            }
+        }
         if (t.selfClosing && t.ns !== "html") continue;
         if (t.name !== "script" && t.name !== "style") continue;
         if (t.ns === "math") continue;
@@ -290,13 +333,13 @@ export function rewriteHtmlString(
         if (text.length === 0) continue;
         if (t.ns === "svg") text = decodedText(text);
         let out: string;
-        if (t.name === "style") out = rewriteCssText(text, rewriteOne);
+        if (t.name === "style") continue; // above
         else {
             const attrOf = (n: string): string | null => { for (const a of t.attrs) if (a.name === n) return decoded(html, a); return null; };
             if (attrOf(t.ns === "svg" ? "href" : "src") !== null || (t.ns === "svg" && attrOf("xlink:href") !== null)) continue;
             const kind = scriptKind(attrOf("type"), attrOf("language"));
             if (kind === "classic" || kind === "module") out = rewriteJsSource(text, defaultJsRewriteOptions());
-            else if (kind === "importmap" && t.ns === "html") out = rewriteImportMap(text, asScript(rewriteOne));
+            else if (kind === "importmap" && t.ns === "html") out = rewriteImportMap(text, asScript(rw));
             else continue;
         }
         edits[edits.length] = [t.to, next.from, t.ns === "svg" ? escapedText(out) : out];
