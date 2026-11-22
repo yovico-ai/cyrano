@@ -296,7 +296,8 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 	// credentials mode to match the @font-face fetch, which is not credentialed
 	// — forcing it would instead double-fetch the font; a fetch preload stays
 	// to match the page's own fetch(), whose credentials the runtime leaves.
-	if _, ok := getAttr(attrs, "crossorigin"); ok {
+	// (Host mode: kept as written — between origins' hosts it is real CORS.)
+	if _, ok := getAttr(attrs, "crossorigin"); ok && !cfg.Proxy.Sites {
 		rel, _ := getAttr(attrs, "rel")
 		as, _ := getAttr(attrs, "as")
 		if v, set := crossoriginValue(!svg, tag, rel, as); set {

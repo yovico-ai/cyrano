@@ -42,6 +42,12 @@ type VHost struct {
 	UserDataEncryption  bool           `json:"userDataEncryption"`
 	Version             string         `json:"version"`
 	SecretCookieName    string         `json:"secretCookieName"`
+	// Sites: host mode (spec/SiteContainment.agda) — each proxied site on
+	// its own host <label>.<hostname> (CYRANO_SITES). The hostname must be
+	// an ordinary registrable domain or under one: the session cookie is a
+	// domain cookie on it, and the sites' hosts are one site to the browser
+	// (Origin-Agent-Cluster gives each its own process).
+	Sites bool `json:"sites"`
 	RewriterJSPath      string         `json:"rewriterJsPath"`
 	CookiesJSONPath     string         `json:"cookiesJsonPath"`
 	// PublicURL is the scheme+host[:port] the browser uses to reach this proxy
@@ -109,6 +115,10 @@ func FromEnv() (*File, error) {
 	if err != nil {
 		return nil, err
 	}
+	sites, err := envBool("CYRANO_SITES", false)
+	if err != nil {
+		return nil, err
+	}
 
 	hostname := envStr("CYRANO_HOSTNAME", "localhost")
 
@@ -129,6 +139,7 @@ func FromEnv() (*File, error) {
 			CookiesJSONPath:   envStr("CYRANO_COOKIES_JSON_PATH", "/cookies.json"),
 			PublicURL:         envStr("CYRANO_PUBLIC_URL", ""),
 			Toolbar:           toolbar,
+			Sites:             sites,
 		}},
 	}
 	return f, nil
@@ -179,6 +190,14 @@ func (f *File) FindVHost(hostHeader string) *VHost {
 	for i := range f.VHosts {
 		if slices.Contains(f.VHosts[i].Hostnames, host) {
 			return &f.VHosts[i]
+		}
+		// Host mode: a site's host, one label under the vhost's name.
+		if f.VHosts[i].Sites {
+			for _, h := range f.VHosts[i].Hostnames {
+				if l, ok := strings.CutSuffix(host, "."+h); ok && l != "" && !strings.Contains(l, ".") {
+					return &f.VHosts[i]
+				}
+			}
 		}
 	}
 	return nil

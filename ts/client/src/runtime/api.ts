@@ -6,6 +6,9 @@
 // stay narrow. Adding a new wrapper means: write the module, import it here,
 // expose it on the returned RewriterApi.
 
+import { crossSitePostMessage, reachable } from "../messaging/site-messages";
+import { SafeWeakMap as CrossSiteMap } from "../native/intrinsics";
+const crossSiteSenders = new CrossSiteMap<object, (...a: unknown[]) => void>();
 import { nO, nR, sStarts } from "../native/intrinsics";
 import { blobScriptFor } from "../patches/blob-document";
 import { crossOriginView } from "../native/cross-origin";
@@ -211,6 +214,23 @@ export function createRewriterApi(
         wrap_document_write: (arg) => wrapDocumentWrite(arg, rewriteOne, buildBootstrap, initialBaseUrl.origin),
         // Reading `x.postMessage` here: this window is the sender of the call that follows.
         wrap_postMessage: (arg) => {
+            // Host mode: a window of another site's host is really
+            // cross-origin; its messages go out translated, announced
+            // (messaging/site-messages.ts).
+            if (config.sites === true && isWindowLike(arg.obj) && !reachable(arg.obj)) {
+                let pm = crossSiteSenders.get(arg.obj as object);
+                if (!pm) {
+                    const siteOrigin = (o: string): string | null => {
+                        try {
+                            const r = rewriteUrl(o + "/", baseUrlState.get(), config);
+                            return r === o + "/" ? null : new URL(r).origin;
+                        } catch { return null; }
+                    };
+                    pm = crossSitePostMessage(arg.obj as Window, () => siteOrigin(baseUrlState.get().origin) ?? "/", siteOrigin);
+                    crossSiteSenders.set(arg.obj as object, pm);
+                }
+                return { postMessage: pm };
+            }
             markSender(arg.obj, targetWindow);
             return wrapPostMessage(arg, initialBaseUrl.origin, () => baseUrlState.get().origin, (h) => unwrapProxiedUrl(h, config));
         },

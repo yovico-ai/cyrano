@@ -13,6 +13,7 @@
 import { nO, nR, ncall } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
 import { wrapMethod } from "../native/surface";
+import { rewriteUrl } from "../url/containment";
 import type { Internals } from "../native/internals";
 import { NOT_SENT, callInRealmOf, callingWindow, delivery, installSender, originalOrigin, sendAs, takeSender } from "../messaging/target-origin";
 
@@ -38,7 +39,14 @@ export function patchPostMessage(
         const sender = marked ?? (bare ? targetWindow : (callingWindow(targetWindow, runtimeUrl, nameOf, unwrap) ?? targetWindow));
         const d = delivery(self, args[1], originalOrigin(sender, unwrap), proxyOrigin, unwrap);
         if (d.kind === "drop") return;
-        const next = d.kind === "send" ? [args[0], d.origin, ...args.slice(2)] : args;
+        // Host mode: the recipient's own host, not the proxy's (each origin on
+        // its own: spec/SiteContainment.agda) — the host its original origin names.
+        let sendTo = d.kind === "send" ? d.origin : "";
+        if (d.kind === "send" && config.sites === true) {
+            const to = originalOrigin(self, unwrap);
+            if (to !== null) { try { sendTo = new URL(rewriteUrl(to + "/", new URL(to), config)).origin; } catch { /* the proxy's */ } }
+        }
+        const next = d.kind === "send" ? [args[0], sendTo, ...args.slice(2)] : args;
         if (sender === self || sender === targetWindow && self === targetWindow) {
             // From a function of the sender's own realm (target-origin.ts callInRealmOf).
             const sent = callInRealmOf(sender, nativeFn, self, next);

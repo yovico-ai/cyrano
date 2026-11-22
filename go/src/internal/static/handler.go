@@ -99,6 +99,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("ETag", `"`+v+`"`)
 			if r.URL.Query().Get("v") == v {
 				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				// Loaded by every origin's host in host mode, a frame under
+				// COEP require-corp included: a resource for any origin.
+				w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
 			} else {
 				w.Header().Set("Cache-Control", "no-cache")
 			}

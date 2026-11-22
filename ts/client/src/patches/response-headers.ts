@@ -13,7 +13,7 @@
 // (cors.ts): fetch marks such a response's Headers, an XHR opened to
 // another origin is judged by its own Access-Control-Expose-Headers.
 
-import { SafeMap, SafeWeakMap, nO, nR, ncall } from "../native/intrinsics";
+import { SafeMap, SafeWeakMap, nO, nR, ncall, sIncludes } from "../native/intrinsics";
 import { wrapMethod } from "../native/surface";
 import { crossOriginXhr, exposedBy, type Exposed } from "./cors";
 
@@ -103,17 +103,31 @@ export function patchResponseHeaders(targetWindow: Window, opaque = false): void
     // ── XMLHttpRequest ──────────────────────────────────────────────────
     const X = (g["XMLHttpRequest"] as { prototype: XMLHttpRequest } | undefined)?.prototype;
     if (X && !opaque) {
-        const nativeOne = X.getResponseHeader;
         const credentialed = nO.getOwnPropertyDescriptor(X, "withCredentials")?.get as ((this: unknown) => boolean) | undefined;
+        const nativeAll = X.getAllResponseHeaders;
+        // Read from the whole list: asked by name, a header a cross-origin
+        // response does not expose is refused with a console message the
+        // page sees (host mode: every origin on its own host).
+        const fromAll = (self: unknown, want: string): string | null => {
+            let all: string;
+            try { all = ncall(nativeAll, self) as string; } catch { return null; }
+            if (!all || !sIncludes(all.toLowerCase(), want)) return null;
+            for (const line of all.split("\r\n")) {
+                const i = line.indexOf(":");
+                if (i > 0 && line.slice(0, i).toLowerCase() === want) return line.slice(i + 1).trim();
+            }
+            return null;
+        };
         const originalsOf = (self: unknown): Originals | null => {
-            try { return parse(ncall(nativeOne, self, CARRIER)); } catch { return null; }
+            const v = fromAll(self, CARRIER);
+            return v === null ? null : parse(v);
         };
         /** What a cross-origin XHR's response exposes; undefined for a same-origin one. */
         const exposedOf = (self: unknown, orig: Originals | null): Exposed | undefined => {
             if (typeof self !== "object" || self === null || !crossOriginXhr.has(self)) return undefined;
             const name = "access-control-expose-headers";
             let list: string | null;
-            try { list = orig && name in orig ? (orig[name]?.join(", ") ?? null) : ncall(nativeOne, self, name); } catch { return undefined; }
+            list = orig && name in orig ? (orig[name]?.join(", ") ?? null) : fromAll(self, name);
             let creds = false;
             try { creds = !!(credentialed && ncall(credentialed, self)); } catch { /* not an XHR */ }
             return exposedBy(list, creds);

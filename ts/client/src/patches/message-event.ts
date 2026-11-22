@@ -7,11 +7,12 @@
 // One accessor on the prototype covers addEventListener and onmessage
 // alike, and leaves the event object itself the native one.
 
-import { nO, ncall } from "../native/intrinsics";
+import { nO, ncall, sEnds, sStarts } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
 import { unwrapProxiedUrl } from "../url/containment";
 import { wrapAccessor } from "../native/surface";
 import { originalOrigin } from "../messaging/target-origin";
+import { originOfHost } from "../url/site-host";
 
 export function patchMessageEventOrigin(targetWindow: Window, config: ClientConfig): void {
     const ME = (targetWindow as unknown as { MessageEvent?: { prototype: MessageEvent } }).MessageEvent;
@@ -19,12 +20,19 @@ export function patchMessageEventOrigin(targetWindow: Window, config: ClientConf
     const proxyOrigin = new URL(config.apiBaseURL).origin;
     const unwrap = (h: string) => unwrapProxiedUrl(h, config);
     const sourceGet = nO.getOwnPropertyDescriptor(ME.prototype, "source")?.get;
+    const proxyHost = new URL(config.apiBaseURL).host, proxyScheme = new URL(config.apiBaseURL).protocol;
+    // Host mode: any of the proxy's hosts is ours (each site on its own).
+    const ours = (o: string): boolean => o === proxyOrigin ||
+        (config.sites === true && sStarts(o, proxyScheme + "//") && sEnds(o, "." + proxyHost));
     wrapAccessor<string>(ME.prototype, "origin", {
         get: (get, self) => {
             const origin = ncall(get, self);
-            if (origin !== proxyOrigin || !sourceGet) return origin;
+            if (!ours(origin) || !sourceGet) return origin;
             const source = ncall(sourceGet, self) as unknown;
-            return (source ? originalOrigin(source, unwrap) : null) ?? origin;
+            // The sender's window when it can be read; else what it announced (site-messages.ts).
+            // Host mode: the origin the host's label names (a cross-origin sender cannot be read).
+            const fromHost = (): string | null => { try { return originOfHost(new URL(origin).host, proxyHost); } catch { return null; } };
+            return (source ? originalOrigin(source, unwrap) : null) ?? (config.sites === true ? fromHost() : null) ?? origin;
         },
     });
 }

@@ -226,6 +226,11 @@ func (h *Handler) serveTarget(w http.ResponseWriter, r *http.Request, target *ur
 		// strip ours explicitly via dropOnRequest in makeDirector and let it
 		// re-add a fresh one if needed.
 	}
+	// Host mode: the Origin the browser sent (a proxy host's), for the
+	// response's CORS fields (modifyResponse).
+	if h.opts.ProxyCfg.Sites {
+		r = r.WithContext(context.WithValue(r.Context(), browserOriginKey{}, r.Header.Get("Origin")))
+	}
 	rp.ServeHTTP(typelessWriter{w}, r)
 }
 
@@ -404,8 +409,26 @@ func (h *Handler) translateResponse(resp *http.Response) error {
 		}
 		resp.Header.Del(name)
 		for _, v := range vals {
-			resp.Header.Add(name, rewriteCSP(v, proxyOrigin))
+			resp.Header.Add(name, sitesCSP(rewriteCSP(v, proxyOrigin), h.opts.ProxyCfg))
 		}
+	}
+	// Host mode: the browser runs CORS between origins' hosts itself. An
+	// Access-Control-Allow-Origin naming the requester's original origin
+	// names the host it asked from (whose Origin the upstream never saw).
+	if h.opts.ProxyCfg.Sites && resp.Request != nil {
+		if bo, _ := resp.Request.Context().Value(browserOriginKey{}).(string); bo != "" {
+			if orig := urlrewrite.HostOrigin(bo, h.opts.ProxyCfg); orig != "" {
+				if v := resp.Header.Get("Access-Control-Allow-Origin"); strings.EqualFold(strings.TrimSpace(v), orig) {
+					resp.Header.Set("Access-Control-Allow-Origin", bo)
+				}
+			}
+		}
+	}
+	// Host mode: each site's host its own agent cluster, so the browser gives
+	// a site's frames processes of their own (measured: without it, sibling
+	// hosts of one domain share the page's process and thread).
+	if h.opts.ProxyCfg.Sites {
+		resp.Header.Set("Origin-Agent-Cluster", "?1")
 	}
 	// Rewrite redirect targets so the browser follows them THROUGH the proxy.
 	// Without this, a `302 Location: https://example.com/foo` from upstream
@@ -636,3 +659,6 @@ func proxyTargetOf(resp *http.Response) *url.URL {
 	}
 	return resp.Request.URL
 }
+
+// browserOriginKey carries the Origin the browser sent (host mode).
+type browserOriginKey struct{}

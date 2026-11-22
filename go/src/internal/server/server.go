@@ -4,6 +4,7 @@
 package server
 
 import (
+	"bufio"
 	"fmt"
 	"github.com/yovico/cyrano/internal/htmlrewrite"
 	"log/slog"
@@ -54,7 +55,7 @@ func (s *Server) proxyEndpoints(vhost *config.VHost) urlrewrite.ProxyConfig {
 	if vhost.PublicURL != "" {
 		u, err := url.Parse(vhost.PublicURL)
 		if err == nil && u.Scheme != "" && u.Host != "" {
-			return urlrewrite.ProxyConfig{PublicURL: u}
+			return withSites(vhost, urlrewrite.ProxyConfig{PublicURL: u})
 		}
 		s.Logger.Warn("CYRANO_PUBLIC_URL is invalid, falling back to derived URL",
 			"value", vhost.PublicURL, "err", err)
@@ -87,10 +88,16 @@ func (s *Server) proxyEndpoints(vhost *config.VHost) urlrewrite.ProxyConfig {
 		}
 	}
 
-	return urlrewrite.ProxyConfig{PublicURL: &url.URL{
+	return withSites(vhost, urlrewrite.ProxyConfig{PublicURL: &url.URL{
 		Scheme: scheme,
 		Host:   domain + ":" + port,
-	}}
+	}})
+}
+
+// withSites turns on host mode for a vhost that has it.
+func withSites(vhost *config.VHost, cfg urlrewrite.ProxyConfig) urlrewrite.ProxyConfig {
+	cfg.Sites = vhost.Sites
+	return cfg
 }
 
 // Handler returns the http.Handler for one listening port. The same handler
@@ -138,6 +145,23 @@ func (s *Server) Handler() http.Handler {
 			s.Logger.Warn("no vhost for host", "host", r.Host)
 			http.Error(w, "no vhost configured for this Host header", http.StatusBadRequest)
 			return
+		}
+
+		// Host mode (prototype): a page navigated to on another host than
+		// its origin's (the portal's own, a stale link) moves to its own
+		// (spec SiteHost admits; subresources are served where they ask).
+		if vhost.Sites && r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/cyrano/") &&
+			strings.EqualFold(r.Header.Get("Sec-Fetch-Dest"), "document") && strings.EqualFold(r.Header.Get("Sec-Fetch-Mode"), "navigate") {
+			cfg := s.proxyEndpoints(vhost)
+			here := cfg.PublicURL.Scheme + "://" + r.Host + r.URL.RequestURI()
+			if orig := urlrewrite.Unwrap(here, cfg); orig != here {
+				if want := urlrewrite.Rewrite(orig, nil, cfg); want != orig {
+					if u, err := url.Parse(want); err == nil && !strings.EqualFold(u.Host, r.Host) {
+						http.Redirect(w, r, want, http.StatusTemporaryRedirect)
+						return
+					}
+				}
+			}
 		}
 
 		// WebSocket upgrade? Goes through the wsproxy path — it hijacks
@@ -348,9 +372,53 @@ func logRequests(logger *slog.Logger, next http.Handler) http.Handler {
 			return
 		}
 		start := time.Now()
+		sw := &statusWriter{ResponseWriter: w}
 		defer func() {
-			logger.Info("req", "method", r.Method, "path", r.URL.Path, "host", r.Host, "ms", time.Since(start).Milliseconds())
+			q := r.URL.RawQuery
+			if len(q) > 80 {
+				q = q[:80]
+			}
+			logger.Info("req", "method", r.Method, "path", r.URL.Path, "q", q, "host", r.Host, "status", sw.status, "cookies", len(r.Cookies()), "cookieBytes", len(r.Header.Get("Cookie")), "abck", strings.Contains(r.Header.Get("Cookie"), "_abck"), "ms", time.Since(start).Milliseconds())
 		}()
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(sw, r)
 	})
 }
+
+// statusWriter records the status for the request log; it keeps the
+// writer's Flush and Hijack (streaming, WebSocket) and unwraps for
+// http.ResponseController.
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusWriter) WriteHeader(code int) {
+	if s.status == 0 {
+		s.status = code
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusWriter) Write(b []byte) (int, error) {
+	if s.status == 0 {
+		s.status = http.StatusOK
+	}
+	return s.ResponseWriter.Write(b)
+}
+
+func (s *statusWriter) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (s *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := s.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("hijack not supported")
+	}
+	s.status = http.StatusSwitchingProtocols
+	return h.Hijack()
+}
+
+func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }

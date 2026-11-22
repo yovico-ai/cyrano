@@ -53,3 +53,92 @@ func Admits(domain, host, key string) bool {
 	l := LabelOf(domain, host)
 	return l != "" && l == Label(key)
 }
+
+// MaxLabel is a DNS label's limit.
+const MaxLabel = 63
+
+var schemeLetter = map[string]byte{"http": 'h', "https": 's', "ws": 'w', "wss": 'x'}
+var letterScheme = map[byte]string{'h': "http", 's': "https", 'w': "ws", 'x': "wss"}
+
+// OriginLabel is spec/OriginLabel.agda originLabel: the origin as one DNS
+// label — scheme letter, the host with "." as "-0" and "-" as "-1", and
+// "-2<port>" when it has one — or "" when it has none (a host with another
+// character, such as an IPv6 address, or a label past 63 characters).
+func OriginLabel(scheme, host, port string) string {
+	l, ok := schemeLetter[scheme]
+	if !ok || host == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteByte(l)
+	for i := 0; i < len(host); i++ {
+		c := host[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+			b.WriteByte(c)
+		case c == '.':
+			b.WriteString("-0")
+		case c == '-':
+			b.WriteString("-1")
+		default:
+			return ""
+		}
+	}
+	for i := 0; i < len(port); i++ {
+		if port[i] < '0' || port[i] > '9' {
+			return ""
+		}
+	}
+	if port != "" {
+		b.WriteString("-2" + port)
+	}
+	if b.Len() > MaxLabel {
+		return ""
+	}
+	return b.String()
+}
+
+// LabelOrigin is spec labelOrigin: the scheme, host and port ("" for none)
+// a label names; ok false when it is no origin's label.
+func LabelOrigin(label string) (scheme, host, port string, ok bool) {
+	if label == "" {
+		return "", "", "", false
+	}
+	scheme, ok = letterScheme[label[0]]
+	if !ok {
+		return "", "", "", false
+	}
+	var h strings.Builder
+	for i := 1; i < len(label); i++ {
+		c := label[i]
+		if c == '-' {
+			if i+1 >= len(label) {
+				return "", "", "", false
+			}
+			switch label[i+1] {
+			case '0':
+				h.WriteByte('.')
+			case '1':
+				h.WriteByte('-')
+			case '2':
+				p := label[i+2:]
+				if h.Len() == 0 || p == "" || strings.Trim(p, "0123456789") != "" {
+					return "", "", "", false
+				}
+				return scheme, h.String(), p, true
+			default:
+				return "", "", "", false
+			}
+			i++
+			continue
+		}
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9') {
+			return "", "", "", false
+		}
+		h.WriteByte(c)
+	}
+	if h.Len() == 0 {
+		return "", "", "", false
+	}
+	return scheme, h.String(), "", true
+}

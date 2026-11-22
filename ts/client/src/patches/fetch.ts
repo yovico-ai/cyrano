@@ -153,7 +153,8 @@ export function patchFetch(
         // page's own origin.
         const target = unwrapOne(rewritten);
         const cross = own !== undefined && isCrossOrigin(target, baseUrl(), own) &&
-            !(cors!.proxy && sStarts(target, cors!.proxy + "/"));
+            !(cors!.proxy && sStarts(target, cors!.proxy + "/")) &&
+            (cors!.sameHost === undefined || cors!.sameHost(rewritten));
         if (own === undefined || !namesContext(cors?.opaque === true, cross, cors?.always === true)) return plain();
 
         const init = (typeof rest[0] === "object" && rest[0] !== null ? rest[0] : undefined) as RequestInit | undefined;

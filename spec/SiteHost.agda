@@ -54,8 +54,12 @@ siteKey sc host nothing    = schemeChars sc ++ toList "://" ++ host
 labelLength : ℕ
 labelLength = 26
 
-siteLabel : Str → Str
-siteLabel key = take labelLength (base32 (sha256 (concatMap (λ c → utf8 (toℕ c)) key)))
+-- Opaque to the type checker: no proof depends on the hash's value, and
+-- unfolding SHA-256 over a term with unknowns made the checker take
+-- 35 GB. The compiled oracle computes it as usual.
+opaque
+  siteLabel : Str → Str
+  siteLabel key = take labelLength (base32 (sha256 (concatMap (λ c → utf8 (toℕ c)) key)))
 
 -- The proxy host serving a site.
 siteHost : Str → Str → Str

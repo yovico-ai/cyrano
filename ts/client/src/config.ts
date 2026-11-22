@@ -12,6 +12,12 @@ export interface ClientConfig {
      */
     apiBaseURL: string;
 
+    /**
+     * Host mode (spec/SiteContainment.agda): every proxified URL on its
+     * target site's own host, <label>.<apiBaseURL host> (url/site-host.ts).
+     */
+    sites?: boolean;
+
     /** Static-asset cache key used on `?v=…` query suffixes. */
     cacheKey: string;
 

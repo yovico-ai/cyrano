@@ -13,6 +13,8 @@ package urlrewrite
 import (
 	"net/url"
 	"strings"
+
+	"github.com/yovico/cyrano/internal/sitehost"
 )
 
 // ProxyConfig is the subset of vhost config Rewrite cares about.
@@ -24,6 +26,44 @@ import (
 // TLS, etc.); that's an operational concern handled outside this package.
 type ProxyConfig struct {
 	PublicURL *url.URL
+	// Sites: host mode (spec/SiteContainment.agda) — every proxified URL
+	// on its target origin's own host, <label>.<PublicURL host>[:port]
+	// (spec/OriginLabel.agda; an origin without a label on PublicURL's).
+	Sites bool
+}
+
+// siteAuth is spec siteAuthFor: the authority serving an origin.
+func (cfg ProxyConfig) siteAuth(scheme, host, port string) string {
+	if l := sitehost.OriginLabel(scheme, host, port); l != "" {
+		return l + "." + cfg.PublicURL.Host
+	}
+	return cfg.PublicURL.Host
+}
+
+// portOf is spec portOf: the port of a canonical authority, "" for none.
+func portOf(u absURL) string {
+	hp := hostPort(u.auth)
+	if strings.HasPrefix(hp, "[") {
+		if i := strings.IndexByte(hp, ']'); i >= 0 {
+			hp = hp[i+1:]
+		}
+	}
+	if i := strings.IndexByte(hp, ':'); i >= 0 {
+		return hp[i+1:]
+	}
+	return ""
+}
+
+// onProxy is spec onProxy (host mode) or sameOrigin (path mode): a URL on
+// one of the proxy's hosts.
+func (cfg ProxyConfig) onProxy(a, proxy absURL) bool {
+	if a.scheme != proxy.scheme {
+		return false
+	}
+	if hostPort(a.auth) == hostPort(proxy.auth) {
+		return true
+	}
+	return cfg.Sites && strings.HasSuffix(a.auth, "."+proxy.auth)
 }
 
 // resolvableSchemes are the schemes whose URLs we route through the proxy.
@@ -53,8 +93,31 @@ func APIBase(cfg ProxyConfig) string {
 func OnProxy(href string, cfg ProxyConfig) bool {
 	a, res := parseRef(nil, preprocess(href))
 	proxy, pres := parseRef(nil, APIBase(cfg))
-	return res == parsedURL && pres == parsedURL &&
-		a.scheme == proxy.scheme && hostPort(a.auth) == hostPort(proxy.auth)
+	return res == parsedURL && pres == parsedURL && cfg.onProxy(a, proxy)
+}
+
+// HostOrigin (host mode) is the original origin a proxy host's origin
+// stands for (spec OriginLabel labelOrigin), or "".
+func HostOrigin(origin string, cfg ProxyConfig) string {
+	if !cfg.Sites || cfg.PublicURL == nil {
+		return ""
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme != cfg.PublicURL.Scheme {
+		return ""
+	}
+	label, ok := strings.CutSuffix(u.Host, "."+cfg.PublicURL.Host)
+	if !ok || strings.Contains(label, ".") {
+		return ""
+	}
+	sc, h, p, ok := sitehost.LabelOrigin(label)
+	if !ok {
+		return ""
+	}
+	if p != "" {
+		h += ":" + p
+	}
+	return sc + "://" + h
 }
 
 // IsProxyHost is OnProxy for a parsed URL.
@@ -284,21 +347,35 @@ func RewriteMarked(rawURL string, baseURL *url.URL, cfg ProxyConfig, m Mark) str
 	if res != parsedURL {
 		return rawURL // another scheme, or rejected by the browser's parser
 	}
-	if a.scheme == proxy.scheme && hostPort(a.auth) == hostPort(proxy.auth) {
+	if cfg.onProxy(a, proxy) {
 		if len(a.path) >= 2 && a.path[0] == "cyrano" {
 			return rawURL
 		}
 		return a.href()
 	}
-	if _, _, _, ok := cyranoTarget(a.path); ok {
-		return proxy.origin() + pathText(a.path) + queryText(a.query) + fragText(a.frag)
+	if sc, seg, _, ok := cyranoTarget(a.path); ok {
+		origin := proxy.origin()
+		if cfg.Sites {
+			// Moved to the host of the site the path names (spec remapAuth).
+			auth := cfg.PublicURL.Host
+			if t, _, ares := authority(sc, []rune(pctDecode(seg))); ares == parsedURL {
+				tu := absURL{scheme: sc, auth: t}
+				auth = cfg.siteAuth(sc, hostOf(tu), portOf(tu))
+			}
+			origin = proxy.scheme + "://" + auth
+		}
+		return origin + pathText(a.path) + queryText(a.query) + fragText(a.frag)
 	}
 	path := make([]string, len(a.path))
 	for i, s := range a.path {
 		path[i] = escapePct(s)
 	}
 	schemeSeg := a.scheme + m.text()
-	return proxy.origin() + "/cyrano/" + schemeSeg + "/" + escapePct(segmentOf(a.auth)) +
+	origin := proxy.origin()
+	if cfg.Sites {
+		origin = proxy.scheme + "://" + cfg.siteAuth(a.scheme, hostOf(a), portOf(a)) // spec atSite
+	}
+	return origin + "/cyrano/" + schemeSeg + "/" + escapePct(segmentOf(a.auth)) +
 		pathText(path) + queryText(a.query) + fragText(a.frag)
 }
 
@@ -406,7 +483,7 @@ func TargetDest(escapedPath string) Dest { return TargetMark(escapedPath).Dest }
 func Unwrap(proxiedHref string, cfg ProxyConfig) string {
 	a, res := parseRef(nil, preprocess(proxiedHref))
 	proxy, pres := parseRef(nil, APIBase(cfg))
-	if res != parsedURL || pres != parsedURL || a.scheme != proxy.scheme || hostPort(a.auth) != hostPort(proxy.auth) {
+	if res != parsedURL || pres != parsedURL || !cfg.onProxy(a, proxy) {
 		return proxiedHref
 	}
 	scheme, seg, rest, ok := cyranoTarget(a.path)
@@ -437,7 +514,7 @@ func Unwrap(proxiedHref string, cfg ProxyConfig) string {
 func RefererRoute(referer, rawPath, query string, cfg ProxyConfig) string {
 	a, res := parseRef(nil, preprocess(referer))
 	proxy, pres := parseRef(nil, APIBase(cfg))
-	if res != parsedURL || pres != parsedURL || a.scheme != proxy.scheme || hostPort(a.auth) != hostPort(proxy.auth) {
+	if res != parsedURL || pres != parsedURL || !cfg.onProxy(a, proxy) {
 		return ""
 	}
 	scheme, seg, _, ok := cyranoTarget(a.path)

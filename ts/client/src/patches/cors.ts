@@ -109,6 +109,12 @@ export interface CorsContext {
     always?: boolean;
     /** The context's own origin is opaque to the browser (a sandboxed document, a data: worker): it runs CORS itself. */
     opaque?: boolean;
+    /**
+     * Host mode: whether a proxified URL stays on this context's own proxy
+     * host. A request to another host is cross-origin to the browser too,
+     * which runs CORS itself (the proxy translates the origins).
+     */
+    sameHost?: (proxified: string) => boolean;
 }
 
 /**

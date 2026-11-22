@@ -49,10 +49,11 @@ import { patchReferrerPolicy, type RewriteOne } from "./referrer-policy";
 import { patchSendBeacon } from "./beacon";
 import { patchWindowOpen } from "./window-open";
 import { patchServiceWorker } from "./service-worker";
-import { patchDocumentCookie } from "./document-cookie";
+import { patchDocumentCookie, setCookieJarDomain } from "./document-cookie";
 import { patchCookieStore } from "./cookie-store";
 import { patchPostMessage } from "./post-message";
 import { patchMessageEventOrigin } from "./message-event";
+import { keepCrossorigin } from "../url/crossorigin";
 
 export function installPatches(
     targetWindow: Window,
@@ -131,7 +132,10 @@ export function installPatches(
     step("patchAnchorUrlReflection", () => patchAnchorUrlReflection(targetWindow, unwrapOne, rewriteOne));
     // Requests to other origins are under CORS (patches/cors.ts).
     const cors = config.identity ? undefined
-        : { origin: () => getCurrentBaseUrl().origin, href: () => getCurrentBaseUrl().href, proxy: new URL(config.apiBaseURL).origin, opaque: opaqueOrigin };
+        : { origin: () => getCurrentBaseUrl().origin, href: () => getCurrentBaseUrl().href, proxy: new URL(config.apiBaseURL).origin, opaque: opaqueOrigin,
+            ...(config.sites === true ? { sameHost: (p: string): boolean => {
+                try { return new URL(p).host === new URL(rewriteOne(getCurrentBaseUrl().origin + "/")).host; } catch { return true; }
+            } } : {}) };
     step("patchFetch", () => patchFetch(targetWindow, rewriteOne, unwrapOne, getCurrentBaseUrl, cors));
     step("patchXmlHttpRequest", () => patchXmlHttpRequest(targetWindow, rewriteOne, unwrapOne, getCurrentBaseUrl, cors));
     step("patchWebSocket", () => patchWebSocket(targetWindow, rewriteOne, unwrapOne, () => getCurrentBaseUrl().origin));
@@ -182,6 +186,7 @@ export function installPatches(
     step("patchWebStorage", () => patchWebStorage(targetWindow, prefix, unwrapOne));
     step("patchStorageNames", () => patchStorageNames(targetWindow, prefix));
     // Before document.cookie is wrapped: it writes with the native setter.
+    if (config.sites === true) { setCookieJarDomain(new URL(config.apiBaseURL).hostname); keepCrossorigin(); }
     step("patchCookieStore", () => patchCookieStore(targetWindow, getCurrentBaseUrl));
     // (config.skip "cookieGet" / "cookieSet": one half only — development aid.)
     step("patchDocumentCookie", () => patchDocumentCookie(targetWindow, getCurrentBaseUrl,

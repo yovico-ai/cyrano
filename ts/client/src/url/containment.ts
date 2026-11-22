@@ -13,7 +13,8 @@
 // proxified URLs across runtimes is a hard requirement so server-rewritten
 // HTML and client-side dynamic rewrites agree on the URL of every resource.
 
-import { SafeSet, sStarts } from "../native/intrinsics";
+import { SafeSet, sEnds, sStarts } from "../native/intrinsics";
+import { originLabel } from "./site-host";
 import type { ClientConfig } from "../config";
 
 // Schemes whose URLs we proxify. Anything else (data:, blob:, javascript:,
@@ -40,7 +41,11 @@ export function proxyApiBase(config: ClientConfig): string {
     return config.apiBaseURL;
 }
 
-/** True if the given URL points at our public proxy origin. */
+/**
+ * True if the given URL points at one of our proxy's hosts: the public
+ * origin, or in host mode (config.sites; spec/SiteContainment.agda
+ * onProxy) any host under it — "<label>.<host>[:port]".
+ */
 function isProxyOrigin(url: URL, config: ClientConfig): boolean {
     let publicOrigin: URL;
     try {
@@ -49,7 +54,21 @@ function isProxyOrigin(url: URL, config: ClientConfig): boolean {
         return false;
     }
     if (url.protocol !== publicOrigin.protocol) return false;
-    return effectiveHost(url) === effectiveHost(publicOrigin);
+    if (effectiveHost(url) === effectiveHost(publicOrigin)) return true;
+    return config.sites === true && sEnds(url.host, "." + publicOrigin.host);
+}
+
+/** spec siteAuthFor: the authority serving an origin — its label's host, or the proxy's own. */
+function siteAuth(config: ClientConfig, scheme: string, hostname: string, port: string): string {
+    const apex = new URL(config.apiBaseURL).host;
+    const l = originLabel(scheme, hostname, port);
+    return l === "" ? apex : l + "." + apex;
+}
+
+/** The origin a target with this scheme and host is proxified on (spec atSite; path mode: the one origin). */
+function originFor(config: ClientConfig, scheme: string, hostname: string, port: string): string {
+    if (config.sites !== true) return proxyApiBase(config);
+    return new URL(config.apiBaseURL).protocol + "//" + siteAuth(config, scheme, hostname, port);
 }
 
 /** Host:port with default ports made explicit so explicit and implicit forms compare equal. */
@@ -243,12 +262,17 @@ export function rewriteUrl(
     // real proxy path that already carries "/cyrano/<scheme>/", producing a URL
     // like "https://www.google.com/cyrano/https/www.google.com/...".
     // Re-map to our proxy origin instead of proxifying a second time.
-    if (cyranoTarget(absolute.pathname) !== null) {
-        const apiBase = proxyApiBase(config);
+    const remap = cyranoTarget(absolute.pathname);
+    if (remap !== null) {
+        // Host mode: the host of the site the path names (spec remapAuth).
+        let apiBase = proxyApiBase(config);
+        if (config.sites === true) {
+            try { const t = new URL(`${remap.scheme}://${pctDecode(remap.host)}/`); apiBase = originFor(config, remap.scheme, t.hostname, t.port); } catch { /* the apex */ }
+        }
         return `${apiBase}${afterAuthority(absolute)}`;
     }
 
-    const apiBase = proxyApiBase(config);
+    const apiBase = originFor(config, absolute.protocol.slice(0, -1), absolute.hostname, absolute.port);
     // The page cannot tell (REQUIREMENTS.md): everything href shows —
     // userinfo, a bare "?" or "#" — is carried, so unwrap gives it back.
     const scheme = absolute.protocol.slice(0, -1); // strip trailing ':'

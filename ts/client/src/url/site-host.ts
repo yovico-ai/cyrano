@@ -120,3 +120,57 @@ export function admits(domain: string, host: string, key: string): boolean {
     const l = labelOf(domain, host);
     return l !== null && l === siteLabel(key);
 }
+
+// ── Origin labels: spec/OriginLabel.agda (Go: sitehost.OriginLabel) ──
+
+export const MAX_LABEL = 63;
+const LETTER: Record<string, string> = { http: "h", https: "s", ws: "w", wss: "x" };
+const SCHEME: Record<string, string> = { h: "http", s: "https", w: "ws", x: "wss" };
+
+/** spec originLabel: the origin as one DNS label, or "" when it has none. */
+export function originLabel(scheme: string, host: string, port: string): string {
+    const l = Object.prototype.hasOwnProperty.call(LETTER, scheme) ? LETTER[scheme]! : "";
+    if (l === "" || host === "" || !/^[0-9]*$/.test(port)) return "";
+    let out = l;
+    for (let i = 0; i < host.length; i++) {
+        const c = host[i]!;
+        if ((c >= "a" && c <= "z") || (c >= "0" && c <= "9")) out += c;
+        else if (c === ".") out += "-0";
+        else if (c === "-") out += "-1";
+        else return "";
+    }
+    if (port !== "") out += "-2" + port;
+    return out.length > MAX_LABEL ? "" : out;
+}
+
+/** spec labelOrigin: [scheme, host, port] a label names, or null. */
+export function labelOrigin(label: string): [string, string, string] | null {
+    if (label === "" || !Object.prototype.hasOwnProperty.call(SCHEME, label[0]!)) return null;
+    const scheme = SCHEME[label[0]!]!;
+    let host = "";
+    for (let i = 1; i < label.length; i++) {
+        const c = label[i]!;
+        if (c === "-") {
+            const n = label[i + 1];
+            if (n === "0") host += ".";
+            else if (n === "1") host += "-";
+            else if (n === "2") {
+                const p = label.slice(i + 2);
+                return host === "" || p === "" || !/^[0-9]+$/.test(p) ? null : [scheme, host, p];
+            } else return null;
+            i++;
+            continue;
+        }
+        if (!((c >= "a" && c <= "z") || (c >= "0" && c <= "9"))) return null;
+        host += c;
+    }
+    return host === "" ? null : [scheme, host, ""];
+}
+
+/** The original origin a proxy host stands for ("<label>.<apex host>"), or null. */
+export function originOfHost(host: string, apexHost: string): string | null {
+    const l = labelOf(apexHost, host);
+    if (l === null) return null;
+    const o = labelOrigin(l);
+    return o === null ? null : `${o[0]}://${o[1]}${o[2] === "" ? "" : ":" + o[2]}`;
+}

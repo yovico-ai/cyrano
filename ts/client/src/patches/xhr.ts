@@ -27,7 +27,8 @@ export function patchXmlHttpRequest(
         if (cors && baseUrl && typeof self === "object" && self !== null) {
             const own = cors.origin();
             const target = unwrapOne(String(next[1]));
-            const cross = isCrossOrigin(target, baseUrl(), own) && !(cors.proxy && sStarts(target, cors.proxy + "/"));
+            const cross = isCrossOrigin(target, baseUrl(), own) && !(cors.proxy && sStarts(target, cors.proxy + "/")) &&
+                (cors.sameHost === undefined || cors.sameHost(String(next[1])));
             if (cross) crossOriginXhr.set(self, own); else crossOriginXhr.delete(self);
             if (namesContext(cors.opaque === true, cross, cors.always === true)) initiatorOfXhr.set(self, { href: initiatorValue(cors.href()), cross });
             else initiatorOfXhr.delete(self);

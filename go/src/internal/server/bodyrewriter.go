@@ -142,7 +142,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			cfg := htmlrewrite.Config{
 				BaseURL:        target,
 				Proxy:          proxyCfg,
-				RewriterJSPath: static.RuntimeURL(vhost.RewriterJSPath),
+				RewriterJSPath: runtimeSrc(proxyCfg, vhost),
 				// Every page gets the one runtime. Its patches keep the native
 				// surface (ts/client/src/native/surface.ts), so a challenge's
 				// integrity and fingerprint checks see native APIs; a challenge
@@ -738,6 +738,8 @@ func clientBase(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig) map[string
 		"rewrite_css_selectors": false,
 		// The runtime's Trusted Types policy (urlrewrite.RewriteCSP admits it).
 		"tt": urlrewrite.TrustedTypesPolicy,
+		// Host mode (spec/SiteContainment.agda): each site on its own host.
+		"sites": proxyCfg.Sites,
 	}
 }
 
@@ -822,4 +824,14 @@ func bootHandler() http.Handler {
 // stylesheet or script.
 func fetchedAsData(resp *http.Response) bool {
 	return resp.Request != nil && strings.EqualFold(resp.Request.Header.Get("Sec-Fetch-Dest"), "empty")
+}
+
+// runtimeSrc is where a page loads the runtime from: its own host, or in
+// host mode the proxy's own — one URL, one cached copy, for every origin's
+// host (an ad page's hundred origins would each fetch it).
+func runtimeSrc(proxyCfg urlrewrite.ProxyConfig, vhost *config.VHost) string {
+	if proxyCfg.Sites {
+		return urlrewrite.APIBase(proxyCfg) + static.RuntimeURL(vhost.RewriterJSPath)
+	}
+	return static.RuntimeURL(vhost.RewriterJSPath)
 }

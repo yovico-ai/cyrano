@@ -149,6 +149,25 @@ func (h *Handler) directFetchHeaders(req *http.Request, target *url.URL, request
 		return
 	}
 	if from == nil {
+		// Host mode: a Referer trimmed to its origin, and Origin, are a
+		// proxy host's — whose label names the page's original origin.
+		if o := req.Header.Get("Origin"); o != "" {
+			if orig := urlrewrite.HostOrigin(o, h.opts.ProxyCfg); orig != "" {
+				req.Header.Set("Origin", orig)
+				if referer != "" {
+					if ro := urlrewrite.HostOrigin(strings.TrimSuffix(referer, "/"), h.opts.ProxyCfg); ro != "" {
+						req.Header.Set("Referer", ro+"/")
+					}
+				}
+				return
+			}
+		}
+		if referer != "" {
+			if ro := urlrewrite.HostOrigin(strings.TrimSuffix(referer, "/"), h.opts.ProxyCfg); ro != "" {
+				req.Header.Set("Referer", ro+"/")
+				return
+			}
+		}
 		// No page of ours behind it: never show the proxy to the upstream.
 		if referer != "" && urlrewrite.OnProxy(referer, h.opts.ProxyCfg) {
 			req.Header.Del("Referer")
@@ -174,6 +193,7 @@ func (h *Handler) directFetchHeaders(req *http.Request, target *url.URL, request
 	mode := strings.ToLower(req.Header.Get("Sec-Fetch-Mode"))
 	safe := req.Method == http.MethodGet || req.Method == http.MethodHead
 	browserSent := req.Header.Get("Origin") != ""
+	browserOrigin := req.Header.Get("Origin")
 	scripted := strings.EqualFold(req.Header.Get("Sec-Fetch-Dest"), "empty")
 	// Every proxied context has the proxy's origin but one the browser
 	// made opaque (a sandboxed document): its requests to the proxy are
@@ -190,6 +210,16 @@ func (h *Handler) directFetchHeaders(req *http.Request, target *url.URL, request
 		req.Header.Del("Origin")
 	} else if browserSent && urlrewrite.OnProxy(req.Header.Get("Origin"), h.opts.ProxyCfg) {
 		req.Header.Set("Origin", from.Scheme+"://"+from.Host)
+	}
+
+	// Host mode: the Origin the browser sent names its context's host, whose
+	// label is the context's original origin — a module's Referer is the
+	// importing script's URL, not its document's.
+	if browserSent {
+		if orig := urlrewrite.HostOrigin(browserOrigin, h.opts.ProxyCfg); orig != "" {
+			req.Header.Set("Origin", orig)
+			init = orig + "/"
+		}
 	}
 
 	// "none" (a user-initiated navigation) has no initiator to compare.

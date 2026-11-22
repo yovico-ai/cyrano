@@ -173,8 +173,13 @@ func (h *Handler) routeSetCookies(resp *http.Response) {
 		}
 	}
 	resp.Header.Del("Set-Cookie")
+	// Host mode: every origin's host reads the one jar, as the one host did.
+	domain := ""
+	if h.opts.ProxyCfg.Sites && h.opts.ProxyCfg.PublicURL != nil {
+		domain = "; Domain=" + h.opts.ProxyCfg.PublicURL.Hostname()
+	}
 	for _, v := range forBrowser {
-		resp.Header.Add("Set-Cookie", v)
+		resp.Header.Add("Set-Cookie", v+domain)
 	}
 
 	if newSession {
@@ -185,6 +190,11 @@ func (h *Handler) routeSetCookies(resp *http.Response) {
 			HttpOnly: true,
 			SameSite: http.SameSiteLaxMode,
 			Secure:   h.opts.ProxyCfg.PublicURL != nil && strings.EqualFold(h.opts.ProxyCfg.PublicURL.Scheme, "https"),
+		}
+		// Host mode: one session for every site's host (a domain cookie on
+		// the proxy's name; its hosts are one site to the browser).
+		if h.opts.ProxyCfg.Sites && h.opts.ProxyCfg.PublicURL != nil {
+			sc.Domain = h.opts.ProxyCfg.PublicURL.Hostname()
 		}
 		resp.Header.Add("Set-Cookie", sc.String())
 	}

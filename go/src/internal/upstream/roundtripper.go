@@ -16,6 +16,7 @@
 package upstream
 
 import (
+	"fmt"
 	"github.com/bogdanfinn/fhttp/httptrace"
 	"github.com/yovico/cyrano/internal/dnscache"
 	"github.com/yovico/cyrano/internal/headerorder"
@@ -24,6 +25,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -82,8 +84,8 @@ type RoundTripper struct {
 func NewRoundTripper(skipVerify bool) *RoundTripper {
 	return &RoundTripper{
 		skipVerify: skipVerify,
-		clients: make(map[string]*clientEntry),
-		aia:     make(map[string]*aiaState),
+		clients:    make(map[string]*clientEntry),
+		aia:        make(map[string]*aiaState),
 	}
 }
 
@@ -104,6 +106,7 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	// own transport wrote its own header order and Go's casing to every http
 	// origin.
 
+	debugUpstream(req)
 	profileKey, profile := selectProfile(req.Header.Get("User-Agent"))
 	// Scope the connection pool to the browser session: each session gets its
 	// own impersonation client (and thus its own h2 connections), so requests
@@ -475,4 +478,40 @@ func copyHeaders(out fhttp.Header, req *http.Request) {
 	if trustworthy {
 		ensureClientHints(out, req.Header.Get("User-Agent"))
 	}
+}
+
+// Development aid (CYRANO_DEBUG_UPSTREAM=<url regexp>): every request to a
+// matching URL is printed to stderr with its headers as sent upstream.
+var debugUpstreamRe = func() *regexp.Regexp {
+	if v := os.Getenv("CYRANO_DEBUG_UPSTREAM"); v != "" {
+		return regexp.MustCompile(v)
+	}
+	return nil
+}()
+
+func debugUpstream(req *http.Request) {
+	if debugUpstreamRe == nil || !debugUpstreamRe.MatchString(req.URL.String()) {
+		return
+	}
+	keys := make([]string, 0, len(req.Header))
+	for k := range req.Header {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString("UPSTREAM " + req.Method + " " + req.URL.String() + "\n")
+	for _, k := range keys {
+		for _, v := range req.Header.Values(k) {
+			if strings.EqualFold(k, "Cookie") {
+				names := []string{}
+				for _, part := range strings.Split(v, ";") {
+					names = append(names, strings.SplitN(strings.TrimSpace(part), "=", 2)[0])
+				}
+				sort.Strings(names)
+				v = strconv.Itoa(len(names)) + " cookies: " + strings.Join(names, " ")
+			}
+			b.WriteString("  " + k + ": " + v + "\n")
+		}
+	}
+	fmt.Fprint(os.Stderr, b.String())
 }

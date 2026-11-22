@@ -24,6 +24,11 @@ export function isPublicSuffix(d: string): boolean {
     return getPublicSuffix(d, { allowPrivateDomains: true }) === d;
 }
 
+// Host mode: the jar is a domain cookie jar on the proxy's name, read by
+// every origin's host (Go: proxy routeSetCookies).
+let jarDomain = "";
+export function setCookieJarDomain(d: string): void { jarDomain = d; }
+
 /** What a write of `value` at `url` stores in the browser's jar, or null. */
 export function nativeCookieWrite(value: string, url: URL): string | null {
     const sc = parseSetCookie(value);
@@ -33,6 +38,7 @@ export function nativeCookieWrite(value: string, url: URL): string | null {
     let out = `${wireName(c)}=${wireValue(c)}; Path=/`;
     if (sc.expires !== null) out += `; Expires=${sc.expires}`;
     if (sc.maxAge !== null) out += `; Max-Age=${sc.maxAge}`;
+    if (jarDomain !== "") out += `; Domain=${jarDomain}`;
     return out;
 }
 

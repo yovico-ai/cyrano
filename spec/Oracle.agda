@@ -120,6 +120,10 @@
 --   docbase <document URL> <href>…      → {"out":"<base URL>"} (the hrefs of
 --                                         the document's <base> elements)
 --   importmap <proxy> <base> <text>     → {"out":"<rewritten import map>"}
+--   siterewrite <proxy> <base> <policy|-> <dest|-> <url> → host mode (SiteContainment), stand-in registrable domain
+--   siteunwrap <proxy> <url>            → host mode unwrap
+--   originlabel <scheme> <host> <port>  → {"out":"<label>"|""}
+--   labelorigin <label>                 → {"out":"<scheme> <host> <port>"|""}
 --   sha256 <text>                       → {"out":"<hex of SHA-256 of its UTF-8>"}
 --   sitelabel <site key>                → {"out":"<26-char base32 label>"}
 --   sitekey <scheme> <host> <reg|"">    → {"out":"<scheme>://<site>"}
@@ -158,7 +162,7 @@
 -- on purpose (skill: a JSON library is more code than trust).
 module Oracle where
 
-open import Data.Bool.Base using (Bool; true; false; _∨_; if_then_else_)
+open import Data.Bool.Base using (Bool; true; false; _∨_; _∧_; if_then_else_)
 open import Data.Char.Base using (Char; toℕ; fromℕ)
 open import Data.List.Base using (List; []; _∷_; _++_; reverse; concatMap)
 open import Data.Maybe.Base using (Maybe; just; nothing)
@@ -204,6 +208,8 @@ import Eval
 import Payment
 import Sha256
 import SiteHost
+import SiteContainment
+import OriginLabel
 import LocalStore
 import Route
 import Features
@@ -319,6 +325,32 @@ proxyOf s = fromParsed (parse nothing s)
   fromParsed invalid     = nothing
   fromParsed outside     = nothing
 
+-- The oracle's stand-in for the registrable domain (public-suffix data is
+-- outside the model; the conformance tests give each runtime this rule):
+-- the last two labels; nothing for a bracketed or all-digit host (an IP
+-- address) or a single label.
+regStandIn : Str → Maybe Str
+regStandIn h = if ipLike h then nothing else lastTwo (splitOn (is 46) h)
+  where
+  ipLike : Str → Bool
+  ipLike [] = true
+  ipLike (c ∷ cs) = is 91 c ∨ allDigitsDots (c ∷ cs)
+    where
+    allDigitsDots : Str → Bool
+    allDigitsDots [] = true
+    allDigitsDots (d ∷ ds) = (isDigit d ∨ is 46 d) ∧ allDigitsDots ds
+  joinDot : List Str → Str
+  joinDot [] = []
+  joinDot (x ∷ []) = x
+  joinDot (x ∷ xs) = x ++ '.' ∷ joinDot xs
+  lastTwo : List Str → Maybe Str
+  lastTwo ls with reverse ls
+  ... | (z ∷ y ∷ _) = just (y ++ '.' ∷ z)
+  ... | _           = nothing
+
+siteProxyOf : Proxy → SiteContainment.SiteProxy
+siteProxyOf px = SiteContainment.siteProxy (pScheme px) (pAuth px)
+
 baseOf : Str → Maybe Abs
 baseOf s = fromParsed (parse nothing s)
   where
@@ -432,6 +464,10 @@ dispatch op args =
   else if eqStr op (toList "wssplit") then wsSplitReq args
   else if eqStr op (toList "refresh") then refreshReq args
   else if eqStr op (toList "unwrap") then unwrapReq args
+  else if eqStr op (toList "siterewrite") then siteRewriteReq args
+  else if eqStr op (toList "originlabel") then threeArgs originLabelReq args
+  else if eqStr op (toList "labelorigin") then oneArg labelOriginReq args
+  else if eqStr op (toList "siteunwrap") then siteUnwrapReq args
   else if eqStr op (toList "srcset") then srcsetReq args
   else if eqStr op (toList "direct") then directReq args
   else if eqStr op (toList "initref") then initRefReq args
@@ -512,6 +548,54 @@ dispatch op args =
   ... | nothing | _ = errorReply "BadProxy"
   ... | just _  | nothing = errorReply "BadBase"
   rewriteMarkReq _ = errorReply "BadRequest"
+
+  -- Host mode (SiteContainment), with the stand-in registrable domain
+  -- below. siterewrite <proxy> <base> <policy|-> <js|css|frame|inert|-> <url>
+  siteRewriteReq : List Str → Str
+  siteRewriteReq (p ∷ b ∷ pt ∷ dt ∷ raw ∷ []) with proxyOf p | baseOf b
+  ... | just px | just base = byMark (pol pt) (dst dt)
+    where
+    pol : Str → Maybe (Maybe Policy)
+    pol t = if eqStr t (toList "-") then just nothing else polOf (policyToken t)
+      where
+      polOf : Maybe Policy → Maybe (Maybe Policy)
+      polOf (just x) = just (just x)
+      polOf nothing  = nothing
+    dst : Str → Maybe (Maybe Dest)
+    dst t = if eqStr t (toList "-") then just nothing
+            else if eqStr t (toList "js") then just (just destScript)
+            else if eqStr t (toList "css") then just (just destStyle)
+            else if eqStr t (toList "frame") then just (just destFrame)
+            else if eqStr t (toList "inert") then just (just destInert)
+            else nothing
+    byMark : Maybe (Maybe Policy) → Maybe (Maybe Dest) → Str
+    byMark (just x) (just d) = answerReply raw (SiteContainment.rewriteUrlSite (siteProxyOf px) (mark x d) base raw)
+    byMark _        _        = errorReply "BadRequest"
+  ... | nothing | _ = errorReply "BadProxy"
+  ... | just _  | nothing = errorReply "BadBase"
+  siteRewriteReq _ = errorReply "BadRequest"
+
+  -- originlabel <scheme> <host> <port|""> → the label, or "" for none
+  originLabelReq : Str → Str → Str → Str
+  originLabelReq sc h p with schemeOf sc
+  ... | just s  = fromMaybeL (OriginLabel.originLabel s h p)
+    where
+    fromMaybeL : Maybe Str → Str
+    fromMaybeL (just l) = l
+    fromMaybeL nothing  = []
+  ... | nothing = toList "BadScheme"
+
+  -- labelorigin <label> → "<scheme> <host> <port>", or "" when it is none
+  labelOriginReq : Str → Str
+  labelOriginReq l with OriginLabel.labelOrigin l
+  ... | just (sc , h , p) = schemeChars sc ++ ' ' ∷ h ++ ' ' ∷ p
+  ... | nothing = []
+
+  siteUnwrapReq : List Str → Str
+  siteUnwrapReq (p ∷ h ∷ []) with proxyOf p
+  ... | just px = answerReply h (SiteContainment.unwrapSite (siteProxyOf px) h)
+  ... | nothing = errorReply "BadProxy"
+  siteUnwrapReq _ = errorReply "BadRequest"
 
   unwrapReq : List Str → Str
   unwrapReq (p ∷ h ∷ []) with proxyOf p
