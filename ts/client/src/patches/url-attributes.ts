@@ -90,6 +90,18 @@ export function patchUrlAttributes(
             });
         }
     }
+    // currentSrc (an image's chosen candidate, a media element's chosen
+    // source) is no attribute: the browser resolves it from the proxified
+    // ones, so it reads as the page's URL unwrapped (halespropertymanagement.com;
+    // every page read the proxy's).
+    for (const ctorName of ["HTMLImageElement", "HTMLMediaElement"]) {
+        const proto = globals[ctorName]?.prototype;
+        if (!proto) continue;
+        wrapAccessor<unknown>(proto, "currentSrc", { get: (get, self) => {
+            const v = ncall(get, self);
+            return typeof v === "string" && v !== "" ? unwrapOne(v) : v;
+        } });
+    }
 }
 
 /**

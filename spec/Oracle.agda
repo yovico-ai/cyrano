@@ -120,7 +120,7 @@
 --   docbase <document URL> <href>…      → {"out":"<base URL>"} (the hrefs of
 --                                         the document's <base> elements)
 --   importmap <proxy> <base> <text>     → {"out":"<rewritten import map>"}
---   attrkind <html|svg> <tag> <attr>    → {"out":"url|urllist|srcset|reflected|none"}
+--   attrkind <html|svg> <tag> <attr>    → {"out":"url|urllist|srcset|css|reflected|handler|none"}
 --   urldest <html|svg> <tag> <attr> <rel types> <as|-> → {"out":"js|css|-"}
 --   urllist <proxy> <base> <text>       → {"out":"<each token proxified>"}
 --   urllike <specifier>                 → {"out":"yes"} / {"out":"no"}

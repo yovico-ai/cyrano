@@ -157,6 +157,13 @@ const untagAll = (s: string): string => s.replace(TAG_RE, (m: string, colon: str
 });
 const isTag = (s: unknown): boolean => typeof s === "string" && tagged.has(s);
 const originNow = new SafeWeakMap<object, () => string | null>();
+const callerNow = new SafeWeakMap<object, () => string | null>();
+
+/** The original URL of the script calling into the runtime now (a page's, never the runtime's), or null. */
+export function callerScriptUrl(targetWindow: object): string | null {
+    const now = callerNow.get(targetWindow);
+    try { return now ? now() : null; } catch { return null; }
+}
 
 /**
  * A `new Function` body, tagged so that its frames show the eval origin
@@ -242,14 +249,32 @@ export function patchErrorStacks(
     // The eval origin V8 would write for code the page's current caller
     // makes now: its frame's function name and the call's location.
     let sitesMode = false;
-    originNow.set(targetWindow, () => {
+    const callerSite = (): CallSite | null => {
         const I = Intrinsic as unknown as { new (): Error; stackTraceLimit: number | undefined };
         const limit = I.stackTraceLimit;
         let sites: unknown;
         sitesMode = true;
         try { I.stackTraceLimit = 30; sites = new I().stack; } catch { sites = null; } finally { sitesMode = false; I.stackTraceLimit = limit; }
         if (!Array.isArray(sites)) return null;
-        const caller = (sites as CallSite[]).find((x) => !ours(x));
+        return (sites as CallSite[]).find((x) => !ours(x)) ?? null;
+    };
+    // The original URL of the script whose code is calling now (of the one
+    // that made it, for eval / Function code): what import() in code it
+    // makes resolves against natively.
+    callerNow.set(targetWindow, () => {
+        const caller = callerSite();
+        if (!caller) return null;
+        if (caller.isEval?.()) {
+            const eo = caller.getEvalOrigin?.();
+            if (typeof eo !== "string") return null;
+            const t = originShown(eo);
+            return urlOf(t, t.length);
+        }
+        const f = caller.getFileName?.();
+        return f ? unwrapOne(f) : null;
+    });
+    originNow.set(targetWindow, () => {
+        const caller = callerSite();
         if (!caller) return null;
         let loc: string;
         if (caller.isEval?.()) {

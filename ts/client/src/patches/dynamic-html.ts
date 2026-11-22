@@ -58,7 +58,7 @@ import { isReferrerPolicy } from "../url/containment";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 import { injectFramesIn } from "./dynamic-iframe";
 import { rewriteImportMapText } from "../url/import-map";
-import { consume, heldAttr, originalAttr, recordAttr, recordText, recordTextNode } from "../native/originals";
+import { consume, heldAttr, originalAttr, recordAttr, recordText, recordTextNode, textAsWritten } from "../native/originals";
 import { trustedLike, trustedPolicyName } from "../native/trusted";
 
 /**
@@ -361,6 +361,7 @@ function patchRawText(targetWindow: Window, rewriteOne: (url: string) => string)
         own(name, "innerText");
     }
     own("HTMLScriptElement", "text");
+    patchTextNodeData(targetWindow, rewriteOne);
     const E = g["Element"]?.prototype;
     for (const key of ["append", "prepend", "replaceChildren"]) {
         if (!E) break;
@@ -368,6 +369,78 @@ function patchRawText(targetWindow: Window, rewriteOne: (url: string) => string)
         wrapMethod<(...a: unknown[]) => void>(E, key, (native, self, args) => {
             if (!isEl(self) || (self.tagName !== "SCRIPT" && self.tagName !== "STYLE")) return nR.apply(native, self, args) as void;
             return nR.apply(native, self, args.map((a) => rewriteTextNode(self, a, rewriteOne))) as void;
+        });
+    }
+}
+
+/**
+ * A script's or style's text changed through its text node: `data` /
+ * `nodeValue` / `textContent` set on it, appendData, insertData,
+ * deleteData, replaceData. The node's new text, as the page has it, is
+ * rewritten whole and its original kept for read-back. CSS-in-JS writes
+ * its rules so — goober (react-hot-toast, BigCommerce's widgets):
+ * `sheet.data = sheet.data + css`; bearsaver.com's hero image loaded from
+ * its origin.
+ */
+function patchTextNodeData(targetWindow: Window, rewriteOne: (url: string) => string): void {
+    const g = targetWindow as unknown as Record<string, { prototype: object } | undefined>;
+    const C = g["CharacterData"]?.prototype;
+    const N = g["Node"]?.prototype;
+    if (!C) return;
+    const nativeGet = nO.getOwnPropertyDescriptor(C, "data")?.get as ((this: unknown) => string) | undefined;
+    const nativeSet = nO.getOwnPropertyDescriptor(C, "data")?.set as ((this: unknown, v: string) => void) | undefined;
+    if (!nativeGet || !nativeSet) return;
+    /** The script/style a text node is the text of, or null. */
+    const rawParent = (n: unknown): Element | null => {
+        const t = n as Node | null;
+        if (typeof t !== "object" || t === null || (t.nodeType !== 3 && t.nodeType !== 4)) return null;
+        const el = t.parentNode as Element | null;
+        if (!el || el.nodeType !== 1 || el.namespaceURI !== "http://www.w3.org/1999/xhtml") return null;
+        return el.localName === "script" || el.localName === "style" ? el : null;
+    };
+    /** Sets the node's text, as the page wrote it: rewritten, the original kept. */
+    const write = (node: Node, parent: Element, text: string): void => {
+        const raw = rawText(parent, text, rewriteOne);
+        const now = raw === null ? text : raw;
+        ncall(nativeSet, node, now);
+        recordTextNode(node, now, text);
+    };
+    const pageText = (node: Node): string => textAsWritten(node, ncall(nativeGet, node));
+    const setter = (proto: object | undefined, key: string): void => {
+        if (!proto || !ncall(nOP.hasOwnProperty, proto, key)) return;
+        wrapAccessor<unknown>(proto, key, {
+            set: (set, self, value) => {
+                const parent = rawParent(self);
+                // null is "" for data's [LegacyNullToEmptyString], nodeValue and textContent alike.
+                if (!parent) return ncall(set, self, value);
+                write(self as Node, parent, value === null ? "" : String(value));
+            },
+        });
+    };
+    setter(C, "data");
+    setter(N, "nodeValue");
+    // Node's textContent setter is wrapped for elements already (patchRawText): a text node's goes here.
+    if (N && ncall(nOP.hasOwnProperty, N, "textContent")) {
+        wrapAccessor<unknown>(N, "textContent", {
+            set: (set, self, value) => {
+                const parent = rawParent(self);
+                if (!parent) return ncall(set, self, value);
+                write(self as Node, parent, value === null ? "" : String(value));
+            },
+        });
+    }
+    // The ranged edits: applied to the page's text on a scratch node (the
+    // native's own checks and errors: an offset past the page's length
+    // throws its IndexSizeError), the result written as above.
+    for (const key of ["appendData", "insertData", "deleteData", "replaceData"]) {
+        if (!ncall(nOP.hasOwnProperty, C, key)) continue;
+        wrapMethod<(...a: unknown[]) => void>(C, key, (native, self, args) => {
+            const parent = rawParent(self);
+            const doc = parent?.ownerDocument;
+            if (!parent || !doc) return nR.apply(native, self, args) as void;
+            const scratch = doc.createTextNode(pageText(self as Node));
+            nR.apply(native, scratch, args);
+            write(self as Node, parent, ncall(nativeGet, scratch));
         });
     }
 }

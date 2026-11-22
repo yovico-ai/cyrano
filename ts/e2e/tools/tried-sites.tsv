@@ -1,0 +1,951 @@
+# Every site random testing compared, direct vs proxied (ts/e2e/tools/live-compare.cjs).
+# day	run	url	direct status	proxied status	errors direct|proxied	escaped	DOM diff
+2026-11-18	run1	https://www.foodnetwork.com/recipes/schooner-ellida-shore-dinner-1912201	200	200	9|11	0	
+2026-11-18	run1	https://www.saveur.com/article/Recipes/Lobster-Bake	0	0	0|0	0	
+2026-11-18	run1	https://www.diffordsguide.com/cocktails/recipe/42725/alaskan-lantern	200	0	6|40	0	
+2026-11-18	run1	https://www.visitmt.com/listings/general/bakery/rock-n-roll-bakery	200	200	0|0	0	
+2026-11-18	run1	https://www.seattlemet.com/travel-and-outdoors/2023/12/glacier-town-washington-mount-baker-restaurants	200	200	0|0	0	
+2026-11-18	run1	https://fiddlershop.com/products/violin-cookie-cutter	200	200	0|5	0	
+2026-11-18	run1	https://www.minecraft.net/en-us/article/the-fastest-way-oxidize-copper	200	200	0|0	0	
+2026-11-18	run1	https://www.metmuseum.org/departments/musical-instruments	200	200	0|0	0	
+2026-11-21	run10	https://www.yelp.ca/search?find_desc=best+psychic&find_loc=San+Jose%2C+CA	403	403	1|1	0	
+2026-11-21	run10	https://roboticsandautomationnews.com/2026/10/16/tesla-patent-reveals-touch-sensitive-skin-for-robot-hands/105999/	200	200	0|0	0	dom
+2026-11-21	run10	https://www.capetown.travel/limitless-cape-town/	200	200	4|5	0	dom
+2026-11-21	run10	https://www.xe.com/currencyconverter/	200	200	0|0	0	dom
+2026-11-21	run10	https://datetime.uk/	200	200	0|0	0	
+2026-11-21	run10	https://www.zazzle.com/bucking+buttons+buttons+pins?msockid=3a19e3fb2ea46f253dcafbe32f316e1d	403	403	2|1	0	
+2026-11-21	run10	https://www.songlyrics.com/queen/bohemian-rhapsody-lyrics/	403	403	21|16	0	dom
+2026-11-21	run10	https://www.walmart.com/ip/Phil-Wickham-Hallelujah-Its-Christmas-Music-Performance-CD/12948660034	200	200	0|2	0	
+2026-11-21	run10	https://microbenotes.com/molecular-chaperones/	200	0	322|3	0	dom
+2026-11-21	run10	https://www.health.com/hawthorn-benefits-8716978	200	200	3|0	0	
+2026-11-21	run10	https://www.pervertium.com/most-popular/	200	200	0|0	0	dom
+2026-11-21	run10	https://meatnbone.com/	200	0	43|23	2	dom
+2026-11-21	run10	https://es.chevrolet.com/suvs	200	200	2|2	0	
+2026-11-21	run10	https://myaccounts.sec.wellsfargo.com/servicing_ui/	200	200	4|4	0	
+2026-11-21	run10	https://www.meta.com/en-gb/facebook-app/			1|1	0	dom
+2026-11-21	run10	https://www.fitchratings.com/research/corporate-finance/fitch-assigns-bbb-rating-to-jbs-nv-idrs-outlook-stable-19-11-2025	200	200	2|2	0	dom
+2026-11-21	run10	https://www.timeanddate.com/counters/	0	0	36|15	0	dom
+2026-11-21	run10	https://us.china-embassy.gov.cn/eng/	200	200	2|1	0	
+2026-11-21	run10	https://www.ainvest.com/news/cftc-passive-software-relief-custody-wallets-unseat-brokers-crypto-derivatives-access-2609/	202	202	2|1	0	
+2026-11-21	run10	https://www.zealot.com/collections	200	200	0|1	0	
+2026-11-21	run10	https://propg.ifas.ufl.edu/07-geophytes/02-othergeophytes/02-geophytes-corms.html	200	200	0|0	0	
+2026-11-21	run10	https://www.investopedia.com/terms/j/judgement.asp	200	200	2|3	0	
+2026-11-21	run10	https://www.vetexotic.theclinics.com/article/S1094-9194(17)30078-6/pdf	200	403	5|11	0	dom
+2026-11-21	run10	https://www.homedepot.com/b/Hardware-Chains-Ropes-Rope/N-5yc1vZc2gr	403	403	1|1	0	
+2026-11-21	run10	https://www.edgartownmarine.com/types-of-yachts-trimarans	200	200	0|0	0	
+2026-11-21	run10	https://www.researchgate.net/figure/Idealized-soil-behavior-from-Parry-and-Wroth-1976_fig6_239388970	403	403	10|6	0	
+2026-11-21	run10	https://www.churchlawandtax.com/pastor-church-law/church-property/removing-disruptive-individuals/	200	200	2|2	0	
+2026-11-21	run10	https://resources.healthgrades.com/right-care/symptoms-and-conditions/lethargy	200	200	0|0	0	
+2026-11-21	run10	https://thecrafttrain.com/recycled-plastic-squid-craft/	200	200	1|0	0	dom
+2026-11-21	run10	https://www.bonappetit.com/story/how-to-buy-and-use-cornmeal	0	0	1|0	0	dom
+2026-11-21	run10	https://www.nhl.com/standings	200	200	0|3	0	dom
+2026-11-21	run10	https://www.emergentmind.com/topics/embedding-inversion-attacks	200	200	0|0	0	dom
+2026-11-21	run10	https://www.storeopeninghours.com/walmart-west-peoria-avenue-peoria-az	200	0	0|1	0	dom
+2026-11-21	run10	https://help.hbomax.com/me-en/Answer/Detail/000002557	200	200	0|4	0	
+2026-11-21	run10	https://fallout.wiki/wiki/Overview:Highwayman	0	0	1|1	0	
+2026-11-21	run10	https://moray.store/	200	200	1|1	0	dom
+2026-11-21	run10	https://downtownbellevue.com/restaurants/john-howie-steak/	200	200	1|1	0	
+2026-11-21	run10	https://www.blockchain.com/explorer/charts/n-orphaned-blocks	200	200	0|0	0	
+2026-11-21	run10	https://www.westsailparts.com/bowsprits/	200	200	0|0	0	
+2026-11-21	run10	https://www.expedia.com/San-Diego-Hotels-Bahia-Resort-Hotel.h18241.Hotel-Information?msockid=124ed79bf8b76a2b38e1cf83f99a6b65	429	429	2|2	0	
+2026-11-21	run10	https://www.khanacademy.org/	200	200	0|0	0	dom
+2026-11-21	run10	https://www.skepdic.com/animism.html	200	200	1|1	0	
+2026-11-21	run10	https://www.target.com/p/disney-darlings-deluxe-feature-doll/-/A-94929506	200	200	2|6	0	dom
+2026-11-21	run10	https://www.economist.com/europe/2026/09/16/russias-sham-election-is-descending-into-farce	403	403	4|6	0	
+2026-11-21	run10	https://hotheadburritos.com/nutrition	200	200	1|1	0	
+2026-11-21	run10	https://pebbletec.com/products/pool-finishes/	200	200	2|2	0	
+2026-11-21	run10	https://www.sealsq.com/investors/news-releases/sealsq-signs-a-loi-to-acquire-quintessencelabs-with-the-objective-of-creating-a-world-leader-in-the-vertical-quantum-security-stack	200	200	0|0	0	
+2026-11-21	run10	https://www.reassigned.us/	200	200	1|0	0	
+2026-11-21	run10	https://www.on3.com/high-school/bakersfield-bakersfield-ca-24145/football/scores/	0	0	385|3	0	dom
+2026-11-21	run10	https://truesteamachievements.com/game/Age-of-Barbarian-Extended-Cut/walkthrough	0	0	65|4	0	dom
+2026-11-21	run10	https://www.thoughtco.com/spoonerism-words-1692128	200	200	6|3	0	dom
+2026-11-21	run10	https://littlecaesars.com/en-us/menu/	200	200	2|0	0	dom
+2026-11-21	run10	https://backbone.com/pages/app	200	200	39|25	0	dom
+2026-11-21	run10	https://dict.eudic.net/dicts/en/Relevant	200	200	0|0	0	dom
+2026-11-21	run10	https://mediatorregistry.com/attorney/browse/	200	200	0|0	0	dom
+2026-11-21	run10	https://www.icccricketschedule.com/	200	200	3|0	0	
+2026-11-21	run10	https://www.coinlore.com/coin/pippin/forecast/price-prediction	200	200	0|0	0	dom
+2026-11-21	run10	https://shopgoodwill.com/item/284350474	200	200	5|2	0	dom
+2026-11-21	run10	https://dealerdaily.lexus.com/SAML/SetSessionCookieforDealer?aspSessionID=emizt05z0wunfbmdgj1v5uof&aspNetUserId=Fq0G4mHL5llEvlv2Mloy5A==&LoginProcess=ForgeRockAuthentication&DashboardRedirection=1DD_Dashboard	200	200	3|2	0	
+2026-11-21	run10	https://www.poketools.com/nature-chart	200	200	7|1	0	
+2026-11-21	run10	https://www.cointalk.com/threads/pcgs-ngc-or-cac.414906/	0	0	0|0	0	dom
+2026-11-21	run10	https://www.wow-petopia.com/npc.php?id=187468	200	200	2|2	0	
+2026-11-21	run10	https://propscopeapp.com/	200	200	0|0	0	
+2026-11-21	run10	https://www.allrecipes.com/article/how-to-make-omelets/	200	200	5|1	0	
+2026-11-21	run10	https://www.ispot.tv/product/bn	200	200	0|0	0	
+2026-11-21	run10	https://www.regmovies.com/theatres/regal-fresno-river-park-1033	200	200	2|80	0	dom
+2026-11-21	run10	https://archer.austin-tx-hotels.com/en/	200	502	0|1	0	dom
+2026-11-21	run10	https://pocketwatchandpetticoats.com/products/peachy-keen-swing-dress	200	0	2|736	0	dom
+2026-11-21	run10	https://www.bankofamerica.com/	200	200	0|1	0	dom
+2026-11-19	run2	https://www.npr.org/2022/01/06/1068636021/great-animal-orchestra-peabody-sussex-museum	200	0	26|27	0	
+2026-11-19	run2	https://www.atlasobscura.com/places/st-cecilias-hall	200	0	6|16	0	
+2026-11-19	run2	https://www.artfund.org/explore/museums-and-galleries/st-cecilias-hall-museum-of-instruments/visitor-information	200	200	1|1	0	
+2026-11-19	run2	https://80.lv/articles/learn-how-to-create-organic-textures-with-houdini-s-copernicus	200	200	25|1	0	
+2026-11-19	run2	https://serebii.net/pokemonpokopia/items/lantern.shtml	0	200	47|1	0	
+2026-11-19	run2	https://parks.canada.ca/culture/gourmand-gourmet/recette-recipe13	200	200	0|0	0	
+2026-11-19	run2	https://serc.carleton.edu/introgeo/demonstrations/examples/tutorial.html	200	200	0|0	0	
+2026-11-19	run2	https://www.muddycolors.com/2018/05/flutter-part-2-painting-on-copper-tutorial-video	403	403	9|10	0	
+2026-11-19	run3	https://getupandgokayaking.com/locations/st-augustine/lighthouse-evening-clear-kayak-tour	404	404	14|2	0	
+2026-11-19	run3	https://tpwd.texas.gov/boating/paddling-trails/gulf-coast/lighthouse-lakes/	200	200	1|0	0	
+2026-11-19	run3	https://www.massaudubon.org/programs/long-pasture/97105-explore-by-kayak-sandy-neck-lighthouse-tour	404	404	2|2	0	
+2026-11-19	run3	https://www.mountaineers.org/activities/trip-reports/sea-kayak-dungeness-spit-3	200	200	1|8	0	
+2026-11-19	run3	https://www.tilebar.com/product/tundra-gray-6x6-honed-limestone-tile.html	200	200	53|25	0	
+2026-11-19	run3	https://www.mandarinstone.com/product/tundra-tumbled-marble/	200	200	0|0	0	
+2026-11-19	run3	https://www.1stdibs.com/furniture/tables/coffee-tables-cocktail-tables/contemporary-minimal-outdoor-indoor-round-center-table-grigio-tundra-marble/id-f_34101172	200	200	5|2	0	
+2026-11-19	run3	https://pypi.org/project/falcon/	200	200	0|0	0	
+2026-11-19	run3	https://falcon.readthedocs.io/en/1.4.0/	200	200	10|17	0	
+2026-11-19	run3	https://pkg.go.dev/github.com/adnvilla/go-quartz/quartz	200	200	0|0	0	
+2026-11-21	run4	https://instituteprojectmanagement.com/blog/what-is-management/	200	200	0|0	0	
+2026-11-21	run4	https://www.violationinfo.com/	200	200	0|0	0	
+2026-11-21	run4	https://visitseattle.org/things-to-do/events/	200	200	3|3	0	
+2026-11-21	run4	https://en.wiktionary.org/wiki/thwarted	200	200	0|0	0	
+2026-11-21	run4	https://www.imdb.com/title/tt35048826/	202	202	0|0	0	
+2026-11-21	run4	https://www.google.com/maps/search/Al%20Khor%20and%20Al%20Thakhira%2C%20Qatar	200	400	0|1	0	
+2026-11-21	run4	https://www.espn.com/soccer/team/squad/_/id/205/brazil	202	202	0|0	0	
+2026-11-21	run4	https://www.pragmaticplay.com/	200	200	2|2	0	
+2026-11-21	run4	https://www.bladehq.com/	200	200	4|0	0	
+2026-11-21	run4	https://m365.cloud.microsoft/	200	200	4|1	0	
+2026-11-21	run4	https://www.yelp.com/biz/mothers-bar-and-grill-phoenix-2?msockid=266f13bb2974602026ae0ba328fb6122	403	403	1|1	0	
+2026-11-21	run5	https://en.wiktionary.org/wiki/forebode	200	200	0|0	0	
+2026-11-21	run5	https://m365.cloud.microsoft/	200	200	6|1	0	
+2026-11-21	run5	https://www.iciba.com/word?w=implicates	200	200	0|0	0	
+2026-11-21	run5	https://www.windowscentral.com/	200	0	381|319	57	
+2026-11-21	run5	https://www.quince.com/	200	200	1|2	0	
+2026-11-21	run5	https://pompomlondon.com/	200	200	2|3	0	
+2026-11-21	run5	https://www.fedex.com/en-us/tracking.html	200	200	4|7	0	
+2026-11-21	run5	https://store.steampowered.com/app/2457220/Avowed/	200	200	0|0	0	
+2026-11-21	run5	https://parquet.apache.org/	200	200	0|0	0	
+2026-11-21	run6	https://m365.cloud.microsoft/	200	200	3|1	0	
+2026-11-21	run6	https://www.dictai.org/w/federally	200	200	1|0	0	
+2026-11-21	run6	https://www.definitions.net/definition/vindicate	200	200	0|0	0	
+2026-11-21	run6	https://www.imdb.com/title/tt32268691/	202	202	23|3	0	dom
+2026-11-21	run6	http://www.bingweeklyquiz.com/bing-homepage-quiz/			1|0	0	dom
+2026-11-21	run6	https://thechefstore.com/products/el-toro-fully-electric-tamale-machine-dual-cylinder-480-tamales-per-hour	200	200	3|6	0	dom
+2026-11-21	run6	https://www.gethawser.com/what-is-a-hawser	200	200	0|0	0	
+2026-11-21	run6	https://bdgastore.com/	200	200	2|6	0	dom
+2026-11-21	run6	https://www.usps.com/?msockid=3b773d68377a6e4a25122570361d6f96	200	200	1|2	0	
+2026-11-21	run6	https://www.delta.com/	200	200	1|1	0	dom
+2026-11-21	run6	https://stability.ai/	200	200	1|2	0	dom
+2026-11-21	run6	https://pocketguard.com/blog/how-to-cancel-planet-fitness-membership/	200	200	0|0	0	
+2026-11-21	run6	https://www.spokanecounty.gov/5519/SCRAPS---Regional-Animal-Protection	200	403	0|1	0	dom
+2026-11-21	run6	https://www.mayoclinic.org/diseases-conditions/narcissistic-personality-disorder/symptoms-causes/syc-20366662	200	200	62|114	0	
+2026-11-21	run6	https://www.spotify.com/	200	200	2|2	0	dom
+2026-11-21	run6	https://tribute.tg/	200	200	0|0	0	
+2026-11-21	run6	https://www.songsuspect.com/	200	200	0|0	0	
+2026-11-21	run6	https://www.webmd.com/oral-health/canker-sores	0	200	19|2	0	dom
+2026-11-21	run7	https://www.ldoceonline.com/dictionary/chastise	0	0	351|4	0	dom
+2026-11-21	run7	https://wicksroofing.com/santa-barbara/santa-maria/	200	200	1|2	0	
+2026-11-21	run7	https://forum.ukuleleunderground.com/threads/response-to-a-post-in-an-earlier-thread.173428/	202	202	0|0	0	dom
+2026-11-21	run7	https://www.domain.com/	200	200	24|1	0	dom
+2026-11-21	run7	https://www.stubhub.com/?msockid=3077d5ec9b8b669420ebcdf49a916714	200	200	0|0	0	
+2026-11-21	run7	https://microsoft-excel-2016.en.softonic.com/	200	200	7|4	0	dom
+2026-11-21	run7	https://www.britannica.com/dictionary/eb/word-of-the-day	200	0	393|6	0	dom
+2026-11-21	run7	https://www.oed.com/dictionary/ferrying_adj	200	200	1|1	0	
+2026-11-21	run7	https://aside.com/download	0	200	0|0	0	
+2026-11-21	run7	https://restaurants.subway.com/united-states/va/ashburn/44110-ashburn-village-blvd	200	200	9|6	1	dom
+2026-11-21	run7	https://www.myaccountingcourse.com/accounting-dictionary/overhead	200	200	0|0	0	dom
+2026-11-21	run7	https://apnews.com/article/bomb-illinois-threat-peoria-b7965b246dc6f7d377d01428bd0adf31	0	0	59|7	0	dom
+2026-11-21	run7	https://www.sports-reference.com/stathead/baseball/vs/chicago-cubs-vs-texas-rangers	403	403	12|7	0	
+2026-11-21	run7	https://www.mathsisfun.com/definitions/theorem.html	200	200	0|0	0	
+2026-11-21	run7	https://traveltract.com/travel-to-kuala-lumpur/	403	403	3|2	0	
+2026-11-21	run7	https://calendarhours.com/90-days-from-today/	200	200	1|1	0	
+2026-11-21	run7	https://www.tripadvisor.com/Hotels-g28953-zfb9208-New_York-Hotels.html	403	403	3|1	0	dom
+2026-11-21	run7	https://www.swatch.com/en-us/bioceramic-scuba-fifty-fathoms.html	200	200	3|4	0	
+2026-11-21	run7	https://www.nexusmods.com/mysummercar/mods/2500	0	0	225|48	0	
+2026-11-21	run7	https://www.glamping.com/what-is-glamping/	200	200	1|1	0	
+2026-11-21	run8	https://dictionary.reverso.net/english-definition/Prattling	403	403	12|7	0	
+2026-11-21	run8	https://recruiterroles.com/	200	200	0|0	0	
+2026-11-21	run8	https://www.luster.com/about-us	200	200	0|0	0	
+2026-11-21	run8	https://www.themoviedb.org/movie/9281-witness	200	200	0|0	0	dom
+2026-11-21	run8	https://dailymoscow.news/weather	503	503	2|1	0	
+2026-11-21	run8	https://www.accountingtools.com/articles/payables	200	200	0|0	0	
+2026-11-21	run8	https://www.who.int/news-room/fact-sheets/detail/the-top-10-causes-of-death	200	200	9|10	0	
+2026-11-21	run8	https://www.gettyimages.com/videos/women-peeing	403	403	13|8	0	
+2026-11-21	run8	https://www.grammarly.com/commonly-confused-words/especially-vs-specially?msockid=2dfdb7efe0c76a472fd4aff7e16a6b75	200	200	0|0	0	dom
+2026-11-21	run8	https://www.fantasticfiction.com/a/isaac-asimov/	202	202	113|6	0	
+2026-11-21	run8	https://bokephq.com/	200	200	0|0	0	
+2026-11-21	run8	https://www.fandango.com/santa-cruz_ca_movietimes	200	200	0|0	0	
+2026-11-21	run8	https://www.forbes.com/advisor/legal/criminal-defense/vandalism/	200	200	0|0	0	
+2026-11-21	run8	https://www.w3schools.com/programming/prog_variables.php	200	200	29|1	0	dom
+2026-11-21	run8	https://www.troweprice.com/en/is/about-us/leadership	200	200	4|4	0	
+2026-11-21	run8	https://www.sccvonline.org/	200	200	1|0	0	
+2026-11-21	run8	https://feminist.org/	200	200	3|3	0	
+2026-11-21	run8	https://www.harley-davidson.com/us/en/marketplace/motorcycle-for-sale/category/trike?msockid=37cc7c34524365b719a2642c530064c2	0	200	0|0	0	dom
+2026-11-21	run8	https://www.wikihow.com/Fake-Usps-Tracking-Number	200	200	8|0	0	
+2026-11-21	run8	https://ca.indeed.com/l-toronto,-on-jobs.html	200	200	4|1	0	dom
+2026-11-21	run8	https://mxb-ranked.com/	200	200	0|0	0	
+2026-11-21	run8	https://www.catchrestaurants.com/location/catch-nyc/	200	200	0|87	0	dom
+2026-11-21	run8	https://www.paypal-community.com/t5/Security-and-Fraud-Archives/Spoof-Phishing-Emails-Tips-on-how-to-identify-amp-stay-protected/m-p/974545/highlight/true			0|1	0	dom
+2026-11-21	run8	https://skedaddleenterprises26.com/	200	200	1|0	0	
+2026-11-21	run8	https://www.bakersdrivethru.com/location_directory/san-bernardino-4/	200	200	4|4	0	dom
+2026-11-21	run8	https://www.novatosmilesdentistry.com/	200	200	1|1	0	
+2026-11-21	run8	https://www.buildasign.com/	200	200	7|17	0	
+2026-11-21	run8	https://englishlib.org/en/definition/fraught.html	403	403	18|15	0	dom
+2026-11-21	run8	https://time.now/timezones/aest/	200	0	3|8	15	dom
+2026-11-21	run8	https://www.acreindia.in/	200	200	0|0	0	dom
+2026-11-21	run8	https://www.speedtest.net/	200	200	6|8	0	
+2026-11-21	run8	https://classicwow.gg/forever/guides/itemization	200	200	0|0	0	
+2026-11-21	run8	https://www.outcomes.com/outcomesone	200	200	0|0	0	
+2026-11-21	run8	https://www.zhihu.com/question/38958817	403	403	1|1	0	
+2026-11-21	run8	https://thehill.com/country/us/	0	0	12|24	45	
+2026-11-21	run8	https://cargo.site/	200	200	0|0	0	
+2026-11-21	run8	https://www.dell.com/support/kbdoc/de-de/000148879/anleitung-3rd-party-e-mails-in-outlook-einrichten?msockid=2904b41862746fc603a4ac0063ab6e19	200	200	2|3	0	
+2026-11-21	run8	https://overduepodcast.com/	200	200	0|0	0	
+2026-11-21	run8	https://www.etymonline.com/word/tepid	403	403	8|5	0	
+2026-11-21	run8	https://striplings.com/pages/shop	200	200	0|0	0	dom
+2026-11-21	run8	https://www.flightradar24.com/data/flights/as929	200	200	1|1	0	
+2026-11-21	run8	https://www.computerhope.com/jargon/p/packet.htm	200	200	0|0	0	
+2026-11-21	run8	https://www.officedepot.com/b/office-chairs/N-593067?msockid=120a7c4fc9c06b760f076457c8426a59	200	200	2|2	0	dom
+2026-11-21	run8	https://www.decathlon.co.uk/sports/skiing/sledges	403	403	11|7	0	
+2026-11-21	run8	https://theblast.com/888215/fans-demand-charges-fiona-the-hippo-death/	200	0	4|9	0	dom
+2026-11-21	run8	https://innovativesoch.com/2026/06/15/feed-mill-troubleshooting-clumping-bridging-flow/	200	200	0|0	0	dom
+2026-11-21	run8	https://www.tutorialspoint.com/operating_system/operating_system_paging.htm	200	0	3|8	0	dom
+2026-11-21	run8	https://www.dickssportinggoods.com/a/suspending-hard-bait-0rtz01a.html?msockid=0a1901017e17661615ed19197f7e67f2	200	200	14|13	0	
+2026-11-21	run9	https://recognizeapp.com/	200	200	1|1	0	
+2026-11-21	run9	https://buildmeter.net/guides/concrete-waste-percentage-guide/	200	200	7|7	0	
+2026-11-21	run9	https://www.etsy.com/market/mitten_decoration?msockid=3986f734cd2162921036ef2ccc9f6307	200	200	1|1	0	dom
+2026-11-21	run9	https://www.medicalnewstoday.com/articles/265214	0	0	13|16	0	dom
+2026-11-21	run9	https://mapdoor.com/us/wa/seatac/starbucks/17801-international-blvd-4	503	503	1|1	0	
+2026-11-21	run9	https://www.porterspaints.com/paints/products/liquid-zinc-zinc-ageing-solution/	200	200	0|0	0	
+2026-11-21	run9	https://store.epicgames.com/p/steep	200	200	0|2	0	dom
+2026-11-21	run9	https://www.tdahworkshop.com/products/pens.htm	200	200	15|14	0	
+2026-11-21	run9	https://zhidao.baidu.com/question/277613561199950365.html	200	200	0|1	0	
+2026-11-21	run9	https://englishwordchamps.com/pernicious-meaning-and-examples/	200	200	0|0	0	
+2026-11-21	run9	https://ludwig.guru/s/assented	403	429	357|7	0	
+2026-11-21	run9	https://weather.com/weather/monthly/l/Seattle+Washington?canonicalCityId=1138ce33fd1be51ab7db675c0da0a27c	0	0	116|11	0	dom
+2026-11-21	run9	https://www.fedexfreight.com/en-us/tracking	200	200	0|0	0	dom
+2026-11-21	run9	https://www.boredpanda.com/funniest-movie-mistakes/	0	200	7|7	0	dom
+2026-11-21	run9	https://wwwprod.sdcourt.ca.gov/node	200	200	1|1	0	
+2026-11-21	run9	https://www.deviantart.com/jc2159a/art/Up-in-the-loft-1260694943	200	200	0|0	0	dom
+2026-11-21	run9	https://noddy.fandom.com/wiki/Noddy_Wiki	403	403	23|11	0	dom
+2026-11-21	run9	https://www.thistle.co/	200	200	1|1	0	
+2026-11-21	run9	https://nssdc.gsfc.nasa.gov/planetary/factsheet/mercuryfact.html	200	200	0|0	0	
+2026-11-21	run9	https://www.theguardian.com/tone/editorials	200	200	31|0	0	dom
+2026-11-21	run9	https://www.war.gov/	200	200	1|2	0	
+2026-11-21	run9	https://vm.motorolasolutions.com/VM8_Auth/Login/VehicleManager_web/	200	200	0|0	0	dom
+2026-11-21	run9	https://www.craigslist.org/city/oxnard-ca	200	200	0|0	0	
+2026-11-21	run9	https://24timezones.com/Chicago/time	200	0	0|0	0	
+2026-11-21	run9	https://www.dairyherd.com/news/business/dairy-heifer-and-calf-values-remain-stratosphere	200	200	1|3	0	dom
+2026-11-21	run9	https://avmajournals.avma.org/downloadpdf/view/journals/ajvr/47/2/ajvr.1986.47.02.422.pdf	200	200	3|2	0	
+2026-11-21	run9	https://quizlet.com/636445969/sherpath-chapter-40-bowel-elimination-flash-cards/	0	0	380|53	0	dom
+2026-11-21	run9	https://bleedingcool.com/comics/bones-leopard-sells-graphic-novel-identical-about-a-non-binary-twin/	200	200	7|11	0	dom
+2026-11-21	run9	https://pickytop.com/skinniest-person-in-the-world/	403	403	56|1	0	dom
+2026-11-21	run9	https://www.yahoo.com/lifestyle/articles/unschooled-15-old-didnt-learn-114500419.html	200	200	6|4	15	dom
+2026-11-21	run9	https://biblehub.com/hebrew/8104.htm	200	200	470|16	0	dom
+2026-11-21	run9	https://www.ebay.com/shop/toothy-plush?_nkw=toothy+plush&msockid=366e27764ef6683d36ae3f6e4fc0696f	403	403	1|1	0	
+2026-11-21	run9	https://archerhotel.com/careers	200	200	0|0	0	
+2026-11-21	run9	https://www.dictionary.net/dictionary/cleaned	500	500	2|2	0	
+2026-11-21	run9	https://www.weather-forecast.com/locations/Shanghai/forecasts/latest	200	200	25|4	0	
+2026-11-21	run9	https://lingojam.com/gibberjabbertranslator	200	200	2|2	0	
+2026-11-21	run9	https://planetbanknote.com/banknote-blog/10-most-iconic-hyperinflation-banknotes/	200	200	2|2	0	
+2026-11-21	run9	https://www.absolllute.com/	200	200	0|0	0	
+2026-11-21	run9	https://pmc.ncbi.nlm.nih.gov/articles/PMC9762273/	203	203	0|0	0	dom
+2026-11-21	run9	https://status.seaofthieves.com/	200	200	11|11	0	
+2026-11-21	run9	https://www.net54baseball.com/index.php/	200	200	42|51	0	
+2026-11-21	run9	https://www.fws.gov/story/animals-fool-you	200	200	3|3	0	
+2026-11-21	run9	https://www.local3news.com/local-news/update-officer-reinstated-after-fatal-shooting-of-georgia-donkey/article_dd726a43-36c9-4c85-82bf-031983ac91f5.html	200	200	0|1	0	dom
+2026-11-21	run9	https://devocionescatolicas.com/2025/06/salmo-100-exhortacion-a-la-gratitud/	403	403	2|1	0	dom
+2026-11-21	run9	https://faq.whatsapp.com/1513589699119080	200	200	1|0	0	
+2026-11-21	run9	https://customerservice.costco.com/app/answers/answer_view/a_id/9227/~/costco-career-faqs	401	401	2|1	0	
+2026-11-21	run9	https://www.wowhead.com/guide/midnight/bonus-rolls-item-upgrades	202	202	8|13	0	dom
+2026-11-21	run9	https://rectorseal.com/flareswage-lp	200	200	0|0	0	
+2026-11-21	run9	https://api.politifact.com/factchecks/2023/feb/28/facebook-posts/that-video-of-president-joe-biden-discussing-alien/	200	200	52|9	0	dom
+2026-11-21	run9	https://www.sciencedirect.com/science/article/pii/S0341816218304417	403	403	12|5	0	dom
+2026-11-21	run9	https://my.clevelandclinic.org/health/symptoms/flatulence	200	200	1|2	0	
+2026-11-21	run9	https://www.biography.com/actors/johnny-depp	0	0	0|7	0	
+2026-11-21	run9	https://www.masterclass.com/articles/mambo-music-guide	0	0	9|9	0	dom
+2026-11-21	run9	https://www.nytimes.com/international/	403	403	1|1	0	
+2026-11-21	run9	https://steakpedia.com/steakhouses/peter-luger/	200	200	0|0	0	
+2026-11-21	run9	https://help.twitch.tv/s/article/purchase-support-faq	200	200	4|0	0	dom
+2026-11-21	run9	https://www.justanswer.com/tax/b2z5g-need-colorado-fed-id-number-1099-g-just-id-number.html?msockid=0f4bbbc815266fee3c9da3d014b26eaa	403	403	1|1	0	
+2026-11-21	run9	https://www.worldwidewords.org/ww-con1.html	200	200	0|0	0	
+2026-11-21	run9	https://www.celebslifereel.com/kelsey-pumel	429	200	1|0	0	
+2026-11-21	run9	https://www.scorpion.co/	200	200	0|0	1	
+2026-11-21	run9	https://chatgpt.com/	200	200	0|0	0	
+2026-11-21	run9	https://www.bbc.co.uk/bitesize/articles/zqmyw6f	200	200	7|7	0	
+2026-11-21	run9	https://gojump-oceanside.com/	200	200	0|0	0	
+2026-11-21	run9	https://www.biologyonline.com/dictionary/anther	200	200	0|0	0	
+2026-11-21	run9	https://grammarhow.com/cost-or-costed/	200	200	0|0	0	dom
+2026-11-21	run9	https://www.careerexplorer.com/careers/treasurer/	200	200	0|0	0	
+2026-11-21	runA1	https://www.nps.gov/ston/learn/historyculture.htm	200	200	0|0	0	
+2026-11-21	runA1	https://www.danword.com/crossword/Circumvent	200	200	0|0	0	
+2026-11-21	runA1	https://psychmeds.aarogyaminds.com/medicines/IMIPRAMINE/Antidep	429	429	2|2	0	
+2026-11-21	runA1	https://www.formula1.com/en/latest/article/breaking-lewis-hamilton-to-make-shock-switch-from-mercedes-to-ferrari-for-2025.3U1mESEizCeJ096Qrhbkb6	200	200	0|0	0	
+2026-11-21	runA1	https://caitlinwilson.com/collections/upholstery-fabric-swatches	0	200	0|0	0	dom
+2026-11-21	runA1	https://www.verywellmind.com/is-someone-gaslighting-you-4147470	200	200	10|0	0	
+2026-11-21	runA1	https://community.adobe.com/questions-6/cannot-cancel-subscription-no-access-to-account-or-associated-email-1637729	200	200	0|0	0	
+2026-11-21	runA1	https://sunnyvalecoachbuscompany.com/	200	200	0|0	0	
+2026-11-21	runA1	https://www.faa.gov/air_traffic/technology/rwsl	200	200	0|0	0	
+2026-11-21	runA1	https://scryfall.com/card/m20/14/disenchant	200	200	0|0	0	
+2026-11-21	runA1	https://thelegalguide.org/employer-misrepresentation-employment-disputes-legal/	0	0	245|6	0	dom
+2026-11-21	runA1	https://www.slidescarnival.com/tag/flight	200	200	0|0	0	dom
+2026-11-21	runA1	https://www.bestbuy.com/site/shop/creepy-gifts	200	200	45|39	0	
+2026-11-21	runA1	https://shopnow.cantorsmeats.com/collections/frozen/cookies-snacks	200	200	3|2	0	
+2026-11-21	runA1	https://legal-resources.uslegalforms.com/l/lewd-and-lascivious-cohabitation	200	200	1|1	0	
+2026-11-21	runA1	http://www.footballsfuture.com/2007/prospects/video.html	200	200	3|3	0	
+2026-11-21	runA1	https://link.springer.com/chapter/10.1057/9781137016461_8	200	200	4|2	0	
+2026-11-21	runA1	https://tenor.com/search/bleep-gifs	200	200	0|0	0	dom
+2026-11-21	runA1	https://fr.investing.com/	0	0	5|0	0	dom
+2026-11-21	runA1	https://www.newsnationnow.com/crime/who-is-dawn-light-clancy-trial-jury-intimidation/	0	0	11|6	0	dom
+2026-11-21	runA1	https://www.pcmag.com/picks/the-best-laptops	200	200	2|2	0	
+2026-11-21	runA1	https://www.dnb.com/business-directory/company-profiles/immense-jewellery-llp.3a68bfb5a6775e4854f36dd2c7b1b417	403	403	9|8	0	dom
+2026-11-21	runA1	http://www.largo.com/	200	200	1|1	0	
+2026-11-21	runA1	https://www.merckmanuals.com/professional/infectious-diseases/bacterial-skin-infections/furuncles-and-carbuncles	200	200	0|0	0	
+2026-11-21	runA1	https://gunslingeros.bandcamp.com/album/27	200	200	0|0	0	
+2026-11-21	runA1	https://kids.nationalgeographic.com/animals/invertebrates/facts/ladybug	200	200	1|1	0	
+2026-11-21	runA1	https://latimescrosswordanswers.com/crossword/distraught	200	200	39|2	0	dom
+2026-11-21	runA1	https://daily.jstor.org/why-we-cringe/	200	200	1|1	0	dom
+2026-11-21	runA1	https://sacredplantco.com/blogs/natures-pharmacy-exploring-the-historical-uses-and-health-benefits-of-medicinal-herbs/thujone-the-green-flame-unraveling-the-mystical-truth-of-wormwood-and-the-absinthe-revolution	200	200	0|0	0	dom
+2026-11-21	runA1	https://croft.co.uk/flipbooks/cremone-bolt-order-guide-2025	200	200	2|2	0	
+2026-11-21	runA1	https://www.bitrue.com/blog/what-is-heehaw-coin	200	200	0|0	0	
+2026-11-21	runA1	https://hobsoft.com/resources/anonymous-email/	200	200	6|6	0	
+2026-11-21	runA1	https://docs.krita.org/en/user_manual.html	200	200	0|0	0	
+2026-11-21	runA1	https://rule34.xxx/index.php?page=post&s=view&id=19403175&tags=father_and_daughter	200	200	0|0	0	dom
+2026-11-21	runA2	https://www.buhave.com/dictionary/excelling/	200	200	0|0	0	dom
+2026-11-21	runA2	https://saffbyjess.com/	200	200	2|2	0	
+2026-11-21	runA2	https://www.politico.com/news/2026/11/19/senate-passes-landmark-permitting-deal-01177557	200	200	0|0	0	
+2026-11-21	runA2	https://gethighball.com/	200	200	0|0	0	
+2026-11-21	runA2	https://sneakernews.com/2026/11/13/k-swiss-racquet-club-black-karats-collection/	0	200	6|11	2	dom
+2026-11-21	runA2	https://docs.runbuggy.com/docs/shipping/05ccf93502e54-pagination	200	200	4|4	0	
+2026-11-21	runA2	https://notopests.com/pest-library/flies/drain-worms/	200	200	0|0	0	
+2026-11-21	runA2	https://www.verywellhealth.com/things-to-know-about-your-ovaries-and-ovulation-3520949	200	200	4|3	0	dom
+2026-11-21	runA2	https://www.21kschool.com/us/blog/models-of-inclusive-education/	200	200	3|1	0	
+2026-11-21	runA2	https://www.hogwash.com/the-venue	200	200	0|0	0	
+2026-11-21	runA2	https://www.usmint.gov/americas-founding-fathers-2019-currency-set-B15052.html	403	403	12|28	0	
+2026-11-21	runA2	https://www.finedininglovers.com/explore/articles/what-makes-soup-bisque-differences-and-recipes	0	200	0|0	0	
+2026-11-21	runA2	https://fragmentsshop.com.au/collections/turner-hastings	200	200	0|0	0	dom
+2026-11-21	runA2	https://thebaodega.substack.com/p/homemade-tofu-pt-2-douzha-soy-pulp	200	200	0|0	0	dom
+2026-11-21	runA2	https://cartipsdaily.com/jeep-wrangler-death-wobble-2026	200	200	0|0	0	dom
+2026-11-21	runA2	https://www.tni.org/en/article/waste-and-capitalism	429	429	3|2	0	dom
+2026-11-21	runA2	https://www.cagematch.net/?id=28&nr=4238&name=The+Adrenaline+Express	307	307	1|1	0	
+2026-11-21	runA2	https://genius.com/Kurikara-screaming-akimbo-lyrics	0	0	371|2	0	
+2026-11-21	runA2	https://spiritless.com/	200	200	3|5	0	
+2026-11-21	runA2	https://www.law.cornell.edu/wex/verdict	200	0	2|5	0	
+2026-11-21	runA2	https://www.snapchat.com/@imkaeleerene	0	200	6|8	0	dom
+2026-11-21	runA2	https://www.instacart.com/categories/316-food/317-fresh-produce/439-fresh-vegetables/592-rhubarb?msockid=27cd0a088fbe66953dc112118e486708	200	200	1|0	0	dom
+2026-11-21	runA2	https://www.ksmu.org/show/studio-live/2026-06-09/soundcheck-space-time-and-taffy-how-the-sideburns-became-the-sideburns	200	0	0|0	0	dom
+2026-11-21	runA2	https://www.mediamatters.org/newsmax/right-leaning-media-downplayed-measles-outbreaks-and-attacked-mmr-vaccine-months-us-lost	200	200	1|1	0	
+2026-11-21	runA2	https://www.southpaw.com/	200	200	1|1	0	dom
+2026-11-21	runA2	https://neurolaunch.com/psychological-effects-of-child-leashes/	200	200	40|0	0	
+2026-11-21	runA2	https://blossombloom.me/cart1.php	200	200	1|1	0	
+2026-11-21	runA2	https://projects.huffingtonpost.com/dying-to-be-free-heroin-treatment	200	200	4|2	0	
+2026-11-21	runA2	https://parade.com/news/lavi-crain-15-year-old-gymnast-frightening-fall-us-gymnastics-championship	403	403	2|1	0	
+2026-11-21	runA2	https://becomingchristians.com/2026/01/20/what-does-begat-mean-in-the-bible/	200	200	2|0	0	dom
+2026-11-21	runA2	https://www.defconlevel.com/current-level	200	0	0|1	0	
+2026-11-21	runA2	https://grammarphobia.com/blog/2013/07/jerkwater.html	200	200	0|0	0	dom
+2026-11-21	runA2	https://plato.stanford.edu/archives/fall2026/entries/anarchism/	200	200	0|0	0	
+2026-11-21	runA2	https://northernkarateschools.com/kegare-%e7%a9%a2%e3%82%8c-of-karatedo-or-why-do-karate-students-engage-in-dojo-clean-up/	200	200	0|2	0	dom
+2026-11-21	runA2	https://cleverhumanizer.ai/paraphrase-tool	200	200	0|0	0	
+2026-11-21	runA2	https://harvestermuzzleloading.com/products/pt-gold	200	0	0|0	0	dom
+2026-11-21	runA2	https://shopgianarosecouture.com/products/super-trouper-crop-floral-multi	0	200	1|0	0	dom
+2026-11-21	runA2	http://static.tvlistings.optimum.net/ool/static/prod/pdfs/west-channel-lineups/MAGNOLIA-AR.pdf	200	200	1|0	0	
+2026-11-21	runA2	https://www.urbandictionary.com/define.php?term=Purser	200	200	0|0	0	
+2026-11-21	runA3	https://ageofsigmar.lexicanum.com/wiki/Castigator	0	0	2|6	0	dom
+2026-11-21	runA3	https://www.sciencedaily.com/releases/2026/07/260713084918.htm	200	200	0|1	0	
+2026-11-21	runA3	https://steamcommunity.com/app/2186680/discussions/0/4027970229984457588/	200	200	0|0	0	
+2026-11-21	runA3	https://www.askaprepper.com/40-bizarre-home-remedies-grandparents-taught-us-actually-work/	200	200	6|6	0	
+2026-11-21	runA3	https://www.liquor.com/best-bitters-5080368	200	200	6|2	0	
+2026-11-21	runA3	https://puscifer.com/	200	200	1|1	0	dom
+2026-11-21	runA3	https://wythic.com/en/forever/quests/94487	200	200	2|0	0	dom
+2026-11-21	runA3	https://mindpsychiatrist.com/how-to-know-if-your-friend-is-a-psychopath/	200	200	24|3	0	dom
+2026-11-21	runA3	https://emeralds.com/education/emerald-treatments/how-to-identify-treated-vs-untreated-emeralds/treated-vs-untreated-emeralds/	200	200	1|1	0	
+2026-11-21	runA3	https://boneheads.io/	200	200	3|0	0	
+2026-11-21	runA3	https://www.pentictonfoundry.com/markets/oil-and-gas/	200	200	0|0	0	
+2026-11-21	runA3	https://vinnews.com/2026/11/19/squad-democrat-condemned-for-short-rope-comment-on-hakeem-jeffries/	0	0	75|6	0	dom
+2026-11-21	runA3	https://psychology.com/tests/inkblot	200	200	0|0	0	
+2026-11-21	runA3	https://aardvarktherapeutics.com/	200	200	0|0	0	
+2026-11-21	runA3	https://hero.epa.gov/reference/7100285/	200	200	0|0	0	dom
+2026-11-21	runA3	https://www.meetup.com/hedonists/?msockid=3ea08583b3fc681738959d9ab2e369b6	200	200	8|5	0	dom
+2026-11-21	runA3	https://stonequarries.net/map	200	200	0|0	0	
+2026-11-21	runA3	https://www.usatoday.com/story/tech/space/2026/11/17/nasa-shine-bright-voyager-1-light-day-phone-morse-code/92809620007/	0	0	290|65	0	dom
+2026-11-21	runA3	https://studylib.net/doc/25691903/the-lightning-thief	403	403	1|1	0	
+2026-11-21	runA3	https://www.campsitephotos.com/campground/ca/sue-meg-state-park/	200	200	0|1	0	dom
+2026-11-21	runA3	https://lyricfinder.net/	200	200	0|0	0	dom
+2026-11-21	runA3	https://www.evadesignsolutions.com/product-page/mickey-mouse-classical-formal-mascot-costume-black-suit-top-hat-rent	200	200	2|2	0	
+2026-11-21	runA3	https://ourgabledhome.com/how-to-sew-a-reversible-apron-tutorial/	200	200	7|2	0	dom
+2026-11-21	runA3	https://teachbesideme.com/geology-experiment-stalactites-and-stalagmites-formation/	0	0	22|7	0	dom
+2026-11-21	runA3	https://www.patreon.com/KozukeHajime/posts/several-wenches-88253531	200	200	1|1	0	
+2026-11-21	runA3	https://www.wood-press-machine.com/products/180-panel-turnover-machine-for-plywood-production-line/	200	200	0|0	0	
+2026-11-21	runA3	https://www.horseclicks.com/horses/filly	200	200	0|0	0	dom
+2026-11-21	runA3	https://commons.lib.jmu.edu/masters202029/48/	200	200	1|1	0	
+2026-11-21	runA3	https://bookscouter.com/book/9781936434572-andelins-gable-house-cookbook	403	403	19|11	0	
+2026-11-21	runA3	http://www.thumbscrew.net/	200	200	3|3	0	
+2026-11-21	runA3	https://londontopia.net/category/london-language/cockney-slang/	200	200	1|1	0	dom
+2026-11-21	runA3	https://www.stenoworks.com/plover-connections-guide/	200	200	0|1	0	
+2026-11-21	runA3	https://www.pomdental.com/gum-overgrowth-unraveling-the-operculum-gum-connection/	200	200	0|0	0	
+2026-11-21	runA3	https://www.modernhealthcare.com/awards/50-most-influential-clinicians/2026/	200	200	6|6	8	dom
+2026-11-21	runA3	https://osc.vistra.com/	200	200	0|0	0	
+2026-11-21	runA3	https://operatoday.com/2018/04/hans_werner_henze_the_raft_of_the_medusa_amsterdam/	200	200	0|0	0	
+2026-11-21	runA3	https://www.cornerstoneondemand.com/resources/article/dear-reworker-my-employee-harassing-contractor-do-i-intervene/	200	200	1|1	0	
+2026-11-21	runA3	https://cdllife.com/2026/class-action-lawsuit-alleges-superego-scammed-drivers-out-of-their-paychecks/	200	200	2|0	0	
+2026-11-21	runA4	https://mc-toolbox.com/enchantment-calculator/	200	200	2|2	0	
+2026-11-21	runA4	https://assureokay.com/request-a-welfare-check-in-california	200	200	7|4	0	dom
+2026-11-21	runA4	https://biologyinsights.com/are-earwigs-poisonous-if-eaten-what-happens-next/	0	0	45|3	0	dom
+2026-11-21	runA4	https://www.impactpool.org/jobs/1231925	200	200	0|0	0	
+2026-11-21	runA4	https://loathing.wiki.gg/wiki/Outfoxin%27	200	200	5|1	0	
+2026-11-21	runA4	https://www.linuxbeginner.org/blog/gaming-on-linux-steam-proton-2026/	200	200	0|0	0	
+2026-11-21	runA4	https://phys.org/news/2026-10-scientists-tiny-particles-weather-air.html	403	403	9|6	0	
+2026-11-21	runA4	https://sunnyvaletherapy.com/	200	200	0|0	0	
+2026-11-21	runA4	https://bloodsense.ai/blood-markers/leukocytes-understanding-your-test-results/	200	200	0|0	0	dom
+2026-11-21	runA4	https://www.goodreads.com/quotes/tag/condescension	200	200	1|1	0	
+2026-11-21	runA4	https://rudderhs.bryanisd.org/	200	200	2|1	0	
+2026-11-21	runA4	https://www.nature.com/articles/s41568-021-00339-z	200	200	4|2	0	
+2026-11-21	runA4	https://www.cosmopolitan.com/style-beauty/fashion/a73395555/prep-trend-2026/	200	0	4|6	0	dom
+2026-11-21	runA4	https://www.jelivestock.com/product-page/creosote-posts	200	200	0|0	2	
+2026-11-21	runA4	https://bridgelegal.org/california-vehicle-impound-laws-owner-rights/	0	0	54|0	0	dom
+2026-11-21	runA4	https://nice-n-naughty-uk.myshopify.com/collections/bondage-cock-ball-restraints-urethral-sounds	200	200	2|4	0	dom
+2026-11-21	runA4	https://encyclopedia.arabpsychology.com/exhibitionism/	200	200	0|0	0	
+2026-11-21	runA4	http://www.amstedglobal.com/mining-aggregate/crusher-wear-parts/gyratory-crusher-parts/	200	200	0|0	0	
+2026-11-21	runA4	https://biggest-gaudiest-patronuses.tumblr.com/post/649400003340697600/yall-were-really-not-gonna-tell-me-about-the-josh	403	403	2|2	0	
+2026-11-21	runA4	https://www.switchlabs.dev/post/sales-follow-up-cadence	200	200	7|4	0	
+2026-11-21	runA4	https://sunnah.com/muslim:1106c	200	200	0|2	0	
+2026-11-21	runA4	https://www.banklesstimes.com/articles/2026/07/07/ex-tether-cio-richard-heathcote-plans-partial-sale-of-his-1-26-tether-stake/	200	200	2|2	0	dom
+2026-11-21	runA4	https://togaze.com/whitewash-knotty-pine/	200	200	1|2	0	dom
+2026-11-21	runA4	https://goretrailers.com/	200	200	2|2	0	dom
+2026-11-21	runA4	https://trustandwill.com/learn/differences-between-legatee-heir-beneficiary-devisee	200	200	0|0	0	
+2026-11-21	runA4	https://bgr.com/2194758/why-camcorder-still-worth-buying/	200	0	1|0	0	dom
+2026-11-21	runA4	https://thebarbellbag.com/	200	200	3|3	0	dom
+2026-11-21	runA4	https://dictionary.apa.org/feeling	200	200	0|0	0	
+2026-11-21	runA4	https://thebeatcommunity.com/2026/11/17/carbon-fiber-plugins-release-pyromaniac/	200	200	0|0	0	
+2026-11-21	runA4	https://mtg.wiki/page/Boast	200	200	0|0	0	
+2026-11-21	runA4	https://backfieldiq.com/	200	200	0|0	0	
+2026-11-21	runA4	https://www.farmersadvance.com/story/news/2026/07/26/how-wildfire-smoke-impacts-corn-yields-and-how-to-decode-the-crickets-chirp/91011056007/	0	0	158|8	0	dom
+2026-11-21	runA4	https://huckleberrycare.com/blog/weaning-from-pacifier	200	200	0|0	0	dom
+2026-11-21	runA4	https://www.kenhub.com/en/library/anatomy/cerebrum	200	200	0|0	0	dom
+2026-11-21	runA4	https://bestneighborhood.org/household-income-forsyth-ga/	403	403	2|1	0	
+2026-11-21	runA4	https://compactorrentalsofamerica.com/compaction-chronicles/10-common-waste-compactor-problems-and-how-to-fix-them/	200	200	1|1	0	
+2026-11-21	runA4	https://www.gorv.com.au/caravan-sway-how-to-beat-it/	200	200	1|1	0	
+2026-11-21	runA4	https://www.istockphoto.com/photos/immoral?msockid=25d8a998a70b617910d1b181a6d96074	200	200	0|0	0	
+2026-11-21	runA4	https://www.dailymail.com/sport/racing/article-16298433/Melbourne-Cup-horses-body-feared-dumped-rubbish-bin-Sydney-tip-just-two-weeks-race-devastated-trainer-seeks-answers.html	200	200	9|4	0	dom
+2026-11-21	runA5	https://www.fortnite.com/item-shop/offers/privateer-oscar-bundle-9fffa321	200	200	0|0	0	
+2026-11-21	runA5	https://mgnv.org/plants/glossary/glossary-raceme/	200	200	0|0	0	dom
+2026-11-21	runA5	https://pippin.com/	200	200	0|0	0	
+2026-11-21	runA5	https://roots2words.com/p/word-of-the-day-chasten	200	200	2|0	0	dom
+2026-11-21	runA5	https://www.formiculture.com/topic/4656-the-prenolepis-imparis-thread/	200	200	1|1	0	
+2026-11-21	runA5	https://macaroniproductionline.com/macaroni-defect-sample-record/	403	403	2|1	0	
+2026-11-21	runA5	https://www.misting.party/2025/12/06/the-emperors-feast-and-the-beggars-crust-food-as-status-in-ancient-rome/	200	200	0|0	0	dom
+2026-11-21	runA5	https://www.midwayusa.com/product/1021812894/?msockid=05f2f8c824106eea371ce0d125066f46	200	200	1|1	0	dom
+2026-11-21	runA5	https://birdies.com/	200	200	23|16	0	
+2026-11-21	runA5	https://arstechnica.com/security/2026/08/terabytes-of-credentials-leaked-in-massive-supply-chain-attack/	200	200	16|0	0	
+2026-11-21	runA5	https://www.japantrendshop.com/tentacle-earbuds-p-7732.html	200	200	0|2	0	
+2026-11-21	runA5	https://oldschool.runescape.wiki/w/Shellbane_Gryphon	0	0	0|0	0	
+2026-11-21	runA5	https://brilliantcts.com/	200	200	0|0	0	
+2026-11-21	runA5	https://www.dentalroundup.com/best/best-fluoride-mouthwash/	429	429	1|1	0	
+2026-11-21	runA5	https://recentbreaches.com/breach/solaria-thegentlemen-2026-09	200	200	0|0	0	
+2026-11-21	runA5	https://wikidiff.com/clangiest/clingiest	200	200	0|0	0	
+2026-11-21	runA5	https://www.fermentingforfoodies.com/favourite-ferments/	200	200	0|0	0	dom
+2026-11-21	runA5	https://wowsdb.com/en/database/upgrades	200	200	0|0	0	
+2026-11-21	runA5	https://www.hartscarnival.com/	200	200	8|7	0	
+2026-11-21	runA5	https://antscout.com/species/strumigenys-cosmostela	200	200	0|2	0	dom
+2026-11-21	runA5	https://deadline.com/feature/2026-tv-premiere-dates-1236391902/	0	0	726|24	0	dom
+2026-11-21	runA5	https://www.musicradar.com/music-tech/i-tested-11-of-the-best-stem-separation-tools-and-you-might-already-have-the-winner-in-your-daw	0	0	406|11	0	dom
+2026-11-21	runA5	https://xhamster.com/search/russian+eighteens	200	200	0|0	0	dom
+2026-11-21	runA5	https://orgosolver.com/learn/bonding-basics/hybridization	200	200	0|0	0	dom
+2026-11-21	runA5	https://www.justice.gov/archives/jm/criminal-resource-manual-2403-hobbs-act-extortion-force-violence-or-fear	200	200	1|3	0	dom
+2026-11-21	runA5	https://www.hazelschlesinger.com/	200	200	2|2	0	
+2026-11-21	runA5	https://www.scrippsnews.com/life/orders-often-go-wrong-at-this-tokyo-restaurant-but-that-s-the-point	0	0	26|5	0	dom
+2026-11-21	runA5	https://mattrav05.github.io/heyday-releases/wiki/	200	200	0|0	0	
+2026-11-21	runA5	https://courtroomguide.com/how-to-stop-a-motion-to-expedite-hearing-tactical-legal-advice/	200	200	0|0	0	
+2026-11-21	runA5	https://www.wordplays.com/crossword-solver/range-nickname	0	0	18|2	0	dom
+2026-11-21	runA5	https://grok.com/	200	200	5|6	0	dom
+2026-11-21	runA5	https://www.foodrepublic.com/1968095/gordon-ramsay-absolute-worst-food-overcook/	200	0	1|1	0	
+2026-11-21	runA5	https://thepotlok.com/product/kahla-pronto-saucer-beige-12-cm/	200	200	0|0	0	
+2026-11-21	runA5	https://help.prodigies.com/en/articles/16864104-how-to-get-deskbells-for-prodigies-all-your-options	200	200	0|0	0	dom
+2026-11-21	runA5	https://dndroll.wikidot.com/creatures:warhorse	200	200	3|4	0	
+2026-11-21	runA6	https://www.motosport.com/product/?code=SS-M-G-P-NA-PLA-DIRT&key=Alpinestars-Harken-Hoody&cc=us&variant[APNP1FQ]=APNP1FQ-X001-Y004&cc=us&product_id=APNP1FQ-X001-Y004&variant[APNP1FQ]=APNP1FQ-X001-Y004&variant=APNP1FQ-X001-Y004&msockid=1bbfa07c4ca76bc13608b8654d5c6ae6	202	202	5|5	0	dom
+2026-11-21	runA6	https://iere.org/how-do-you-prevent-warbles/	403	403	282|6	0	dom
+2026-11-21	runA6	https://www.democraticunderground.com/100221639164	200	0	3|2	0	dom
+2026-11-21	runA6	https://pwrites.princeton.edu/tag/poltroon/	200	200	0|2	0	
+2026-11-21	runA6	https://forestparkgolfcourse.com/article/homemade-liverwurst-easy-recipe-no-fancy-equipment-all-tastes-german	0	0	30|0	0	dom
+2026-11-21	runA6	https://cali-plates.com/product/static-room-hash/	200	200	0|0	0	dom
+2026-11-21	runA6	https://control.com/technical-articles/intergral-windup-method-in-pid-control/	200	403	0|8	0	dom
+2026-11-21	runA6	https://www.amcor.com/product-listing/superflex-222-mm-48-ltr-2245	200	200	0|0	0	
+2026-11-21	runA6	https://www.howtopronounce.com/bluntness	0	0	43|7	0	dom
+2026-11-21	runA6	https://cdnc.ucr.edu/?a=d&d=SSTR19101112.2.27	403	403	17|10	0	
+2026-11-21	runA6	https://www.kohlrabi.org/kohlrabi-coleslaw/	200	200	0|0	0	
+2026-11-21	runA6	https://www.greatbritishlife.co.uk/magazines/dumfriesandgalloway/25694817.story-murder-hole-lonely-cassillis-moor/	0	0	10|5	0	dom
+2026-11-21	runA6	https://www.healthline.com/health/penis-splitting	0	0	8|3	0	dom
+2026-11-21	runA6	https://www.spears.com/	200	200	0|0	0	
+2026-11-21	runA6	https://github.com/pgsty/pigsty	200	200	0|3	0	
+2026-11-21	runA6	https://www.jillybean.net/	200	200	0|0	0	
+2026-11-21	runA6	https://www.citybiz.co/article/921250/feast-fettle-invests-5-million-in-howard-county-expansion-plans-250-jobs/	200	0	1|0	0	dom
+2026-11-21	runA6	https://www.dominos.com/en/restaurants	0	200	0|0	0	dom
+2026-11-21	runA6	https://about.starbucks.com/stories/2026/starbucks-holiday-menu-arrives-nov-5-with-new-and-returning-drinks-treats-holiday-cups-and-merchandise/	200	200	0|0	0	
+2026-11-21	runA6	https://stepmotherxxx.com/	200	200	0|4	0	
+2026-11-21	runA6	https://robertlubrican.com/incest_stories/	200	200	0|0	0	
+2026-11-21	runA6	https://www.t-mobile.com/cell-phone/google-pixel-10?msockid=06a79d8394bf6b8e36a3859a952b6a9a	200	200	14|15	0	dom
+2026-11-21	runA6	https://kids.geometrydash.io/	200	200	2|2	0	dom
+2026-11-21	runA6	https://inquired.com/	200	0	4|4	0	
+2026-11-21	runA6	https://globalincidenttracker.com/accidents	200	200	0|0	0	
+2026-11-21	runA6	https://www.guns.com/search?keyword=6.5mm+grendel	200	200	0|0	12	dom
+2026-11-21	runA6	https://www.geeksforgeeks.org/maths/integers/	200	200	146|2	0	
+2026-11-21	runA6	https://www.thetaxadviser.com/issues/2017/dec/using-qssts/	200	200	2|2	0	
+2026-11-21	runA6	https://about.google/company-info/	200	200	1|1	0	
+2026-11-21	runA6	https://www.uhaul.com/Storage/Seattle-WA/Results/	200	200	0|0	0	dom
+2026-11-21	runA6	https://www.experian.com/blogs/ask-experian/mortgagor-vs-mortgagee/?msockid=2a9e30e4a6b16061266528fda71d61bb	200	200	2|0	0	dom
+2026-11-21	runA6	https://speed.measurementlab.net/	200	200	0|0	0	
+2026-11-21	runA6	https://www.cadillacforums.com/threads/4-6-northstar-timing.757922/	202	202	352|3	0	
+2026-11-21	runA6	https://www.cnn.com/videos/live	200	200	4|5	0	dom
+2026-11-21	runA6	https://gettingstronger.org/	200	200	8|6	0	
+2026-11-21	runB1	https://eslforums.com/happy-synonym/	200	200	28|5	0	dom
+2026-11-21	runB1	https://www.arts.uci.edu/events/continuity	200	200	0|0	0	
+2026-11-21	runB1	https://travelbabbo.com/what-to-do-in-tokyo/	200	200	0|31	0	dom
+2026-11-21	runB1	https://www.medicinenet.com/is_gelatin_healthy_to_eat_benefits_side_effects/article.htm	200	200	167|2	0	dom
+2026-11-21	runB1	https://www.bankrate.com/loans/loan-calculator/	200	200	3|3	0	
+2026-11-21	runB1	https://jokojokes.com/decision-jokes.html	200	200	0|0	0	dom
+2026-11-21	runB1	https://offer.gfjianli.com/	200	200	0|0	0	
+2026-11-21	runB1	https://trash-cans.com/	200	200	0|0	0	
+2026-11-21	runB1	https://trailertrader.com/	200	200	0|0	0	dom
+2026-11-21	runB1	https://www.yellowpages.com/paterson-nj/mip/nature-tree-service-498439988	200	200	19|9	0	dom
+2026-11-21	runB1	https://inyourtravel.com/what-is-an-excursion/	200	200	0|0	0	
+2026-11-21	runB1	https://blackamericaweb.com/playlist/best-in-black-inventors-10-black-inventors-that-impacted-the-world/	200	200	1|1	0	
+2026-11-21	runB1	https://www.slangsphere.com/what-does-laden-mean-5-essential-shocking-facts-in-2026/	404	404	1|1	0	
+2026-11-21	runB1	https://starlink.com/business	200	200	0|0	0	dom
+2026-11-21	runB1	https://www.lustergallerystudio.com/	200	200	0|0	0	
+2026-11-21	runB1	https://www.speedtest.org/	200	200	12|4	0	
+2026-11-21	runB1	https://www.lowes.com/?msockid=2c1080bd7ad66a34140498a47bda6bc6	200	200	2|4	0	dom
+2026-11-21	runB1	https://www.mlb.com/braves/news?msockid=0a22d7f5e51a63fb1f3fcfece43b6220	200	200	1|1	0	dom
+2026-11-21	runB1	https://grammarist.com/usage/concerning/	0	200	10|4	0	dom
+2026-11-21	runB1	https://www.primevideo.com/storefront/home/home	200	200	1|1	0	dom
+2026-11-21	runB1	https://tubitv.com/movies/649963/freaks	200	200	2|1	0	dom
+2026-11-21	runB1	https://rulers.org/	200	200	0|0	0	
+2026-11-21	runB1	https://arenasclub.com/	200	200	0|0	0	dom
+2026-11-21	runB1	https://www.wittytv.it/	200	200	0|1	0	
+2026-11-21	runB1	https://www.tesu.edu/	200	200	1|1	0	
+2026-11-21	runB1	https://www.amzn.com/Best-Sellers/zgbs	200	200	5|5	0	dom
+2026-11-21	runB1	https://mangadex.org/title/801513ba-a712-498c-8f57-cae55b38cc92/berserk?order=asc	200	200	0|0	0	
+2026-11-21	runB1	https://cdphe.colorado.gov/hm/radon	200	200	1|1	0	
+2026-11-21	runB2	https://sewingonline.sulky.com/store	200	200	0|0	0	dom
+2026-11-21	runB2	https://www.lifeworksnw.org/	200	200	0|0	0	dom
+2026-11-21	runB2	https://www.immi-usa.com/migrant-vs-immigrant/	200	200	0|0	0	
+2026-11-21	runB2	https://www.airliners.net/forum/viewtopic.php?t=773639	202	202	2|19	0	dom
+2026-11-21	runB2	https://www.marthastewart.com/1125789/how-make-perfect-terrarium-keep-alive	200	200	3|10	0	dom
+2026-11-21	runB2	https://business.fresnochamber.com/list/member/central-california-builders-exchange-11864	200	200	0|0	0	
+2026-11-21	runB2	https://tryhardguides.com/attempts-crossword-clue/	200	200	0|0	0	dom
+2026-11-21	runB2	https://www.fifaworldcupnews.com/brazil-squad-november-2026/	200	200	36|0	0	dom
+2026-11-21	runB2	https://cn.linguee.com/%E8%8B%B1%E8%AF%AD-%E4%B8%AD%E6%96%87/%E7%BF%BB%E8%AD%AF/praised.html	200	200	0|0	0	
+2026-11-21	runB2	https://people.com/all-that-star-christy-knowings-dies-46-12059309	200	200	10|8	0	
+2026-11-21	runB2	https://www.tripping.com/guides/tripping-vacation-rental-search	200	200	0|0	0	
+2026-11-21	runB2	https://www.technobezz.com/facebook-account-suspended-how-to-appeal-it	0	0	63|14	0	dom
+2026-11-21	runB2	https://www.sportingnews.com/us/nba/golden-state-warriors/news/why-seth-curry-isnt-playing-warriors-signing-contract-brother-steph-golden-state/92772dd838e6708962b95398	0	0	1|1	0	
+2026-11-21	runB2	https://7littlewordsanswers.com/walloped-7-little-words	0	0	31|13	0	dom
+2026-11-21	runB2	https://www.codecademy.com/catalog/language/c-sharp	200	200	0|1	0	dom
+2026-11-21	runB2	https://www.deltadental.com/protect-my-smile/oral-health-conditions/cavity/	200	200	0|0	0	
+2026-11-21	runB2	https://animals.net/donkey/	0	200	33|5	0	
+2026-11-21	runB2	https://openetymology.com/words/solicitude	200	200	0|0	0	
+2026-11-21	runB2	https://shipradar.io/	200	200	0|0	0	
+2026-11-21	runB2	https://www.eslprintables.com/vocabulary_worksheets/travelling/2nd_year_Lesson_6_Travel_is_fu_1041429/	0	200	3|6	0	
+2026-11-21	runB2	https://wmutes.com/	200	200	0|2	0	
+2026-11-21	runB2	https://www.consumerreviews.tv/boostaro/	200	200	0|1	0	dom
+2026-11-21	runB2	https://www.foxnews.com/us/woman-allegedly-torments-california-family-claiming-toddler-vanished-1984-refuses-basic-dna-test?msockid=0eaef328bb1a60bb13deeb31ba3a611c	200	200	6|15	0	dom
+2026-11-21	runB2	https://bearsaver.com/about-us/	200	200	0|0	1	
+2026-11-21	runB2	https://www.mathwords.com/l/likelihood.htm	200	0	5|5	0	
+2026-11-21	runB2	https://my.ptg.org/discussion/lacquer-suggestions-for-hammer-voicing	200	200	0|0	0	
+2026-11-21	runB2	https://itsjesusanyhow.com/apostle_s_desk/view/1333/hush_somebody_is_calling_my_name_	200	200	1|1	0	
+2026-11-21	runB2	https://www.zodiachelps.com/2025/11/22/christmas-love-astrology-mistletoe-magic-zodiac-compatibility-in-december/	403	403	2|1	0	dom
+2026-11-21	runB2	https://www.comicbasics.com/daisys-real-parents-in-the-testaments-just-rewrote-a-major-handmaids-tale-twist/	0	200	18|3	0	dom
+2026-11-21	runB2	https://bleacherreport.com/denver-broncos	200	200	7|7	0	dom
+2026-11-21	runB2	https://newreleases.io/project/github/cheat-engine/cheat-engine/release/7.4	200	200	0|0	0	
+2026-11-21	runB2	https://voltagetools.com/	200	200	0|0	0	
+2026-11-21	runB2	https://www.scabbard.com/store/	200	200	0|0	0	
+2026-11-22	runB3	https://watchovervoodoo.com/	200	200	0|0	0	dom
+2026-11-22	runB3	https://apps.apple.com/us/app/google-chrome/id535886823	200	200	1|1	0	dom
+2026-11-22	runB3	https://www.clam-ptreyes.org/	200	200	2|2	0	dom
+2026-11-22	runB3	https://soapsuds.io/	0	0	0|0	0	
+2026-11-22	runB3	https://heirloom-eats.com/	403	403	22|6	0	dom
+2026-11-22	runB3	https://www.cyberbackgroundchecks.com/detail/garry-lee-kimpel/pidpyqqxzgzmpqmzgyzlaa	200	200	35|21	0	dom
+2026-11-22	runB3	https://commons.m.wikimedia.org/wiki/Main_Page	200	200	0|0	0	
+2026-11-22	runB3	https://www.baltimorebeatdown.com/	200	200	0|0	0	
+2026-11-22	runB3	https://rajah.com/	0	0	22|5	0	dom
+2026-11-22	runB3	https://plastic-craft.com/what-is-acrylic-plastic-properties-uses-and-grades-explained/	200	200	0|0	0	
+2026-11-22	runB3	https://morgantech.com/the-best-of-dwfoamies/	200	200	0|0	0	dom
+2026-11-22	runB3	https://www.marvel.com/teams-and-groups/avengers	200	200	1|1	0	
+2026-11-22	runB3	https://www.domesticshelters.org/articles/legal/how-abusers-coerce-recantation	200	200	0|0	0	
+2026-11-22	runB3	https://www.city-data.com/city/New-Orleans-Louisiana.html	200	200	1|1	0	
+2026-11-22	runB3	https://dredge.wiki/	200	200	0|0	0	
+2026-11-22	runB3	https://therighthairstyles.com/how-to-plop-curly-hair/	200	200	0|15	0	dom
+2026-11-22	runB3	https://constitutionus.com/constitution/amendments/constitutional-amendments/	200	200	32|13	0	dom
+2026-11-22	runB3	https://www.abridged.org/	200	200	3|2	0	
+2026-11-22	runB3	https://centurychemical.com/products/winter-pruf-antifreeze/	200	200	0|0	0	
+2026-11-22	runB3	https://www.ambitious-brand.com/en/	200	200	1|1	0	
+2026-11-22	runB3	https://www.delish.com/cooking/menus/g70294065/best-comfort-food-recipes/	200	200	3|4	0	dom
+2026-11-22	runB3	https://www.legacy.com/funeral-homes/nebraska/fremont/ludvigsen-mortuary-fremont/fh-3818	200	429	1|1	0	dom
+2026-11-22	runB3	https://beautymethodstudio.com/	200	200	3651|2450	0	
+2026-11-22	runB3	https://worker.com/	200	200	0|0	0	
+2026-11-22	runB3	https://vetexplainspets.com/what-foods-are-poisonous-to-possums/	200	200	1|1	0	dom
+2026-11-22	runB3	https://www.archerandolive.com/en-au/blogs/news/monthlies-what-are-they-for-and-how-can-you-customise-them	200	200	0|0	0	
+2026-11-22	runB3	https://champsorchumps.us/team/nfl/kansas-city-chiefs/head-to-head/philadelphia-eagles	200	200	2|0	0	dom
+2026-11-22	runB3	https://skiaddiction.com/blogs/training-education/how-to-backslide	200	200	0|0	0	
+2026-11-22	runB3	https://www.movers.com/	200	200	0|0	0	
+2026-11-22	runB3	https://richmond.com/exclusive/article_de490e63-827a-5374-84b0-70de257c118c.html	200	200	0|0	0	
+2026-11-22	runB3	https://travel.usnews.com/Galapagos_Islands_Ecuador/	0	200	65|13	0	dom
+2026-11-22	runB3	https://www.crazygames.com/game/web-master	200	200	0|2	0	dom
+2026-11-22	runB3	https://punkygibbon.co.uk/bands/s/subwaysect_singles.html	200	200	1|0	0	
+2026-11-22	runB3	https://www.beamng.com/threads/volumetric-tornadoes.109607/	200	200	0|2	0	
+2026-11-22	runB3	https://www.colts.com/	200	200	5|4	0	dom
+2026-11-22	runB3	https://www.military.com/buffalo-chicken-thai-curry-and-a-smores-bar-how-the-army-decides-what-goes-in-your-mre	0	0	1038|77	0	dom
+2026-11-22	runB3	https://365cycles.com/products/gnarly-nutrition-drink-mixes-dkmx0286	404	404	2|3	0	dom
+2026-11-22	runC1	https://wildlifeinformer.com/hawks-in-new-jersey/	0	200	16|0	0	dom
+2026-11-22	runC1	https://thephaseonegroup.com/	200	200	0|0	0	
+2026-11-22	runC1	https://www.apollohospitals.com/diseases-and-conditions/pallor	403	403	2|1	0	dom
+2026-11-22	runC1	https://www.syngentaflowers.com/ams/product/flower/70087660	403	403	11|6	0	
+2026-11-22	runC1	https://www.simplexfire.com/product-catalogs	200	200	0|0	0	
+2026-11-22	runC1	https://www.oculearning.com/	200	200	2|0	0	
+2026-11-22	runC1	https://jurassic.epochtoys.com/en-us/volcano-quake/	200	200	0|0	0	
+2026-11-22	runC1	https://extension.umn.edu/agriculture/animals-and-livestock/horse/field-horsetail-and-brackenfern-harmful-plants-to-horses	200	200	0|0	0	
+2026-11-22	runC1	https://fireflyspace.com/careers/	200	200	0|0	0	dom
+2026-11-22	runC1	https://catholiconline.news/politics/the-erosion-of-civility-in-congressional-hearings-a-call-for-professional-decorum/	200	200	0|0	0	dom
+2026-11-22	runC1	https://www.lazeclient.com/	200	200	0|0	0	
+2026-11-22	runC1	https://www.tasteofhome.com/recipes/tasty-burritos/	200	200	60|28	0	dom
+2026-11-22	runC1	https://www.justwatch.com/us/tv-show/the-simpsons	200	200	0|0	0	
+2026-11-22	runC1	https://symbolsdb.com/approximately-symbol	200	200	0|0	0	dom
+2026-11-22	runC1	https://www.albertsons.com/shop/aisles/cookies-snacks-candy/crackers.html?msockid=33205b6df7356f9c05424374f6e36e6f	200	200	2|2	0	dom
+2026-11-22	runC1	https://www.frenchdictionary.com/translate/sorrow	200	200	11|9	0	dom
+2026-11-22	runC1	https://stackoverflow.com/questions/32337821/replicate-netflix-login-and-generate-cookie	403	403	12|5	0	dom
+2026-11-22	runC1	https://prolixlubricant.com/	200	200	0|0	0	dom
+2026-11-22	runC1	https://www.carmax.com/cars/ford/bronco?msockid=276c77ac72cd631e07556fb573446295	403	403	1|1	0	
+2026-11-22	runC1	https://equinecareblog.com/how-to-manage-mud-in-your-horse-paddock/	200	200	7|1	0	dom
+2026-11-22	runC1	https://www.anderson.ucla.edu/sites/default/files/document/2025-06/Culture_of_honor.pdf	200	200	0|0	0	
+2026-11-22	runC1	https://aacrjournals.org/cancerres/article/79/12/3011/633588/Defining-the-Hallmarks-of-MetastasisHallmarks-of	403	403	14|9	0	
+2026-11-22	runC1	https://www.tapatalk.com/groups/junkyardairguns/walther-loather-re-barrels-projects-t148.html	403	403	10|5	0	dom
+2026-11-22	runC1	https://arxiv.org/html/2507.13397v3	200	200	0|0	0	
+2026-11-22	runC1	https://nyslicersaz.com/	200	200	0|0	0	
+2026-11-22	runC1	https://chilling.com/	200	200	0|0	0	
+2026-11-22	runC1	https://game8.co/games/Outer-Worlds-2/archives/568008	200	200	3|15	0	
+2026-11-22	runC1	https://www.uscourts.gov/about-federal-courts/types-cases/appeals	200	200	0|0	0	dom
+2026-11-22	runC1	https://askthenozzle.com/blog/how-to-fix-under-extrusion-the-settings-and-order-that-actually-work/	200	200	0|0	0	
+2026-11-22	runC1	https://www.arsenal.com/news/how-to-watch-all-of-our-pre-season-matches-aAYHu8K0fsn7	200	200	1|1	0	
+2026-11-22	runC2	https://www.billboard.com/lists/top-drinking-songs-alcohol/	0	0	675|76	0	
+2026-11-22	runC2	https://www.openbible.info/topics/litanies_of_carnival	200	200	0|0	0	dom
+2026-11-22	runC2	https://www.transfermarkt.com/statistik/neuestetransfers	200	200	1|1	0	dom
+2026-11-22	runC2	https://www.azlyrics.com/lyrics/natashabedingfield/unwritten.html	0	0	736|26	0	dom
+2026-11-22	runC2	https://www.carollara.com/	200	200	0|0	0	
+2026-11-22	runC2	https://blog.statsbench.com/nfl/teams/tennessee-titans/roster/	200	200	0|0	0	dom
+2026-11-22	runC2	https://islamweb.net/en/article/186619/The-Relationship-between-the-Jinns-and-Humans---I	200	200	0|0	0	
+2026-11-22	runC2	https://www.guitarcenter.com/Outlet/Violins.gc	200	200	0|0	0	
+2026-11-22	runC2	https://salem.lib.virginia.edu/n113.html	200	200	2|0	0	dom
+2026-11-22	runC2	https://preruling.com/	200	200	0|0	0	
+2026-11-22	runC2	https://wiza.co/d/ubiquitybpo/9924/carol-palmer-stewart	403	403	10|5	0	dom
+2026-11-22	runC2	https://www.medanta.org/patient-education-blog/itchy-skin-15-home-remedies-to-soothe-itchy-skin-fast	200	200	4|4	0	
+2026-11-22	runC2	https://decorguider.com/should-you-caulk-around-a-toilet-base/	200	200	4|28	0	dom
+2026-11-22	runC2	https://kino.mail.ru/person/619893_eileen_mccallum/movies/	200	200	2|1	0	
+2026-11-22	runC2	https://cyclotronbeam.com/about-us/	200	200	0|0	0	
+2026-11-22	runC2	https://www.spatial.com/	200	200	0|0	0	dom
+2026-11-22	runC2	https://www.silverrecyclers.com/blog/what-is-a-porringer.aspx	200	200	0|0	0	
+2026-11-22	runC2	https://www.mpamag.com/us/news/general/federal-judge-refuses-to-pause-suit-over-unisons-home-equity-product/586363	200	200	0|0	0	
+2026-11-22	runC2	https://www.homely.com.au/	403	403	12|6	0	dom
+2026-11-22	runC2	https://www.meticulousmanicurist.com/blog/why-toenails-get-thick	200	200	0|0	0	
+2026-11-22	runC2	https://www.xvideos.com/tags/threesome	200	200	0|1	0	
+2026-11-22	runC2	https://knowyourmeme.com/memes/owned-pwned	200	200	23|92	0	dom
+2026-11-22	runC2	https://www.bhg.com/gardening/plant-dictionary/perennial/mallow/	200	200	0|9	0	
+2026-11-22	runC2	https://education.nationalgeographic.org/resource/bayou/	200	200	0|0	0	
+2026-11-22	runC2	https://blog.youtube/	200	200	0|0	0	
+2026-11-22	runC2	https://gauntletventures.com/our-team/	200	200	0|0	0	
+2026-11-22	runC2	https://tunsstore.com/	200	200	0|0	0	
+2026-11-22	runC2	https://usenarrative.ai/	200	200	0|0	0	
+2026-11-22	runC2	https://www.aol.com/	200	200	4|51	0	dom
+2026-11-22	runC2	https://conquestcapped.com/guides/wow-forever/wow-forever-blood-shards/	200	200	0|0	0	
+2026-11-22	runC2	https://www.worldtimeserver.com/current_time_in_US-AL.aspx	200	200	0|0	0	
+2026-11-22	runC2	https://www.dexterdaily.com/2025/12/astor-cody-dexter-resurrection.html	200	200	8|6	0	dom
+2026-11-22	runC2	https://www.grammar-monster.com/glossary/schwa.htm	200	200	2|3	0	
+2026-11-22	runC2	https://lawful.com/articles/extortion	200	200	0|0	0	
+2026-11-22	runC2	https://wellsfargo.banklocationmaps.com/en/usa/florida/miami	200	200	0|1	0	dom
+2026-11-22	runC3	https://www.thecalculatorsite.com/time/days/60	200	200	8|5	0	
+2026-11-22	runC3	https://flightrights.net/en/blog/finnair-flight-delay-compensation/	403	403	3|2	0	
+2026-11-22	runC3	https://www.clarks.com/en-us/all-mens-styles/mens-oxford-shoes/m_oxfords_us-c	200	200	1|0	0	
+2026-11-22	runC3	https://oldnavy.gap.com/stores/tx/brownsville/oldnavy-6186.html?msockid=27c59bd5234d65c3112483cc22ee6422	200	200	4|2	0	
+2026-11-22	runC3	https://www.automata.tech/about-us	200	200	0|0	0	
+2026-11-22	runC3	https://www.axialshops.com/	200	200	0|0	0	
+2026-11-22	runC3	https://www.poundscalculator.com/	200	200	0|0	0	
+2026-11-22	runC3	https://www.buffersusa.com/	200	200	0|0	0	
+2026-11-22	runC3	https://modding.wiki/en/home	200	200	0|0	0	dom
+2026-11-22	runC3	https://www.acalculator.org/days/est-to-ist	200	200	0|0	0	
+2026-11-22	runC3	https://www.allaboutbirds.org/guide/European_Starling/id	200	200	1|1	0	dom
+2026-11-22	runC3	https://www.talked.com.au/login	200	200	0|0	0	
+2026-11-22	runC3	https://ngdc.cncb.ac.cn/databasecommons/database/id/7343	0	200	0|1	0	dom
+2026-11-22	runC3	https://www.ah.nl/allerhande/recepten/triflerecepten?msockid=0c7c2d5a76946e89291a354377b76f78	403	403	1|1	0	
+2026-11-22	runC3	https://create.roblox.com/landing	200	200	4|4	0	
+2026-11-22	runC3	https://hdmaster.com/	200	200	0|0	0	
+2026-11-22	runC3	https://www.worldometers.info/time/florida-united-states/	200	200	45|0	0	dom
+2026-11-22	runC3	https://www.mystore411.com/store/view/4561/Walmart-Columbus	200	200	1|1	0	
+2026-11-22	runC3	https://countryclubdentalflagstaff.com/himalayan-salt-mouth-rinse-oral-health/	200	200	1|1	0	
+2026-11-22	runC3	https://www.traderjoes.com/home/products/pdp/eucalyptus-081022	200	200	0|0	0	
+2026-11-22	runC3	https://bokepbaby.com/kategori/bokep-jepang	200	200	1|1	0	dom
+2026-11-22	runC3	https://www.cbssports.com/college-basketball/rankings/top25/	0	200	9|5	0	
+2026-11-22	runC3	https://www.quantamagazine.org/what-is-a-manifold-20251103/	200	200	2|2	0	
+2026-11-22	runC3	https://www.marycollingscf.co.uk/the-biretta-a-guide-to-its-history-symbolism-and-use-in-the-church/	200	200	0|0	0	dom
+2026-11-22	runC3	https://www.bluecrab.info/forum/index.php/board,104.0.html	403	403	13|6	0	dom
+2026-11-22	runC3	https://www.foxsports.com/motor/formula-1/schedule	200	200	1|13	0	dom
+2026-11-22	runC3	https://handlednow.com/	200	200	1|1	0	
+2026-11-22	runC3	https://halespropertymanagement.com/	200	200	16|10	0	
+2026-11-22	runC3	https://thetoolstrunk.com/driver-cannot-load-on-this-device-mslo64-sys/	200	200	0|0	0	dom
+2026-11-22	runC3	http://www3.hilton.com/en/index.html	403	403	12|14	0	
+2026-11-22	runD1	https://fantasyracingcheatsheet.com/nascar/cup/races/practice/1/2024/darlington-raceway/goodyear-400	200	200	0|0	0	
+2026-11-22	runD1	https://www.stadium.fi/	200	200	0|0	0	dom
+2026-11-22	runD1	http://www.chadscafe.com/	200	200	0|0	1	
+2026-11-22	runD1	https://geology.com/articles/geyser.shtml	0	0	1712|81	0	dom
+2026-11-22	runD1	https://www.zoominfo.com/p/Tania-Lopez/9003295334	403	403	1|1	0	
+2026-11-22	runD1	https://river.com/	200	200	0|0	0	dom
+2026-11-22	runD1b	https://www.inclave.com/	200	200	0|0	0	
+2026-11-22	runD1b	https://www.hulu.com/	200	200	0|2	0	
+2026-11-22	runD1b	https://parcelsapp.com/	200	0	517|61	0	dom
+2026-11-22	runD1b	https://www.stadiumsportus.com/	200	200	1|1	0	
+2026-11-22	runD1b	https://subways-menu.com/	200	200	0|0	0	
+2026-11-22	runD1b	https://www.booking.com/city/us/seattle.html?msockid=3c4522d54d0a6ace0c533acc4c446b00	200	200	0|0	0	dom
+2026-11-22	runD1b	https://www.nfl.com/news/2026-nfl-draft-saints-pick-arizona-state-wr-jordyn-tyson-with-no-8-overall-selection	200	200	2|4	0	dom
+2026-11-22	runD1b	https://www.wikiwand.com/en/Foreskin	200	200	10|32	0	dom
+2026-11-22	runD1b	https://tacticalsurplususa.com/firearms/ar-platform/ar-uppers/	200	200	1|2	0	
+2026-11-22	runD1b	https://www.wordhint.net/7-little-words/clues/insipid/	200	200	61|37	0	
+2026-11-22	runD1b	https://www.iqiyi.com/so/q_12345+abc%E7%9A%84%E6%8C%89%E4%B8%8D%E5%87%BA%E5%95%8A%E5%90%A7%E4%B8%80%E5%A4%A9	200	200	6|7	0	
+2026-11-22	runD1b	https://sewguide.com/inseam-how-to-measure-it/	200	200	16|6	0	dom
+2026-11-22	runD1b	http://www.jlaforums.com/viewtopic.php?t=68861691	429	429	7|7	0	dom
+2026-11-22	runD1b	https://wdlh.co.uk/things-to-do/the-donkey-sanctuary/	200	200	0|0	0	
+2026-11-22	runD1b	https://www.weddingwire.com/c/ut-utah/salt-lake-city/wedding-venues/770-11-rca.html	200	200	0|0	0	dom
+2026-11-22	runD1b	https://search.google/	200	200	1|0	0	
+2026-11-22	runD1b	https://www.shimmersensing.com/	200	200	0|0	0	
+2026-11-22	runD1b	https://www.naturalsciences.be/en/discover-join/discover---taxonomy-what-why-and-how/introduction-to-taxonomy-the-science-of-classification	200	200	3|3	0	
+2026-11-22	runD1b	https://www.positivityblog.com/inspirational-sayings/	200	200	0|0	0	
+2026-11-22	runD1b	https://www.mainspringcollective.org/	200	200	0|0	0	
+2026-11-22	runD1b	https://kleki.com/	200	200	0|0	0	
+2026-11-22	runD1b	https://www.anoopcnair.com/accessibility-settings-in-windows-11/	200	200	0|0	0	dom
+2026-11-22	runD1b	https://demoniacult.com/collections/creepers-1	200	200	4|4	0	
+2026-11-22	runD1b	https://stockcake.com/s/create-an-image-of-a-serene-coastal-village-at-golden-hour-whitewashed-buildings-ocean-breeze-warm-sunlight-cinematic-landscape	200	403	0|1	0	dom
+2026-11-22	runD2	https://wordsdefined.com/define/person	200	200	40|4	0	dom
+2026-11-22	runD2	https://www.congregateonline.com/	200	200	0|0	0	dom
+2026-11-22	runD2	https://engineeringstatics.org/Chapter_06-trusses.html	200	200	0|0	0	
+2026-11-22	runD2	https://undauntedmfg.com/collections/frontpage	200	200	0|0	0	
+2026-11-22	runD2	https://www.aib.world/publications/journal-of-international-business-studies/	200	200	1|1	0	
+2026-11-22	runD2	https://whatsanswer.com/wp-content/uploads/blocksy/local-google-fonts/s/prompt/v10/-W_9XJnvUD7dzB2CA-oQTkYBeZ0lTiM.woff2			0|1	0	dom
+2026-11-22	runD2	https://www.rei.com/c/snowshoes?msockid=2d802550e59d61c516e13d49e41460e7	200	200	5|6	0	dom
+2026-11-22	runD2	https://www.ultimatetweaks.com/	200	200	2|2	0	
+2026-11-22	runD2	https://seatplan.com/backstage/what-is-a-proscenium-arch/	200	200	0|0	0	
+2026-11-22	runD2	https://www.bk.com/store-locator/store/restaurant_8708	200	200	0|0	0	
+2026-11-22	runD2	https://devinesepticpros.com/septic-service-dauphin-island-al/	200	200	4|4	0	dom
+2026-11-22	runD2	https://thisvsthat.io/related-to-vs-relating-to	200	200	14|44	0	dom
+2026-11-22	runD2	https://www.thegospelcoalition.org/article/cruciform-life/	200	200	1|1	0	dom
+2026-11-22	runD2	https://myhematology.com/hemostasis-disorders/thrombosis-an-overview/	200	200	21|1	0	dom
+2026-11-22	runD2	https://www.365scores.com/en-us/baseball/team/washington-nationals-7432	200	200	425|26	0	
+2026-11-22	runD2	https://attach.org/	0	200	0|0	0	dom
+2026-11-22	runD2	https://www.worldhistory.org/Abraham_Lincoln/	0	200	12|7	0	dom
+2026-11-22	runD2	https://hospitaldirectoryusa.com/	200	200	0|0	0	
+2026-11-22	runD2	https://corporatefinanceinstitute.com/resources/accounting/expenses/	200	200	1|1	0	
+2026-11-22	runD2	https://racingnews365.com/drivers/max-verstappen/results/2026	200	200	2|1	0	
+2026-11-22	runD2	https://freedict.com/word/matronly	200	200	14|8	0	dom
+2026-11-22	runD2	https://kemono.cr/discord/server/1016841588070158446	200	200	0|3	0	
+2026-11-22	runD2	https://qr.io/	200	200	0|0	0	
+2026-11-22	runD2	https://www.tvmaze.com/episodes/534864/alaskan-bush-people-4x07-dead-in-the-water	200	200	2|0	0	dom
+2026-11-22	runD2	https://en.wikisource.org/wiki/The_Tibetan_Book_of_the_Dead/Foreword	200	200	0|0	0	
+2026-11-22	runD2	https://www.firsttechfed.com/	200	200	1|2	0	dom
+2026-11-22	runD2	https://www.almanac.com/what-you-can-and-cant-compost	200	200	6|6	0	
+2026-11-22	runD2	https://writingexplained.org/analyse-or-analyze-difference	0	200	0|1	0	
+2026-11-22	runD2	https://vetopropac.com/catalog/tool-bags-by-trade/plumber/	200	200	0|0	0	dom
+2026-11-22	runD2	https://posterstore.com/posters-prints/	200	200	0|0	0	
+2026-11-22	runD3	https://www.scribbr.com/commonly-confused-words/born-vs-borne/	200	200	0|0	0	
+2026-11-22	runD3	https://www.chiefs.com/video/full-game-highlights-from-week-18-chiefs-vs-raiders-x2221	200	200	2|2	0	
+2026-11-22	runD3	https://schemesofwork.com/	200	200	0|0	0	dom
+2026-11-22	runD3	https://www.canva.com/create/timetables/?msockid=198913e7bc226c0d39950bfebd036d8e	200	200	1|1	0	dom
+2026-11-22	runD3	https://ballgames.app/games/no-doubter	200	200	0|0	0	
+2026-11-22	runD3	https://adorno.design/editorial/the-simple-elegance-of-minimalist-design/	200	200	1|1	0	
+2026-11-22	runD3	https://getsourced.com/	200	200	0|0	0	
+2026-11-22	runD3	https://www.napaonline.com/en/shop/replacement-parts/ignition-engine-management/ignition-coils/348251742	200	403	3|64	0	dom
+2026-11-22	runD3	https://platform.pointcare.com/s/	200	200	1|1	0	
+2026-11-22	runD3	https://a-z-animals.com/animals/birds/the-types-of-north-american-swallows/	200	200	3|10	0	dom
+2026-11-22	runD3	https://www.periodicos.capes.gov.br/index.php/acervo/buscador.html?task=detalhes&id=W2138737041	403	403	2|1	0	
+2026-11-22	runD3	https://inlandgroup.com/	200	200	3|3	0	
+2026-11-22	runD3	https://www.ftbistro.com/reservation-policy/	200	200	0|0	0	
+2026-11-22	runD3	https://transition.fcc.gov/pshs/emergency/gets.html	200	200	1|0	0	
+2026-11-22	runD3	https://heritageanimalhosp.com/	200	200	0|0	0	
+2026-11-22	runD3	https://fortunasausage.com/all-natural-soupy-supri-soupie-10-12-oz/	200	200	5|1	0	
+2026-11-22	runD3	https://www.statue.com/collections/all	200	200	0|0	0	
+2026-11-22	runD3	https://www.gov.uk/guidance/export-or-move-livestock-and-poultry	200	200	0|0	0	
+2026-11-22	runD3	https://www.chegg.com/homework-help/questions-and-answers/zybookscom-zybook-snhumat350v-1-chapter-2-zybooks-catalog-help-f-ay-library-mat-350-applie-q56121163?msockid=0fbce179b8a96448254af960b98c65e2	403	403	1|1	0	
+2026-11-22	runD3	https://news.xbox.com/en-us/2025/12/19/getting-started-with-xbox-cloud-gaming/	200	200	3|2	0	
+2026-11-22	runD3	https://libertystation.com/go/cygnet-theatre	200	200	0|0	0	
+2026-11-22	runD3	https://www.euphoric.global/	200	200	1|1	0	
+2026-11-22	runD3	https://onlinelibrary.wiley.com/journal/16136829?msockid=3fad5205c4386e0f00dd4a1cc5d16f88	200	403	3|6	0	dom
+2026-11-22	runD3	https://www.kbb.com/toyota/camry/2026/xse/?msockid=0ce58871e90d6f792f509068e86e6e4f	403	403	1|1	0	
+2026-11-22	runD3	https://gizmodo.com/download/roblox	200	200	0|0	1	
+2026-11-22	runD3	https://prod.net/	200	200	0|3	0	
+2026-11-22	runD3	https://www.messistat.com/en	200	200	0|0	0	
+2026-11-22	runD3	https://innate.com/	200	200	0|0	0	
+2026-11-22	runD3	http://surrealist.com/	200	200	0|0	0	dom
+2026-11-22	runD3	https://www.timezone-map.com/	200	200	0|0	0	
+2026-11-22	runD3	https://blog.csdn.net/AI_Green/article/details/121266869	521	521	4|2	0	
+2026-11-22	runE1	https://www.cbr.com/tiana-charlotte-feminist-friendship-underrated-the-princess-and-the-frog/	0	0	790|106	0	
+2026-11-22	runE1	https://www.cricbuzz.com/live-cricket-scores/129458/eng-vs-ind-1st-odi-india-tour-of-england-2026	200	200	11|63	0	dom
+2026-11-22	runE1	https://www.nasdaq.com/articles/looking-nasdaq-100-index-adds-and-deletes	403	403	1|1	0	
+2026-11-22	runE1	https://www.fortisgames.com/	200	200	0|0	0	
+2026-11-22	runE1	https://www.thepioneerwoman.com/food-cooking/recipes/a36701023/queso-dip-recipe/	200	200	7|5	0	
+2026-11-22	runE1	https://www.sanitized.com/	200	200	2|2	0	dom
+2026-11-22	runE1	https://www.cvs.com/store-locator/cvs-pharmacy-locations/California/San-Diego	200	200	1|1	0	
+2026-11-22	runE1	https://beginnersinai.org/humanoid-robots/	200	200	0|0	0	
+2026-11-22	runE1	https://www.clevergirlfinance.com/frugal-living/	200	200	4|8	0	dom
+2026-11-22	runE1	https://www.bpb.de/themen/geschichte/	200	200	0|0	0	
+2026-11-22	runE1	https://www.rapidtables.com/calc/time/dubai-time.html	200	200	0|0	0	
+2026-11-22	runE1	https://www.hobbylobby.com/christmas-decorations/artificial-christmas-trees/c/58-840?msockid=3910539a65a16c8510ab4b83640d6d75	200	200	0|0	0	
+2026-11-22	runE1	https://flk.npc.gov.cn/	200	200	0|0	0	
+2026-11-22	runE1	https://festivalmate.net/venues/princess-pavilion-falmouth/	200	200	0|0	0	
+2026-11-22	runE1	https://www.whatistheph.com/substance/Lime	200	200	0|1	0	
+2026-11-22	runE1	https://riahealth.com/blog/7-types-of-drunks/	200	200	15|12	0	
+2026-11-22	runE1	https://www.allaboutvision.com/eye-care/eye-doctors/ophthalmic/	200	200	0|0	0	
+2026-11-22	runE1	https://thewoobles.com/pages/crochet-tutorials	200	200	0|0	0	
+2026-11-22	runE1	https://www.math-only-math.com/units-of-length-conversion-charts.html	200	200	5|5	0	
+2026-11-22	runE1	https://www.casaley.com.mx/	200	200	0|1	0	
+2026-11-22	runE1	https://www.netflix.com/title/70213471	200	200	3|2	0	
+2026-11-22	runE1	https://www.theplayers.com/	200	200	0|0	0	dom
+2026-11-22	runE1	https://the-grove-at-canopy.seniorlivingflorida.org/	200	200	0|0	0	
+2026-11-22	runE1	https://ridetheincline.com/what-is-a-funicular-railway/	200	200	0|0	0	
+2026-11-22	runE1	https://www.calculatorsoup.com/calculators/math/fractionscomparing.php	0	0	16|9	0	dom
+2026-11-22	runE1	https://dle.rae.es/%C3%A1rbol	200	200	0|0	0	
+2026-11-22	runE1	https://www.suttonroofinginc.com/service-areas-mustang-ridge-tx	200	200	0|0	0	
+2026-11-22	runE1	https://www.macys.com/shop/womens/handbags-wallets-accessories/handbags/satchels?id=46013&msockid=3bebe5974524675e1b09fd8e44af66ce	403	403	5|5	0	
+2026-11-22	runE1	https://www.millerhighlife.com/	200	200	0|0	0	
+2026-11-22	runE1	https://obsproject.com/forum/resources/youtube-chat-transparent-background-solely-css.486/	200	200	0|0	0	
+2026-11-22	runE1	https://mundolacteo.es/leche/que-es-la-leche	200	200	0|0	0	
+2026-11-22	runE1	https://visitcn.com.cn/zh/guides/chinese-spring-festival-guide	200	200	0|0	0	
+2026-11-22	runE1	https://en.langenscheidt.com/german-english/farbe	200	200	0|0	0	
+2026-11-22	runE1	https://pawns.app/	200	200	0|0	0	
+2026-11-22	runE1	https://epatient.shields.com/	200	200	0|0	0	
+2026-11-22	runE1	https://www.wish.com/~/gadgets	200	200	0|0	0	dom
+2026-11-22	runE1	https://www.getloot.com/	200	200	0|1	0	dom
+2026-11-22	runE1	https://www.bristol.ac.uk/university/	200	200	1|1	0	
+2026-11-22	runE1	https://www.msdmanuals.cn/home/mouth-and-dental-disorders/biology-of-the-mouth-and-teeth/biology-of-the-teeth			0|1	0	dom
+2026-11-22	runE1	https://about.youtube/	200	200	0|0	0	dom
+2026-11-22	runE1	https://mmuregistry.flhealth.gov/spa/	200	200	0|1	0	
+2026-11-22	runE1	https://animalcare.oc.gov/get-involved/donate	200	200	0|0	0	
+2026-11-22	runE1	https://www.msfinicky.com/	200	200	0|0	0	dom
+2026-11-22	runE1	https://hgic.clemson.edu/factsheet/hibiscus/	200	200	2|2	0	
+2026-11-22	runE1	https://www.anjuke-w.com.cn/	200	200	1|1	0	
+2026-11-22	runE1	https://www.change.org/decision-makers/the-united-states-government	200	200	0|0	0	
+2026-11-22	runE1	https://yandex.ru/pogoda/ru/los-angeles/month	200	200	0|0	0	
+2026-11-22	runE1	https://tampanails.com/	200	200	1|1	0	
+2026-11-22	runE1	https://www.desmos.com/calculator/kza246ocpo	200	200	0|0	0	
+2026-11-22	runE1	https://www.wheezypuff.com/	200	200	0|0	0	
+2026-11-22	runE1	https://www.bajajfinservmarkets.in/hi/gold-rate	200	200	1|1	0	
+2026-11-22	runE1	https://hypebeast.com/2026/10/victor-kan-third-of-june-interview	200	200	1|16	0	
+2026-11-22	runE1	https://openpayrolls.com/employee/daniel-cortes-20408	403	403	10|6	0	
+2026-11-22	runE1	https://www.fieggen.com/shoelace/lacingmethods.htm	200	200	0|0	0	
+2026-11-22	runE1	https://ahem.info/	200	200	0|0	0	
+2026-11-22	runE1	https://www.toronto.com/things-to-do/	200	200	3|4	0	
+2026-11-22	runE1	https://audio.com/tools/stem-splitter	200	200	2|1	0	
+2026-11-22	runE1	https://jackson.saltinerestaurant.com/	200	200	1|0	0	dom
+2026-11-22	runE1	https://webuhr.de/uhrzeit/	200	200	0|0	0	
+2026-11-22	runE1	https://www.ikea.cn/cn/zh/cat/sha-fa-fu003/	200	200	4|3	0	
+2026-11-22	runE1	https://www.restaurantji.com/fl/orange-park/the-urban-bean-coffeehouse-cafe-/	200	200	4|4	0	
+2026-11-22	runE2	https://apidocs.beenverified.com/	200	200	0|0	0	
+2026-11-22	runE2	https://www.loopnet.com/Listing/601-W-Flores-St-Tucson-AZ/33233955/	403	403	1|1	0	
+2026-11-22	runE2	https://spanishunraveled.com/coche-vs-carro/	200	200	0|0	0	
+2026-11-22	runE2	https://thefoxoakland.com/	200	200	0|4	0	
+2026-11-22	runE2	https://www.sfyc.org/the-club	200	200	1|1	0	
+2026-11-22	runE2	https://www.tomsguide.com/how-to/how-to-fix-a-stuck-windows-update	200	200	180|50	0	
+2026-11-22	runE2	https://foofighters.com/tour-dates/	200	200	0|0	0	
+2026-11-22	runE2	https://www.uccresources.com/pages/stillspeaking-resources	200	200	1|4	0	
+2026-11-22	runE2	https://home.ourhome2.net/showthread.php?958287-Ashlee-Great-Tryst-with-Ashlee	200	200	0|0	0	
+2026-11-22	runE2	https://www.zoores.ac.cn/	200	200	4|3	0	
+2026-11-22	runE2	https://detail.zol.com.cn/cell_phone_index/subcate57_0_list_1_0_9_2_0_1.html	200	200	15|10	0	
+2026-11-22	runE2	https://catalinaseacamp.org/blog/10-cool-facts-about-salt-water/	200	200	1|1	0	
+2026-11-22	runE2	https://poki.org.mx/	200	200	0|0	0	dom
+2026-11-22	runE2	https://www.dpm.org.cn/subject_tea/index.html	200	200	0|3	0	
+2026-11-22	runE2	https://time.is/Japan	0	0	198|71	0	dom
+2026-11-22	runE2	https://www.mcmaster.com/products/chain	200	200	6|3	0	
+2026-11-22	runE2	https://gtatracker.gg/guides/gta-online-beginner-guide	200	200	1|1	0	dom
+2026-11-22	runE2	https://www.gafei.com/kafeibiji-17313	200	200	0|0	0	
+2026-11-22	runE2	https://www.theupsstore.com/tools/track-a-package	200	200	0|0	0	
+2026-11-22	runE2	https://resources.mouser.com/	200	200	3|4	0	
+2026-11-22	runE2	https://www.spanishdict.com/translate/playa	0	0	228|48	0	dom
+2026-11-22	runE2	https://slate.com/culture/2026/11/don-delillo-books-amazons-cleo-birdwell-hockey-heated-rivalry.html	0	200	4|18	0	dom
+2026-11-22	runE2	https://www.heart.org/en/health-topics/heart-attack/treatment-of-a-heart-attack/stent	200	200	0|0	0	dom
+2026-11-22	runE2	https://www.guidingtech.com/what-happens-when-your-google-account-is-disabled-tips-for-recovering/	200	200	1|3	0	dom
+2026-11-22	runE2	https://japan.stripes.com/travel/did-you-know-olympic-games-and-japan.html1	0	0	0|5	0	
+2026-11-22	runE2	https://www.storeshours.com/fedex/north-carolina/charlotte/csxway	200	200	1|0	0	
+2026-11-22	runE2	https://www.realjourneytravels.com/places/ermita-de-santa-justa/	200	200	0|0	0	
+2026-11-22	runE2	https://medicine.utah.edu/neurology/conferences/wino	200	200	1|1	0	
+2026-11-22	runE2	http://job.mohrss.gov.cn/	200	200	11|11	0	
+2026-11-22	runE2	https://www.hotels.com/de1439028/hotels-los-angeles-california/?msockid=2b37f7cae7596c572570efd3e63e6d42	429	429	2|3	0	
+2026-11-22	runE2	https://www.cyberpowerpc.com/	503	503	2|1	0	
+2026-11-22	runE2	https://funsoft.co.kr/games/	200	200	0|0	0	
+2026-11-22	runE2	https://www.nbcnews.com/news/us-news/clavicular-looksmaxxing-charged-rape-massachusetts-rcna599130	0	0	11|15	0	dom
+2026-11-22	runE2	https://pluto.tv/us/movies/6a6ba7a2cd7852640b858fc7/?msockid=1bb83fa9ec6d6b1431ab27b0edb86acc	200	200	4|0	0	dom
+2026-11-22	runE2	https://www.fda.gov/drugs/drug-safety-and-availability/drug-shortages	200	200	0|1	0	
+2026-11-22	runE2	https://stats.gleague.nba.com/team/1612709924/	200	200	3|4	0	
+2026-11-22	runE2	https://boostaromax.com/	200	200	0|0	0	
+2026-11-22	runE2	https://kino-tv.co/en/films/	200	200	0|0	0	
+2026-11-22	runE2	https://www.lapl.org/	200	200	1|1	0	
+2026-11-22	runE2	https://fischipedia.org/wiki/Glowworm	403	403	11|11	0	
+2026-11-22	runE2	https://www.rosesarerosie.com/	200	200	0|0	0	
+2026-11-22	runE2	https://www.cars.com/shopping/toyota-camry/?msockid=3bc1a3ae20456de10093bbb721496c2d	403	200	10|1	0	dom
+2026-11-22	runE2	https://www.onsmd.com/locations/greenwich/	0	0	0|0	0	dom
+2026-11-22	runE2	https://lithe.top/	200	200	0|0	0	
+2026-11-22	runE2	http://www.mwr.gov.cn/zw/zgzygwywj/202511/t20251127_2090893.html			0|1	0	dom
+2026-11-22	runE2	https://www.vw.com.cn/	0	0	1|0	0	
+2026-11-22	runE2	https://www.wordunscrambler.net/jumble-solver.aspx?word=+25%,%2030%%20microsoft	403	403	9|6	0	dom
+2026-11-22	runE2	https://www.petguide.com/breeds/cat/gato/	0	200	707|109	0	dom
+2026-11-22	runE2	https://www.wired.com/gallery/iphone-buying-guide/	200	200	5|6	0	dom
+2026-11-22	runE2	https://chat-test.learnprompting.org/docs/basic_applications/zapier_for_emails	200	200	14|8	0	
+2026-11-22	runE2	https://allevents.in/leeds/bill-bailey-at-first-direct-bank-arena-leeds/2400031054747042	200	200	0|0	0	
+2026-11-22	runE2	https://www.aao.org/eye-health/tips-prevention/facts-about-tears	0	200	3|2	0	
+2026-11-22	runE2	https://www.answers.com/tourist-attractions/Does_The_Statue_of_Liberty_represent_Lucifer	200	200	5|4	0	
+2026-11-22	runE2	https://thehundreds.com/	200	200	1|1	0	
+2026-11-22	runE2	https://profindr.com/answers/what-is-fumigation	200	200	0|0	0	
+2026-11-22	runE2	https://locations.pizzahut.com/tx/san-antonio	200	200	54|54	0	
+2026-11-22	runE2	https://www.gasbuddy.com/gasprices/arizona/cottonwood	200	200	16|16	0	dom
+2026-11-22	runE2	https://liveclock.io/	200	200	0|0	0	
+2026-11-22	runE2	https://www.skyscanner.com/airline/airline-delta-dl.html	200	200	0|0	0	
+2026-11-22	runE3	https://locations.dollartree.com/tx/el-paso/9513-viscount-blvd-suite-a	200	200	0|0	0	
+2026-11-22	runE3	https://www.a-hospital.com/w/%E7%89%99%E9%BD%BF	200	200	3|2	0	dom
+2026-11-22	runE3	https://music.migu.cn/v5/	200	200	0|0	0	dom
+2026-11-22	runE3	https://www.timessquarenyc.org/retail/target	200	200	0|0	0	
+2026-11-22	runE3	https://www.fedexforum.com/events-and-tickets/box-office	200	200	0|0	0	
+2026-11-22	runE3	https://www.slicedca.com/	200	200	0|1	0	dom
+2026-11-22	runE3	https://www.respiratorytherapyzone.com/asthma-early-sings/	0	200	2|1	0	dom
+2026-11-22	runE3	https://liraclinical.com/collections/all	200	200	0|0	0	
+2026-11-22	runE3	https://www.businessinsider.com/reference/what-is-yammer-app	200	200	3|4	0	
+2026-11-22	runE3	https://easy-schule.de/was-sind-pilze/	200	200	1|1	0	
+2026-11-22	runE3	https://nytcrossword.org/nyt-clues/chaperones-nyt-crossword/	200	200	5|1	0	dom
+2026-11-22	runE3	https://espnpressroom.com/	200	200	0|0	0	
+2026-11-22	runE3	https://nuvectramedical.com/vertigenics-brain-supplement-reviews/	200	200	0|0	0	
+2026-11-22	runE3	https://fotogrib.ru/encyclopedia	200	200	0|0	0	
+2026-11-22	runE3	https://helpdeskgeek.com/how-to-get-help-in-windows/	0	0	18|3	0	dom
+2026-11-22	runE3	https://www.zara.cn/cn/zh/woman-shoes-l1251.html	200	200	0|0	0	
+2026-11-22	runE3	https://abcnews.com/GMA/Culture/dancing-with-the-stars-season-35-who-is-eliminated/story?id=136377567	200	200	2|3	0	dom
+2026-11-22	runE3	https://tool.colden.cn/	200	200	0|0	0	
+2026-11-22	runE3	https://www.foresttrip.go.kr/	200	200	0|0	0	
+2026-11-22	runE3	https://zapatos.es/	200	200	0|0	0	
+2026-11-22	runE3	https://lagranjarestaurants.com/menu	200	200	2|2	0	
+2026-11-22	runE3	https://www.cvent.com/	200	200	0|2	0	
+2026-11-22	runE3	https://arizonahistoricalsociety.org/museum/arizona-heritage-center/	200	200	0|0	0	dom
+2026-11-22	runE3	https://mozvip.tw/article/shoes-size	200	200	0|0	0	
+2026-11-22	runE3	https://www.trivago.com/?msockid=06b3bb5e2baf68142fcca3472a8e6930	200	200	1|1	0	
+2026-11-22	runE3	https://www.history.com/articles/albert-einstein	200	200	2|0	0	
+2026-11-22	runE3	https://www.tripadvisor.com.hk/Hotels-g32655-Los_Angeles_California-Hotels.html	403	403	2|1	0	dom
+2026-11-22	runE3	https://worth.com/	200	200	11|4	0	dom
+2026-11-22	runE3	https://time.savvycal.com/convert/Eastern-Time?q=4pm	200	200	1|1	0	
+2026-11-22	runE3	https://www.airnav.com/airports/	200	200	0|0	0	
+2026-11-22	runE3	https://ohiostatebuckeyes.com/sports/mens-basketball/roster/2026-27	200	200	1|1	0	
+2026-11-22	runE3	https://www.asics.com/us/en-us/tennis-shoes/c/aa80204000/?msockid=0cc1bf20326361383340a73933fd6053	403	403	2|1	0	
+2026-11-22	runE3	https://galabau-kw.de/gartenfinanzierung/	200	200	0|0	0	
+2026-11-22	runE3	https://community.hubspot.com/t/outlook-integration-with-saleshub-keeps-asking-for-admin-approval/22338	200	200	0|0	0	
+2026-11-22	runE3	https://las-vegas.events/	200	200	0|0	0	
+2026-11-22	runE3	https://www.bottlestore.com/	200	200	0|0	0	
+2026-11-22	runE3	https://sensorstechforum.com/ja/fedex-tracking-scam/	200	200	0|0	0	
+2026-11-22	runE3	https://electronicscoach.com/modulation.html	200	200	0|0	0	dom
+2026-11-22	runE3	https://xhamster.desi/search/newest+added	200	200	1|1	0	dom
+2026-11-22	runE3	https://whichtimezone.com/usa/california/	200	200	6|2	0	dom
+2026-11-22	runE3	https://www.centurycommunities.com/find-your-new-home/arizona/phoenix-metro/buckeye/montana-vista/	200	200	0|0	0	
+2026-11-22	runE3	https://tacobellsmenus.com/	200	200	2|2	0	
+2026-11-22	runE3	https://db.pokemongohub.net/pokemon/334	200	200	0|0	0	
+2026-11-22	runE3	https://geekrewind.com/how-to-find-the-accessibility-folder-in-windows-11/	200	200	1|1	0	
+2026-11-22	runE3	https://www.honigwine.com/	200	200	1|1	0	
+2026-11-22	runE3	https://www.stanfordchildrens.org/en/topic/default?id=impotence-erectile-dysfunction-85-P01482	200	200	0|0	0	
+2026-11-22	runE3	https://health.tvbs.com.tw/regimen/343839	200	200	0|1	0	dom
+2026-11-22	runE3	https://englishan.com/altogether-vs-all-together/	200	200	0|0	0	
+2026-11-22	runE3	https://vertigenics-us.com/	403	403	1|1	0	
+2026-11-22	runE3	https://www.truckingboards.com/bb/index.php	200	200	10|30	0	dom
+2026-11-22	runE3	https://www.birds-of-north-america.net/curlews.html	200	200	1|1	0	
+2026-11-22	runE3	https://www.englishgrammar.org/best-synonyms-hate/	200	200	16|8	0	
+2026-11-22	runE3	https://capsulecrm.com/	200	200	1|1	0	
+2026-11-22	runE3	https://www.17track.net/en/tracking	200	200	1|2	0	
+2026-11-22	runE3	https://www.bbb.org/us/fl/boca-raton/category/medical-malpractice-lawyers	200	200	1|0	0	
+2026-11-22	runE3	https://www.storelocators.com/store-lists/ace_hardware/iowa	200	200	0|1	0	
+2026-11-22	runE3	https://mercer-health.com/our-physicians/james-reichert-do-0/	200	200	0|0	0	
+2026-11-22	runE3	https://modpodgebrand.com/	200	200	0|0	0	

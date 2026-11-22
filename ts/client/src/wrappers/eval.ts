@@ -30,7 +30,8 @@
 import { SafeWeakMap, SafeWeakSet, nOP, nR, ncall } from "../native/intrinsics";
 import { isWindowObject } from "../native/brand";
 import { isTrustedValue, realmOfFunction, trusted } from "../native/trusted";
-import { defaultJsRewriteOptions, rewriteJsSource } from "../js/rewriter";
+import { rewriteJsSource } from "../js/rewriter";
+import { madeCodeOptions } from "../js/made-code";
 import { maskAs, standIn } from "../native/surface";
 import { sharedData } from "../native/shared";
 
@@ -57,10 +58,10 @@ export function wrapEval(nativeEval: typeof eval): typeof eval {
     const w = maskAs(standIn(nativeEval, {
         apply(target, self, args: unknown[]) {
             if (isTrustedValue(args[0])) {
-                return nR.apply(target, self, [trusted(realmOf(target), "Script", rewriteJsSource(String(args[0]), defaultJsRewriteOptions())), ...args.slice(1)]);
+                return nR.apply(target, self, [trusted(realmOf(target), "Script", rewriteJsSource(String(args[0]), madeCodeOptions(realmOf(target), String(args[0])))), ...args.slice(1)]);
             }
             if (typeof args[0] !== "string") return nR.apply(target, self, args);
-            return nR.apply(target, self, [rewriteJsSource(args[0], defaultJsRewriteOptions()), ...args.slice(1)]);
+            return nR.apply(target, self, [rewriteJsSource(args[0], madeCodeOptions(realmOf(target), args[0])), ...args.slice(1)]);
         },
     }), nativeEval);
     wrappers.set(nativeEval, w);
@@ -92,10 +93,10 @@ export function wrapEvalArg(_nativeEval: typeof eval, source: unknown): unknown 
     // A TrustedScript (what a page under Trusted Types must give eval) is
     // rewritten like a string, and stays trusted.
     if (isTrustedValue(source)) {
-        return trusted(realmOf(_nativeEval), "Script", rewriteJsSource(String(source), defaultJsRewriteOptions()));
+        return trusted(realmOf(_nativeEval), "Script", rewriteJsSource(String(source), madeCodeOptions(realmOf(_nativeEval), String(source))));
     }
     if (typeof source !== "string") return source;
-    return rewriteJsSource(source, defaultJsRewriteOptions());
+    return rewriteJsSource(source, madeCodeOptions(realmOf(_nativeEval), source));
 }
 
 /** R16 F.apply(t, arr): the arguments with the first rewritten when F is an evaluator. */

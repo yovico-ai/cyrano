@@ -1,6 +1,7 @@
 package htmlrewrite
 
 import (
+	"github.com/yovico/cyrano/internal/jsrewrite"
 	"bytes"
 	"net/url"
 	"strings"
@@ -633,5 +634,34 @@ func TestRewrite_StyleTextOriginal(t *testing.T) {
 	got = rewrite(t, `<html><body><style>b{background:url(/bg.png)}</style></body></html>`, func(cfg *Config) { cfg.NoOriginals = true; css(cfg) })
 	if strings.Contains(got, "crn-o") {
 		t.Errorf("originals written with NoOriginals:\n%s", got)
+	}
+}
+
+// An event handler attribute's value is a function body the browser
+// compiles: rewritten by the JS rules (spec/Attrs.agda handler), its
+// original kept for read-back. A Lijit sync frame's
+// `onload="q(location,document)"` (birdies.com) read the proxy's location;
+// Basis' `onload="window.location.href='…'"` (guns.com) navigated to the
+// origin. A value no rule touches, and a name that is no handler, stay.
+func TestRewrite_EventHandlerAttributes(t *testing.T) {
+	js := func(cfg *Config) {
+		cfg.NoOriginals = false
+		cfg.RewriteInlineJS = func(src []byte) []byte { return jsrewrite.Rewrite(src, jsrewrite.DefaultOptions()) }
+	}
+	got := rewrite(t, `<html><body onload="q(location,document)"><a onclick="return false" data-on="location" one-x="location">x</a><svg><rect onclick="top.location.href=u"/></svg></body></html>`, js)
+	for _, want := range []string{
+		`onload="q(/*` + "\x7f" + `*/$rewriter.wrap_get_location(`,
+		`crn-o="{&#34;onload&#34;:&#34;q(location,document)&#34;}"`,
+		`onclick="return false"`,
+		`data-on="location"`,
+		`one-x="location"`,
+		`<rect onclick="/*` + "\x7f" + `*/$rewriter.wrap_`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Count(got, "crn-o=") != 2 {
+		t.Errorf("want originals on the two rewritten handlers only:\n%s", got)
 	}
 }

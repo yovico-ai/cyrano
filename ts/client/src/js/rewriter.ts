@@ -251,6 +251,18 @@ function rewriteJsSourceUncached(src: string, opts: JsRewriteOptions): string {
     return result;
 }
 
+/**
+ * An event handler attribute's value (spec/Attrs.agda handler): a function
+ * body the browser compiles where the global object is in scope, rewritten
+ * by the rules as the server rewrites it — without the eval preamble (Go's
+ * htmlrewrite gives handlers its inline-script rewrite, which has none).
+ */
+export function rewriteHandlerSource(src: string): string {
+    if (typeof src !== "string" || src.length === 0 || !mayEdit(src) || alreadyRewritten(src)) return src;
+    const edits = jsEdits(src, defaultJsRewriteOptions());
+    return edits === null ? src : applyEdits(src, edits);
+}
+
 // ── Edits ────────────────────────────────────────────────────────────────
 
 /** Where an edit sits among others at the same offset: closers, then openers, then replacements. */

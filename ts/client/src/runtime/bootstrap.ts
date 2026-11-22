@@ -17,6 +17,7 @@ import { installPatches } from "../patches/install";
 import { patchWindowLocation } from "../patches/location";
 import { unwrapProxiedUrl } from "../url/containment";
 import { internalsOf, publish, type Internals } from "../native/internals";
+import { nR } from "../native/intrinsics";
 
 export interface RewriterBootstrap {
     inject(): RewriterApi;
@@ -70,6 +71,8 @@ export function init(
             // assign to it without error (assigning to an existing global property
             // is always permitted).
             defineHidden(targetWindow, "$__crn_key__", null);
+            // This copy's functions are of this window's realm only when loaded into it.
+            if ((targetWindow as unknown) === globalThis) internals.realmApply = (f, s, a) => nR.apply(f as (...x: unknown[]) => unknown, s, a);
             publish(targetWindow, api, internals);
             return api;
         },

@@ -22,6 +22,19 @@
 --              (q.cite, img.longDesc, img.lowsrc, object.codeBase): kept as
 --              written; the runtime's getter resolves it as the page's
 --              base would (the native one resolves against the proxy's).
+--   handler    an event handler content attribute (onclick, onload, …):
+--              its value is a function body the browser compiles, rewritten
+--              by the JS rules as a body (R1–R17: its `location` read was
+--              the proxy's — a Lijit sync frame's `onload="q(location,
+--              document)"` on birdies.com built its script URL from the
+--              proxy's host; Basis' `onload="window.location.href='…'"` on
+--              guns.com navigated a written frame to the origin). Any
+--              namespace's element; the name "on" and one or more ASCII
+--              lowercase letters (the parser lowercases HTML attribute
+--              names). Every name Chromium compiles is one; a name it does
+--              not compile has its text rewritten all the same, read back
+--              as written. Before every other kind (no URL attribute is so
+--              named).
 --   none       not a URL.
 --
 -- Elements by namespace and local name (lowercase; an SVG element's
@@ -48,7 +61,7 @@
 -- is not none.
 module Attrs where
 
-open import Data.Bool.Base using (Bool; true; false; _∨_; if_then_else_)
+open import Data.Bool.Base using (Bool; true; false; _∨_; _∧_; if_then_else_)
 open import Data.List.Base using (List; []; _∷_; _++_; map; reverse)
 open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.String.Base using (String; toList)
@@ -60,7 +73,7 @@ data Ns : Set where
   htmlNs svgNs : Ns
 
 data AttrKind : Set where
-  oneUrl urlList srcsetList cssValue reflected none : AttrKind
+  oneUrl urlList srcsetList cssValue reflected handler none : AttrKind
 
 kindName : AttrKind → Str
 kindName oneUrl     = toList "url"
@@ -68,6 +81,7 @@ kindName urlList    = toList "urllist"
 kindName srcsetList = toList "srcset"
 kindName cssValue   = toList "css"
 kindName reflected  = toList "reflected"
+kindName handler    = toList "handler"
 kindName none       = toList "none"
 
 inS : Str → List Str → Bool
@@ -115,9 +129,22 @@ svgKind t a =
   true  ∧′ b = b
   false ∧′ _ = false
 
+-- "on" then one or more of a–z.
+isHandler : Str → Bool
+isHandler ('o' ∷ 'n' ∷ c ∷ cs) = lower c ∧ all′ cs
+  where
+  lower : Char → Bool
+  lower x = within 97 122 x
+  all′ : Str → Bool
+  all′ []       = true
+  all′ (y ∷ ys) = lower y ∧ all′ ys
+isHandler _ = false
+
 attrKind : Ns → Str → Str → AttrKind
-attrKind htmlNs t a = htmlKind (if eqStr t (toList "image") then toList "img" else t) a
-attrKind svgNs  t a = svgKind t a
+attrKind n t a with isHandler a
+... | true = handler
+attrKind htmlNs t a | false = htmlKind (if eqStr t (toList "image") then toList "img" else t) a
+attrKind svgNs  t a | false = svgKind t a
 
 ------------------------------------------------------------------------
 -- A URL list: tokens separated by ASCII whitespace (HTML "split a string

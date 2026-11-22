@@ -18,7 +18,8 @@
 // wrapped yet.
 
 import { SafeWeakSet, nO, nR } from "../native/intrinsics";
-import { defaultJsRewriteOptions, rewriteJsSource } from "../js/rewriter";
+import { rewriteJsSource } from "../js/rewriter";
+import { madeCodeOptions } from "../js/made-code";
 import { maskAs, replaceValue } from "../native/surface";
 import { tagFunctionBody } from "../native/error-stack";
 import { isTrustedValue, trusted } from "../native/trusted";
@@ -38,7 +39,7 @@ export function patchFunctionConstructor(targetWindow: Window): void {
         const twin = nR.construct(NativeFunction, args) as object; // the page's own source; throws as natively
         const rewritten = args.slice();
         // Tagged: its frames show the page's calling frame as eval origin (native/error-stack.ts).
-        const code = tagFunctionBody(targetWindow, rewriteJsSource(body, { ...defaultJsRewriteOptions(), functionBody: true }));
+        const code = tagFunctionBody(targetWindow, rewriteJsSource(body, madeCodeOptions(targetWindow, body, { functionBody: true })));
         rewritten[rewritten.length - 1] = wasTrusted ? trusted(targetWindow, "Script", code) : code;
         const fn = nR.construct(NativeFunction, rewritten, (newTarget ?? NativeFunction) as FunctionConstructor) as object;
         return maskAs(fn, twin);

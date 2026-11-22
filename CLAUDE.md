@@ -305,10 +305,20 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   Google's ad tag stores __gads/__gpi/__eoi with it, every write was refused);
   its refusals are the native's own, and change events still list the
   wire cookies. `import.meta.resolve` is the runtime's (R15: it resolved against
-  the proxied module URL; IKEA's Vite preloads).
+  the proxied module URL; IKEA's Vite preloads). import() in code made at
+  run time (new Function, eval) resolves against the script that made it,
+  found from the stack when the source names `import` (`js/made-code.ts`;
+  Usercentrics' `new Function("u","return import(u)")` on
+  halespropertymanagement.com; `made-code-import-vs-chromium`). Known gap:
+  natively a classic script fetched cross-origin without CORS resolves
+  nothing (base about:blank); proxied every script is CORS same-origin.
   The postMessage trampoline is compiled only for a realm other than the
   runtime's own (under Trusted Types a compile is a violation: Pinterest;
-  Chrome's Function takes no TrustedScript). A fetch preload keeps its
+  Chrome's Function takes no TrustedScript), and only for one with no copy
+  of the runtime of its own (`Internals.realmApply`: a frame's CSP without
+  'unsafe-eval' refused the compile, a violation per message — Disqus and
+  Google sign-in frames on dexterdaily.com; `csp-postmessage-vs-chromium`);
+  a refused compile is not retried. A fetch preload keeps its
   crossorigin (Attrs.agda crossoriginValue: Spotify fetched its JSON twice).
   Trusted Types gaps: a page's *default* policy is handed the rewritten
   text; `setTimeout(string)` and `javascript:` URLs are not sinks the
@@ -466,8 +476,9 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   saw this: compare an HTTP/1.1 head by capturing it (a local
   http/1.1-only TLS server, direct Chrome vs `mitmprobe`).
 - **Random testing** (owner, 2026-11-21): 3 random words → a search → a
-  random result of a site not visited before → `live-compare.cjs` with
-  `CLICKS=3`, on a nested display the owner watches (`Xephyr :97`).
+  random result of a site not visited before (every comparison so far:
+  `ts/e2e/tools/tried-sites.tsv`) → `live-compare.cjs` with
+  `CLICKS=3`, several at once, on a nested display the owner watches (`Xephyr :97`).
   live-compare compares DOM structure (signatures outside ads), computed
   styles of elements both sides have once, pixels, errors (proxied URLs
   and quoted CSP read as direct), escapes; ads are masked on both sides
@@ -479,8 +490,13 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   as script text: flashtalking's creatives escaped); import() takes its
   specifier's string (a URL object escaped); text reaching a <script> or
   <style> by any route (a fragment's text: Marketo forms; append/prepend
-  /replaceChildren/after strings) is rewritten, each text node keeping its
-  original for read-back; http: and https: to one host
+  /replaceChildren/after strings; its text node's data, nodeValue,
+  textContent, append/insert/delete/replaceData — goober's CSS-in-JS on
+  bearsaver.com) is rewritten, each text node keeping its
+  original for read-back; event handler attributes (`on` + a–z, any
+  element: spec/Attrs.agda handler) are JS-rewritten as function bodies in
+  both runtimes (birdies.com, guns.com; `event-handlers-vs-chromium`);
+  http: and https: to one host
   use separate upstream clients (tls-client caches a transport per host
   and port, 443 by default). A closed connection through the proxy
   (ERR_EMPTY_RESPONSE) is an upstream failure direct sees as its own net
@@ -575,7 +591,8 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   setAttributeNS are rewritten). URL-bearing attributes are one table in
   both runtimes (spec/Attrs.agda, checked against what Chromium fetches):
   `ping` / `attributionsrc` are URL lists (and window.open's
-  attributionsrc features: spec/Features.agda); `cite` / `longdesc` / `lowsrc` /
+  attributionsrc features: spec/Features.agda); `currentSrc` (img, media)
+  reads unwrapped (`current-src-vs-chromium`); `cite` / `longdesc` / `lowsrc` /
   `codebase` stay as written, their getters unwrapped; an SVG presentation
   attribute that takes a <url> (clip-path, fill, mask, …) is CSS, rewritten
   as a style attribute (Attrs.agda cssValue: Google Charts' clip-path naming

@@ -17,7 +17,7 @@ const located = locateOracle();
 if (located.skip !== "" && oracleRequired) throw new Error(located.skip);
 
 const tags = "a area audio base blockquote body button del embed form frame iframe image img input ins link object q script source table tbody td tfoot th thead tr track video use feimage svg div span p meta html applet portal fencedframe g rect path text pattern".split(" ");
-const names = "src href xlink:href action formaction data poster background ping attributionsrc srcset imagesrcset cite longdesc lowsrc codebase manifest archive classid usemap style id content dynsrc itemid clip-path cursor fill filter marker-start marker-mid marker-end mask stroke stroke-width opacity CLIP-PATH".split(" ");
+const names = "src href xlink:href action formaction data poster background ping attributionsrc srcset imagesrcset cite longdesc lowsrc codebase manifest archive classid usemap style id content dynsrc itemid clip-path cursor fill filter marker-start marker-mid marker-end mask stroke stroke-width opacity CLIP-PATH onclick onload onerror onfoo one on onClick on-x on1 onx2 o".split(" ");
 const pieces = [" ", "\t", "\n", "\f", "\r", "  ", "/a", "b/c", "https://x.example/p", "//h.example/", "?q", "#f", "http://[::1", "%zz", "é", "data:,x"];
 const config = (proxy: string): ClientConfig => ({ apiBaseURL: proxy, source: "/rewriter.js", cacheKey: "t", version: "t", rewrite_css_selectors: false });
 

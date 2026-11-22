@@ -24,6 +24,12 @@ export interface Internals {
     api: RewriterApi;
     /** The window's own native postMessage. */
     nativePostMessage?: (...a: unknown[]) => unknown;
+    /**
+     * Calls a function from a function of the window's own realm (the
+     * incumbent realm a postMessage takes its source from): set by a copy
+     * of the runtime loaded into that window, never by a creator's copy.
+     */
+    realmApply?: (f: unknown, self: unknown, args: unknown[]) => unknown;
     /** Sends a message to `recipient` from this window's realm. */
     send?: (recipient: unknown, args: unknown[]) => unknown;
     /**

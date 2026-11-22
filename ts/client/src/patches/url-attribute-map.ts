@@ -1,3 +1,4 @@
+import { rewriteHandlerSource } from "../js/rewriter";
 import { rewriteCssText } from "../css/rewriter";
 import { heldAttr } from "../native/originals";
 import { frameDest, type Dest } from "../url/containment";
@@ -23,8 +24,18 @@ import { frameDest, type Dest } from "../url/containment";
 // "srcset"; "reflected": never fetched, but its IDL getter resolves it
 // (q.cite, img.longDesc): kept, the getter unwrapped; "css": an SVG
 // presentation attribute taking a <url>, on any SVG element, rewritten as
-// a style attribute (Google Charts' clip-path="url(<page URL>#id)").
-export type AttrKind = "url" | "urllist" | "srcset" | "css" | "reflected" | "none";
+// a style attribute (Google Charts' clip-path="url(<page URL>#id)");
+// "handler": an event handler attribute (onclick, onload — "on" and ASCII
+// lowercase letters, any element), a function body JS-rewritten
+// (birdies.com's Lijit frame: `onload="q(location,document)"`).
+export type AttrKind = "url" | "urllist" | "srcset" | "css" | "reflected" | "handler" | "none";
+
+/** spec/Attrs.agda isHandler: "on" and one or more of a–z. */
+export function isHandlerAttr(name: string): boolean {
+    if (name.length < 3 || name.charCodeAt(0) !== 111 || name.charCodeAt(1) !== 110) return false;
+    for (let i = 2; i < name.length; i++) { const c = name.charCodeAt(i); if (c < 97 || c > 122) return false; }
+    return true;
+}
 
 const SVG_CSS_ATTRS = ["clip-path", "cursor", "fill", "filter", "marker-start", "marker-mid", "marker-end", "mask", "stroke"];
 
@@ -56,6 +67,7 @@ const own = (m: Record<string, Record<string, AttrKind>>, t: string): Record<str
 
 /** spec attrKind: an attribute (lowercase) of an element (lowercase local name), SVG or HTML. */
 export function urlAttrKind(svg: boolean, localName: string, attr: string): AttrKind {
+    if (isHandlerAttr(attr)) return "handler";
     const row = svg ? own(svgKinds, localName) : own(htmlKinds, localName === "image" ? "img" : localName);
     if (row && Object.prototype.hasOwnProperty.call(row, attr)) return row[attr]!;
     return svg && SVG_CSS_ATTRS.indexOf(attr) >= 0 ? "css" : "none";
@@ -82,6 +94,7 @@ export function rewriteByKind(kind: AttrKind, v: string, rw: (url: string) => st
         case "urllist": return rewriteUrlList(v, rw);
         case "srcset": return srcset(v, rw);
         case "css": return rewriteCssText(v, rw);
+        case "handler": return rewriteHandlerSource(v);
         default: return v;
     }
 }

@@ -40,7 +40,8 @@ type Config struct {
 	ClientPassthrough map[string]any
 
 	// RewriteInlineJS, when non-nil, is invoked on the text content of every
-	// non-event-handler <script> block in the document. The hook lets us
+	// JS <script> block in the document, and on every event handler
+	// attribute's value (spec/Attrs.agda handler). The hook lets us
 	// inject the JS rewriter without coupling the htmlrewrite package to
 	// jsrewrite directly. Returns the rewritten source.
 	RewriteInlineJS func([]byte) []byte
@@ -90,36 +91,6 @@ var tagsWithRestUrls = map[string]bool{
 	"form":   true,
 	"input":  true,
 	"button": true,
-}
-
-// htmlEventAttrs is the set of intrinsic event handlers that contain JS
-// source code. Phase 4 will pipe these through the JS rewriter; phase 3
-// leaves them alone (known passthrough — server-side AST rewriting of
-// inline event handlers happens once we have the JS rewriter ported).
-var htmlEventAttrs = map[string]bool{
-	"onabort": true, "oncancel": true, "oncanplay": true, "oncanplaythrough": true,
-	"onchange": true, "onclick": true, "oncuechange": true, "ondblclick": true,
-	"ondurationchange": true, "onemptied": true, "onended": true, "oninput": true,
-	"oninvalid": true, "onkeydown": true, "onkeypress": true, "onkeyup": true,
-	"onloadeddata": true, "onloadedmetadata": true, "onloadstart": true,
-	"onmousedown": true, "onmouseenter": true, "onmouseleave": true, "onmousemove": true,
-	"onmouseout": true, "onmouseover": true, "onmouseup": true, "onmousewheel": true,
-	"onpause": true, "onplay": true, "onplaying": true, "onprogress": true,
-	"onratechange": true, "onreset": true, "onseeked": true, "onseeking": true,
-	"onselect": true, "onshow": true, "onstalled": true, "onsubmit": true,
-	"onsuspend": true, "ontimeupdate": true, "ontoggle": true, "onvolumechange": true,
-	"onwaiting": true, "onafterprint": true, "onbeforeprint": true, "onbeforeunload": true,
-	"onhashchange": true, "onmessage": true, "onoffline": true, "ononline": true,
-	"onpagehide": true, "onpageshow": true, "onpopstate": true, "onstorage": true,
-	"onunload": true, "onreadystatechange": true, "onblur": true, "onerror": true,
-	"onfocus": true, "onload": true, "onresize": true, "onscroll": true,
-	"onanimationend": true, "onanimationiteration": true, "onanimationstart": true,
-	"oncontextmenu": true, "oncopy": true, "oncut": true, "ondrag": true,
-	"ondragend": true, "ondragenter": true, "ondragleave": true, "ondragover": true,
-	"ondragstart": true, "ondrop": true, "onfocusin": true, "onfocusout": true,
-	"onfullscreenchange": true, "onfullscreenerror": true, "onopen": true,
-	"onpaste": true, "ontouchcancel": true, "ontouchend": true, "ontouchmove": true,
-	"ontouchstart": true, "ontransitionend": true, "onwheel": true,
 }
 
 // BootPath serves the bootstrap's second script as an external one, for

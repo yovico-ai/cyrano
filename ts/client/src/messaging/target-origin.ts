@@ -116,6 +116,15 @@ const trampolines = new SafeWeakMap<object, (f: unknown, self: unknown, args: un
 export const NOT_SENT = Symbol("not sent");
 export function callInRealmOf(sender: unknown, fn: unknown, self: unknown, args: unknown[]): unknown {
     if (typeof sender !== "object" || sender === null) return NOT_SENT;
+    // A realm with a copy of the runtime of its own calls through it (its
+    // realmApply): a compile there is refused under a CSP without
+    // 'unsafe-eval', and the violation fires at the page (Disqus, Google
+    // sign-in frames on dexterdaily.com). Looked up first: an empty frame
+    // that navigates keeps its Window and gets a copy then.
+    if (sender !== (globalThis as unknown)) {
+        const own = internalsOf(sender)?.realmApply;
+        if (own) return own(fn, self, args);
+    }
     let t = trampolines.get(sender);
     if (!t) {
         try {
@@ -129,6 +138,8 @@ export function callInRealmOf(sender: unknown, fn: unknown, self: unknown, args:
             // compiled — under Trusted Types that would be a violation,
             // fired at the page (Pinterest, 2026-11-20; Chrome's Function
             // takes no TrustedScript either).
+            // Otherwise only a frame that runs on its creator's copy (an
+            // empty frame) is compiled into.
             if (sender === (globalThis as unknown)) {
                 t = (f: unknown, s: unknown, a: unknown[]) => nR.apply(f as (...x: unknown[]) => unknown, s, a);
             } else {
@@ -150,7 +161,10 @@ export function callInRealmOf(sender: unknown, fn: unknown, self: unknown, args:
             }
             trampolines.set(sender, t);
         } catch {
-            return NOT_SENT; // really cross-origin, or a realm that refuses
+            // Really cross-origin, or a realm that refuses to compile: asked
+            // once (each refusal is a violation the page sees).
+            try { trampolines.set(sender, () => NOT_SENT); } catch { /* not a key */ }
+            return NOT_SENT;
         }
     }
     return t(fn, self, args);

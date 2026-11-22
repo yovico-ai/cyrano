@@ -368,6 +368,14 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 			if cfg.RewriteInlineCSS != nil {
 				attrs = setAttr(attrs, key, string(cfg.RewriteInlineCSS([]byte(at.Val))))
 			}
+		case AttrHandler:
+			// A function body, rewritten by the JS rules as an inline
+			// script is (spec/Attrs.agda handler); read back as written.
+			if cfg.RewriteInlineJS != nil {
+				if now := string(cfg.RewriteInlineJS([]byte(at.Val))); now != at.Val {
+					attrs = setAttr(attrs, key, now)
+				}
+			}
 		}
 	}
 

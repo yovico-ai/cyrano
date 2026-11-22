@@ -17,10 +17,11 @@ const (
 	AttrSrcset             // a srcset
 	AttrReflected          // never fetched; its IDL getter resolves it (cite, longdesc): kept
 	AttrCSS                // an SVG presentation attribute taking a <url>: CSS, rewritten as a style attribute
+	AttrHandler            // an event handler content attribute: a function body, JS-rewritten
 )
 
 func (k AttrKind) String() string {
-	return [...]string{"none", "url", "urllist", "srcset", "reflected", "css"}[k]
+	return [...]string{"none", "url", "urllist", "srcset", "reflected", "css", "handler"}[k]
 }
 
 // svgPresentationURLAttrs are the SVG presentation attributes that take a
@@ -112,6 +113,9 @@ func URLDest(svg bool, tag, attr string, rel []string, as string, hasAs bool) ur
 }
 
 func URLAttrKind(svg bool, tag, attr string) AttrKind {
+	if IsHandlerAttr(attr) {
+		return AttrHandler
+	}
 	if svg {
 		if k := svgAttrKinds[tag][attr]; k != AttrNone {
 			return k
@@ -471,4 +475,19 @@ func (n *nsTracker) adoption(t string) {
 func (n *nsTracker) cdataAllowed() bool {
 	e, ok := n.top()
 	return ok && e.ns != NsHTML && e.ip == noIP
+}
+
+// IsHandlerAttr is spec/Attrs.agda isHandler: "on" and one or more ASCII
+// lowercase letters — an event handler content attribute (onclick,
+// onload), whose value the browser compiles as a function body.
+func IsHandlerAttr(name string) bool {
+	if len(name) < 3 || name[0] != 'o' || name[1] != 'n' {
+		return false
+	}
+	for i := 2; i < len(name); i++ {
+		if name[i] < 'a' || name[i] > 'z' {
+			return false
+		}
+	}
+	return true
 }
