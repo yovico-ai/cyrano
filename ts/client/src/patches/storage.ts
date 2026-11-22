@@ -36,6 +36,16 @@ import { captureIdb, partitionFor, type NativeStorage, type Partition } from "./
 const SEP = "\u001f";
 const TAG = "crn" + SEP;
 
+/** The prefix of a storage key's names (spec/Storage.agda namePrefix): "crn␟KEY␟". */
+export function namePrefix(key: string): string { return TAG + key + SEP; }
+/** A name as stored under a key (spec stored). */
+export function storedName(key: string, name: string): string { return namePrefix(key) + name; }
+/** A stored name read back under a key, or null when it is not that key's (spec shown). */
+export function shownName(key: string, stored: string): string | null {
+    const p = namePrefix(key);
+    return sStarts(stored, p) ? stored.slice(p.length) : null;
+}
+
 /** The prefix of this context's names: its storage key (partitionKey). */
 export type Prefix = () => string;
 
@@ -72,7 +82,7 @@ export function storagePrefix(targetWindow: Window, origin: () => string): Prefi
         } catch { /* a really cross-origin ancestor */ }
         let site = own;
         try { site = siteOf(new URL(own)); } catch { /* an opaque origin */ }
-        return TAG + partitionKey(ancestors, site, own) + SEP;
+        return namePrefix(partitionKey(ancestors, site, own));
     };
 }
 

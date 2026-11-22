@@ -59,6 +59,16 @@ export function captureIdb(g: Record<string, unknown>): NativeIdb | null {
     }
 }
 
+/**
+ * Whether setting k to v keeps a partition holding `entries` within its
+ * quota (spec/LocalStore.agda fits): keys and values in UTF-16 code units.
+ */
+export function fitsQuota(entries: Iterable<[string, string]>, k: string, v: string, quota = QUOTA): boolean {
+    let size = k.length + v.length;
+    for (const [ek, ev] of entries) if (ek !== k) size += ek.length + ev.length;
+    return size <= quota;
+}
+
 interface Meta { [partition: string]: { t: number; s?: 1 } }
 
 /** One partition's view of localStorage. */

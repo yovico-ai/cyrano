@@ -84,9 +84,14 @@ without p k = filterᵇ (λ e → not (eqStr (part e) p ∧ eqStr (key e) k))
 sizeAfter : Str → Str → Str → Store → ℕ
 sizeAfter p k v s = length k + length v + foldr (λ e n → length (key e) + length (val e) + n) 0 (ofPart p (without p k (all s)))
 
--- setItem succeeds exactly when the partition stays within its own quota.
+-- setItem succeeds exactly when the partition stays within its own quota
+-- (fitsWithin: under any quota q — the logic, checked by conformance with
+-- small ones; the quota itself is Chromium's, checked in Chromium).
+fitsWithin : ℕ → Str → Str → Str → Store → Bool
+fitsWithin q p k v s = sizeAfter p k v s ≤ᵇ q
+
 fits : Str → Str → Str → Store → Bool
-fits p k v s = sizeAfter p k v s ≤ᵇ quota
+fits = fitsWithin quota
 
 -- Eviction: some (part, key) leave the native store. `all` is untouched.
 evict : List (Str × Str) → Store → Store

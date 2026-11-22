@@ -197,6 +197,7 @@ import Frames
 import Stack
 import H1
 import Eval
+import LocalStore
 import Route
 import Features
 import Messaging
@@ -387,6 +388,9 @@ dispatch op args =
   else if eqStr op (toList "featuresmap") then oneArg (Features.mapSources (λ v → fromℕ 91 ∷ v ++ fromℕ 93 ∷ [])) args
   else if eqStr op (toList "refererroute") then refererRouteReq args
   else if eqStr op (toList "evalcall") then evalCallReq args
+  else if eqStr op (toList "storename") then twoArgs (λ k n → Storage.stored k n) args
+  else if eqStr op (toList "storeshown") then storeShownReq args
+  else if eqStr op (toList "lsfits") then lsFitsReq args
   else if eqStr op (toList "h1head") then oneArg (λ v → joinNL (H1.h1Head (if Data.List.Base.null v then [] else splitOn (is 10) v))) args
   else if eqStr op (toList "h1orders") then oneArg (λ st → Data.List.Base.concatMap (λ ns → fromℕ 60 ∷ joinComma ns ++ fromℕ 62 ∷ []) (H1.recordsOf st)) args
   else if eqStr op (toList "framedlength") then framedLengthReq args
@@ -729,6 +733,25 @@ dispatch op args =
     arg : Eval.Arg
     arg = if eqStr a (toList "text") then Eval.text body else (if eqStr a (toList "script") then Eval.script body else Eval.other)
   evalCallReq _ = errorReply "BadRequest"
+
+  -- storeshown KEY STORED: "just NAME" or "nothing".
+  storeShownReq : List Str → Str
+  storeShownReq (k ∷ st ∷ []) with Storage.shown k st
+  ... | just n  = out (toList "just " ++ n)
+  ... | nothing = out (toList "nothing")
+  storeShownReq _ = errorReply "BadRequest"
+
+  -- lsfits Q KEY VALUE K1 V1 K2 V2 …: whether setting KEY to VALUE in a
+  -- partition holding K1=V1, … stays within quota Q.
+  lsFitsReq : List Str → Str
+  lsFitsReq (q ∷ k ∷ v ∷ rest) = yn (LocalStore.fitsWithin (Url.digitsValue q) p k v (LocalStore.store (entries rest) []))
+    where
+    p : Str
+    p = toList "P"
+    entries : List Str → List LocalStore.Entry
+    entries (a ∷ b ∷ more) = LocalStore.entry p a b ∷ entries more
+    entries _ = []
+  lsFitsReq _ = errorReply "BadRequest"
 
   orbReq : List Str → Str
   orbReq (ct ∷ b ∷ []) = yn (Orb.blocks (ctArg ct) b)

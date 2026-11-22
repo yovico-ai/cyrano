@@ -78,3 +78,63 @@ partitionKey []                  site origin = origin
 partitionKey (top ∷ ancestors) site origin =
   if thirdParty (top ∷ ancestors) site then origin Data.List.Base.++ ('^' ∷ top) else origin
   where import Data.List.Base
+
+-- ---------------------------------------------------------------------
+-- Names under a storage key (TS: patches/storage.ts — localStorage and
+-- sessionStorage keys, IndexedDB database names, Cache Storage names,
+-- BroadcastChannel names). Every name page code gives is stored as
+--   "crn" ␟ KEY ␟ NAME        (␟ = U+001F)
+-- and read back as NAME; a stored name of another key (or one stored
+-- before this existed) is not read back at all: listings —
+-- localStorage.key / length, indexedDB.databases(), caches.keys() — and
+-- storage events show only the key's own names.
+--
+-- Proved: a name reads back as it was given (shown-stored). Not proved
+-- here, checked by property against the oracle (storage-names-conformance):
+-- a name stored under one key is not read under another — it holds because
+-- a storage key (an origin, or origin ^ site) never holds ␟.
+
+import Data.Char.Base as C
+import Data.Nat.Base as N
+
+sep : C.Char
+sep = C.fromℕ 31
+
+open import Data.List.Base using (_++_)
+open import Data.Maybe.Base using (Maybe; just; nothing)
+open import Relation.Binary.PropositionalEquality using (_≡_; refl)
+
+namePrefix : Str → Str
+namePrefix key = toList "crn" ++ (sep ∷ key ++ (sep ∷ []))
+
+stored : Str → Str → Str
+stored key name = namePrefix key ++ name
+
+-- The rest of s after p, when s starts with p.
+dropPrefix : Str → Str → Maybe Str
+dropPrefix []       s        = just s
+dropPrefix (_ ∷ _)  []       = nothing
+dropPrefix (p ∷ ps) (c ∷ cs) = if C.toℕ p N.≡ᵇ C.toℕ c then dropPrefix ps cs else nothing
+
+shown : Str → Str → Maybe Str
+shown key s = dropPrefix (namePrefix key) s
+
+-- A listing as page code sees it: its key's names, read back; others dropped.
+listed : Str → List Str → List Str
+listed key [] = []
+listed key (s ∷ ss) with shown key s
+... | just n  = n ∷ listed key ss
+... | nothing = listed key ss
+
+private
+  ≡ᵇ-refl : ∀ n → (n N.≡ᵇ n) ≡ true
+  ≡ᵇ-refl N.zero    = refl
+  ≡ᵇ-refl (N.suc n) = ≡ᵇ-refl n
+
+  drop-own : ∀ p n → dropPrefix p (p ++ n) ≡ just n
+  drop-own []       n = refl
+  drop-own (c ∷ cs) n rewrite ≡ᵇ-refl (C.toℕ c) = drop-own cs n
+
+-- A name reads back as it was given.
+shown-stored : ∀ key name → shown key (stored key name) ≡ just name
+shown-stored key name = drop-own (namePrefix key) name
