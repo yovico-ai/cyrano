@@ -31,6 +31,7 @@ import { getDomain } from "tldts";
 import { SafeWeakMap, nO, nR, ncall, sStarts } from "../native/intrinsics";
 import { internalsOf } from "../native/internals";
 import { wrapAccessor, wrapConstructor, wrapMethod } from "../native/surface";
+import { captureIdb, partitionFor, type NativeStorage, type Partition } from "./local-store";
 
 const SEP = "\u001f";
 const TAG = "crn" + SEP;
@@ -151,6 +152,21 @@ export function patchWebStorage(targetWindow: Window, prefix: Prefix, unwrapOne:
     if (!nat.length) return;
     const nativeLength = nat.length;
 
+    // localStorage: per partition, with its own quota (local-store.ts,
+    // spec/LocalStore.agda). sessionStorage stays the native one, prefixed.
+    const idb = captureIdb(g);
+    let nativeLocal: Storage | null = null;
+    try {
+        const d = nO.getOwnPropertyDescriptor(targetWindow, "localStorage");
+        nativeLocal = d?.get ? (ncall(d.get as (this: Window) => Storage, targetWindow) as Storage) : null;
+    } catch { nativeLocal = null; } // a sandboxed document: the native throws
+    const DOMExc = g["DOMException"] as (new (m: string, n: string) => Error) | undefined;
+    const quotaError = (k: string): Error => DOMExc
+        ? new DOMExc(`Failed to execute 'setItem' on 'Storage': Setting the value of '${k}' exceeded the quota.`, "QuotaExceededError")
+        : new Error("QuotaExceededError");
+    const tier = (real: Storage): Partition | null =>
+        real === nativeLocal ? partitionFor(prefix(), real, nat as unknown as NativeStorage, idb, quotaError) : null;
+
     const views = new SafeWeakMap<object, Storage>(); // view → real
     const viewOf = new SafeWeakMap<Storage, object>(); // real → view
     /** The real Storage behind what page code holds (a view, or the object itself). */
@@ -167,6 +183,8 @@ export function patchWebStorage(targetWindow: Window, prefix: Prefix, unwrapOne:
     const lists = new SafeWeakMap<Storage, { prefix: string; keys: string[] }>();
     const forget = (real: Storage): void => { lists.delete(real); };
     const keysOf = (real: Storage): string[] => {
+        const t = tier(real);
+        if (t) return t.keys();
         const p = prefix();
         const hit = lists.get(real);
         if (hit && hit.prefix === p) return hit.keys;
@@ -182,23 +200,31 @@ export function patchWebStorage(targetWindow: Window, prefix: Prefix, unwrapOne:
 
     wrapMethod<(...a: unknown[]) => unknown>(SP, "getItem", (native, self, args) => {
         const real = realOf(self);
-        return real && args.length ? ncall(nat.getItem, real, prefix() + String(args[0])) : nR.apply(native, self, args);
+        if (!real || !args.length) return nR.apply(native, self, args);
+        const t = tier(real);
+        return t ? t.get(String(args[0])) : ncall(nat.getItem, real, prefix() + String(args[0]));
     });
     wrapMethod<(...a: unknown[]) => unknown>(SP, "setItem", (native, self, args) => {
         const real = realOf(self);
         if (!real || args.length < 2) return nR.apply(native, self, args);
         forget(real);
+        const t = tier(real);
+        if (t) { t.set(String(args[0]), String(args[1])); return undefined; }
         return ncall(nat.setItem, real, prefix() + String(args[0]), String(args[1]));
     });
     wrapMethod<(...a: unknown[]) => unknown>(SP, "removeItem", (native, self, args) => {
         const real = realOf(self);
         if (!real || !args.length) return nR.apply(native, self, args);
         forget(real);
+        const t = tier(real);
+        if (t) { t.remove(String(args[0])); return undefined; }
         return ncall(nat.removeItem, real, prefix() + String(args[0]));
     });
     wrapMethod<(...a: unknown[]) => unknown>(SP, "clear", (native, self, args) => {
         const real = realOf(self);
         if (!real) return nR.apply(native, self, args);
+        const t = tier(real);
+        if (t) { t.clear(); forget(real); return undefined; }
         const p = prefix();
         for (const k of keysOf(real)) ncall(nat.removeItem, real, p + k); // this origin's only
         forget(real);
@@ -224,33 +250,41 @@ export function patchWebStorage(targetWindow: Window, prefix: Prefix, unwrapOne:
         v = new Proxy(nO.create(SP) as object, {
             get: (_t, p) => {
                 if (typeof p === "symbol" || p in SP) return nR.get(SP, p, v);
-                const value = ncall(nat.getItem, real, prefix() + p);
+                const t = tier(real);
+                const value = t ? t.get(p) : ncall(nat.getItem, real, prefix() + p);
                 return value === null ? undefined : value;
             },
             set: (_t, p, value) => {
                 if (typeof p === "symbol") return false;
                 forget(real);
-                ncall(nat.setItem, real, prefix() + p, String(value));
+                const t = tier(real);
+                if (t) t.set(p, String(value));
+                else ncall(nat.setItem, real, prefix() + p, String(value));
                 return true;
             },
-            has: (_t, p) => typeof p === "symbol" || p in SP || ncall(nat.getItem, real, prefix() + p) !== null,
+            has: (_t, p) => typeof p === "symbol" || p in SP || (tier(real)?.get(p) ?? ncall(nat.getItem, real, prefix() + p)) !== null,
             deleteProperty: (_t, p) => {
                 if (typeof p === "string") {
                     forget(real);
-                    ncall(nat.removeItem, real, prefix() + p);
+                    const t = tier(real);
+                    if (t) t.remove(p);
+                    else ncall(nat.removeItem, real, prefix() + p);
                 }
                 return true;
             },
             ownKeys: () => keysOf(real).slice(),
             getOwnPropertyDescriptor: (_t, p) => {
                 if (typeof p !== "string") return undefined;
-                const value = ncall(nat.getItem, real, prefix() + p);
+                const t = tier(real);
+                const value = t ? t.get(p) : ncall(nat.getItem, real, prefix() + p);
                 return value === null ? undefined : { value, writable: true, enumerable: true, configurable: true };
             },
             defineProperty: (_t, p, d) => {
                 if (typeof p !== "string" || !("value" in d)) return false;
                 forget(real);
-                ncall(nat.setItem, real, prefix() + p, String(d.value));
+                const t = tier(real);
+                if (t) t.set(p, String(d.value));
+                else ncall(nat.setItem, real, prefix() + p, String(d.value));
                 return true;
             },
         });
@@ -274,6 +308,7 @@ export function patchWebStorage(targetWindow: Window, prefix: Prefix, unwrapOne:
     const SE = g["StorageEvent"]?.prototype as object | undefined;
     const keyGet = SE ? (nO.getOwnPropertyDescriptor(SE, "key")?.get as ((this: unknown) => string | null) | undefined) : undefined;
     const areaGet = SE ? (nO.getOwnPropertyDescriptor(SE, "storageArea")?.get as ((this: unknown) => Storage | null) | undefined) : undefined;
+    const newValueGet = SE ? (nO.getOwnPropertyDescriptor(SE, "newValue")?.get as ((this: unknown) => string | null) | undefined) : undefined;
     if (SE && keyGet) {
         const listen = (g["EventTarget"]?.prototype as EventTarget | undefined)?.addEventListener;
         if (listen) ncall(listen, targetWindow, "storage", (e: Event) => {
@@ -281,6 +316,11 @@ export function patchWebStorage(targetWindow: Window, prefix: Prefix, unwrapOne:
             try { k = ncall(keyGet, e); } catch { return; }
             const area = areaGet ? ncall(areaGet, e) : null;
             if (area) forget(area);
+            if (area && k !== null && sStarts(k, prefix())) {
+                const t = tier(area);
+                const nv = newValueGet ? (ncall(newValueGet, e) as string | null) : null;
+                if (t) t.external(k.slice(prefix().length), nv);
+            }
             // (key null: a clear() — the native clear is never called by a proxied page.)
             if (k === null || !sStarts(k, prefix())) e.stopImmediatePropagation();
         }, true);

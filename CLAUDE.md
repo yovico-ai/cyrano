@@ -167,6 +167,17 @@ navigate listeners see just the navigation that replaces it.
   `<meta http-equiv=content-security-policy>` reads its rewritten
   `content`; CSS attribute selectors match the rewritten values;
   `crossOrigin` reads the forced value.
+- **localStorage, each site its own quota** (spec/LocalStore.agda,
+  `patches/local-store.ts`, local-store-vs-chromium): every proxied site
+  shares the proxy origin's one localStorage (Chromium: 5 242 880 UTF-16
+  code units of keys and values per storage key, measured). A partition
+  now lives in memory, in IndexedDB (all of it; name "crn␟ls", which no
+  page lists) and in the native store as far as it fits, which is read
+  synchronously at load. A full native store evicts other partitions
+  (least recently used, only those IndexedDB holds); a write fails only
+  when the writer's own partition passes the quota. Limit: entries evicted
+  from the native store read as missing for the first moments of the
+  site's next load, until IndexedDB answers. sessionStorage stays native.
 - **eval** (spec/Eval.agda, checked in Chromium by eval-calls-vs-chromium
   against the oracle): every eval the source shows is rewritten — eval(…)
   and (eval)(…) direct, X.eval(…), X["eval"](…), eval.call/apply (and
