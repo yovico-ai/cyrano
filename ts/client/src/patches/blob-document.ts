@@ -3,7 +3,12 @@
 //   * a frame's HTML document (TradingView's chart on bitrue.com:
 //     `<iframe src="blob:…">` of a page it writes);
 //   * a stylesheet (monotote's theme on sneakernews.com:
-//     `link.rel = "stylesheet"; link.href = URL.createObjectURL(css)`).
+//     `link.rel = "stylesheet"; link.href = URL.createObjectURL(css)`);
+//   * a script, classic or module, by <script src> or import() (a Wix
+//     widget on jelivestock.com: a blob module whose imports went direct).
+// A module's import specifiers are proxified against its own URL — the
+// page's blob URL, which import.meta.url stays — so a relative one fails
+// to resolve as it does directly, an absolute one goes through the proxy.
 // The element gets instead a blob: URL of the same content rewritten — a
 // document as a srcdoc is (URLs proxified, the runtime's bootstrap first),
 // a stylesheet as any CSS — of the same type (spec/Frames.agda
@@ -23,9 +28,11 @@
 
 import { SafeMap, nO, ncall, sStarts } from "../native/intrinsics";
 import { rewriteCssText } from "../css/rewriter";
+import { defaultJsRewriteOptions, rewriteJsSource } from "../js/rewriter";
 import { readBlob } from "./blob-worker-source";
 import { rewriteSrcdoc } from "./html-rewriter";
 import type { RewriteOne } from "./referrer-policy";
+import { scriptKindOf, type ScriptKind } from "./script-kind";
 
 const done = new SafeMap<string, string>(); // "doc|css " + the page's blob URL → the rewritten one's
 
@@ -44,13 +51,14 @@ export function hasScheme(ref: string): boolean {
 }
 
 /** A rewriter for a document whose base is a blob: URL: references without a scheme stay as written. */
-function underBlobBase(rw: RewriteOne): RewriteOne {
+function underBlobBase(rw: RewriteOne, blobUrl: string): RewriteOne {
     const keep = (u: string, f: () => string): string => (hasScheme(u) ? f() : u);
     const out: RewriteOne = Object.assign((u: string): string => keep(u, () => rw(u)), {
         // A <base href> with a scheme is a real base from there on; one
         // without is passed over (skipBase).
         withBase: (href: string): RewriteOne | null => (hasScheme(href) ? rw.withBase?.(href) ?? null : null),
         skipBase: true,
+        baseHref: () => blobUrl,
     });
     const wp = rw.withPolicy, wm = rw.withMark;
     if (wp) out.withPolicy = (u, p) => keep(u, () => wp(u, p));
@@ -79,7 +87,7 @@ export function blobDocumentFor(win: Window, url: string, rewriteOne: RewriteOne
     if (hit) return hit;
     const read = readBlob(win, url, "text/plain; charset=utf-8");
     if (!read || !htmlDocumentType(read.type)) return null;
-    return remake(win, "doc " + url, rewriteSrcdoc(read.source, underBlobBase(rewriteOne), proxyOrigin, bootstrap), read.type);
+    return remake(win, "doc " + url, rewriteSrcdoc(read.source, underBlobBase(rewriteOne, url), proxyOrigin, bootstrap), read.type);
 }
 
 /** The URL a stylesheet link is given for a blob: URL: the rewritten sheet's, or null to give the URL as it is. */
@@ -92,6 +100,28 @@ export function blobStylesheetFor(win: Window, url: string, rewriteOne: RewriteO
     const css = rewriteCssText(read.source, rewriteOne);
     if (css === read.source) return null;
     return remake(win, "css " + url, css, read.type);
+}
+
+/** The URL a script is given for a blob: URL (classic or module): the rewritten script's, or null to give it as it is. */
+export function blobScriptFor(win: Window, url: string, rewriteOne: RewriteOne, module: boolean): string | null {
+    if (!sStarts(url.toLowerCase(), "blob:")) return null;
+    const key = (module ? "mjs " : "js ") + url;
+    const hit = done.get(key);
+    if (hit) return hit;
+    const read = readBlob(win, url, "text/plain; charset=utf-8");
+    if (!read) return null;
+    const opts = defaultJsRewriteOptions();
+    if (module) {
+        const wm = rewriteOne.withMark;
+        const rwJs = wm ? (u: string): string => wm(u, null, "js") : rewriteOne;
+        opts.baseUrl = url;
+        opts.proxify = (specifier, from) => {
+            try { return rwJs(new URL(specifier, from).href); } catch { return specifier; }
+        };
+    }
+    const js = rewriteJsSource(read.source, opts);
+    if (js === read.source) return null;
+    return remake(win, key, js, read.type);
 }
 
 /** Whether a rel names a stylesheet (ASCII whitespace-separated, any case). */
@@ -107,16 +137,18 @@ export function relStylesheet(rel: string | null): boolean {
  * a link's rel as it stands.
  */
 export function blobValue(win: Window | null | undefined, tag: string, attr: string, rel: string | null, value: string,
-    rewriteOne: RewriteOne, proxyOrigin: string, bootstrap: (() => string) | undefined): string | null {
+    rewriteOne: RewriteOne, proxyOrigin: string, bootstrap: (() => string) | undefined, scriptType: ScriptKind | null = null): string | null {
     if (!win || !/^[\x00-\x20]*blob:/i.test(value)) return null;
     const t = tag.toLowerCase(), a = attr.toLowerCase(), url = value.replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, "");
     if (a === "src" && (t === "iframe" || t === "frame")) return blobDocumentFor(win, url, rewriteOne, proxyOrigin, bootstrap);
     if (a === "href" && t === "link" && relStylesheet(rel)) return blobStylesheetFor(win, url, rewriteOne);
+    if (a === "src" && t === "script" && (scriptType === "classic" || scriptType === "module")) return blobScriptFor(win, url, rewriteOne, scriptType === "module");
     return null;
 }
 
 /** blobValue for an element of the document. */
 export function elementBlobValue(el: Element, attr: string, value: string, rewriteOne: RewriteOne, proxyOrigin: string, bootstrap: (() => string) | undefined): string | null {
     if (el.namespaceURI !== "http://www.w3.org/1999/xhtml") return null;
-    return blobValue(el.ownerDocument?.defaultView, el.localName, attr, el.localName === "link" ? el.getAttribute("rel") : null, value, rewriteOne, proxyOrigin, bootstrap);
+    return blobValue(el.ownerDocument?.defaultView, el.localName, attr, el.localName === "link" ? el.getAttribute("rel") : null, value, rewriteOne, proxyOrigin, bootstrap,
+        el.localName === "script" ? scriptKindOf(el) : null);
 }

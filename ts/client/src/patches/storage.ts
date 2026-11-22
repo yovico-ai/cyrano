@@ -28,7 +28,7 @@
 
 import { getDomain } from "tldts";
 
-import { SafeWeakMap, nO, nR, ncall, sStarts } from "../native/intrinsics";
+import { SafeWeakMap, nO, nR, ncall, sStarts, sIncludes } from "../native/intrinsics";
 import { internalsOf } from "../native/internals";
 import { wrapAccessor, wrapConstructor, wrapMethod } from "../native/surface";
 import { captureIdb, partitionFor, type NativeStorage, type Partition } from "./local-store";
@@ -174,6 +174,17 @@ export function patchWebStorage(targetWindow: Window, prefix: Prefix, unwrapOne:
     const quotaError = (k: string): Error => DOMExc
         ? new DOMExc(`Failed to execute 'setItem' on 'Storage': Setting the value of '${k}' exceeded the quota.`, "QuotaExceededError")
         : new Error("QuotaExceededError");
+    // A native refusal names what was stored ("crn␟KEY␟name"): the page
+    // reads its own name, as directly (sports-reference.com's quota errors).
+    const asPages = <T,>(stored: string, name: string, f: () => T): T => {
+        try { return f(); } catch (e) {
+            const m = (e as { message?: unknown })?.message;
+            if (DOMExc && typeof m === "string" && sIncludes(m, stored)) {
+                throw new DOMExc(m.split(stored).join(name), String((e as { name?: unknown }).name));
+            }
+            throw e;
+        }
+    };
     const tier = (real: Storage): Partition | null =>
         real === nativeLocal ? partitionFor(prefix(), real, nat as unknown as NativeStorage, idb, quotaError) : null;
 
@@ -220,7 +231,8 @@ export function patchWebStorage(targetWindow: Window, prefix: Prefix, unwrapOne:
         forget(real);
         const t = tier(real);
         if (t) { t.set(String(args[0]), String(args[1])); return undefined; }
-        return ncall(nat.setItem, real, prefix() + String(args[0]), String(args[1]));
+        const name = String(args[0]), v = String(args[1]), stored = prefix() + name;
+        return asPages(stored, name, () => ncall(nat.setItem, real, stored, v));
     });
     wrapMethod<(...a: unknown[]) => unknown>(SP, "removeItem", (native, self, args) => {
         const real = realOf(self);
@@ -228,7 +240,8 @@ export function patchWebStorage(targetWindow: Window, prefix: Prefix, unwrapOne:
         forget(real);
         const t = tier(real);
         if (t) { t.remove(String(args[0])); return undefined; }
-        return ncall(nat.removeItem, real, prefix() + String(args[0]));
+        const name = String(args[0]), stored = prefix() + name;
+        return asPages(stored, name, () => ncall(nat.removeItem, real, stored));
     });
     wrapMethod<(...a: unknown[]) => unknown>(SP, "clear", (native, self, args) => {
         const real = realOf(self);

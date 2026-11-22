@@ -33,6 +33,11 @@ type Options struct {
 	DialTimeout   time.Duration // upstream dial budget; default 10s
 	HandshakeRead time.Duration // upstream handshake response read budget; default 15s
 	Logger        *slog.Logger  // optional structured logger
+	// Cookies gives the handshake's Cookie header: what a direct browser
+	// sends target from a page of pageOrigin (proxy.WebSocketCookies).
+	// Without it no cookie is sent — never the browser's header as it
+	// came, which holds every proxied site's cookies and the proxy's own.
+	Cookies func(in *http.Request, target *url.URL, pageOrigin string) string
 }
 
 // Handler upgrades incoming WebSocket requests and proxies them.
@@ -124,7 +129,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Build the upstream upgrade request. Strip our local host bits and
 	// substitute the original origin's so the upstream sees the handshake
 	// it expects.
-	upgradeReq := buildUpstreamRequest(r, target)
+	upgradeReq := buildUpstreamRequest(r, target, h.opts.Cookies)
 	if err := upgradeReq.Write(upstream); err != nil {
 		h.opts.Logger.Warn("wsproxy: write upgrade request failed",
 			"target", target.String(), "err", err)
@@ -177,7 +182,7 @@ func (h *Handler) dialUpstream(target *url.URL) (net.Conn, error) {
 // buildUpstreamRequest clones the inbound request with rewritten Host and
 // the upstream path/query restored. We keep the WebSocket upgrade headers
 // (Sec-WebSocket-*) verbatim — those are end-to-end client⟷upstream.
-func buildUpstreamRequest(in *http.Request, target *url.URL) *http.Request {
+func buildUpstreamRequest(in *http.Request, target *url.URL, cookies func(*http.Request, *url.URL, string) string) *http.Request {
 	out := in.Clone(in.Context())
 	// The query as the page wrote it; the client's origin marker removed.
 	query, pageOrigin, hadQuery := urlrewrite.SplitWSOrigin(target.RawQuery)
@@ -216,6 +221,16 @@ func buildUpstreamRequest(in *http.Request, target *url.URL) *http.Request {
 			pageOrigin = scheme + "://" + target.Host
 		}
 		out.Header.Set("Origin", pageOrigin)
+	}
+
+	// The cookies a direct browser would send (the page's origin as the
+	// client named it: SameSite is judged against it).
+	out.Header.Del("Cookie")
+	if cookies != nil {
+		_, named, _ := urlrewrite.SplitWSOrigin(target.RawQuery)
+		if c := cookies(in, target, named); c != "" {
+			out.Header.Set("Cookie", c)
+		}
 	}
 
 	// http.Request.Write needs RequestURI cleared (it constructs one).

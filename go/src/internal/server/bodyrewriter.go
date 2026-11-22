@@ -353,13 +353,39 @@ func sniffHTMLBytes(body []byte) bool {
 	return false
 }
 
+// judgedDest is the destination a request is judged by (spec/Disposition.agda
+// judgedDest): its Sec-Fetch-Dest, except that a prefetch for no particular
+// destination (<link rel=prefetch>: empty, Sec-Purpose: prefetch) is one
+// for a navigation — Chromium serves the navigation from it while it is
+// fresh, so answered as data the origin's page became the proxied
+// document (togaze.com).
+func judgedDest(sfd string, has bool, purpose string, hasPurpose bool) (string, bool) {
+	if has && hasPurpose && strings.EqualFold(sfd, "empty") && isPrefetch(purpose) {
+		return "document", true
+	}
+	return sfd, has
+}
+
+// isPrefetch: Sec-Purpose's first member is the token "prefetch".
+func isPrefetch(v string) bool {
+	if i := strings.IndexAny(v, ";,"); i >= 0 {
+		v = v[:i]
+	}
+	return strings.Trim(v, " \t") == "prefetch"
+}
+
 func kindOf(resp *http.Response) bodyKind {
 	sfd, has := "", false
+	purpose, hasPurpose := "", false
 	if resp.Request != nil {
 		if v := resp.Request.Header.Values("Sec-Fetch-Dest"); len(v) > 0 {
 			sfd, has = v[0], true
 		}
+		if v := resp.Request.Header.Values("Sec-Purpose"); len(v) > 0 {
+			purpose, hasPurpose = strings.Join(v, ","), true
+		}
 	}
+	sfd, has = judgedDest(sfd, has, purpose, hasPurpose)
 	cts := resp.Header.Values("Content-Type")
 	ct, hasCT := strings.Join(cts, ","), len(cts) > 0 // the lines, as one list (Chromium reads them all)
 	return responseKind(proxy.RequestDest(resp), sfd, has, ct, hasCT, func() bool { return sniffedHTML(resp) })

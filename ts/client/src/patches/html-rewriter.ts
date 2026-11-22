@@ -213,7 +213,8 @@ function editStartTag(src: string, t: Extract<Tok, { kind: "start" }>, rewriteOn
         // A blob: URL of a document or stylesheet built in the browser: the
         // element gets it rewritten (blob-document.ts; TradingView's chart is such markup).
         if (html && /^[\x00-\x20]*blob:/i.test(v)) {
-            const doc = blobValue(globalThis as unknown as Window, t.name, a.name, value("rel"), v, rewriteOne, proxyOrigin, bootstrap);
+            const doc = blobValue(globalThis as unknown as Window, t.name, a.name, value("rel"), v, rewriteOne, proxyOrigin, bootstrap,
+                t.name === "script" ? scriptKind(value("type"), value("language")) : null);
             if (doc) { change(a, a.name, doc); continue; }
         }
         if (html && t.name === "iframe" && a.name === "srcdoc") { change(a, "srcdoc", T("HTML", rewriteSrcdoc(v, rewriteOne, proxyOrigin, bootstrap))); continue; }
@@ -338,7 +339,18 @@ export function rewriteHtmlString(
             const attrOf = (n: string): string | null => { for (const a of t.attrs) if (a.name === n) return decoded(html, a); return null; };
             if (attrOf(t.ns === "svg" ? "href" : "src") !== null || (t.ns === "svg" && attrOf("xlink:href") !== null)) continue;
             const kind = scriptKind(attrOf("type"), attrOf("language"));
-            if (kind === "classic" || kind === "module") out = rewriteJsSource(text, defaultJsRewriteOptions());
+            if (kind === "classic" || kind === "module") {
+                // A module's specifiers proxified against the document's base,
+                // which import.meta.url is (as the server's and dynamic-html's).
+                const opts = defaultJsRewriteOptions();
+                const base = rw.baseHref?.();
+                if (kind === "module" && base) {
+                    const rwJs = asScript(rw);
+                    opts.baseUrl = base;
+                    opts.proxify = (specifier, from) => { try { return rwJs(new URL(specifier, from).href); } catch { return specifier; } };
+                }
+                out = rewriteJsSource(text, opts);
+            }
             else if (kind === "importmap" && t.ns === "html") out = rewriteImportMap(text, asScript(rw));
             else continue;
         }
@@ -407,14 +419,14 @@ export function rewriteCspContent(csp: string, proxyOrigin: string, ttPolicy?: s
                 vals = appendIfAbsent(appendIfAbsent(vals, "'unsafe-inline'"), "'self'");
             }
             if (proxyOrigin !== "" && !allowsNothing(vals)) vals = appendIfAbsent(vals, proxyOrigin);
-            if (name === "connect-src") vals = readableCsp(vals);
+            if (name === "connect-src") vals = readableCsp(vals, proxyOrigin);
         }
         if (name === "default-src") defaultVals = vals;
         out.push([name, ...vals].join(" "));
     }
     // A default-src that governs connect gets an explicit connect-src after it (spec translatePolicy).
     if (!seen.has("connect-src") && defaultVals && !allowsNothing(defaultVals)) {
-        out.push(["connect-src", ...readableCsp(defaultVals)].join(" "));
+        out.push(["connect-src", ...readableCsp(defaultVals, proxyOrigin)].join(" "));
     }
     return out.join("; ");
 }
@@ -430,8 +442,21 @@ function allowsNothing(vals: string[]): boolean {
     return none;
 }
 
-/** What the runtime reads itself (a page's blob: / data: worker script) admitted to a connect list (spec readable). */
-function readableCsp(vals: string[]): string[] {
+/**
+ * Admitted to a connect list (spec readable): the proxy's WebSocket origin
+ * (a page's sockets go to it; an https: source does not admit wss:) and
+ * what the runtime reads itself (a page's blob: / data: worker script).
+ */
+function readableCsp(vals: string[], proxyOrigin: string): string[] {
     if (allowsNothing(vals)) return vals;
+    if (proxyOrigin !== "") vals = appendIfAbsent(vals, wsOriginCsp(proxyOrigin));
     return appendIfAbsent(appendIfAbsent(vals, "blob:"), "data:");
+}
+
+/** The proxy's origin as a WebSocket's (spec wsOrigin). */
+export function wsOriginCsp(origin: string): string {
+    const l = asciiLower(origin);
+    if (sStarts(l, "https://")) return "wss://" + origin.slice(8);
+    if (sStarts(l, "http://")) return "ws://" + origin.slice(7);
+    return origin;
 }

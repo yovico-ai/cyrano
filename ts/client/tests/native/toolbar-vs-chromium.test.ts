@@ -27,7 +27,12 @@ type Browser = { newPage(o?: object): Promise<Page>; close(): Promise<void> };
 
 // A flex body (the toolbar must stay out of its flow), content under the
 // toolbar's box, and listeners of every kind the toolbar's events could reach.
-const PAGE = `<style>body{display:flex;flex-wrap:wrap;gap:4px;margin:0} .c{width:150px;height:40px;background:#ccd}</style>
+// Its children inherit from the body what is not inherited by default
+// (GeneratePress, USWDS: *{box-sizing:inherit}; misting.party, epa.gov):
+// through the toolbar's slot they must inherit the body's values.
+const PAGE = `<style>html{box-sizing:border-box} *,::before,::after{box-sizing:inherit}
+body{display:flex;flex-wrap:wrap;gap:4px;margin:0;background-color:rgb(250,250,240)} .c{width:150px;height:40px;background:#ccd;padding:6px}
+#b{background-color:inherit}</style>
 <div class="c" id="a">a</div><div class="c" id="b">b</div>text<div class="c" id="z">z</div>
 <script>
 var seen = [], records = 0;
@@ -43,6 +48,7 @@ function snap() {
     hits: [document.elementFromPoint(5, 5).id, document.elementFromPoint(400, 10).id, document.elementFromPoint(200, 10).id, document.elementsFromPoint(400, 10).length],
     shadow: String(document.body.shadowRoot), slot: String(document.getElementById("a").assignedSlot), sheets: document.styleSheets.length,
     adopted: document.adoptedStyleSheets.length, scroll: document.documentElement.scrollHeight + "," + document.body.scrollHeight,
+    sizing: getComputedStyle(document.getElementById("a")).boxSizing, bInherits: getComputedStyle(document.getElementById("b")).backgroundColor,
     last: document.body.lastChild.nodeName, active: document.activeElement === document.body, records: records };
 }
 </script>`;

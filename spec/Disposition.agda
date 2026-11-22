@@ -251,3 +251,32 @@ nosniff lines = first (Url.splitOn (is 44) (joinC lines))
 -- applies exactly where it does directly.
 proxied-sheet : ∀ quirks so ct ns → sheetApplies quirks true ct (ns ∨ addNosniff so ct ns) ≡ sheetApplies quirks so ct ns
 proxied-sheet quirks so ct ns = appliesLaw (cssTyped ct) (untypedSheet ct) quirks so ns
+
+------------------------------------------------------------------------
+-- The destination a request is judged by (responseKind's sfd): its
+-- Sec-Fetch-Dest — but a prefetch for no particular destination is one
+-- for a navigation. `<link rel=prefetch>` (and an "instant page" script's)
+-- asks with Sec-Fetch-Dest empty and Sec-Purpose: prefetch, and Chromium
+-- serves the navigation to that URL from it while it is fresh (measured):
+-- answered as data, the origin's page became the proxied document, every
+-- subresource and its next link off the proxy (togaze.com). Judged as a
+-- document, it is HTML only when it is (its type or sniff); a prefetched
+-- script or JSON stays as sent, and the runtime's own fetch() of a URL
+-- goes under another one (it never reuses the prefetch).
+-- A prefetch: Sec-Purpose's first member is the token "prefetch"
+-- (Structured Fields: up to ";" or ",", spaces and tabs around it).
+isPrefetch : Str → Bool
+isPrefetch v = eqStr (trim (upTo v)) (toList "prefetch")
+  where
+  upTo : Str → Str
+  upTo [] = []
+  upTo (c ∷ cs) = if Url.is 59 c ∨ Url.is 44 c then [] else c ∷ upTo cs
+  dropWs : Str → Str
+  dropWs [] = []
+  dropWs (c ∷ cs) = if Url.is 32 c ∨ Url.is 9 c then dropWs cs else c ∷ cs
+  trim : Str → Str
+  trim s = Data.List.Base.reverse (dropWs (Data.List.Base.reverse (dropWs s)))
+
+judgedDest : Maybe Str → Maybe Str → Maybe Str
+judgedDest (just d) (just p) = if eqStr (map lowerAscii d) (toList "empty") ∧ isPrefetch p then just (toList "document") else just d
+judgedDest sfd _ = sfd

@@ -82,8 +82,13 @@ export function cursorOver(dragging: boolean, r: Region): Cursor {
 // Dark with a light ring and a shadow: it shows on dark pages and light.
 // The cursor, while the pointer is over it, is the host's — inherited by
 // what lies beneath (it takes no pointer events itself).
+// The slot passes the body's values on: through it the body's children
+// inherit from the slot, and a property they take by `inherit` that is not
+// inherited by default (*{box-sizing:inherit}: GeneratePress, USWDS) must
+// be the body's — all of them inherited, the slot itself boxless.
 const css = (left: number, cursor: Cursor): string => `
 :host { ${cursor === "page" ? "" : `cursor: ${cursor} !important;`} }
+slot { all: inherit; display: contents !important; }
 ${cursor === "page" ? "" : `::slotted(*) { cursor: ${cursor} !important; }`}
 #crn-tb { position: fixed; top: 0; left: ${left}px; width: ${TOOLBAR.width}px; height: ${TOOLBAR.height}px; z-index: 2147483647;
   box-sizing: border-box; margin: 0; padding: 0; border: 0; border-radius: 0 0 7px 7px; background: rgba(28, 33, 42, 0.92);

@@ -85,3 +85,21 @@ describe("localStorage partition: the running size is fitsQuota's", () => {
         }), { numRuns: 200 });
     });
 });
+
+// The native store is only a cache of a partition: a refusal of its own
+// (a frame's Storage gone, "Access is denied for this document": seen on
+// cornerstoneondemand.com's chat frame and sports-reference.com) never
+// reaches the page; the page's refusals are its quota's alone.
+describe("localStorage partition: the native cache's refusals are not the page's", () => {
+    it("writes and removals within the quota succeed when the native store refuses everything", () => {
+        const refuse = (): never => { throw Object.assign(new Error("Failed to execute 'removeItem' on 'Storage': Access is denied for this document."), { name: "SecurityError" }); };
+        const nat: NativeStorage = { getItem: () => null, setItem: refuse, removeItem: refuse, key: () => null, length: () => 0 };
+        const p = new Partition("P", {} as Storage, nat, null, (k) => Object.assign(new Error("quota " + k), { name: "QuotaExceededError" }));
+        expect(() => p.set("a", "1")).not.toThrow();
+        expect(p.get("a")).toBe("1");
+        expect(() => p.remove("a")).not.toThrow();
+        expect(() => p.remove("never")).not.toThrow();
+        expect(p.get("a")).toBeNull();
+        expect(() => p.set("b", "x".repeat(QUOTA))).toThrow(/quota b/);
+    });
+});

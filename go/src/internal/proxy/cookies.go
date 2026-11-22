@@ -193,3 +193,43 @@ func (h *Handler) routeSetCookies(resp *http.Response) {
 func contextWithSession(req *http.Request, sessionID string) context.Context {
 	return context.WithValue(req.Context(), SessionContextKey{}, sessionID)
 }
+
+// WebSocketCookies is the Cookie header a direct browser sends on the
+// handshake of a WebSocket to target (ws: / wss:) opened by a page of
+// pageOrigin: the cookies of target's http(s) equivalent — from the
+// browser's jar (the incoming Cookie header, every proxied site's cookies
+// under their prefixes) and the session jar — SameSite judged against the
+// page's site, as upstreamCookies does for HTTP. "" for none.
+//
+// The handshake used to forward the browser's Cookie header as it came:
+// every proxied site's cookies and the proxy's session cookie went to the
+// socket's server (foxnews.com refused the handshake: "Request Header Or
+// Cookie Too Large").
+func WebSocketCookies(req *http.Request, target *url.URL, pageOrigin string, jar *SessionJar, sessionCookieName string) string {
+	cookies := urlrewrite.JarCookies(strings.Join(req.Header.Values("Cookie"), "; "))
+	if jar != nil && sessionCookieName != "" {
+		if c, err := req.Cookie(sessionCookieName); err == nil {
+			cookies = append(cookies, jar.Cookies(c.Value)...)
+		}
+	}
+	httpTarget := *target
+	switch strings.ToLower(target.Scheme) {
+	case "wss":
+		httpTarget.Scheme = "https"
+	case "ws":
+		httpTarget.Scheme = "http"
+	}
+	httpTarget.RawQuery, httpTarget.ForceQuery = "", false
+	to := pageKey(&httpTarget)
+	sameSite := pageOrigin == "" || urlrewrite.SecFetchSite(pageOrigin, to) != "cross-site"
+	var send []urlrewrite.StoredCookie
+	for _, c := range urlrewrite.SelectCookies(false, to, cookies) {
+		if urlrewrite.SameSiteAllows(c.SameSite, sameSite, false) {
+			send = append(send, c)
+		}
+	}
+	if len(send) == 0 {
+		return ""
+	}
+	return urlrewrite.CookieString(send)
+}

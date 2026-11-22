@@ -11,6 +11,7 @@ import (
 	"net/http/cookiejar"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yovico/cyrano/internal/urlrewrite"
 )
@@ -496,5 +497,98 @@ func TestE2E_RewrittenBodyIsCompressed(t *testing.T) {
 	}
 	if h := resp.Header.Get("Crn-H"); !strings.Contains(h, `"content-encoding":null`) {
 		t.Errorf("Crn-H does not say the origin sent no Content-Encoding: %s", h)
+	}
+}
+
+// TestE2E_PrefetchedPageIsADocument — <link rel=prefetch> asks with
+// Sec-Fetch-Dest empty and Sec-Purpose: prefetch, and Chromium serves the
+// navigation to that URL from it while it is fresh: answered as data, the
+// origin's page became the proxied document, everything it loaded and its
+// next link off the proxy (togaze.com). Judged as a document
+// (spec/Disposition.agda judgedDest): a page is rewritten, data stays as sent.
+func TestE2E_PrefetchedPageIsADocument(t *testing.T) {
+	const page = `<!doctype html><html><head><script src="https://cdn.example/a.js"></script></head><body>next</body></html>`
+	up := startInlineServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "max-age=300")
+		if strings.HasSuffix(r.URL.Path, ".json") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"u":"https://cdn.example/x"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, page)
+	})
+	proxy := startProxy(t)
+	get := func(u string, h map[string]string) string {
+		req, _ := http.NewRequest("GET", u, nil)
+		for k, v := range h {
+			req.Header.Set(k, v)
+		}
+		resp, err := noCompressionClient().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+	next := gotoURL(proxy, up.URL+"/next")
+	prefetch := map[string]string{"Sec-Fetch-Dest": "empty", "Sec-Fetch-Mode": "no-cors", "Sec-Purpose": "prefetch"}
+	if body := get(next, prefetch); !strings.Contains(body, "$rewriter_init") || strings.Contains(body, `src="https://cdn.example/a.js"`) {
+		t.Errorf("a prefetched page must be rewritten as the document it becomes:\n%s", body)
+	}
+	if body := get(next, map[string]string{"Sec-Fetch-Dest": "empty", "Sec-Fetch-Mode": "cors"}); body != page {
+		t.Errorf("a fetch() of the page is the page's data, as sent:\n%s", body)
+	}
+	if body := get(gotoURL(proxy, up.URL+"/d.json"), prefetch); body != `{"u":"https://cdn.example/x"}` {
+		t.Errorf("prefetched data stays as sent: %s", body)
+	}
+}
+
+// TestE2E_WebSocketCookies — a WebSocket's handshake carries the cookies a
+// direct browser sends its server: that site's, under their own names.
+// It forwarded the browser's Cookie header as it came — every proxied
+// site's cookies and the proxy's session cookie went to the socket's
+// server (foxnews.com refused the handshake as too large).
+func TestE2E_WebSocketCookies(t *testing.T) {
+	got := make(chan string, 1)
+	up := startInlineServer(t, func(w http.ResponseWriter, r *http.Request) {
+		got <- strings.Join(r.Header.Values("Cookie"), "; ")
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "no hijack", 500)
+			return
+		}
+		c, _, err := hj.Hijack()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		_, _ = io.WriteString(c, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: x\r\n\r\n")
+	})
+	proxy := startProxy(t)
+	host := strings.TrimPrefix(up.URL, "http://")
+	wire := func(h, name, value string) string {
+		c := urlrewrite.StoredCookie{Name: name, Value: value, Domain: h, Path: "/", HostOnly: true, SameSite: 'l'}
+		return c.WireName() + "=" + c.WireValue()
+	}
+	jar := wire("127.0.0.1", "mine", "1") + "; " + wire("other.example", "theirs", "2") + "; crnsct=session-secret"
+
+	conn, err := net.Dial("tcp", strings.TrimPrefix(proxy.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_, _ = io.WriteString(conn, "GET /cyrano/ws/"+host+"/sock HTTP/1.1\r\nHost: "+strings.TrimPrefix(proxy.URL, "http://")+
+		"\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nOrigin: "+proxy.URL+
+		"\r\nCookie: "+jar+"\r\n\r\n")
+	var cookie string
+	select {
+	case cookie = <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the handshake never reached the server")
+	}
+	if cookie != "mine=1" {
+		t.Errorf("handshake Cookie = %q, want only this site's cookie, as named (mine=1)", cookie)
 	}
 }

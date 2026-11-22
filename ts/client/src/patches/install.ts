@@ -22,6 +22,7 @@ import { patchCrossOriginWindows } from "./cross-origin-windows";
 import { patchResponseHeaders } from "./response-headers";
 import { patchEmbeddedContext } from "./embedded";
 import { patchFedCM } from "./fedcm";
+import { patchPaymentRequest } from "./payment-request";
 import { installToolbar } from "../ui/toolbar";
 import { patchSelectors } from "./selectors";
 import { patchStorageNames, patchWebStorage, storagePrefix } from "./storage";
@@ -88,6 +89,7 @@ export function installPatches(
         withPolicy: (rawUrl: string, policy: string): string => rewriteUrl(rawUrl, base(), config, policy),
         withMark: (rawUrl: string, policy: string | null, dest: Dest | null): string =>
             rewriteUrl(rawUrl, base(), config, policy ?? undefined, dest ?? undefined),
+        baseHref: (): string => base().href,
         withBase: (href: string): RewriteOne | null => {
             let b: URL;
             try { b = new URL(href, base()); } catch { return null; }
@@ -171,6 +173,8 @@ export function installPatches(
     step("patchResponseHeaders", () => patchResponseHeaders(targetWindow, opaqueOrigin));
     // FedCM requests would leave the browser outside the proxy (patches/fedcm.ts).
     step("patchFedCM", () => patchFedCM(targetWindow));
+    // URL-based payment methods would have the browser fetch outside the proxy (patches/payment-request.ts).
+    step("patchPaymentRequest", () => patchPaymentRequest(targetWindow));
     // What a frame of another origin's page is denied (patches/embedded.ts).
     if (flattened) step("patchEmbeddedContext", () => patchEmbeddedContext(targetWindow, () => getCurrentBaseUrl().origin));
     // Storage of every kind is this origin's alone (patches/storage.ts).

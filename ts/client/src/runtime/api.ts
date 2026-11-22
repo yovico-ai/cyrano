@@ -6,7 +6,8 @@
 // stay narrow. Adding a new wrapper means: write the module, import it here,
 // expose it on the returned RewriterApi.
 
-import { nO, nR } from "../native/intrinsics";
+import { nO, nR, sStarts } from "../native/intrinsics";
+import { blobScriptFor } from "../patches/blob-document";
 import { crossOriginView } from "../native/cross-origin";
 import { markSender } from "../messaging/target-origin";
 import { isView } from "../native/cross-origin";
@@ -16,7 +17,7 @@ import { honourOptionalChains } from "./optional";
 import type { ClientConfig } from "../config";
 import type { RewriterApi } from "./api-types";
 import { BaseUrlState } from "./base-url-state";
-import { isUrlLikeSpecifier, rewriteUrl, unwrapProxiedUrl } from "../url/containment";
+import { isUrlLikeSpecifier, rewriteUrl, unwrapProxiedUrl, type Dest } from "../url/containment";
 import { metaResolver } from "../wrappers/meta-resolve";
 import { foreignLocationView, makeLocationView } from "../wrappers/wrapped-location";
 import {
@@ -299,6 +300,13 @@ export function createRewriterApi(
                 }
             }
             if (!isUrlLikeSpecifier(specifier as string)) return specifier;
+            // A module the page built (a blob: URL): rewritten as a module (patches/blob-document.ts).
+            if (sStarts((specifier as string).toLowerCase(), "blob:")) {
+                const rw = Object.assign((u: string): string => rewriteUrl(u, baseUrlState.get(), config), {
+                    withMark: (u: string, p: string | null, d: Dest | null): string => rewriteUrl(u, baseUrlState.get(), config, p ?? undefined, d ?? undefined),
+                });
+                return blobScriptFor(targetWindow, specifier as string, rw, true) ?? specifier;
+            }
             let base = baseUrlState.get();
             if (typeof scriptUrl === "string") {
                 try { base = new URL(scriptUrl); } catch { /* keep the page's */ }

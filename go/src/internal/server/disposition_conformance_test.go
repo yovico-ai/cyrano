@@ -86,3 +86,34 @@ func TestResponseKind_SniffsUntakenTypes(t *testing.T) {
 		t.Error("sniff")
 	}
 }
+
+// The destination a request is judged by: a prefetch for no destination
+// is a navigation's (spec/Disposition.agda judgedDest; togaze.com).
+func TestSpecConformance_JudgedDest(t *testing.T) {
+	oracle := specoracle.Need(t)
+	dests := []string{"empty", "Empty", "EMPTY", "document", "script", "image", "", " empty"}
+	purposes := []string{"prefetch", "prefetch;prerender", "prefetch;anonymous-client-ip", " prefetch ", "\tprefetch", "Prefetch", "prefetch, x",
+		"prerender", "", "pre fetch", "prefetchx", "x, prefetch", ";prefetch", "prefetch\t;a"}
+	rapid.Check(t, func(rt *rapid.T) {
+		has, hasP := rapid.Bool().Draw(rt, "has"), rapid.Bool().Draw(rt, "hasP")
+		sfd, p := rapid.SampledFrom(dests).Draw(rt, "sfd"), rapid.SampledFrom(purposes).Draw(rt, "p")
+		b := func(v bool) string {
+			if v {
+				return "1"
+			}
+			return "0"
+		}
+		want, _, err := oracle.Ask("judgeddest", b(has), sfd, b(hasP), p)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		d, ok := judgedDest(sfd, has, p, hasP)
+		got := "nothing"
+		if ok {
+			got = "just " + d
+		}
+		if got != want {
+			rt.Fatalf("judgedDest(%q/%v, %q/%v) = %s, spec says %s", sfd, has, p, hasP, got, want)
+		}
+	})
+}

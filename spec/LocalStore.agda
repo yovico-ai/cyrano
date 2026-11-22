@@ -94,6 +94,11 @@ fits : Str → Str → Str → Store → Bool
 fits = fitsWithin quota
 
 -- Eviction: some (part, key) leave the native store. `all` is untouched.
+-- A refusal by the native store (full, or a frame's Storage gone: "Access
+-- is denied for this document") is one too: the entry is not hot. So by
+-- evict-keeps and evict-keeps-quota it changes no partition's contents and
+-- no write's QuotaExceededError — it is never the page's (TS: every
+-- native call of the cache is caught; storage-names-conformance).
 evict : List (Str × Str) → Store → Store
 evict hot' s = store (all s) hot'
 

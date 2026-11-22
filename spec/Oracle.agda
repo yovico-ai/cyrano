@@ -197,6 +197,7 @@ import Frames
 import Stack
 import H1
 import Eval
+import Payment
 import LocalStore
 import Route
 import Features
@@ -347,6 +348,7 @@ dispatch op args =
   else if eqStr op (toList "targetdest") then targetDestReq args
   else if eqStr op (toList "rewritemark") then rewriteMarkReq args
   else if eqStr op (toList "disposition") then dispositionReq args
+  else if eqStr op (toList "judgeddest") then judgedDestReq args
   else if eqStr op (toList "sniffhtml") then sniffHtmlReq args
   else if eqStr op (toList "setspolicy") then setsPolicyReq args
   else if eqStr op (toList "postdelivery") then postDeliveryReq args
@@ -388,6 +390,7 @@ dispatch op args =
   else if eqStr op (toList "featuresmap") then oneArg (Features.mapSources (λ v → fromℕ 91 ∷ v ++ fromℕ 93 ∷ [])) args
   else if eqStr op (toList "refererroute") then refererRouteReq args
   else if eqStr op (toList "evalcall") then evalCallReq args
+  else if eqStr op (toList "paymentrefused") then oneArg (λ t → paymentAnswer (Payment.refused t)) args
   else if eqStr op (toList "blobbase") then oneArg (λ t → if Frames.blobBase t then toList "yes" else toList "no") args
   else if eqStr op (toList "blobdocument") then oneArg (λ t → if Frames.blobDocument t then toList "yes" else toList "no") args
   else if eqStr op (toList "storename") then twoArgs (λ k n → Storage.stored k n) args
@@ -555,6 +558,21 @@ dispatch op args =
     opt : Str → Str → Maybe Str
     opt p v = if eqStr p (toList "1") then just v else nothing
   dispositionReq _ = errorReply "BadRequest"
+
+  paymentAnswer : Maybe Bool → Str
+  paymentAnswer (just true)  = toList "yes"
+  paymentAnswer (just false) = toList "no"
+  paymentAnswer nothing      = toList "outside"
+
+  -- judgeddest <0|1 Sec-Fetch-Dest present> <Sec-Fetch-Dest> <0|1 Sec-Purpose present> <Sec-Purpose>: "just D" or "nothing".
+  judgedDestReq : List Str → Str
+  judgedDestReq (sp ∷ sd ∷ pp ∷ pv ∷ []) with Disposition.judgedDest (o sp sd) (o pp pv)
+    where
+    o : Str → Str → Maybe Str
+    o p v = if eqStr p (toList "1") then just v else nothing
+  ... | just d  = out (toList "just " ++ d)
+  ... | nothing = out (toList "nothing")
+  judgedDestReq _ = errorReply "BadRequest"
 
   -- crossorigin <html 0|1> <tag> <rel> <as>
   crossoriginReq : List Str → Str

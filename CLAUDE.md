@@ -98,6 +98,8 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
 - `github.com/tdewolff/parse/v2/css` — CSS lexer (token-based).
 - Stdlib `net/http/httputil.ReverseProxy` with Director + ModifyResponse.
 - Stdlib `http.Hijacker` + raw TCP for WebSocket — no third-party WS lib.
+  The handshake carries the target's cookies only (`proxy.WebSocketCookies`):
+  until 2026-11-22 it forwarded every proxied site's and the session cookie.
 - Stdlib `log/slog` for structured logging.
 
 ## What a response is rewritten as
@@ -113,7 +115,9 @@ nothing of how it is rewritten.) A marked
 response is rewritten as such even when served `text/plain`; a
 cross-origin stylesheet of another type gets `nosniff` (it would apply in
 a quirks document only same-origin: Disposition.agda `proxied-sheet`); an unmarked
-one goes by Sec-Fetch-Dest; a fetch() of the same file gets the origin's
+one goes by Sec-Fetch-Dest (a prefetch for no destination — `<link
+rel=prefetch>`, Sec-Purpose: prefetch — as a document: Chrome navigates
+from it; Disposition.agda judgedDest, togaze.com); a fetch() of the same file gets the origin's
 bytes under a different URL, so the browser's cache never hands a script
 the data copy. Unwrap ignores the marks. A cross-origin script response
 Chromium's ORB blocks (JSON, HTML, PDF… — spec/Orb.agda, checked against
@@ -130,7 +134,9 @@ The small control over a proxied top-level page — grip, `<<`, home, `>>`
 turns it off; `tests/native/toolbar-vs-chromium`). The page cannot tell it
 is there: it is no node of the page's DOM (a closed shadow root on
 `<body>`, the body's content through a slot), out of flow, styled by a
-constructed sheet of that root, and takes no pointer events — the runtime
+constructed sheet of that root (its slot `all: inherit; display:
+contents`: the body's children inherit the body's values through it —
+`*{box-sizing:inherit}` pages lost border-box), and takes no pointer events — the runtime
 takes the user's pointer events at the window, first in line, by
 coordinates. Its cursor is the host's (`:host`), inherited beneath. Home
 leaves without a Referer (`window.open(url, "_self", "noreferrer")`: a
@@ -181,7 +187,9 @@ navigate listeners see just the navigation that replaces it.
   (least recently used, only those IndexedDB holds); a write fails only
   when the writer's own partition passes the quota. Limit: entries evicted
   from the native store read as missing for the first moments of the
-  site's next load, until IndexedDB answers. sessionStorage stays native.
+  site's next load, until IndexedDB answers. sessionStorage stays native (prefixed; a native refusal names the page's
+  key). The native store is only a cache: its own refusals (a frame's
+  Storage gone) never reach the page.
 - **eval** (spec/Eval.agda, checked in Chromium by eval-calls-vs-chromium
   against the oracle): every eval the source shows is rewritten — eval(…)
   and (eval)(…) direct, X.eval(…), X["eval"](…), eval.call/apply (and
@@ -213,7 +221,9 @@ navigate listeners see just the navigation that replaces it.
   checked against it; `csp-vs-chromium`: whatever loads directly loads
   proxied, and the bootstrap runs): source lists gain the proxy origin,
   Trusted Types directives are kept and enforced; the connect policy
-  also admits blob: and data: (the runtime reads a page's blob worker
+  also admits the proxy's WebSocket origin (`wss://` for an https proxy:
+  an https: source does not admit wss:, Csp.agda wsOrigin; emeralds.com's
+  chat), blob: and data: (the runtime reads a page's blob worker
   script with an XHR the page does not make: Costco); framing (frame-ancestors,
   X-Frame-Options) is judged by the proxy for the real embedder, checked
   against Chromium (`framing-vs-chromium`). A faithful translation
@@ -555,7 +565,11 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   `CYRANO_DEBUG_R5="[!]<url re> <lo> <hi> …; …"` (R5 by offset), and
   V8 coverage / pause-on-caught-exceptions over CDP, direct vs proxied.
 - **Browser-level requests** the page cannot intercept escape the proxy
-  (FedCM `navigator.credentials.get`, seen on theguardian.com).
+  (FedCM `navigator.credentials.get`, seen on theguardian.com). FedCM is
+  refused (`patches/fedcm.ts`), and so is a PaymentRequest for a URL-based
+  method (spec/Payment.agda, `patches/payment-request.ts`: Chrome fetches
+  the method's manifest and app at construction — Stripe's Google Pay on
+  kenhub.com fetched gstatic): answered as a method without an app.
 - **Not wrapped yet**: `AsyncFunction`/`GeneratorFunction` constructors;
   an SVG element's `href.baseVal` (SVGAnimatedString; setAttribute /
   setAttributeNS are rewritten). URL-bearing attributes are one table in

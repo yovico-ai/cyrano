@@ -178,7 +178,7 @@ func translateCSPDirective(d cspDirective, proxyOrigin string) (cspDirective, bo
 			vals = appendIfAbsent(vals, proxyOrigin)
 		}
 		if d.name == "connect-src" {
-			vals = readableCSP(vals)
+			vals = readableCSP(vals, proxyOrigin)
 		}
 		return cspDirective{d.name, vals}, true
 	}
@@ -202,14 +202,29 @@ func allowsNothing(vals []string) bool {
 	return none
 }
 
-// readableCSP admits to a connect list what the runtime reads itself: a
-// page's blob: or data: worker script, by an XHR the page does not make
-// (spec readable). 'none' alone stays.
-func readableCSP(vals []string) []string {
+// readableCSP admits to a connect list the proxy's WebSocket origin (a
+// page's sockets go to it, and an https: source does not admit wss:) and
+// what the runtime reads itself: a page's blob: or data: worker script, by
+// an XHR the page does not make (spec readable). 'none' alone stays.
+func readableCSP(vals []string, proxyOrigin string) []string {
 	if allowsNothing(vals) {
 		return vals
 	}
+	if proxyOrigin != "" {
+		vals = appendIfAbsent(vals, wsOriginCSP(proxyOrigin))
+	}
 	return appendIfAbsent(appendIfAbsent(vals, "blob:"), "data:")
+}
+
+// wsOriginCSP is the proxy's origin as a WebSocket's (spec wsOrigin).
+func wsOriginCSP(origin string) string {
+	switch {
+	case len(origin) >= 8 && strings.EqualFold(origin[:8], "https://"):
+		return "wss://" + origin[8:]
+	case len(origin) >= 7 && strings.EqualFold(origin[:7], "http://"):
+		return "ws://" + origin[7:]
+	}
+	return origin
 }
 
 func showCSPPolicy(p []cspDirective, proxyOrigin string) string {
@@ -230,7 +245,7 @@ func showCSPPolicy(p []cspDirective, proxyOrigin string) string {
 	// A default-src that governs connect gets an explicit connect-src
 	// after it: its own list, readable (spec translatePolicy).
 	if !hasConnect && hasDefault && !allowsNothing(def) {
-		ds = append(ds, strings.Join(append([]string{"connect-src"}, readableCSP(append([]string(nil), def...))...), " "))
+		ds = append(ds, strings.Join(append([]string{"connect-src"}, readableCSP(append([]string(nil), def...), proxyOrigin)...), " "))
 	}
 	return strings.Join(ds, "; ")
 }

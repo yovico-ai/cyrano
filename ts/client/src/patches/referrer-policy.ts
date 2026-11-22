@@ -36,6 +36,8 @@ export interface RewriteOne {
     withBase?: (href: string) => RewriteOne | null;
     /** A <base href> withBase cannot resolve is passed over, not the end of the search (a blob document's). */
     skipBase?: boolean;
+    /** The base it resolves against, as the page has it (a module's import.meta.url and specifiers). */
+    baseHref?: () => string;
 }
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";

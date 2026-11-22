@@ -37,7 +37,10 @@ const NONCE = "n0nce";
 const INLINE_NONCED = "(window.__p=window.__p||{}).inlineNonce=1;";
 const INLINE_PLAIN = "(window.__p=window.__p||{}).inlinePlain=1;";
 const sha = (s: string) => `'sha256-${createHash("sha256").update(s).digest("base64")}'`;
-const PROBES = ["imgCdn", "imgSelf", "scriptCdn", "inlineNonce", "inlinePlain", "styleCdn", "fetchCdn"] as const;
+// wsCdn: a WebSocket (to the proxy's /cyrano/ws/… proxied): an https:/http:
+// source does not admit ws:/wss:, so the proxy's WebSocket origin must be
+// in the connect list (spec Csp.wsOrigin; emeralds.com's chat).
+const PROBES = ["imgCdn", "imgSelf", "scriptCdn", "inlineNonce", "inlinePlain", "styleCdn", "fetchCdn", "wsCdn"] as const;
 
 describe.skipIf(!wanted || located.skip !== "")("CSP: the page cannot tell, in Chromium", () => {
     let oracle: OracleClient;
@@ -88,6 +91,13 @@ describe.skipIf(!wanted || located.skip !== "")("CSP: the page cannot tell, in C
             if (path === "/data.txt") { res.writeHead(200, { "content-type": "text/plain", "access-control-allow-origin": "*" }); res.end("ok"); return; }
             res.writeHead(404); res.end();
         });
+        // A WebSocket at …/ws: the handshake, then nothing.
+        server.on("upgrade", (req, socket) => {
+            if (!/\/ws$/.test(req.url ?? "")) { socket.destroy(); return; }
+            const key = String(req.headers["sec-websocket-key"] ?? "");
+            const accept = createHash("sha1").update(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+            socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+        });
         await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
         port = (server.address() as { port: number }).port;
         const require = createRequire(new URL("../../../e2e/package.json", import.meta.url));
@@ -103,7 +113,7 @@ describe.skipIf(!wanted || located.skip !== "")("CSP: the page cannot tell, in C
     it("what loads directly loads proxied, and the bootstrap runs", async () => {
         const cdn = `http://cdn.localhost:${port}`;
         const values = ["'self'", "'none'", "'unsafe-inline'", "'strict-dynamic'", `'nonce-${NONCE}'`, sha(INLINE_NONCED), sha(INLINE_PLAIN),
-            cdn, "http://*.localhost:*", "http:", "data:", "*", "https://elsewhere.example"];
+            cdn, "http://*.localhost:*", "http:", "data:", "*", "https://elsewhere.example", `ws://cdn.localhost:${port}`, "ws:"];
         const directive = fc.tuple(
             fc.constantFrom("default-src", "script-src", "script-src-elem", "img-src", "style-src", "connect-src", "report-uri", "trusted-types"),
             fc.array(fc.constantFrom(...values), { minLength: 1, maxLength: 4 }),
@@ -117,17 +127,28 @@ describe.skipIf(!wanted || located.skip !== "")("CSP: the page cannot tell, in C
             const ctx = await browser.newContext();
             const page = await ctx.newPage();
             await page.goto(url);
-            const out = await page.evaluate(async (a: { cdn: string }) => {
+            const out = await page.evaluate(async (a: { cdn: string; ws: string }) => {
                 const p = ((window as unknown as { __p?: Record<string, number> }).__p) ?? {};
                 const img = (id: string) => { const e = document.getElementById(id) as HTMLImageElement | null; return !!e && e.complete && e.naturalWidth > 0; };
                 const link = document.getElementById("styleCdn") as HTMLLinkElement | null;
                 let fetchCdn = false;
                 try { fetchCdn = (await (await fetch(a.cdn)).text()) === "ok"; } catch { fetchCdn = false; }
+                const wsCdn = await new Promise<boolean>((done) => {
+                    try {
+                        const w = new WebSocket(a.ws);
+                        const t = setTimeout(() => done(false), 2000);
+                        w.onopen = () => { clearTimeout(t); w.close(); done(true); };
+                        w.onerror = () => { clearTimeout(t); done(false); };
+                    } catch { done(false); }
+                });
                 return {
                     imgCdn: img("imgCdn"), imgSelf: img("imgSelf"), scriptCdn: !!p["scriptCdn"], inlineNonce: !!p["inlineNonce"],
-                    inlinePlain: !!p["inlinePlain"], styleCdn: !!link?.sheet, fetchCdn, boot: !!p["boot"],
+                    inlinePlain: !!p["inlinePlain"], styleCdn: !!link?.sheet, fetchCdn, wsCdn, boot: !!p["boot"],
                 };
-            }, { cdn: url.includes("/cyrano/") ? `${proxyOrigin}/cyrano/http/cdn.localhost:${port}/data.txt` : `${cdn}/data.txt` });
+            }, {
+                cdn: url.includes("/cyrano/") ? `${proxyOrigin}/cyrano/http/cdn.localhost:${port}/data.txt` : `${cdn}/data.txt`,
+                ws: url.includes("/cyrano/") ? `ws://proxy.localhost:${port}/cyrano/ws/cdn.localhost:${port}/ws` : `ws://cdn.localhost:${port}/ws`,
+            });
             await ctx.close();
             return out;
         };

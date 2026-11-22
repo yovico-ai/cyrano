@@ -53,6 +53,25 @@ const nb = document.createElement("iframe");
 nb.src = URL.createObjectURL(new Blob(['<!doctype html><img src="rel2.png"><img src="/rel2.png"><img src="//cdn.example/sr.png"><img src="http://cdn.example/abs.png">' +
   '<base href="rel/"><img src="rel2.png"><base href="http://cdn.example/b3/"><img src="after.png">'], { type: "text/html" }));
 document.body.appendChild(nb);
+// Scripts the page builds (a Wix widget's module on jelivestock.com): a
+// classic one by src; a module by src and by import(), each importing an
+// absolute URL and telling its import.meta.url (the page's blob URL).
+const cls = document.createElement("script");
+cls.src = URL.createObjectURL(new Blob(["window.classicRan = typeof location.href;"], { type: "text/javascript" }));
+document.head.appendChild(cls);
+const modUrl = URL.createObjectURL(new Blob(['import "http://cdn.example/m.js"; window.modMeta = import.meta.url === window.modUrl;'], { type: "text/javascript" }));
+window.modUrl = modUrl;
+const mod = document.createElement("script");
+mod.type = "module"; mod.src = modUrl;
+document.head.appendChild(mod);
+const dynUrl = URL.createObjectURL(new Blob(['import "http://cdn.example/d.js"; export const meta = import.meta.url;'], { type: "text/javascript" }));
+window.dynUrl = dynUrl;
+// (from a script the page inserts: this harness serves its own inline script unrewritten)
+const imp = document.createElement("script");
+imp.textContent = 'import(window.dynUrl).then(function (m) { window.dynMeta = m.meta === window.dynUrl; }, function (e) { window.dynMeta = String(e); });';
+document.head.appendChild(imp);
+// An inline module inserted as markup: its absolute import too.
+document.body.appendChild(document.createRange().createContextualFragment('<script type="module">import "http://cdn.example/i.js"; window.inlineRan = 1;</scr' + 'ipt>'));
 // Not HTML: loads as given.
 const t = document.createElement("iframe");
 t.src = URL.createObjectURL(new Blob(["just text http://cdn.example/text.png"], { type: "text/plain" }));
@@ -71,6 +90,10 @@ describe.skipIf(!wanted)("a frame's blob: HTML document, in Chromium", () => {
             if (u.startsWith("/rewriter.js")) {
                 res.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
                 return res.end(bundle);
+            }
+            if (/\/(m|d|i)\.js$/.test(u)) {
+                res.writeHead(200, { "content-type": "text/javascript", "access-control-allow-origin": "*" });
+                return res.end("export {};");
             }
             if (/lib2?\.js$/.test(u)) {
                 res.writeHead(200, { "content-type": "text/javascript", "access-control-allow-origin": "*" });
@@ -95,16 +118,17 @@ describe.skipIf(!wanted)("a frame's blob: HTML document, in Chromium", () => {
         server?.close();
     });
 
-    const run = async (path: string): Promise<{ ran: unknown; markupRan: unknown; sameUrl: unknown; fetched: string[] }> => {
+    const run = async (path: string): Promise<{ ran: unknown; markupRan: unknown; sameUrl: unknown; scripts: Record<string, unknown>; fetched: string[] }> => {
         const page = await browser.newPage();
         const fetched: string[] = [];
         page.on("request", (r) => { const u = r.url(); if (/cdn\.example|rel2?\.png/.test(u)) fetched.push(u); });
         await page.goto(origin + path);
         await page.waitForTimeout(500);
-        await page.waitForFunction("window.frameRan !== undefined && window.markupRan !== undefined", undefined, { timeout: 5000 }).catch(() => {});
+        await page.waitForFunction("window.frameRan !== undefined && window.markupRan !== undefined && window.dynMeta !== undefined && window.inlineRan !== undefined", undefined, { timeout: 5000 }).catch(() => {});
+        const scripts = await page.evaluate(() => { const w = window as unknown as Record<string, unknown>; return { classicRan: w["classicRan"], modMeta: w["modMeta"], dynMeta: w["dynMeta"], inlineRan: w["inlineRan"] }; });
         const got = await page.evaluate(() => ({ ran: (window as unknown as { frameRan?: unknown }).frameRan, markupRan: (window as unknown as { markupRan?: unknown }).markupRan, sameUrl: (window as unknown as { sameUrl?: unknown }).sameUrl && (window as unknown as { sameCss?: unknown }).sameCss }));
         await page.close();
-        return { ...got, fetched };
+        return { ...got, scripts, fetched };
     };
 
     it("loads the document's resources through the proxy, runs it, reads back the page's URL", async () => {
@@ -112,7 +136,9 @@ describe.skipIf(!wanted)("a frame's blob: HTML document, in Chromium", () => {
         const proxied = await run("/cyrano/https/site.example/page");
         const names = (xs: string[]): string[] => xs.map((u) => u.replace(/^.*cdn\.example/, "").replace(/^.*\/(rel2?\.png)$/, "/$1")).sort();
         expect(direct).toMatchObject({ ran: "number", markupRan: "number", sameUrl: true });
-        expect(names(direct.fetched)).toEqual(["/abs.png", "/b/lib2.js", "/b/logo2.png", "/b3/after.png", "/bg.png", "/lib.js", "/logo.png", "/rel.png", "/theme.css"]);
+        expect(names(direct.fetched)).toEqual(["/abs.png", "/b/lib2.js", "/b/logo2.png", "/b3/after.png", "/bg.png", "/d.js", "/i.js", "/lib.js", "/logo.png", "/m.js", "/rel.png", "/theme.css"]);
+        expect(direct.scripts).toEqual({ classicRan: "string", modMeta: true, dynMeta: true, inlineRan: 1 });
+        expect(proxied.scripts).toEqual(direct.scripts);
         expect({ ran: proxied.ran, markupRan: proxied.markupRan, sameUrl: proxied.sameUrl }).toEqual({ ran: direct.ran, markupRan: direct.markupRan, sameUrl: direct.sameUrl });
         expect(names(proxied.fetched)).toEqual(names(direct.fetched));
         expect(proxied.fetched.filter((u) => !u.startsWith(origin))).toEqual([]);

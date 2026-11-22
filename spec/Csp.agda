@@ -172,10 +172,6 @@ noneOnly ws = anyNone ws ∧ allQuiet ws
   allQuiet [] = true
   allQuiet (t ∷ ts) = (eqStr (lowerAll t) (toList "'none'") ∨ eqStr (lowerAll t) (toList "'report-sample'")) ∧ allQuiet ts
 
--- What the runtime reads, admitted to a connect list.
-readable : List Str → List Str
-readable ws = if noneOnly ws then ws else appendIfAbsent (toList "data:") (appendIfAbsent (toList "blob:") ws)
-
 -- The proxy origin and the runtime's Trusted Types policy name.
 record CspProxy : Set where
   field
@@ -184,12 +180,36 @@ record CspProxy : Set where
     plainHttp : Bool
 open CspProxy
 
+-- The proxy's origin as a WebSocket's: a page's sockets go to it
+-- (/cyrano/wss/…), and a host-source of scheme https does not admit wss:
+-- (CSP3 §6.7.2.9, checked in Chromium: framing-vs-chromium) — a page whose
+-- connect-src lists wss://host (not wss: or 'self') had its socket refused
+-- proxied (emeralds.com's chat over plain HTTP).
+-- (The proxy origin is written as the proxy is configured: lowercase.)
+wsOrigin : Str → Str
+wsOrigin s = if prefixCI (toList "https://") s then toList "wss://" ++ drop 8 s
+             else if prefixCI (toList "http://") s then toList "ws://" ++ drop 7 s
+             else s
+  where
+  drop : ℕ → Str → Str
+  drop zero    xs       = xs
+  drop (suc n) []       = []
+  drop (suc n) (_ ∷ xs) = drop n xs
+
+-- What the runtime reads, admitted to a connect list (with the proxy's
+-- WebSocket origin, when there is a proxy origin).
+readable : CspProxy → List Str → List Str
+readable p ws = if noneOnly ws then ws else appendIfAbsent (toList "data:") (appendIfAbsent (toList "blob:") (withWs ws))
+  where
+  withWs : List Str → List Str
+  withWs vs = if isEmpty (origin p) then vs else appendIfAbsent (wsOrigin (origin p)) vs
+
 translateDirective : CspProxy → Directive → Maybe Directive
 translateDirective p (n , vs) =
   if eqStr n (toList "report-uri") ∨ eqStr n (toList "report-to") then nothing
   else if plainHttp p ∧ (eqStr n (toList "upgrade-insecure-requests") ∨ eqStr n (toList "block-all-mixed-content")) then nothing
   else if eqStr n (toList "trusted-types") then just (n , tt)
-  else if eqStr n (toList "connect-src") then just (n , readable (withProxy hashed))
+  else if eqStr n (toList "connect-src") then just (n , readable p (withProxy hashed))
   else if fetchDirective n then just (n , withProxy hashed)
   else just (n , vs)
   where
@@ -223,7 +243,7 @@ translatePolicy p ds = withConnect (translateEach p ds)
   withConnect out with named (toList "connect-src") out | named (toList "default-src") out
   ... | just _  | _       = out
   ... | nothing | nothing = out
-  ... | nothing | just vs = if noneOnly vs then out else out ++ ((toList "connect-src" , readable vs) ∷ [])
+  ... | nothing | just vs = if noneOnly vs then out else out ++ ((toList "connect-src" , readable p vs) ∷ [])
 
 ------------------------------------------------------------------------
 -- Writing.

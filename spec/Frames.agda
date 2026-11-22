@@ -152,6 +152,10 @@ inertFrame markInert marked recorded = markInert ∨ (not marked ∧ recorded)
 -- an HTML document — text/html, parameters aside, any case. Others (XML,
 -- SVG, text, images) load as given. Found: TradingView's chart frame
 -- (bitrue.com) loaded its bundles from their origin.
+-- So too a blob given to <script src> (classic or module, by the element's
+-- type: Html.agda's script kinds) or to import(): rewritten as JavaScript;
+-- a module's specifiers resolve against the page's blob URL, which its
+-- import.meta.url stays (jelivestock.com: a Wix module imported direct).
 blobDocument : Str → Bool
 blobDocument ty = eqLower (essence ty) (toList "text/html")
   where

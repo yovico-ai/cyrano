@@ -143,8 +143,12 @@ func (s *Server) Handler() http.Handler {
 		// WebSocket upgrade? Goes through the wsproxy path — it hijacks
 		// the conn and pipes raw frames after rewriting the handshake.
 		if wsproxy.IsWSUpgrade(r) {
+			secret := vhost.SecretCookieName
 			wsHandler := wsproxy.New(wsproxy.Options{
 				Logger: s.Logger.With("component", "wsproxy"),
+				Cookies: func(in *http.Request, target *url.URL, pageOrigin string) string {
+					return proxy.WebSocketCookies(in, target, pageOrigin, jar, secret)
+				},
 			})
 			wsHandler.ServeHTTP(w, r)
 			return

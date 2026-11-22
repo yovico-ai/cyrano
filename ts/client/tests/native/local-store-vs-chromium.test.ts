@@ -88,6 +88,27 @@ describe.skipIf(!wanted)("localStorage, each site its own quota, in Chromium", (
         return out;
     };
 
+    // sessionStorage stays native, prefixed: its refusal named the stored
+    // name ("crn␟…␟big"); the page reads its own, as directly
+    // (sports-reference.com).
+    it("a sessionStorage refusal names the page's key, as direct", async () => {
+        const refusal = async (u: string): Promise<string> => {
+            const ctx = await browser.newContext();
+            const pg = await ctx.newPage(); await pg.goto(u);
+            const r = await pg.evaluate(([n]) => {
+                const out: string[] = [];
+                try { sessionStorage.setItem("big", "x".repeat(n)); out.push("stored"); } catch (e) { out.push((e as Error).name + ": " + (e as Error).message + " " + (e instanceof DOMException)); }
+                try { sessionStorage.removeItem("big"); out.push("removed"); } catch (e) { out.push((e as Error).name); }
+                return out.join(" | ");
+            }, [6 * 1024 * 1024] as [number]);
+            await ctx.close();
+            return r;
+        };
+        const direct = await refusal(`http://127.0.0.1:${port}/page`);
+        expect(direct).toBe("QuotaExceededError: Failed to execute 'setItem' on 'Storage': Setting the value of 'big' exceeded the quota. true | removed");
+        expect(await refusal(`http://127.0.0.1:${port}/cyrano/https/a.example/page`)).toBe(direct);
+    }, 60_000);
+
     it("gives each site its own quota and keeps every entry, as direct", async () => {
         const direct = await run(`http://127.0.0.1:${port}/page`, `http://localhost:${port}/page`);
         const proxied = await run(`http://127.0.0.1:${port}/cyrano/https/a.example/page`, `http://127.0.0.1:${port}/cyrano/https/b.example/page`);

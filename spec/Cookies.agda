@@ -538,3 +538,14 @@ itemSameSite ssNone    = toList "none"
 itemSameSite ssLax     = toList "lax"
 itemSameSite ssStrict  = toList "strict"
 itemSameSite ssDefault = toList "lax"
+
+-- A WebSocket's handshake carries the cookies of its URL's http(s)
+-- equivalent (RFC 6265bis: ws as http, wss as https — Secure ones over
+-- wss), selected as for any request from the proxy's jars, SameSite judged
+-- against the page that opened it; never the browser's Cookie header as it
+-- came, which holds every proxied site's cookies and the proxy's own
+-- (foxnews.com; Go: proxy.WebSocketCookies, TestE2E_WebSocketCookies).
+socketCookieScheme : Scheme → Scheme
+socketCookieScheme ws  = http
+socketCookieScheme wss = https
+socketCookieScheme s   = s

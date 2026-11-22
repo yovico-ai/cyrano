@@ -79,7 +79,8 @@ export class Partition {
 
     constructor(
         readonly prefix: string,
-        private readonly real: Storage,
+        /** The native store of the window that last used the partition (a frame that made it may be gone). */
+        public real: Storage,
         private readonly nat: NativeStorage,
         private readonly idb: NativeIdb | null,
         private readonly quotaError: (key: string) => Error,
@@ -114,11 +115,14 @@ export class Partition {
 
     remove(k: string): void {
         const old = this.mem.get(k);
-        if (old === undefined) { ncall(this.nat.removeItem, this.real, this.prefix + k); return; }
-        this.mem.delete(k);
-        this.size -= k.length + old.length;
-        this.del(k);
-        ncall(this.nat.removeItem, this.real, this.prefix + k);
+        if (old !== undefined) {
+            this.mem.delete(k);
+            this.size -= k.length + old.length;
+            this.del(k);
+        }
+        // The native store is a cache: what it refuses is never the page's
+        // (the page's own refusals are the quota's, above).
+        try { ncall(this.nat.removeItem, this.real, this.prefix + k); } catch { /* cache */ }
     }
 
     clear(): void { for (const k of this.keys()) this.remove(k); }
@@ -144,7 +148,7 @@ export class Partition {
         }
         // It does not fit: it lives in IndexedDB only. An older copy must
         // not be read at the next load in its place.
-        ncall(this.nat.removeItem, this.real, this.prefix + k);
+        try { ncall(this.nat.removeItem, this.real, this.prefix + k); } catch { /* cache */ }
         return false;
     }
 
@@ -163,7 +167,7 @@ export class Partition {
             const k = ncall(this.nat.key, this.real, i);
             if (k !== null && sStarts(k, victim)) drop.push(k);
         }
-        for (const k of drop) ncall(this.nat.removeItem, this.real, k);
+        for (const k of drop) { try { ncall(this.nat.removeItem, this.real, k); } catch { /* cache */ } }
         delete meta[victim];
         this.writeMeta(meta);
         return true;
@@ -253,5 +257,6 @@ const partitions = sharedData("ls.partitions", () => new SafeMap<string, Partiti
 export function partitionFor(prefix: string, real: Storage, nat: NativeStorage, idb: NativeIdb | null, quotaError: (k: string) => Error): Partition {
     let p = partitions.get(prefix);
     if (!p) { p = new Partition(prefix, real, nat, idb, quotaError); partitions.set(prefix, p); }
+    else p.real = real;
     return p;
 }
