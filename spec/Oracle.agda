@@ -120,6 +120,10 @@
 --   docbase <document URL> <href>…      → {"out":"<base URL>"} (the hrefs of
 --                                         the document's <base> elements)
 --   importmap <proxy> <base> <text>     → {"out":"<rewritten import map>"}
+--   sha256 <text>                       → {"out":"<hex of SHA-256 of its UTF-8>"}
+--   sitelabel <site key>                → {"out":"<26-char base32 label>"}
+--   sitekey <scheme> <host> <reg|"">    → {"out":"<scheme>://<site>"}
+--   siteadmits <domain> <host> <key>    → {"out":"yes|no"}
 --   attrkind <html|svg> <tag> <attr>    → {"out":"url|urllist|srcset|reflected|none"}
 --   urldest <html|svg> <tag> <attr> <rel types> <as|-> → {"out":"js|css|-"}
 --   urllist <proxy> <base> <text>       → {"out":"<each token proxified>"}
@@ -198,6 +202,8 @@ import Stack
 import H1
 import Eval
 import Payment
+import Sha256
+import SiteHost
 import LocalStore
 import Route
 import Features
@@ -390,6 +396,10 @@ dispatch op args =
   else if eqStr op (toList "featuresmap") then oneArg (Features.mapSources (λ v → fromℕ 91 ∷ v ++ fromℕ 93 ∷ [])) args
   else if eqStr op (toList "refererroute") then refererRouteReq args
   else if eqStr op (toList "evalcall") then evalCallReq args
+  else if eqStr op (toList "sha256") then oneArg (λ t → Sha256.hex (Sha256.sha256 (concatMap (λ c → utf8 (toℕ c)) t))) args
+  else if eqStr op (toList "sitelabel") then oneArg SiteHost.siteLabel args
+  else if eqStr op (toList "sitekey") then threeArgs (λ sc h r → siteKeyReq sc h r) args
+  else if eqStr op (toList "siteadmits") then threeArgs (λ d h k → if SiteHost.admits d h k then toList "yes" else toList "no") args
   else if eqStr op (toList "paymentrefused") then oneArg (λ t → paymentAnswer (Payment.refused t)) args
   else if eqStr op (toList "blobbase") then oneArg (λ t → if Frames.blobBase t then toList "yes" else toList "no") args
   else if eqStr op (toList "blobdocument") then oneArg (λ t → if Frames.blobDocument t then toList "yes" else toList "no") args
@@ -558,6 +568,12 @@ dispatch op args =
     opt : Str → Str → Maybe Str
     opt p v = if eqStr p (toList "1") then just v else nothing
   dispositionReq _ = errorReply "BadRequest"
+
+  -- "" for a host without a registrable domain.
+  siteKeyReq : Str → Str → Str → Str
+  siteKeyReq sc h r with schemeOf sc
+  ... | just s  = SiteHost.siteKey s h (if Data.List.Base.null r then nothing else just r)
+  ... | nothing = toList "BadScheme"
 
   paymentAnswer : Maybe Bool → Str
   paymentAnswer (just true)  = toList "yes"
