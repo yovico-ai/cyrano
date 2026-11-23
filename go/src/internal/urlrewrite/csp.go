@@ -97,6 +97,9 @@ var cspFetchDirectives = map[string]bool{
 	"frame-src": true, "img-src": true, "manifest-src": true, "media-src": true, "object-src": true,
 	"prefetch-src": true, "script-src": true, "script-src-elem": true, "script-src-attr": true,
 	"style-src": true, "style-src-elem": true, "style-src-attr": true, "worker-src": true,
+	// Not fetch directives, but they name URLs the proxied page reaches on
+	// the proxy (a form's action, a <base href>): spec Csp navigationTarget.
+	"form-action": true, "base-uri": true,
 }
 
 func isScriptOrStyleDirective(name string) bool {

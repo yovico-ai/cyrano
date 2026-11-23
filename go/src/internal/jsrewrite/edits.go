@@ -41,10 +41,11 @@ func (p *parser) replace(pos, del int, ins string) {
 
 // withGlobal is the global object whatever names a with object claims: a
 // sloppy function's this, or — in a strict function nested in the with,
-// where this is undefined and no name is safe — a function compiled from
-// "return this", reached from a literal's constructor. R13 (TS: WITH_GLOBAL
-// in ts/client/src/js/rewriter.ts).
-const withGlobal = `((typeof _crn$g!=="undefined"&&_crn$g)||(function(){return this})()||(function(){}).constructor("return this")()).`
+// where this is undefined — globalThis when it holds the runtime, and only
+// past that a function compiled from "return this", reached from a
+// literal's constructor (an eval: refused under a CSP without
+// 'unsafe-eval'). R13 (TS: WITH_GLOBAL in ts/client/src/js/rewriter.ts).
+const withGlobal = `((typeof _crn$g!=="undefined"&&_crn$g)||(function(){return this})()||(typeof globalThis!=="undefined"&&globalThis&&globalThis.$rewriter&&globalThis)||(function(){}).constructor("return this")()).`
 
 // rt is an edit's text as written where it lands: inside a with body the
 // runtime's names go through the global object (Vue's compiled templates

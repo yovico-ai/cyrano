@@ -387,7 +387,9 @@ function decodedText(raw: string): string {
 // 'unsafe-inline' 'self'. Output: "name value…" joined by "; ".
 const CSP_FETCH = new SafeSet(["child-src", "connect-src", "default-src", "fenced-frame-src", "font-src", "frame-src",
     "img-src", "manifest-src", "media-src", "object-src", "prefetch-src", "script-src", "script-src-elem",
-    "script-src-attr", "style-src", "style-src-elem", "style-src-attr", "worker-src"]);
+    "script-src-attr", "style-src", "style-src-elem", "style-src-attr", "worker-src",
+    // (not fetch directives: URLs the proxied page reaches on the proxy — spec Csp navigationTarget)
+    "form-action", "base-uri"]);
 const CSP_SCRIPT_STYLE = new SafeSet(["default-src", "script-src", "script-src-elem", "script-src-attr",
     "style-src", "style-src-elem", "style-src-attr"]);
 const cspWords = (s: string): string[] => s.split(/[\t\n\f\r ]+/).filter((w) => w !== "");

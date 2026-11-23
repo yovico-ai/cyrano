@@ -15,7 +15,7 @@ const located = locateOracle();
 if (located.skip !== "" && oracleRequired) throw new Error(located.skip);
 
 const names = ["default-src", "script-src", "Script-Src", "script-src-elem", "style-src", "style-src-attr", "img-src",
-    "connect-src", "frame-src", "object-src", "worker-src", "font-src", "frame-ancestors", "base-uri", "report-uri",
+    "connect-src", "frame-src", "object-src", "worker-src", "font-src", "frame-ancestors", "base-uri", "form-action", "report-uri",
     "report-to", "trusted-types", "require-trusted-types-for", "upgrade-insecure-requests", "block-all-mixed-content",
     "sandbox", "foo-src", "é-src"];
 const values = ["'self'", "'none'", "'NONE'", "'unsafe-inline'", "'unsafe-eval'", "'strict-dynamic'", "'nonce-abc'",

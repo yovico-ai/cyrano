@@ -10,6 +10,8 @@
 // rewriter API itself, only how to bootstrap one in a child window given a
 // parent that already has $rewriter_init available.
 
+import { unwrapProxiedUrl } from "../url/containment";
+import { heldAttr } from "../native/originals";
 import { contentWindowOf } from "../native/cross-origin";
 import type { ClientConfig } from "../config";
 import type { RewriterApi } from "./api-types";
@@ -32,6 +34,19 @@ export function injectIntoIframe(
 ): void {
     const childWindow = contentWindowOf(iframe) as WindowWithRewriter | null; // the real window, not a view
     if (!childWindow || childWindow === parentWindow) return;
+    // Only an empty frame (about:blank) is given its creator's runtime. A
+    // proxied document has the server's bootstrap or, where none of its
+    // scripts can run, no runtime at all — given the creator's, it read the
+    // creator's URL as its own (a frame redirected back to the page's origin
+    // with a document of no element: frame-redirect-back-vs-chromium). Nor
+    // a blank frame on its way to a proxied URL: the navigation reuses the
+    // window, and the runtime stamped on it would stay the creator's
+    // (dynamic-iframe.ts maybeInjectIframe).
+    try {
+        if (!/^about:/i.test(String((childWindow as unknown as Window).location.href))) return;
+        const src = heldAttr(iframe, "src"); // as held: getAttribute reads the page's back
+        if (src && unwrapProxiedUrl(src, parentConfig) !== src) return;
+    } catch { return; }
 
     try {
         // If the child already has $rewriter (the proxy injected bootstrap into

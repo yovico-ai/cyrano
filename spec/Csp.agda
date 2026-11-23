@@ -118,6 +118,13 @@ fetchDirective n = member n (map toList
   ∷ "prefetch-src" ∷ "script-src" ∷ "script-src-elem" ∷ "script-src-attr"
   ∷ "style-src" ∷ "style-src-elem" ∷ "style-src-attr" ∷ "worker-src" ∷ []))
 
+-- form-action and base-uri name URLs the proxied page reaches on the proxy
+-- (a form's action, a <base href>, proxified): they admit the proxy origin
+-- too, as fetch directives do (dzen.ru's sign-in form post was refused and
+-- its page stayed blank).
+navigationTarget : Str → Bool
+navigationTarget n = member n (map toList ("form-action" ∷ "base-uri" ∷ []))
+
 scriptOrStyle : Str → Bool
 scriptOrStyle n = member n (map toList
   ( "default-src" ∷ "script-src" ∷ "script-src-elem" ∷ "script-src-attr"
@@ -210,7 +217,7 @@ translateDirective p (n , vs) =
   else if plainHttp p ∧ (eqStr n (toList "upgrade-insecure-requests") ∨ eqStr n (toList "block-all-mixed-content")) then nothing
   else if eqStr n (toList "trusted-types") then just (n , tt)
   else if eqStr n (toList "connect-src") then just (n , readable p (withProxy hashed))
-  else if fetchDirective n then just (n , withProxy hashed)
+  else if fetchDirective n ∨ navigationTarget n then just (n , withProxy hashed)
   else just (n , vs)
   where
   tt : List Str

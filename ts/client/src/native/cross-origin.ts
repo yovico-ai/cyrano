@@ -119,7 +119,16 @@ export function crossOriginView<T>(target: T, pendingOrigin: string | null = nul
     // see as a message's source — a browser has one WindowProxy throughout.
     const mine = v.origin();
     const theirs = originalOriginOf(target, v.unwrap);
-    const cross = pendingOrigin !== null ? pendingOrigin !== mine : theirs !== null && theirs !== mine;
+    // The pending origin stands while the frame is still on its initial
+    // about:blank; once a document has committed, it is that document's
+    // origin — a frame sent elsewhere may be redirected back (Q4's sign-in
+    // frame on ir.netflix.net came back to the page's own origin, and the
+    // page read its location: proxied it threw).
+    let committed = false;
+    try { committed = (target as unknown as Window).location.href !== "about:blank"; } catch { committed = false; }
+    const cross = pendingOrigin !== null && !(committed && theirs !== null)
+        ? pendingOrigin !== mine
+        : theirs !== null && theirs !== mine;
     // A browser has one WindowProxy for a frame through all its
     // navigations: page code that took it while the frame was still its own
     // origin's (a blank frame a script writes into, then navigates) keeps

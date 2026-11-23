@@ -346,10 +346,12 @@ const SET_LOCATION = "$rewriter.wrap_set_location(location, function(v){location
 /**
  * R13: the global object, whatever names a with object claims. A sloppy
  * function's `this`; in a strict function nested in the with (where `this`
- * is undefined and no name is safe) a function compiled from "return this",
- * reached from a literal's constructor.
+ * is undefined) `globalThis` when it holds the runtime — a function compiled
+ * from "return this", reached from a literal's constructor, only past that:
+ * it is an eval, refused under a CSP without 'unsafe-eval' (the Facebook
+ * SDK's strict modules inside a with, in Disqus frames: armorgames.com).
  */
-const WITH_GLOBAL = '((typeof _crn$g!=="undefined"&&_crn$g)||(function(){return this})()||(function(){}).constructor("return this")()).';
+const WITH_GLOBAL = '((typeof _crn$g!=="undefined"&&_crn$g)||(function(){return this})()||(typeof globalThis!=="undefined"&&globalThis&&globalThis.$rewriter&&globalThis)||(function(){}).constructor("return this")()).';
 function inWith(ins: string): string {
     return ins.replace(/\$rewriter\./g, WITH_GLOBAL + "$rewriter.").replace(/\$__crn_key__/g, WITH_GLOBAL + "$__crn_key__");
 }

@@ -82,7 +82,9 @@ describe.skipIf(!wanted)("workers in Chromium", () => {
         await page.goto(`${origin}/cyrano/https/example.com/p/`);
         const result = await page.evaluate(async () => {
             const run = (kind: "classic" | "module") => new Promise<unknown>((done) => {
-                const src = `fetch("/from-${kind}").then(() => postMessage([typeof $rewriter, location.href]), (e) => postMessage(["fetch failed " + e]));`;
+                // (Absolute: a blob worker's base is its blob URL, against which
+                // nothing relative resolves — as directly, measured.)
+                const src = `fetch("https://example.com/from-${kind}").then(() => postMessage([typeof $rewriter, location.href]), (e) => postMessage(["fetch failed " + e]));`;
                 const blob = new Blob([src], { type: "text/javascript" });
                 const w = new Worker(URL.createObjectURL(blob), kind === "module" ? { type: "module" } : {});
                 w.onmessage = (e) => done(e.data);
@@ -93,8 +95,11 @@ describe.skipIf(!wanted)("workers in Chromium", () => {
             return { classic: await run("classic"), module: await run("module"), pageBlob: [blob.size, await blob.text()] };
         });
         expect(result.pageBlob).toEqual([3, "abc"]);
-        expect(result.classic).toEqual(["object", "https://example.com/p/"]);
-        expect(result.module).toEqual(["object", "https://example.com/p/"]);
+        // A blob worker's location is its blob URL, the page's origin in it (as directly).
+        for (const r of [result.classic, result.module]) {
+            expect((r as string[])[0]).toBe("object");
+            expect((r as string[])[1]).toMatch(/^blob:https:\/\/example\.com\/[0-9a-f-]{36}$/);
+        }
         expect(seen.sort()).toEqual(["/cyrano/https/example.com/from-classic", "/cyrano/https/example.com/from-module"]);
     }, 60_000);
 
@@ -178,16 +183,19 @@ describe.skipIf(!wanted)("workers in Chromium", () => {
         const result = await page.evaluate(async () => {
             const src = `
                 const r = new Request("https://tiles.example/t1", { referrer: "https://example.com/p/page" });
-                const reads = [r.referrer, new Request("/x", { referrer: "" }).referrer, new Request("/x", { referrer: "https://other.example/" }).referrer,
-                    new Request("/x", { referrer: "/rel" }).referrer];
+                const t = (f) => { try { return f(); } catch (e) { return e.name; } };
+                const reads = [r.referrer, t(() => new Request("https://tiles.example/x", { referrer: "" }).referrer),
+                    t(() => new Request("https://tiles.example/x", { referrer: "https://other.example/" }).referrer),
+                    t(() => new Request("https://tiles.example/x", { referrer: "/rel" }).referrer)];
                 fetch(r).then(() => fetch("https://tiles.example/t2", { referrer: "https://example.com/p/" }))
                     .then(() => fetch("https://tiles.example/t3", { referrer: "https://other.example/" }))
                     .then(() => postMessage(reads), (e) => postMessage(["fetch failed " + e]));`;
             const w = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
             return await new Promise<unknown>((done) => { w.onmessage = (e) => done(e.data); setTimeout(() => done(["timeout"]), 5000); });
         });
-        // As directly: the URL, "", the context's own (cross-origin), the page's origin + /rel.
-        expect(result).toEqual(["https://example.com/p/page", "", "about:client", "https://example.com/rel"]);
+        // As directly (measured in a blob worker): the URL, "", the context's own
+        // (cross-origin), and a relative one does not resolve against the blob URL.
+        expect(result).toEqual(["https://example.com/p/page", "", "about:client", "TypeError"]);
         // The proxy gets the page it names, proxified (and reads it back);
         // a cross-origin one is the context's own: a blob worker's, none.
         expect(referers).toEqual({

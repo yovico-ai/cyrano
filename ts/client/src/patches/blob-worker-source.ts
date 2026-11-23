@@ -32,7 +32,7 @@
 //
 // Known gap: the object URL's origin is the proxy's (blob:http://proxy/…)
 // where natively it is the site's; translating blob: URLs is a follow-up.
-import { SafeMap, SafeWeakMap, nO, nR, ncall, sIncludes } from "../native/intrinsics";
+import { SafeMap, SafeWeakMap, nO, nR, ncall, sIncludes, sStarts } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
 import { rewriteJsSource, defaultJsRewriteOptions } from "../js/rewriter";
 import { wrapConstructor, wrapMethod } from "../native/surface";
@@ -79,7 +79,18 @@ export function patchBlobWorkerSource(
         const key = `${module ? "m" : "c"} ${url}`;
         let priv = privateUrl.get(key);
         if (!priv) {
-            const body = buildWorkerPreamble(config, getCurrentBaseUrl().href, module) +
+            // The worker's location is the page's blob: or data: URL, as given
+            // (its fragment too: thangs.com's Turbopack config), its base that
+            // URL — against which nothing relative resolves, as natively.
+            // A blob: URL the page made carries the proxy's origin: the worker
+            // is told the page's, as directly (blob:<page origin>/<uuid>).
+            let own: string;
+            try {
+                own = new URL(url, getCurrentBaseUrl()).href;
+                const proxyOrigin = new URL(config.apiBaseURL).origin;
+                if (sStarts(own, "blob:" + proxyOrigin + "/")) own = "blob:" + getCurrentBaseUrl().origin + own.slice(5 + proxyOrigin.length);
+            } catch { own = getCurrentBaseUrl().href; }
+            const body = buildWorkerPreamble(config, own, module) +
                 rewriteJsSource(src.source, defaultJsRewriteOptions());
             priv = nR.apply(nativeCreate, URLs, [new NativeBlob([body], { type: module ? src.type : "text/javascript" })]) as string;
             privateUrl.set(key, priv);

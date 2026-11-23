@@ -176,10 +176,18 @@ export function tagFunctionBody(targetWindow: object, body: string): string {
     const now = originNow.get(targetWindow);
     const origin = now ? now() : null;
     if (origin === null) return body;
-    const tag = `${TAG}${++tagCount}`;
-    tagged.set(tag, origin);
+    // One tag per eval origin: the same body made at the same place is the
+    // same source, which V8's compilation cache then serves, as natively
+    // (a tag per call made every source new, and the table grow).
+    let tag = tagOf.get(origin);
+    if (tag === undefined) {
+        tag = `${TAG}${++tagCount}`;
+        tagOf.set(origin, tag);
+        tagged.set(tag, origin);
+    }
     return `${body}\n//# sourceURL=${tag}`;
 }
+const tagOf = new SafeMap<string, string>();
 
 export function patchErrorStacks(
     targetWindow: Window,
@@ -249,14 +257,23 @@ export function patchErrorStacks(
     // The eval origin V8 would write for code the page's current caller
     // makes now: its frame's function name and the call's location.
     let sitesMode = false;
+    // (A stack is costly in proportion to its frames: a few first — the
+    // runtime's own frames above the page's are few — and more only when
+    // they were all the runtime's. qidian.com's bot check makes thousands
+    // of functions; a 30-frame capture each blocked its page for a minute.)
     const callerSite = (): CallSite | null => {
         const I = Intrinsic as unknown as { new (): Error; stackTraceLimit: number | undefined };
         const limit = I.stackTraceLimit;
-        let sites: unknown;
-        sitesMode = true;
-        try { I.stackTraceLimit = 30; sites = new I().stack; } catch { sites = null; } finally { sitesMode = false; I.stackTraceLimit = limit; }
-        if (!Array.isArray(sites)) return null;
-        return (sites as CallSite[]).find((x) => !ours(x)) ?? null;
+        for (const depth of [8, 30]) {
+            let sites: unknown;
+            sitesMode = true;
+            try { I.stackTraceLimit = depth; sites = new I().stack; } catch { sites = null; } finally { sitesMode = false; I.stackTraceLimit = limit; }
+            if (!Array.isArray(sites)) return null;
+            const found = (sites as CallSite[]).find((x) => !ours(x));
+            if (found) return found;
+            if (sites.length < depth) return null; // the whole stack was the runtime's
+        }
+        return null;
     };
     // The original URL of the script whose code is calling now (of the one
     // that made it, for eval / Function code): what import() in code it

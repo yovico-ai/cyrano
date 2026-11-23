@@ -46,9 +46,15 @@ export function patchWebSocket(
             get: (get, self) => {
                 const real = ncall(get, self);
                 const bare = withoutPageOrigin(real);
-                const original = unwrapOne(bare);
+                // The browser made the proxied URL ws: / wss: (from the proxy's
+                // http: / https:): read back as the proxy's, then the page's
+                // made ws: / wss: as the browser makes it (toutiao.com read
+                // wss://<proxy>/cyrano/https/… back).
+                const asProxy = bare.replace(/^ws(s?):/i, (_m, s: string) => `http${s}:`);
+                const original = unwrapOne(asProxy);
                 // Only a URL cyrano proxified carries cyrano's marker.
-                return original === bare ? real : original;
+                if (original === asProxy) return real;
+                return original.replace(/^http(s?):/i, (_m, s: string) => `ws${s}:`);
             },
         });
     }

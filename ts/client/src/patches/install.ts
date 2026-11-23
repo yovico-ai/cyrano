@@ -28,6 +28,7 @@ import { patchSelectors } from "./selectors";
 import { patchStorageNames, patchWebStorage, storagePrefix } from "./storage";
 import { patchCacheUrls } from "./cache-urls";
 import { patchTypedOm } from "./typed-om";
+import { patchMediaMetadata } from "./media-metadata";
 import { patchReflection } from "../native/hidden-globals";
 import { patchDocumentWrite } from "../wrappers/document-write";
 import { buildBootstrapHtml } from "../runtime/bootstrap-html";
@@ -185,6 +186,7 @@ export function installPatches(
     step("patchStorageNames", () => patchStorageNames(targetWindow, prefix));
     step("patchCacheUrls", () => patchCacheUrls(targetWindow, rewriteOne));
     step("patchTypedOm", () => patchTypedOm(targetWindow, rewriteOne));
+    step("patchMediaMetadata", () => patchMediaMetadata(targetWindow, rewriteOne, unwrapOne));
     // Before document.cookie is wrapped: it writes with the native setter.
     step("patchCookieStore", () => patchCookieStore(targetWindow, getCurrentBaseUrl));
     // (config.skip "cookieGet" / "cookieSet": one half only — development aid.)

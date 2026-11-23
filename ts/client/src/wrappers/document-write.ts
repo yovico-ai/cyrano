@@ -69,6 +69,23 @@ function maybeInjectBootstrap(
     return withBootstrap(rewrittenHtml, getBootstrapHtml());
 }
 
+// How written markup parses where it goes: scripting (a document with a
+// browsing context), and — while the document has no <base href> yet —
+// the first <base href> written is the base of every URL after it, as the
+// browser parses it (in the same write: the rewriter resolves before the
+// browser has seen it). Flashtalking's richloads write a <base> into an
+// empty frame first; their scripts were fetched from the creator's folder
+// (ginifab.com; written-base-vs-chromium). The base is read when each
+// chunk is rewritten: an earlier write's <base> is already the document's.
+function writeContext(doc: unknown): { scripting: boolean; document: boolean } {
+    let hasBase = true;
+    try {
+        const d = doc as Document;
+        hasBase = !!d.querySelector && d.querySelector("base[href]") !== null;
+    } catch { /* as if it had one: nothing changes */ }
+    return { scripting: (doc as Document).defaultView !== null, document: !hasBase };
+}
+
 // ── Writes that split a construct ───────────────────────────────────────
 //
 // Each write is tokenized from the data state, so a tag, comment or
@@ -157,8 +174,8 @@ export function wrapDocumentWrite(
             const native = target[name] as (...a: unknown[]) => unknown;
             if (!allStrings(args)) return napply(native, target, args);
             const joined = args.map((a) => sinkText(a) ?? "").join("") + (name === "writeln" ? "\n" : "");
-            const ctx = { scripting: (target as unknown as Document).defaultView !== null };
             const rewrite = (html: string): string => {
+                const ctx = writeContext(target);
                 const r = rewriteHtmlString(html, rewriteOne, proxyOrigin, undefined, ctx);
                 return getBootstrapHtml ? maybeInjectBootstrap(target, html, r, getBootstrapHtml) : r;
             };
@@ -226,9 +243,8 @@ export function patchDocumentWrite(
             if (!isDocumentLike(self) || !allStrings(args)) return nR.apply(native, self, args);
             const joined = args.map((a) => sinkText(a) ?? "").join("") + (key === "writeln" ? "\n" : "");
             // Markup for the document's parser, where it stands.
-            const ctx = { scripting: (self as unknown as Document).defaultView !== null };
             const rewrite = (html: string): string =>
-                maybeInjectBootstrap(self, html, rewriteHtmlString(html, rewriteOne, proxyOrigin, bootstrap, ctx), bootstrap);
+                maybeInjectBootstrap(self, html, rewriteHtmlString(html, rewriteOne, proxyOrigin, bootstrap, writeContext(self)), bootstrap);
             if (!flushers.has(self)) flushers.set(self, () => flushCarried(self, nativeWrite, rewrite, targetWindow));
             const out = writeThrough(self, nativeWrite, joined, args.some(isTrustedValue), rewrite, targetWindow);
             // Frames the written markup made: the page may write into them next.

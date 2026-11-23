@@ -246,7 +246,9 @@ frame, its `eval`, an `onload` attribute, `contentWindow[k].href`).
 - **CSP** is weakened, not translated — spec/Csp.agda (both runtimes
   checked against it; `csp-vs-chromium`: whatever loads directly loads
   proxied, and the bootstrap runs): source lists gain the proxy origin,
-  Trusted Types directives are kept and enforced; the connect policy
+  Trusted Types directives are kept and enforced; `form-action` and
+  `base-uri` gain it too (a form's action and a `<base href>` are on the
+  proxy: dzen.ru's SSO post was refused, `csp-form-action-vs-chromium`); the connect policy
   also admits the proxy's WebSocket origin (`wss://` for an https proxy:
   an https: source does not admit wss:, Csp.agda wsOrigin; emeralds.com's
   chat), blob: and data: (the runtime reads a page's blob worker
@@ -338,6 +340,28 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   halespropertymanagement.com; `made-code-import-vs-chromium`). Known gap:
   natively a classic script fetched cross-origin without CORS resolves
   nothing (base about:blank); proxied every script is CORS same-origin.
+  R13's global object inside a `with` takes `globalThis` (when it holds the
+  runtime) before compiling "return this": that is an eval, refused under a
+  CSP without 'unsafe-eval' (the Facebook SDK's strict modules in Disqus
+  frames; `with-global-csp-vs-chromium`). A `new Function` body is tagged
+  once per eval origin, so a body made again at the same place is the same
+  source (V8's compilation cache; the tag table bounded). Media Session
+  artwork `src`s are proxified (the browser fetches them itself:
+  visitoslo.com; `media-metadata-vs-chromium`). Markup written into a
+  document with no `<base href>` yet takes the first one it writes as the
+  base of what follows in the same write (Flashtalking richloads on
+  ginifab.com: `written-base-vs-chromium`). A worker reads its own URL,
+  fragment included (a served worker's from its own location, unwrapped;
+  a blob: worker's the page's blob URL with the page's origin; Turbopack's
+  `#params=` on thangs.com: `worker-location-vs-chromium`).
+  `WebSocket#url` reads the page's URL made ws(s) as the browser makes it
+  (toutiao.com: `websocket-url-vs-chromium`). A frame whose document has
+  committed is that document's origin, not its src's (a frame sent
+  elsewhere and redirected back to the page's origin: ir.netflix.net's
+  Q4 sign-in; `frame-redirect-back-vs-chromium`); only an empty frame
+  (about:) not on its way to a proxied URL is given its creator's runtime
+  (a proxied document with no runtime of its own read the creator's URL).
+  Limit: such a document reads its own `URL` from its own realm, proxied.
   The postMessage trampoline is compiled only for a realm other than the
   runtime's own (under Trusted Types a compile is a violation: Pinterest;
   Chrome's Function takes no TrustedScript), and only for one with no copy
@@ -479,6 +503,12 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   build too). Tools: scratchpad `loop.cjs` (CDP
   profile by host, `NOISO=1` puts frames in one process for a like-for-like
   direct profile), `pause2.cjs` (stack samples inside a hang).
+- **Measure load time without a debugger attached.** A DevTools session
+  (Playwright, any CDP client) makes every stack capture walk the whole
+  stack: the runtime's `new Function` stand-in took a minute on qidian.com
+  under Playwright and ~1 s more than direct in a stock Chrome. Start Chrome
+  with `--remote-debugging-port` and attach only after the load
+  (scratchpad `loadtime.cjs`, `fntime.cjs`).
 - **Speed: profile before guessing.** A page that feels slow proxied was
   the runtime's CPU, not the network: CDP `Network.loadingFinished` early
   but `responseReceived` late means the main thread is busy — take a

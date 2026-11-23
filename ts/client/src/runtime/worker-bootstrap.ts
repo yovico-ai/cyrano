@@ -84,8 +84,20 @@ export function initWorker(
     // The runtime's Trusted Types policy: the preamble made it to load the
     // runtime with (native/trusted.ts).
     initTrusted(scope, config.tt, policy);
-    const baseUrl = new URL(hrefAtCreation);
-    const wrappedLocation = new WorkerWrappedLocation(hrefAtCreation);
+    // The worker's own URL as the page has it. A worker the server serves
+    // is told the URL the server saw, which has no fragment (the browser
+    // never sends it); the worker's own location still holds the proxied
+    // URL with it — Turbopack passes its chunk list there (thangs.com:
+    // "Missing worker bootstrap config"). A worker the runtime made of a
+    // page's blob: or data: script is told the page's URL.
+    let href = hrefAtCreation;
+    try {
+        const own = String((scope as unknown as { location?: { href?: unknown } }).location?.href ?? "");
+        const original = own ? unwrapProxiedUrl(own, config) : own;
+        if (original && original !== own) href = original;
+    } catch { /* as told */ }
+    const baseUrl = new URL(href);
+    const wrappedLocation = new WorkerWrappedLocation(href);
     const rewriteOne = (rawUrl: string): string => rewriteUrl(rawUrl, baseUrl, config);
     const unwrapOne = (proxiedUrl: string): string => unwrapProxiedUrl(proxiedUrl, config);
 
