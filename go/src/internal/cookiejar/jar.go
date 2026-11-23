@@ -17,8 +17,8 @@ import (
 	"github.com/yovico/cyrano/internal/urlrewrite"
 )
 
-// Expiry: a session cookie (Session) or one alive until Until (seconds
-// after the epoch).
+// Expiry: a session cookie (Session) or one alive until Until (ms after
+// the epoch, as Chromium reports an expiry).
 type Expiry struct {
 	Session bool
 	Until   uint64
@@ -46,10 +46,13 @@ func SameID(a, b urlrewrite.StoredCookie) bool {
 	return a.Name == b.Name && a.Domain == b.Domain && a.Path == b.Path && a.HostOnly == b.HostOnly
 }
 
-// Cap is Chromium's longest cookie life: 400 days.
-const Cap = 400 * 86400
+// Cap is Chromium's longest cookie life: 400 days, in ms.
+const Cap = 400 * 86400 * 1000
 
-// ExpiryOf is a Set-Cookie's expiry at now (spec CookieJar.expiryOf): Max-Age
+// CapSeconds is the same in seconds (a Max-Age).
+const CapSeconds = 400 * 86400
+
+// ExpiryOf is a Set-Cookie's expiry at now, in ms (spec CookieJar.expiryOf): Max-Age
 // before Expires, each capped at 400 days; ok false when it is already
 // expired (a deletion).
 func ExpiryOf(now uint64, sc urlrewrite.SetCookie) (Expiry, bool) {
@@ -62,10 +65,10 @@ func ExpiryOf(now uint64, sc urlrewrite.SetCookie) (Expiry, bool) {
 		if !ok {
 			return Expiry{Session: true}, true
 		}
-		if t <= now {
+		if t*1000 <= now {
 			return Expiry{}, false
 		}
-		return Expiry{Until: capped(t)}, true
+		return Expiry{Until: capped(t * 1000)}, true
 	}
 	if sc.MaxAge == nil || *sc.MaxAge == "" {
 		return byExpires()
@@ -81,10 +84,10 @@ func ExpiryOf(now uint64, sc urlrewrite.SetCookie) (Expiry, bool) {
 	if n == 0 {
 		return Expiry{}, false
 	}
-	if n > Cap {
-		n = Cap
+	if n > CapSeconds {
+		n = CapSeconds
 	}
-	return Expiry{Until: capped(now + n)}, true
+	return Expiry{Until: capped(now + n*1000)}, true
 }
 
 // natOf reads decimal digits (at least one), saturating.
@@ -217,7 +220,7 @@ type Entry struct {
 	Expiry   Expiry
 	Site     string // registrable domain (or the host): the 180's key
 	Created  uint64
-	Accessed uint64 // seconds: the once-a-minute threshold
+	Accessed uint64 // ms: the once-a-minute threshold
 	Order    uint64 // the jar's tick at the last access: the LRU order
 }
 
@@ -415,18 +418,25 @@ func (j *Jar) Put(api bool, now uint64, site string, ch Change) []Numbered {
 			chs = append(chs, Change{Cookie: c, Gone: true})
 		}
 	default:
+		// An overwrite keeps the old creation (and place) when the value is
+		// the same; with another value it is a new cookie, last (spec
+		// replaceOrAdd; Chromium, measured).
 		ne := Entry{Cookie: c, Expiry: ch.Expiry, Site: site, Created: now, Accessed: now, Order: j.Tick + 1}
-		replaced := false
+		replaced, moved := false, false
 		for _, e := range j.Entries {
 			if !replaced && SameID(e.Cookie, c) {
-				ne.Created = e.Created
-				es = append(es, ne)
 				replaced = true
+				if e.Cookie.Value == c.Value {
+					ne.Created = e.Created
+					es = append(es, ne)
+				} else {
+					moved = true
+				}
 				continue
 			}
 			es = append(es, e)
 		}
-		if !replaced {
+		if !replaced || moved {
 			es = append(es, ne)
 		}
 		if !c.HTTPOnly {
@@ -469,12 +479,12 @@ func (j *Jar) ApplyOutbox(now uint64, site string, ch Change, k uint64) []Number
 	return out
 }
 
-// Touch records that the cookies used reports were used at now, at most
-// once a minute each (Chromium's kLastAccessThreshold).
+// Touch records that the cookies used reports were used at now (ms), at
+// most once a minute each (Chromium's kLastAccessThreshold).
 func (j *Jar) Touch(now uint64, used func(urlrewrite.StoredCookie) bool) {
 	for i := range j.Entries {
 		e := &j.Entries[i]
-		if used(e.Cookie) && e.Accessed+60 <= now {
+		if used(e.Cookie) && e.Accessed+60000 <= now {
 			j.Tick++
 			e.Accessed, e.Order = now, j.Tick
 		}
@@ -501,4 +511,76 @@ func (j *Jar) Live(now uint64) []urlrewrite.StoredCookie {
 		}
 	}
 	return out
+}
+
+// AckPrefix names a writer's ack: the highest outbox number the server read.
+const AckPrefix = "__crn~a!"
+
+// SepEsc percent-encodes "%", "~" and "*" (spec sepEsc): a record of a slot.
+func SepEsc(s string) string {
+	r := strings.NewReplacer("%", "%25", "~", "%7E", "*", "%2A")
+	return r.Replace(s)
+}
+
+// SepUnesc reads SepEsc back (spec sepUnesc).
+func SepUnesc(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '%' && i+2 < len(s) {
+			switch {
+			case s[i+1] == '2' && s[i+2] == '5':
+				b.WriteByte('%')
+				i += 2
+				continue
+			case s[i+1] == '7' && (s[i+2] == 'E' || s[i+2] == 'e'):
+				b.WriteByte('~')
+				i += 2
+				continue
+			case s[i+1] == '2' && (s[i+2] == 'A' || s[i+2] == 'a'):
+				b.WriteByte('*')
+				i += 2
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+// PackSlot writes records (one-write outbox entries' names and values) as
+// one slot's value (spec packSlot).
+func PackSlot(records [][2]string) string {
+	parts := make([]string, len(records))
+	for i, r := range records {
+		parts[i] = SepEsc(r[0]) + "*" + SepEsc(r[1])
+	}
+	return strings.Join(parts, "~")
+}
+
+// UnpackSlot reads a slot's value back (spec unpackSlot).
+func UnpackSlot(v string) [][2]string {
+	var out [][2]string
+	for _, r := range strings.Split(v, "~") {
+		n, val, _ := strings.Cut(r, "*")
+		out = append(out, [2]string{SepUnesc(n), SepUnesc(val)})
+	}
+	return out
+}
+
+// OutboxOf reads the writes a slot carries (spec outboxOf, one slot).
+func OutboxOf(slotValue string) []Numbered {
+	var out []Numbered
+	for _, r := range UnpackSlot(slotValue) {
+		if ch, k, ap, ok := Unchan(false, r[0], r[1]); ok && ap == nil {
+			out = append(out, Numbered{ch, k})
+		}
+	}
+	return out
+}
+
+// InboxFor reports whether a change of a cookie of site is told to the
+// browser as an inbox entry (spec inboxFor): only on a response to a page
+// of that same site, and never on a document's own (its snapshot has it).
+func InboxFor(document bool, requesterSite *string, site string) bool {
+	return requesterSite != nil && !document && *requesterSite == site
 }

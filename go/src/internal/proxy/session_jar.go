@@ -3,33 +3,164 @@ package proxy
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/yovico/cyrano/internal/cookiejar"
 	"github.com/yovico/cyrano/internal/urlrewrite"
 )
 
-// SessionJar keeps, per session, the cookies page scripts must never see:
-// HttpOnly ones. They are scoped and chosen by the same rules as every
-// other cookie (spec/Cookies.agda; urlrewrite.StoredCookie). Script-visible
-// cookies live in the browser's own jar under their wire names.
+// SessionJar keeps, per session, every cookie of the proxied sites — the
+// script-visible ones too — in a cookiejar.Jar (spec/CookieJar.agda: the
+// jar with Chromium's limits per registrable domain). The browser's own jar
+// carries only the channel: outbox entries (a script's write) and inbox
+// entries (a change scripts see), so it never nears its own limit.
+//
+// A jar outlives the server: it is kept in dir, one file per session,
+// written soon after it changes and read when the session is first seen.
+// The browser session is recorded with it: when a request names another
+// (the browser was restarted), the session cookies are gone, as natively.
 type SessionJar struct {
 	mu               sync.Mutex
-	entries          map[string][]jarEntry // sessionID → cookies, in creation order
-	challengeOrigins map[string][2]string  // sessionID → [scheme, host] of last challenge page
+	dir              string
+	sessions         map[string]*session
+	challengeOrigins map[string][2]string // sessionID → [scheme, host] of last challenge page
+	dirty            map[string]bool
+	flushing         bool
 }
 
-type jarEntry struct {
-	c       urlrewrite.StoredCookie
-	expires time.Time // zero = a session cookie
+type session struct {
+	Jar            cookiejar.Jar `json:"jar"`
+	BrowserSession string        `json:"bs"`
+	Issued         int64         `json:"bsAt"` // when the marker was issued (unix seconds)
 }
 
-// NewSessionJar returns an empty in-memory jar.
-func NewSessionJar() *SessionJar {
-	return &SessionJar{
-		entries:          make(map[string][]jarEntry),
+// NewSessionJar returns a jar kept in dir ("" keeps it in memory only).
+func NewSessionJar(dir ...string) *SessionJar {
+	j := &SessionJar{
+		sessions:         make(map[string]*session),
 		challengeOrigins: make(map[string][2]string),
+		dirty:            make(map[string]bool),
 	}
+	if len(dir) > 0 && dir[0] != "" {
+		j.dir = dir[0]
+		_ = os.MkdirAll(j.dir, 0o700)
+	}
+	return j
+}
+
+// DefaultCookieDir is where jars are kept unless CYRANO_COOKIE_DIR says.
+func DefaultCookieDir() string {
+	if d := os.Getenv("CYRANO_COOKIE_DIR"); d != "" {
+		return d
+	}
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(base, "cyrano", "cookies")
+}
+
+func validSessionID(id string) bool {
+	if len(id) != 32 {
+		return false
+	}
+	_, err := hex.DecodeString(id)
+	return err == nil
+}
+
+// get is the session's state, read from disk on first use; j.mu held.
+func (j *SessionJar) get(id string) *session {
+	if s, ok := j.sessions[id]; ok {
+		return s
+	}
+	s := &session{}
+	if j.dir != "" && validSessionID(id) {
+		if b, err := os.ReadFile(filepath.Join(j.dir, id+".json")); err == nil {
+			_ = json.Unmarshal(b, s)
+		}
+	}
+	j.sessions[id] = s
+	return s
+}
+
+// changed marks the session for writing out; j.mu held.
+func (j *SessionJar) changed(id string) {
+	if j.dir == "" || !validSessionID(id) {
+		return
+	}
+	j.dirty[id] = true
+	if !j.flushing {
+		j.flushing = true
+		time.AfterFunc(time.Second, j.flush)
+	}
+}
+
+func (j *SessionJar) flush() {
+	j.mu.Lock()
+	out := make(map[string][]byte, len(j.dirty))
+	for id := range j.dirty {
+		if b, err := json.Marshal(j.sessions[id]); err == nil {
+			out[id] = b
+		}
+	}
+	j.dirty = make(map[string]bool)
+	j.flushing = false
+	j.mu.Unlock()
+	for id, b := range out {
+		p := filepath.Join(j.dir, id+".json")
+		tmp := p + ".tmp"
+		if os.WriteFile(tmp, b, 0o600) == nil {
+			_ = os.Rename(tmp, p)
+		}
+	}
+}
+
+// With runs f on the session's jar, under the jar's lock; the jar is then
+// written out.
+func (j *SessionJar) With(sessionID string, f func(*cookiejar.Jar)) {
+	if sessionID == "" {
+		return
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	f(&j.get(sessionID).Jar)
+	j.changed(sessionID)
+}
+
+// NoteBrowserSession takes a request of sessionID's browser-session marker
+// ("" when it came without one) and gives the marker the response must
+// set ("" for none). A request without one is the first of a browser
+// session (the marker is a session cookie: the browser was restarted): the
+// session cookies end, as natively, and a new marker is issued — the same
+// one to every request without a marker in the next 30 seconds (they were
+// sent before the browser had it). A request with a marker other than the
+// jar's is taken at its word.
+func (j *SessionJar) NoteBrowserSession(sessionID, marker string) string {
+	if sessionID == "" {
+		return ""
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	s := j.get(sessionID)
+	if marker != "" {
+		if s.BrowserSession != marker {
+			s.BrowserSession = marker
+			j.changed(sessionID)
+		}
+		return ""
+	}
+	now := time.Now().Unix()
+	if s.BrowserSession != "" && now-s.Issued < 30 {
+		return s.BrowserSession
+	}
+	s.Jar.EndSession()
+	s.BrowserSession, s.Issued = GenerateSessionID(), now
+	j.changed(sessionID)
+	return s.BrowserSession
 }
 
 // StoreChallengeOrigin records the origin (scheme + host) of the challenge
@@ -67,62 +198,59 @@ func GenerateSessionID() string {
 	return hex.EncodeToString(b)
 }
 
-// sameIdentity: the RFC's cookie identity — name, domain, path, host-only.
-func sameIdentity(a, b urlrewrite.StoredCookie) bool {
-	return a.Name == b.Name && a.Domain == b.Domain && a.Path == b.Path && a.HostOnly == b.HostOnly
-}
+// unixNow is the jar's clock: ms after the epoch.
+func unixNow() uint64 { return uint64(time.Now().UnixMilli()) }
 
-// Store keeps c for the session, replacing a cookie of the same identity
-// (in its place: creation order is the first creation's). expires zero is a
-// session cookie.
+// Store keeps c for the session (expires zero: a session cookie), as a
+// response's Set-Cookie would; site is its registrable domain.
 func (j *SessionJar) Store(sessionID string, c urlrewrite.StoredCookie, expires time.Time) {
-	if sessionID == "" {
-		return
+	e := cookiejar.Expiry{Session: expires.IsZero()}
+	if !e.Session {
+		e.Until = uint64(expires.UnixMilli())
 	}
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	es := j.entries[sessionID]
-	for i := range es {
-		if sameIdentity(es[i].c, c) {
-			es[i] = jarEntry{c, expires}
-			return
-		}
-	}
-	j.entries[sessionID] = append(es, jarEntry{c, expires})
+	j.With(sessionID, func(jar *cookiejar.Jar) {
+		jar.Put(false, unixNow(), cookieSite(c.Domain), cookiejar.Change{Cookie: c, Expiry: e})
+	})
 }
 
 // Remove drops the cookie with c's identity, if the session has one.
 func (j *SessionJar) Remove(sessionID string, c urlrewrite.StoredCookie) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	es := j.entries[sessionID]
-	for i := range es {
-		if sameIdentity(es[i].c, c) {
-			j.entries[sessionID] = append(es[:i:i], es[i+1:]...)
-			return
-		}
-	}
+	j.With(sessionID, func(jar *cookiejar.Jar) {
+		jar.Put(false, unixNow(), cookieSite(c.Domain), cookiejar.Change{Cookie: c, Gone: true})
+	})
 }
 
-// Cookies returns the session's live cookies in creation order, evicting
-// expired ones.
+// Cookies returns the session's live cookies in creation order.
 func (j *SessionJar) Cookies(sessionID string) []urlrewrite.StoredCookie {
 	if sessionID == "" {
 		return nil
 	}
-	now := time.Now()
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	es := j.entries[sessionID]
-	live := es[:0]
-	out := make([]urlrewrite.StoredCookie, 0, len(es))
-	for _, e := range es {
-		if !e.expires.IsZero() && !e.expires.After(now) {
-			continue
+	return j.get(sessionID).Jar.Live(unixNow())
+}
+
+// Snapshot is what a document at pageURL is given of the session's jar
+// (spec CookieJar.snapshot): the script-visible cookies shown there, as
+// inbox entries of the jar's generation, and that generation. The runtime
+// keeps them in memory; the channel keeps them current.
+func (j *SessionJar) Snapshot(sessionID, pageURL string) map[string]any {
+	entries := []string{}
+	var gen uint64
+	if sessionID != "" {
+		j.mu.Lock()
+		jar := &j.get(sessionID).Jar
+		gen = jar.Gen
+		now := unixNow()
+		for _, e := range jar.Entries {
+			if !e.Expiry.Alive(now) || e.Cookie.HTTPOnly || !urlrewrite.MatchesURL(true, pageURL, e.Cookie) {
+				continue
+			}
+			ch := cookiejar.Change{Cookie: e.Cookie, Expiry: e.Expiry}
+			a := jar.LastApplied(e.Cookie)
+			entries = append(entries, cookiejar.ChanName(true, ch), cookiejar.ChanValue(ch, gen, &a))
 		}
-		live = append(live, e)
-		out = append(out, e.c)
+		j.mu.Unlock()
 	}
-	j.entries[sessionID] = live
-	return out
+	return map[string]any{"g": gen, "e": entries}
 }

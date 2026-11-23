@@ -89,10 +89,10 @@ func dump(j *Jar, inbox []string) string {
 func TestSpecConformance_Jar(t *testing.T) {
 	oracle := specoracle.Need(t)
 	rapid.Check(t, func(rt *rapid.T) {
-		now := uint64(1795000000)
+		now := uint64(1795000000000)
 		var script []string
 		for i, n := 0, rapid.IntRange(1, 25).Draw(rt, "ops"); i < n; i++ {
-			now += uint64(rapid.SampledFrom([]int{0, 1, 30, 61, 120}).Draw(rt, "dt"))
+			now += uint64(rapid.SampledFrom([]int{0, 1, 30, 61, 120}).Draw(rt, "dt")) * 1000
 			switch rapid.IntRange(0, 9).Draw(rt, "op") {
 			case 0, 1, 2, 3, 4:
 				u := rapid.SampledFrom(jarURLs).Draw(rt, "url")
@@ -125,7 +125,7 @@ func TestSpecConformance_Jar(t *testing.T) {
 					attr := rapid.SampledFrom([]string{"", "; Secure", "; Priority=Low", "; Priority=High", "; Max-Age=999"}).Draw(rt, "battr")
 					script = append(script, strings.Join([]string{"put", "http", fmt.Sprint(now + uint64(b)), jarSites[u], u, fmt.Sprintf("c%d=1%s", b, attr)}, us))
 				}
-				now += 200
+				now += 200000
 			}
 		}
 		want, _, err := oracle.Ask("jar", strings.Join(script, "\n"))
@@ -151,7 +151,7 @@ func TestSpecConformance_Chan(t *testing.T) {
 		u := rapid.SampledFrom(jarURLs).Draw(rt, "url")
 		s := rapid.SampledFrom(jarNames).Draw(rt, "name") + "=" + rapid.SampledFrom([]string{"1", "", "a:b!c", "é"}).Draw(rt, "v") +
 			rapid.SampledFrom(jarAttrs).Draw(rt, "attr")
-		e := rapid.SampledFrom([]string{"", "x", "1795000123"}).Draw(rt, "exp")
+		e := rapid.SampledFrom([]string{"", "x", "1795000123456"}).Draw(rt, "exp")
 		k := uint64(rapid.IntRange(0, 99).Draw(rt, "k"))
 		ap := "-"
 		var apn *uint64
@@ -181,7 +181,7 @@ func TestSpecConformance_Chan(t *testing.T) {
 		case "":
 			ch.Expiry = Expiry{Session: true}
 		default:
-			ch.Expiry = Expiry{Until: 1795000123}
+			ch.Expiry = Expiry{Until: 1795000123456}
 		}
 		name, value := ChanName(inbox, ch), ChanValue(ch, k, apn)
 		if got := name + "\n" + value; got != want {
@@ -195,6 +195,42 @@ func TestSpecConformance_Chan(t *testing.T) {
 		}
 		if wantBack == "null" {
 			rt.Fatalf("spec cannot read back %q %q", name, value)
+		}
+	})
+}
+
+func TestSpecConformance_Slot(t *testing.T) {
+	oracle := specoracle.Need(t)
+	pieces := []string{"a", "%", "~", "*", "%25", "%7e", "!", ":", "é", "", "__crn~o!h!x!%2F!n"}
+	rapid.Check(t, func(rt *rapid.T) {
+		var recs [][2]string
+		var args []string
+		for i, n := 0, rapid.IntRange(1, 4).Draw(rt, "n"); i < n; i++ {
+			a := strings.Join(rapid.SliceOfN(rapid.SampledFrom(pieces), 1, 4).Draw(rt, "a"), "")
+			b := strings.Join(rapid.SliceOfN(rapid.SampledFrom(pieces), 0, 4).Draw(rt, "b"), "")
+			recs = append(recs, [2]string{a, b})
+			args = append(args, a, b)
+		}
+		packed := PackSlot(recs)
+		want, _, err := oracle.Ask("pack", strings.Join(args, us))
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		if packed != want {
+			rt.Fatalf("PackSlot(%q) = %q, spec %q", recs, packed, want)
+		}
+		back, _, _ := oracle.Ask("unpack", packed)
+		var lines []string
+		for _, r := range UnpackSlot(packed) {
+			lines = append(lines, r[0]+us+r[1])
+		}
+		if got := strings.Join(lines, "\n"); got != back {
+			rt.Fatalf("UnpackSlot(%q) = %q, spec %q", packed, got, back)
+		}
+		for i, r := range UnpackSlot(packed) {
+			if r != recs[i] {
+				rt.Fatalf("round trip of %q: %q", recs, UnpackSlot(packed))
+			}
 		}
 	})
 }

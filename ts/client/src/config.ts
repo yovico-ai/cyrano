@@ -30,6 +30,12 @@ export interface ClientConfig {
      * the browser's own referrer is unwrapped.
      */
     referrer?: string;
+    /**
+     * The document's cookies, from the session's jar (spec/CookieJar.agda
+     * snapshot): the jar's generation and inbox entries, name and value in
+     * turn. The runtime keeps them in memory (cookies/memory.ts).
+     */
+    ck?: { g: number; e: string[] };
 
     /**
      * The nonce the page's CSP asks of scripts, when it asks for one: put

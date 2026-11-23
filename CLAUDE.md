@@ -223,6 +223,32 @@ frame, its `eval`, an `onload` attribute, `contentWindow[k].href`).
   site's next load, until IndexedDB answers. sessionStorage stays native (prefixed; a native refusal names the page's
   key). The native store is only a cache: its own refusals (a frame's
   Storage gone) never reach the page.
+- **Cookies live on the server** (spec/CookieJar.agda, `internal/cookiejar`,
+  `proxy/session_jar.go`; runtime `cookies/memory.ts`;
+  `cookie-jar-vs-chromium`): every cookie of a session, script-visible
+  ones too, is in the server's jar under Chromium's limits per registrable
+  domain (180 purged to 150 by priority-aware LRU with secure protection,
+  3300 in all — `cookie-evict-vs-chromium`), kept on disk
+  (`CYRANO_COOKIE_DIR`, default the user cache dir). The browser's jar
+  carries the session cookie (persistent: 400 days), a browser-session
+  marker (a session cookie; a request without it ends the jar's session
+  cookies, as a restart does) and the channel, all `Priority=Low`: a
+  script's writes packed into a few outbox slots per page tree (ride the
+  next request; the server's one ack per tree clears them), and inbox
+  entries for changes a response made to the requesting page's own site
+  (absorbed before every read and on cookieStore's change event). A
+  document gets its cookies inline in its config (`ck`; an external
+  bootstrap's from the boot handler, never in a URL) and is revalidated
+  (`no-cache`). Other tabs hear of a write on a BroadcastChannel. Cookie
+  dates as Chromium reads them (spec/CookieDate.agda, not the RFC's);
+  an overwrite with another value is a new cookie (last in order).
+  Cookies of the old wire form (`__crn!`) are read until the jar holds
+  their identity. Gaps: cookieStore change events are stopped (the
+  native ones list the channel; a synthesized one is not isTrusted); a
+  script's write over an HttpOnly cookie shows in its memory until the
+  next document; a third party's cookie a subresource sets reaches a
+  live frame of that party only with its next document; last access of
+  cookies a script reads is not tracked.
 - **eval** (spec/Eval.agda, checked in Chromium by eval-calls-vs-chromium
   against the oracle): every eval the source shows is rewritten — eval(…)
   and (eval)(…) direct, X.eval(…), X["eval"](…), eval.call/apply (and

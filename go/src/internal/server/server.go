@@ -108,7 +108,7 @@ func (s *Server) proxyEndpoints(vhost *config.VHost) urlrewrite.ProxyConfig {
 func (s *Server) Handler() http.Handler {
 	// One jar per server lifetime — shared across all requests so cookies
 	// set on response N are available to forward on request N+1.
-	jar := proxy.NewSessionJar()
+	jar := proxy.NewSessionJar(proxy.DefaultCookieDir())
 
 	// One upstream transport per server lifetime, shared across all requests
 	// and all per-request proxy.Handler instances. This is what makes HTTP/2
@@ -175,7 +175,7 @@ func (s *Server) Handler() http.Handler {
 			sh.ServeHTTP(w, r)
 			return
 		case htmlrewrite.BootPath:
-			bootHandler().ServeHTTP(w, r)
+			bootHandler(jar, vhost.SecretCookieName).ServeHTTP(w, r)
 			return
 		case WorkerInitPath:
 			workerInitHandler(vhost, s.proxyEndpoints(vhost)).ServeHTTP(w, r)

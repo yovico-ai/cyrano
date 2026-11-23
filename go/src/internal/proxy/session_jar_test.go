@@ -62,9 +62,9 @@ func TestSessionJar_StoreReplaceRemove(t *testing.T) {
 	jar.Store("s1", a, time.Time{})
 	jar.Store("s1", b, time.Time{})
 	a2, _ := stored(t, "https://www.a.example/", "sid=2; HttpOnly")
-	jar.Store("s1", a2, time.Time{}) // same identity: replaced in place
+	jar.Store("s1", a2, time.Time{}) // same identity, another value: a new cookie, last (Chromium)
 	got := jar.Cookies("s1")
-	if len(got) != 2 || got[0].Value != "2" || got[1].Name != "tok" {
+	if len(got) != 2 || got[0].Name != "tok" || got[1].Value != "2" {
 		t.Fatalf("Cookies = %+v", got)
 	}
 	if len(jar.Cookies("s2")) != 0 || len(jar.Cookies("")) != 0 {

@@ -77,7 +77,7 @@ describe.skipIf(!wanted || located.skip !== "")("a site's cookies past its limit
             await ctx.close();
             // The same writes as a script's, one second apart (the jar's
             // order is its own tick; the minute threshold never comes up).
-            const script = writes.map((w, i) => ["put", "api", String(1795000000 + i), "site.localhost", url, w].join(US)).join("\n");
+            const script = writes.map((w, i) => ["put", "api", String(1795000000000 + i * 1000), "site.localhost", url, w].join(US)).join("\n");
             const out = (await oracle.ask("jar", [script])) ?? "";
             const kept = out.split("\n").filter((l) => l.startsWith("E" + US)).map((l) => l.split(US)[1]!.split("!")[3]!).sort();
             if (JSON.stringify(kept) !== JSON.stringify(native)) {

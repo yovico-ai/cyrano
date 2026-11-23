@@ -61,11 +61,14 @@
 --   jar <script> → the jar after the script (lines, fields U+001F):
 --     put <api|http> <now> <site> <url> <set-cookie> | outbox <now> <site> <name> <value> | touch <now> <url> | end
 --     out: "E" scope flags expiry created accessed order site value, per entry; "G" gen; "I" name value, per inbox change
+--   unpack <slot value> → its records, lines "name U+001F value"
+--   pack <name U+001F value U+001F …> → the slot value of those records
 --   mem <script> → a runtime's memory after the script (lines, fields U+001F):
 --     absorb <inbox name> <inbox value> | write <outbox name> <outbox value> |
---     snap <url> <gen> (<inbox name> <inbox value>)* | read <now> <url>
+--     snap <url> <gen> (<inbox name> <inbox value>)* | read <now> <url> | ack <n> <gen>
 --     out: "R" cookie string, per read; "K" scope flags expiry gen pending|- value, per known cookie
 --   cookiedate <Expires string> → {"out":"<seconds after the epoch, 0 before it>"|"none"}
+--   (jar and mem: times in ms after the epoch)
 --   orbproxy <cross-origin 0|1> <redirect 0|1> <ct|"-"> <no-cors 0|1> <body> → {"out":"yes"|"no"} (the proxy fails it: ORB)
 --   sheetnosniff <same-origin 0|1> <ct|"-"> <nosniff 0|1> → {"out":"yes"|"no"} (the proxy adds nosniff)
 --   htmltail <scripting 0|1> <markup>  → {"out":"<offset>"|"none"} (where an unfinished construct at the end begins)
@@ -463,6 +466,8 @@ dispatch op args =
   else if eqStr op (toList "chan") then chanReq args
   else if eqStr op (toList "jar") then jarReq args
   else if eqStr op (toList "mem") then memReq args
+  else if eqStr op (toList "unpack") then oneArg (λ v → lines (Data.List.Base.map (λ r → Data.Product.Base.proj₁ r ++ usC ∷ Data.Product.Base.proj₂ r) (CookieJar.unpackSlot v))) args
+  else if eqStr op (toList "pack") then oneArg (λ v → CookieJar.packSlot (packArgs (splitOn (is 31) v))) args
   else if eqStr op (toList "cookies") then cookiesReq args
   else if eqStr op (toList "cookiestoreset") then cookieStoreSetReq args
   else if eqStr op (toList "cookiestoredelete") then cookieStoreDeleteReq args
@@ -1283,6 +1288,10 @@ dispatch op args =
     jarOut r = let j = JarRun.rJar r ; outs = JarRun.rOut r in out (lines (Data.List.Base.map jarEntryLine (CookieJar.entries j) ++ (toList "G" ++ usC ∷ toList (showNat (CookieJar.gen j))) ∷ Data.List.Base.reverse outs))
   jarReq _ = errorReply "BadRequest"
 
+  packArgs : List Str → List (Str × Str)
+  packArgs (n ∷ v ∷ rest) = (n , v) ∷ packArgs rest
+  packArgs _ = []
+
   -- A runtime's memory (CookieJar.Mem), by script.
   record MemRun : Set where
     constructor mkMemRun
@@ -1297,13 +1306,7 @@ dispatch op args =
   memSnapEntries _ = []
 
   memLine : MemRun → Str → MemRun
-  memLine r line with splitOn (is 31) line
-  ... | (cmd ∷ a ∷ b ∷ rest) =
-    if eqStr cmd (toList "absorb") then byAbsorb (CookieJar.unchan true a b)
-    else if eqStr cmd (toList "write") then byWrite (CookieJar.unchan false a b)
-    else if eqStr cmd (toList "snap") then bySnap (baseOf a) (jarNat b)
-    else if eqStr cmd (toList "read") then byRead (jarNat a) (baseOf b)
-    else r
+  memLine r line = byCmd (splitOn (is 31) line)
     where
     byAbsorb : Maybe (CookieJar.Change × ℕ × Maybe ℕ) → MemRun
     byAbsorb (just (ch , k , just ap)) = record r { mMem = CookieJar.absorb ch k ap (MemRun.mMem r) }
@@ -1311,13 +1314,24 @@ dispatch op args =
     byWrite : Maybe (CookieJar.Change × ℕ × Maybe ℕ) → MemRun
     byWrite (just (ch , k , nothing)) = record r { mMem = CookieJar.write ch k (MemRun.mMem r) }
     byWrite _ = r
-    bySnap : Maybe Abs → Maybe ℕ → MemRun
-    bySnap (just u) (just g) = record r { mMem = CookieJar.snapshot u g (memSnapEntries rest) (MemRun.mMem r) }
-    bySnap _ _ = r
+    bySnap : Maybe Abs → Maybe ℕ → List Str → MemRun
+    bySnap (just u) (just g) rest = record r { mMem = CookieJar.snapshot u g (memSnapEntries rest) (MemRun.mMem r) }
+    bySnap _ _ _ = r
     byRead : Maybe ℕ → Maybe Abs → MemRun
     byRead (just t) (just u) = record r { mOut = (toList "R" ++ usC ∷ CookieJar.memCookies t u (MemRun.mMem r)) ∷ MemRun.mOut r }
     byRead _ _ = r
-  ... | _ = r
+    byAck : Maybe ℕ → Maybe ℕ → MemRun
+    byAck (just n) (just k) = record r { mMem = CookieJar.ack n k (MemRun.mMem r) }
+    byAck _ _ = r
+    byCmd : List Str → MemRun
+    byCmd (cmd ∷ a ∷ b ∷ rest) =
+      if eqStr cmd (toList "absorb") then byAbsorb (CookieJar.unchan true a b)
+      else if eqStr cmd (toList "write") then byWrite (CookieJar.unchan false a b)
+      else if eqStr cmd (toList "snap") then bySnap (baseOf a) (jarNat b) rest
+      else if eqStr cmd (toList "read") then byRead (jarNat a) (baseOf b)
+      else if eqStr cmd (toList "ack") then byAck (jarNat a) (jarNat b)
+      else r
+    byCmd _ = r
 
   memAll : MemRun → List Str → MemRun
   memAll r []       = r

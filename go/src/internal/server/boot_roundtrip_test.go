@@ -45,7 +45,7 @@ func TestBootQueryRoundTrip(t *testing.T) {
 			rt.Skip()
 		}
 		rec := httptest.NewRecorder()
-		bootHandler().ServeHTTP(rec, httptest.NewRequest("GET", htmlrewrite.BootURL(cfgJSON, base), nil))
+		bootHandler(nil, "").ServeHTTP(rec, httptest.NewRequest("GET", htmlrewrite.BootURL(cfgJSON, base), nil))
 		js := rec.Body.String()
 		var gotCfg, wantCfg any
 		if err := json.Unmarshal([]byte(argBetween(rt, js, "$rewriter_init(window,", ").inject()")), &gotCfg); err != nil {

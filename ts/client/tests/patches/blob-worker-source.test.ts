@@ -25,7 +25,8 @@ function setUp(href = "https://claude.ai/cdn-cgi/challenge-platform/x", XMLHttpR
     win = {
         Blob: globalThis.Blob,
         URL: {
-            createObjectURL: (b: Blob) => { const u = `blob:test/${++n}`; made.set(u, b); return u; },
+            // On the proxy's origin, as the browser makes them.
+            createObjectURL: (b: Blob) => { const u = `blob:http://localhost:9081/${++n}`; made.set(u, b); return u; },
             revokeObjectURL: () => undefined,
         },
         ...(XMLHttpRequest ? { XMLHttpRequest } : {}),
@@ -53,7 +54,8 @@ describe("patchBlobWorkerSource", () => {
         // (Loaded as a TrustedScriptURL where Trusted Types are enforced.)
         expect(text).toContain('importScripts(p?p.createScriptURL("http://localhost:9081/rewriter.js"):"http://localhost:9081/rewriter.js")');
         expect(unmarked(String(text))).toContain("self.$rewriter=self.$rewriter_init_worker(");
-        expect(text).toContain('"https://claude.ai/cdn-cgi/challenge-platform/x"');
+        // The worker's own URL: its blob URL, with the page's origin (as directly).
+        expect(text).toContain('"blob:https://claude.ai/1"');
         expect(text).toContain("self.$__crn_key__=null");
         expect(unmarked(String(text))).toContain("$rewriter.wrap_get_location(location)");
     });
@@ -108,15 +110,17 @@ describe("patchBlobWorkerSource", () => {
         expect(scriptFor("data:text/livescript,postMessage(1)", true)).toBeDefined();
     });
 
-    // The module worker's init import carries the page URL in ?u= (the Go
-    // server's workerInitHandler reads it back): what it reads is the URL.
-    it("a module worker's init import carries the page URL exactly", async () => {
+    // The module worker's init import carries the worker's own URL in ?u=
+    // (the Go server's workerInitHandler reads it back): its blob URL with
+    // the page's origin, read back exactly.
+    it("a module worker's init import carries the worker's own URL exactly", async () => {
         for (const href of ["https://h.example/p?a=b&u=c#f", "https://h.example/%25/x+y/é?q=a b;c", "https://h.example/😀?</script>"]) {
             const scriptFor = setUp(href);
-            const priv = scriptFor(win.URL.createObjectURL(new win.Blob(["1"], { type: "text/javascript" })), true)!;
+            const blobUrl = win.URL.createObjectURL(new win.Blob(["1"], { type: "text/javascript" }));
+            const priv = scriptFor(blobUrl, true)!;
             const text = await made.get(priv)!.text();
             const spec = JSON.parse(text.slice(text.indexOf("import ") + 7, text.indexOf(";\n"))) as string;
-            expect(new URL(spec).searchParams.get("u")).toBe(new URL(href).href);
+            expect(new URL(spec).searchParams.get("u")).toBe("blob:" + new URL(href).origin + blobUrl.slice("blob:http://localhost:9081".length));
         }
     });
 });

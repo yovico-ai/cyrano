@@ -178,6 +178,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			if cfg.ExternalBootstrap {
 				cfg.ClientPassthrough["xb"] = true
 			}
+			documentCookies(cfg.ClientPassthrough, cfg.ExternalBootstrap, jar, resp, target)
 			replaceBody(resp, htmlrewrite.RewriteXMLDocument(body, &cfg))
 
 		case kindHTML:
@@ -215,6 +216,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			if cfg.ExternalBootstrap {
 				cfg.ClientPassthrough["xb"] = true // documents this page writes need the same
 			}
+			documentCookies(cfg.ClientPassthrough, cfg.ExternalBootstrap, jar, resp, target)
 			// Challenge pages are rewritten like any other. Their scripts check
 			// their own source, which reads back as the origin wrote it
 			// (jsrewrite: marked, invertible edits); left unrewritten, they
@@ -888,6 +890,29 @@ func pageConfig(base map[string]any, resp *http.Response) map[string]any {
 	return cp
 }
 
+// documentCookies gives a document its cookies (the jar's snapshot for its
+// URL, spec CookieJar.snapshot) in its runtime's config — for an external
+// bootstrap the boot handler reads them itself: no cookie goes in a URL.
+// A document so given is revalidated, never reused from the HTTP cache:
+// what it came with would be stale (the origin's Cache-Control stays
+// readable, Crn-H).
+func documentCookies(cp map[string]any, external bool, jar *proxy.SessionJar, resp *http.Response, target *url.URL) {
+	if jar == nil || resp.Request == nil {
+		return
+	}
+	sid, _ := resp.Request.Context().Value(proxy.SessionContextKey{}).(string)
+	if !external {
+		cp["ck"] = jar.Snapshot(sid, target.String())
+	}
+	if cc := resp.Header.Get("Cache-Control"); !strings.Contains(strings.ToLower(cc), "no-store") && !strings.Contains(strings.ToLower(cc), "no-cache") {
+		if cc == "" {
+			resp.Header.Set("Cache-Control", "no-cache")
+		} else {
+			resp.Header.Set("Cache-Control", "no-cache, "+cc)
+		}
+	}
+}
+
 // WorkerInitPath serves a module worker's preamble (workerPreamble): the
 // client runtime, initialized for the worker's original URL (?u=).
 const WorkerInitPath = "/cyrano-worker-init.js"
@@ -924,7 +949,7 @@ func originalPolicies(resp *http.Response) []string {
 
 // bootHandler serves htmlrewrite.BootPath: the bootstrap's second script
 // for a page whose CSP forbids inline scripts.
-func bootHandler() http.Handler {
+func bootHandler(jar *proxy.SessionJar, sessName string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg := r.URL.Query().Get("c")
 		// Only a JSON object, re-serialized: nothing else reaches the script.
@@ -932,6 +957,13 @@ func bootHandler() http.Handler {
 		if json.Unmarshal([]byte(cfg), &parsed) != nil {
 			http.Error(w, "bad config", http.StatusBadRequest)
 			return
+		}
+		// The document's cookies, from the session's jar (never in the URL).
+		delete(parsed, "ck")
+		if jar != nil && sessName != "" {
+			if c, err := r.Cookie(sessName); err == nil {
+				parsed["ck"] = jar.Snapshot(c.Value, r.URL.Query().Get("u"))
+			}
 		}
 		clean, _ := json.Marshal(parsed)
 		href, _ := json.Marshal(r.URL.Query().Get("u"))

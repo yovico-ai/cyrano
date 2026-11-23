@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	crnjar "github.com/yovico/cyrano/internal/cookiejar"
 	"github.com/yovico/cyrano/internal/urlrewrite"
 )
 
@@ -68,8 +69,9 @@ func TestE2E_BrotliDecode(t *testing.T) {
 	}
 }
 
-// TestE2E_SetCookiePrefixed — Set-Cookie headers from the upstream must arrive
-// at the browser with the site-namespace prefix on the cookie name.
+// TestE2E_SetCookiePrefixed — a Set-Cookie from the upstream is kept in the
+// session's jar; the browser is told it as an inbox entry scoped to the
+// origin's host (spec/CookieJar.agda), which the runtime absorbs.
 func TestE2E_SetCookiePrefixed(t *testing.T) {
 	upstream := startInlineServer(t, func(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, &http.Cookie{Name: "session", Value: "abc123", Path: "/"})
@@ -78,14 +80,20 @@ func TestE2E_SetCookiePrefixed(t *testing.T) {
 	})
 	proxy := startProxy(t)
 
-	resp := getViaRaw(t, proxy, upstream.URL+"/")
+	// As the page's own fetch() would ask: its Referer, no document.
+	req, _ := http.NewRequest("GET", gotoURL(proxy, upstream.URL+"/"), nil)
+	req.Header.Set("Referer", gotoURL(proxy, upstream.URL+"/page"))
+	req.Header.Set("Sec-Fetch-Dest", "empty")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
 	resp.Body.Close()
 
-	// The cookie lives in the browser's jar in cyrano's wire form
-	// (spec/Cookies.agda; urlrewrite.Unwire), scoped to the origin's host.
 	found := false
 	for _, sc := range resp.Cookies() {
-		if c, ok := urlrewrite.Unwire(sc.Name, sc.Value); ok && c.Name == "session" && c.Value == "abc123" && c.HostOnly && c.Domain == "127.0.0.1" {
+		if ch, _, ap, ok := crnjar.Unchan(true, sc.Name, sc.Value); ok && ap != nil && !ch.Gone && ch.Cookie.Name == "session" &&
+			ch.Cookie.Value == "abc123" && ch.Cookie.HostOnly && ch.Cookie.Domain == "127.0.0.1" {
 			found = true
 		}
 	}

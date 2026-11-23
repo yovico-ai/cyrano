@@ -310,6 +310,7 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		}
 
 		// The cookies a direct browser would send this request (cookies.go).
+		h.noteBrowserSession(req, sessionID)
 		h.upstreamCookies(req, target, sessionID)
 
 		// Advertise the same encodings a real browser sends. "gzip only" is a

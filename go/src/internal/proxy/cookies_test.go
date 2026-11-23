@@ -51,21 +51,24 @@ func TestCookies_SetCookieRouting(t *testing.T) {
 			session = strings.TrimPrefix(strings.Split(v, ";")[0], "crnsct=")
 			continue
 		}
+		if strings.HasPrefix(v, "crnsctb=") {
+			continue // the browser-session marker
+		}
 		toBrowser = append(toBrowser, v)
 	}
 	host := up.Hostname()
-	want := []string{
-		"__crn!h!" + host + "!%2Fapp!visible=iu:1; Path=/; Max-Age=60",
-		"__crn!h!" + host + "!%2Fapp!secret=; Path=/; Max-Age=0", // any script-visible twin is replaced
-	}
+	// Every cookie stays in the server's jar; a request with no page of its
+	// own behind it (typed) is told nothing back (CookieJar.inboxFor).
+	_ = host
+	var want []string
 	if strings.Join(toBrowser, " | ") != strings.Join(want, " | ") {
 		t.Errorf("Set-Cookie to the browser:\n got  %q\n want %q", toBrowser, want)
 	}
 	if session == "" {
 		t.Fatal("no session cookie issued")
 	}
-	if got := jar.Cookies(session); len(got) != 1 || got[0].Name != "secret" || !got[0].HTTPOnly || got[0].Path != "/app" {
-		t.Errorf("server jar = %+v, want the HttpOnly cookie only", got)
+	if got := jar.Cookies(session); len(got) != 2 || got[0].Name != "visible" || got[0].HTTPOnly || got[1].Name != "secret" || !got[1].HTTPOnly || got[1].Path != "/app" {
+		t.Errorf("server jar = %+v, want both, the second HttpOnly", got)
 	}
 }
 
@@ -75,10 +78,11 @@ func TestCookies_UpstreamGetsWhatABrowserWouldSend(t *testing.T) {
 	host := up.Hostname()
 	jar := NewSessionJar()
 	h := New(Options{ProxyCfg: devProxyCfg(), CookieJar: jar, SessionCookieName: "crnsct"})
+	jar.NoteBrowserSession("sess", "bs1") // the browser session the requests come in
 	jar.Store("sess", urlrewrite.StoredCookie{HostOnly: true, Domain: host, Path: "/", Name: "secret", Value: "2", HTTPOnly: true, SameSite: 'u'}, time.Time{})
 
 	browserJar := strings.Join([]string{
-		"crnsct=sess",
+		"crnsct=sess", "crnsctb=bs1",
 		"__crn!h!" + host + "!%2F!a=iu:1",
 		"__crn!h!" + host + "!%2Fapp!deep=iu:2",        // longer path: first
 		"__crn!h!" + host + "!%2Fother!elsewhere=iu:3", // path does not match
@@ -98,7 +102,8 @@ func TestCookies_UpstreamGetsWhatABrowserWouldSend(t *testing.T) {
 		return captured.headers.Get("Cookie")
 	}
 
-	if got, want := send(nil), "deep=2; a=1; strict=5; none=6; secret=2"; got != want {
+	// (The jar's cookies before the old wire form's, among equal paths.)
+	if got, want := send(nil), "deep=2; secret=2; a=1; strict=5; none=6"; got != want {
 		t.Errorf("same-site request:\n got  %q\n want %q", got, want)
 	}
 	crossSite := map[string]string{
@@ -110,7 +115,7 @@ func TestCookies_UpstreamGetsWhatABrowserWouldSend(t *testing.T) {
 	crossNav := map[string]string{
 		"Referer": urlrewrite.Rewrite("https://page.example/x", nil, devProxyCfg()), "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate",
 	}
-	if got, want := send(crossNav), "deep=2; a=1; none=6; secret=2"; got != want {
+	if got, want := send(crossNav), "deep=2; secret=2; a=1; none=6"; got != want {
 		t.Errorf("cross-site top-level navigation (Lax allowed, Strict not):\n got  %q\n want %q", got, want)
 	}
 }
@@ -167,8 +172,9 @@ func TestCookies_CredentialsOmitSendsNoCookies(t *testing.T) {
 	host := up.Hostname()
 	jar := NewSessionJar()
 	h := New(Options{ProxyCfg: devProxyCfg(), CookieJar: jar, SessionCookieName: "crnsct"})
+	jar.NoteBrowserSession("sess", "bs1")
 	jar.Store("sess", urlrewrite.StoredCookie{HostOnly: true, Domain: host, Path: "/", Name: "secret", Value: "2", HTTPOnly: true, SameSite: 'u'}, time.Time{})
-	browserJar := "crnsct=sess; __crn!h!" + host + "!%2F!a=iu:1"
+	browserJar := "crnsct=sess; crnsctb=bs1; __crn!h!" + host + "!%2F!a=iu:1"
 
 	send := func(credentials string) (*httptest.ResponseRecorder, http.Header) {
 		req := httptest.NewRequest("GET", cyranoPath(upstream.URL+"/api"), nil)
@@ -200,10 +206,10 @@ func TestCookies_CredentialsOmitSendsNoCookies(t *testing.T) {
 
 	// Control: the same request with credentials gets the cookies, and its
 	// response's HttpOnly cookie is stored (sent on the next request).
-	if _, got := send("include"); got.Get("Cookie") != "a=1; secret=2" {
-		t.Errorf("Crn-C include: upstream Cookie = %q, want %q", got.Get("Cookie"), "a=1; secret=2")
+	if _, got := send("include"); got.Get("Cookie") != "secret=2; a=1" {
+		t.Errorf("Crn-C include: upstream Cookie = %q, want %q", got.Get("Cookie"), "secret=2; a=1")
 	}
-	if _, got := send(""); got.Get("Cookie") != "a=1; secret=2; secret2=2" {
-		t.Errorf("no Crn-C: upstream Cookie = %q, want %q", got.Get("Cookie"), "a=1; secret=2; secret2=2")
+	if _, got := send(""); got.Get("Cookie") != "secret=2; fresh=1; secret2=2; a=1" {
+		t.Errorf("no Crn-C: upstream Cookie = %q, want %q", got.Get("Cookie"), "secret=2; fresh=1; secret2=2; a=1")
 	}
 }

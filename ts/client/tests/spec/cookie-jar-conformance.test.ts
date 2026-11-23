@@ -8,7 +8,7 @@
 import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { absorb, chanName, chanValue, memCookies, snapshot, unchan, write, type Change, type Known } from "../../src/cookies/jar";
+import { absorb, ack, chanName, chanValue, memCookies, packSlot, snapshot, unchan, unpackSlot, write, type Change, type Known } from "../../src/cookies/jar";
 import { parseSetCookie, scope, storeCookie } from "../../src/cookies/rfc";
 import { OracleClient, locateOracle, oracleRequired } from "./oracle-client";
 
@@ -29,7 +29,7 @@ const change = (u: string, s: string, e: string): Change | null => {
 };
 
 const arbChange = fc.tuple(fc.constantFrom(...URLS), fc.constantFrom(...NAMES), fc.constantFrom("1", "", "a:b!c", "é"), fc.constantFrom(...ATTRS),
-    fc.constantFrom("", "x", "1795000100", "1795000900"));
+    fc.constantFrom("", "x", "1795000100000", "1795000900000"));
 
 describe.skipIf(located.skip !== "")("the cookie jar's runtime half: the spec", () => {
     let oracle: OracleClient;
@@ -53,12 +53,25 @@ describe.skipIf(located.skip !== "")("the cookie jar's runtime half: the spec", 
         }), { numRuns: 600 });
     });
 
+    it("packs the outbox's slots as the spec", async () => {
+        const piece = fc.constantFrom("a", "%", "~", "*", "%25", "%7e", "!", ":", "é", "", "__crn~o!h!x!%2F!n");
+        await fc.assert(fc.asyncProperty(fc.array(fc.tuple(fc.array(piece, { minLength: 1, maxLength: 4 }), fc.array(piece, { maxLength: 4 })), { minLength: 1, maxLength: 4 }),
+            async (rs) => {
+                const recs = rs.map(([a, b]) => [a.join(""), b.join("")] as [string, string]);
+                const packed = packSlot(recs);
+                expect(packed).toBe(await oracle.ask("pack", [recs.flat().join(US)]));
+                expect(unpackSlot(packed).map(([n, v]) => n + US + v).join("\n")).toBe(await oracle.ask("unpack", [packed]));
+                expect(unpackSlot(packed)).toEqual(recs);
+            }), { numRuns: 400 });
+    });
+
     it("keeps memory as the spec", async () => {
         const op = fc.oneof(
             fc.tuple(fc.constant("absorb"), arbChange, fc.nat(8), fc.nat(5)),
             fc.tuple(fc.constant("write"), arbChange, fc.nat(8), fc.constant(0)),
             fc.tuple(fc.constant("snap"), fc.array(arbChange, { maxLength: 3 }), fc.nat(8), fc.constantFrom(...URLS)),
-            fc.tuple(fc.constant("read"), fc.constantFrom(1795000000, 1795000500, 1795001000), fc.constantFrom(...URLS), fc.constant(0)),
+            fc.tuple(fc.constant("read"), fc.constantFrom(1795000000000, 1795000500000, 1795001000000), fc.constantFrom(...URLS), fc.constant(0)),
+            fc.tuple(fc.constant("ack"), fc.nat(8), fc.nat(8), fc.constant(0)),
         );
         await fc.assert(fc.asyncProperty(fc.array(op, { minLength: 1, maxLength: 14 }), async (ops) => {
             const lines: string[] = [];
@@ -84,6 +97,10 @@ describe.skipIf(located.skip !== "")("the cookie jar's runtime half: the spec", 
                     }
                     lines.push(["snap", u, String(g), ...fields].join(US));
                     snapshot(mem, new URL(u), g, entries);
+                } else if (o[0] === "ack") {
+                    const a = o[1] as number, g = o[2] as number;
+                    lines.push(["ack", String(a), String(g)].join(US));
+                    ack(mem, a, g);
                 } else {
                     const [, now, u] = o as unknown as [string, number, string];
                     lines.push(["read", String(now), u].join(US));

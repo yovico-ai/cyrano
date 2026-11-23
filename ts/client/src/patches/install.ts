@@ -54,6 +54,7 @@ import { patchWindowOpen } from "./window-open";
 import { patchServiceWorker } from "./service-worker";
 import { patchDocumentCookie } from "./document-cookie";
 import { patchCookieStore } from "./cookie-store";
+import { givenSnapshot } from "../cookies/memory";
 import { patchPostMessage } from "./post-message";
 import { patchMessageEventOrigin } from "./message-event";
 
@@ -188,6 +189,8 @@ export function installPatches(
     step("patchTypedOm", () => patchTypedOm(targetWindow, rewriteOne));
     step("patchMediaMetadata", () => patchMediaMetadata(targetWindow, rewriteOne, unwrapOne));
     // Before document.cookie is wrapped: it writes with the native setter.
+    // The document's cookies, from the session's jar: memory's from its first access.
+    step("cookieSnapshot", () => givenSnapshot(targetWindow, config.ck));
     step("patchCookieStore", () => patchCookieStore(targetWindow, getCurrentBaseUrl));
     // (config.skip "cookieGet" / "cookieSet": one half only — development aid.)
     step("patchDocumentCookie", () => patchDocumentCookie(targetWindow, getCurrentBaseUrl,

@@ -19,7 +19,7 @@ export interface Known { change: Change; gen: number; pending: number | null }
 
 export const INBOX = "__crn~i!";
 export const OUTBOX = "__crn~o!";
-const CAP = 400 * 86400;
+const CAP = 400 * 86400 * 1000;
 
 export const sameId = (a: StoredCookie, b: StoredCookie): boolean =>
     a.name === b.name && a.domain === b.domain && a.path === b.path && a.hostOnly === b.hostOnly;
@@ -28,14 +28,14 @@ export const alive = (now: number, e: Expiry): boolean => e.session || now < e.u
 
 const natOf = (s: string): number | null => (/^[0-9]+$/.test(s) ? Number(s) : null);
 
-/** A Set-Cookie's expiry at `now` (seconds), or null: already expired (spec expiryOf). */
+/** A Set-Cookie's expiry at `now` (ms), or null: already expired (spec expiryOf). */
 export function expiryOf(now: number, sc: SetCookie): Expiry | null {
     const capped = (t: number): number => Math.min(t, now + CAP);
     const byExpires = (): Expiry | null => {
         if (sc.expires === null) return { session: true };
         const t = cookieDate(sc.expires);
         if (t === null) return { session: true };
-        return t <= now ? null : { session: false, until: capped(t) };
+        return t * 1000 <= now ? null : { session: false, until: capped(t * 1000) };
     };
     const m = sc.maxAge;
     if (m === null || m === "") return byExpires();
@@ -43,7 +43,7 @@ export function expiryOf(now: number, sc: SetCookie): Expiry | null {
     const n = natOf(m);
     if (n === null) return byExpires();
     if (n === 0) return null;
-    return { session: false, until: capped(now + Math.min(n, CAP)) };
+    return { session: false, until: capped(now + Math.min(n, 400 * 86400) * 1000) };
 }
 
 const flags = (c: StoredCookie): string => (c.secure ? "s" : "i") + c.sameSite + c.priority;
@@ -91,13 +91,22 @@ export function unchan(inbox: boolean, name: string, value: string): { change: C
     return { change, n, applied };
 }
 
+// Memory's order is the creation order: a change keeps a cookie's place
+// when its value stays, else it is a new cookie, last (spec placed).
+const sameValue = (a: Change, b: Change): boolean => !a.gone && !b.gone && a.cookie.value === b.cookie.value;
+function place(mem: Known[], i: number, k: Known): void {
+    if (sameValue(mem[i]!.change, k.change)) { mem[i] = k; return; }
+    mem.splice(i, 1);
+    mem.push(k);
+}
+
 /** An inbox (or snapshot) entry of generation g, the last outbox applied a (spec absorb). */
 export function absorb(mem: Known[], ch: Change, g: number, a: number): void {
     for (let i = 0; i < mem.length; i++) {
         const k = mem[i]!;
         if (!sameId(k.change.cookie, ch.cookie)) continue;
         const takes = k.pending !== null ? k.pending <= a : k.gen < g;
-        if (takes) mem[i] = { change: ch, gen: g, pending: null };
+        if (takes) place(mem, i, { change: ch, gen: g, pending: null });
         return;
     }
     mem.push({ change: ch, gen: g, pending: null });
@@ -107,7 +116,7 @@ export function absorb(mem: Known[], ch: Change, g: number, a: number): void {
 export function write(mem: Known[], ch: Change, p: number): void {
     for (let i = 0; i < mem.length; i++) {
         const k = mem[i]!;
-        if (sameId(k.change.cookie, ch.cookie)) { mem[i] = { change: ch, gen: k.gen, pending: p }; return; }
+        if (sameId(k.change.cookie, ch.cookie)) { place(mem, i, { change: ch, gen: k.gen, pending: p }); return; }
     }
     mem.push({ change: ch, gen: 0, pending: p });
 }
@@ -137,4 +146,31 @@ export function snapshot(mem: Known[], url: URL, g: number, entries: { change: C
         }
     }
     for (const e of entries) absorb(mem, e.change, e.n, e.applied);
+}
+
+// ── the outbox, packed (spec packSlot, unpackSlot, ack) ─────────────────
+
+export const ACK = "__crn~a!";
+
+const sepEsc = (s: string): string => s.replace(/[%~*]/g, (c) => (c === "%" ? "%25" : c === "~" ? "%7E" : "%2A"));
+const sepUnesc = (s: string): string => s.replace(/%(25|7[Ee]|2[Aa])/g, (m) => (m === "%25" ? "%" : m[1] === "7" ? "~" : "*"));
+
+/** Records (one-write outbox entries' names and values) as a slot's value. */
+export const packSlot = (records: readonly (readonly [string, string])[]): string =>
+    records.map(([n, v]) => sepEsc(n) + "*" + sepEsc(v)).join("~");
+
+/** A slot's value read back. */
+export function unpackSlot(v: string): [string, string][] {
+    return v.split("~").map((r): [string, string] => {
+        const i = r.indexOf("*");
+        return i < 0 ? [sepUnesc(r), ""] : [sepUnesc(r.slice(0, i)), sepUnesc(r.slice(i + 1))];
+    });
+}
+
+/** The server's ack: this runtime's writes numbered up to a are in, as of generation g (spec ack). */
+export function ack(mem: Known[], a: number, g: number): void {
+    for (let i = 0; i < mem.length; i++) {
+        const k = mem[i]!;
+        if (k.pending !== null && k.pending <= a) mem[i] = { ...k, pending: null, gen: Math.max(k.gen, g) };
+    }
 }

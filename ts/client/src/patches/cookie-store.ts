@@ -3,23 +3,26 @@
 // Chromium has it). Natively it reads and writes the proxy origin's jar:
 // a write for the page's own domain was refused ("Cookie domain must
 // domain-match current host" — Google's ad tag stores __gads, __gpi, __eoi
-// so, on every site with ads) and a read listed the proxy's wire cookies.
+// so, on every site with ads) and a read listed the proxy's channel.
 //
-// A write is checked as Chromium checks it and lands in the browser's jar
-// in the wire form document.cookie uses (cookies/rfc.ts), through the
-// native document.cookie setter; a read takes the native getAll() — it
-// still knows each cookie's expiry — keeps the cookies cyrano wrote, as
-// document.cookie selects them for the page's original URL, and gives
-// each item its original name, value, domain, path, sameSite and secure.
+// It reads and writes the same memory as document.cookie
+// (cookies/memory.ts; spec/CookieJar.agda): a write is checked as Chromium
+// checks it, taken into memory and the outbox, and has taken effect when
+// its promise resolves; a read lists, from memory, the cookies for the
+// page's original URL, each item as Chromium makes it (its keys, in their
+// order; the expiry to the millisecond). A refusal is the native's own,
+// made on the proxy's jar with an already expired cookie.
 //
-// Not done: change events (CookieChangeEvent) still list the wire
-// cookies; `partitioned` is not kept (a partitioned cookie is stored
-// unpartitioned); service workers' cookieStore.
-
-import { SafeWeakMap, nO, nR, ncall } from "../native/intrinsics";
+// The native store's change events list the channel's entries: they are
+// stopped before any listener of the page's. Not done: change events of
+// the page's own cookies (a synthesized event is not isTrusted);
+// `partitioned` is not kept; service workers' cookieStore.
+import { nO, nR, ncall } from "../native/intrinsics";
 import { wrapMethod } from "../native/surface";
-import { cookieStoreDelete, cookieStoreQuery, cookieStoreSet, itemSameSite, unwire, wireName, wireValue, type StoredCookie, type StoreErr } from "../cookies/rfc";
-import { isPublicSuffix } from "./document-cookie";
+import { cookieStoreDelete, cookieStoreQuery, cookieStoreSet, itemSameSite, type StoredCookie, type StoreErr } from "../cookies/rfc";
+import { sameId, type Change } from "../cookies/jar";
+import { absorbInbox, knownCookies, liveCookies, snapshotFirst, writeCookie, type CookieAccess } from "../cookies/memory";
+import { cookieAccessor, isPublicSuffix } from "./document-cookie";
 
 // Each refusal, made by the native on the proxy's own jar so that the
 // page gets the browser's own TypeError (its message differs between
@@ -55,8 +58,10 @@ export function patchCookieStore(targetWindow: Window, baseUrl: () => URL): void
     const CS = (targetWindow as unknown as { CookieStore?: { prototype: object } }).CookieStore;
     const DocProto = (targetWindow as unknown as { Document?: { prototype: object } }).Document?.prototype;
     if (!CS || !DocProto) return;
-    const cookieSet = nO.getOwnPropertyDescriptor(DocProto, "cookie")?.set as ((this: unknown, v: string) => void) | undefined;
-    if (!cookieSet) return;
+    const cookieDesc = cookieAccessor((targetWindow as unknown as { document: object }).document) ?? nO.getOwnPropertyDescriptor(DocProto, "cookie");
+    const cookieGet = cookieDesc?.get as ((this: unknown) => string) | undefined;
+    const cookieSet = cookieDesc?.set as ((this: unknown, v: string) => void) | undefined;
+    if (!cookieGet || !cookieSet) return;
     const nativeGetAll = nO.getOwnPropertyDescriptor(CS.prototype, "getAll")?.value as AnyFn | undefined;
     const W = targetWindow as unknown as { Promise: PromiseConstructor; TypeError: TypeErrorConstructor; document: Document };
     const P = W.Promise;
@@ -84,50 +89,31 @@ export function patchCookieStore(targetWindow: Window, baseUrl: () => URL): void
         return nR.apply(then, p, [() => nR.apply(nativeSet!, self, MALFORMED)]) as Promise<unknown>;
     };
 
-    const write = (c: StoredCookie, expiry: string): void => {
-        ncall(cookieSet, W.document, `${wireName(c)}=${wireValue(c)}; Path=/${expiry}`);
+    const access = (): CookieAccess => ({ get: () => ncall(cookieGet, W.document), set: (v: string) => ncall(cookieSet, W.document, v) });
+    const resolved = (v: unknown): Promise<unknown> => nR.apply(P.resolve as AnyFn, P, [v]) as Promise<unknown>;
+    // A write, into memory and the outbox: in effect when its promise resolves.
+    const write = (ch: Change): Promise<unknown> => {
+        snapshotFirst(targetWindow, baseUrl());
+        const a = access();
+        writeCookie(targetWindow, a, ch, absorbInbox(targetWindow, a));
+        return resolved(undefined);
     };
-    // A write goes through document.cookie, and the browser's own store
-    // answers on another channel: natively a set() has taken effect by the
-    // time its promise resolves, so here it resolves when the native list
-    // shows it (a cookie present with its value; gone, for a delete or an
-    // expired one) — a getAll() right after raced it and came back without
-    // the cookie. Bounded: a write the browser refuses never shows.
-    const settled = (self: unknown, c: StoredCookie, present: boolean): unknown => {
-        if (!nativeGetAll) return undefined;
-        const name = wireName(c), value = wireValue(c);
-        const step = (left: number): unknown => nR.apply(then, nR.apply(nativeGetAll, self, []), [(list: Item[]) => {
-            let found = false;
-            // (Gone: no cookie of the name, whatever its value.)
-            for (const it of list) if (String(it["name"]) === name && (!present || String(it["value"]) === value)) { found = true; break; }
-            return found === present || left <= 0 ? undefined : step(left - 1);
-        }, () => undefined]);
-        return step(5);
+    // An item as Chromium makes it: these keys, in this order.
+    const item = (c: StoredCookie): Item => {
+        const k = knownCookies(targetWindow).find((x) => sameId(x.change.cookie, c));
+        const e = k && !k.change.expiry.session ? k.change.expiry.until : null;
+        return { domain: c.hostOnly ? null : c.domain, expires: e, name: c.name, partitioned: false, path: c.path,
+            sameSite: itemSameSite(c.sameSite), secure: c.secure, value: c.value };
     };
-
-    // The cookies cyrano wrote, from the native list; each item kept with its cookie.
-    const items = new SafeWeakMap<StoredCookie, Item>();
-    const query = (self: unknown, name: string | null): Promise<unknown> => {
-        const all = nR.apply(nativeGetAll!, self, []) as Promise<Item[]>;
-        return nR.apply(then, all, [(list: Item[]) => {
-            const cs: StoredCookie[] = [];
-            for (const it of list) {
-                const c = unwire(String(it["name"]), String(it["value"]));
-                if (c) { cs.push(c); items.set(c, it); }
-            }
-            return cookieStoreQuery(baseUrl(), name, cs).map((c) => {
-                const it = items.get(c)!;
-                it["domain"] = c.hostOnly ? null : c.domain;
-                it["name"] = c.name;
-                it["path"] = c.path;
-                it["sameSite"] = itemSameSite(c.sameSite);
-                it["secure"] = c.secure;
-                it["value"] = c.value;
-                return it;
-            });
-        }]) as Promise<unknown>;
+    const query = (name: string | null): Promise<unknown> => {
+        snapshotFirst(targetWindow, baseUrl());
+        const cs = liveCookies(targetWindow, absorbInbox(targetWindow, access()));
+        return resolved(cookieStoreQuery(baseUrl(), name, cs).map(item));
     };
-
+    // A document that may not use cookies (sandboxed): the native's own refusal.
+    const allowed = (): boolean => {
+        try { ncall(cookieGet, W.document); return true; } catch { return false; }
+    };
     // get(name) / get(options) and getAll alike: the name asked for, or a refusal.
     const nameOf = (method: string, args: unknown[]): { name: string | null } | { error: string } => {
         const a = args[0];
@@ -147,10 +133,11 @@ export function patchCookieStore(targetWindow: Window, baseUrl: () => URL): void
 
     if (nativeGetAll) {
         for (const method of ["get", "getAll"] as const) {
-            wrapMethod<AnyFn>(CS.prototype, method, (_native, self, args) => {
+            wrapMethod<AnyFn>(CS.prototype, method, (native, self, args) => {
+                if (!allowed()) return nR.apply(native, self, args);
                 const n = nameOf(method, args);
                 if ("error" in n) return rejected(method, n.error);
-                const all = query(self, n.name);
+                const all = query(n.name);
                 return method === "getAll" ? all : nR.apply(then, all, [(xs: Item[]) => xs[0] ?? null]);
             });
         }
@@ -173,10 +160,10 @@ export function patchCookieStore(targetWindow: Window, baseUrl: () => URL): void
                 name, value, domain, path, sameSite: ss === "none" ? "n" : ss === "lax" ? "l" : "t",
             });
             if ("error" in r) return refuse(self, r.error, name, value);
-            const gone = expires !== null && expires <= Date.now();
-            if (gone) write(r, "; Max-Age=0");
-            else write(r, expires !== null ? `; Expires=${new Date(expires).toUTCString()}` : "");
-            return settled(self, r, !gone);
+            const now = Date.now();
+            if (expires !== null && expires <= now) return write({ cookie: r, gone: true, expiry: { session: true } });
+            return write({ cookie: r, gone: false,
+                expiry: expires === null ? { session: true } : { session: false, until: Math.min(expires, now + 400 * 86400 * 1000) } });
         }]);
     });
 
@@ -200,8 +187,22 @@ export function patchCookieStore(targetWindow: Window, baseUrl: () => URL): void
                 delete probe.value;
                 return nR.apply(nativeDelete, self, [probe]);
             }
-            write(r, "; Max-Age=0");
-            return settled(self, r, false);
+            return write({ cookie: r, gone: true, expiry: { session: true } });
         }]);
     });
+
+    // The native store's change events list the channel: stopped before any
+    // listener of the page's (this one is the first on the store).
+    const store = (targetWindow as unknown as { cookieStore?: EventTarget }).cookieStore;
+    const ET = (targetWindow as unknown as { EventTarget?: { prototype: EventTarget } }).EventTarget;
+    const listen = ET?.prototype.addEventListener;
+    const stop = (targetWindow as unknown as { Event?: { prototype: Event } }).Event?.prototype.stopImmediatePropagation;
+    if (store && listen && stop) {
+        try {
+            ncall(listen as AnyFn, store, "change", (e: Event) => {
+                try { absorbInbox(targetWindow, access()); } catch { /* a document that may not read them */ }
+                ncall(stop as AnyFn, e);
+            });
+        } catch { /* no store events here */ }
+    }
 }
