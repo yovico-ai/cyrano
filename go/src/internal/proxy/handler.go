@@ -687,5 +687,5 @@ func (h *Handler) mixedContent(r *http.Request, target *url.URL) urlrewrite.Mixe
 	if v := r.Header.Values("Sec-Fetch-Dest"); len(v) > 0 {
 		dest, has = v[0], true
 	}
-	return urlrewrite.MixedContent(ctx, target, dest, has)
+	return urlrewrite.MixedContent(ctx, target, dest, has, urlrewrite.TargetDest(r.URL.EscapedPath()) == urlrewrite.DestImageSet)
 }

@@ -174,6 +174,8 @@ export function urlDest(svg: boolean, tag: string, attr: string, rel: readonly s
     if (tag === "script" && attr === "src") return "js";
     // The document a frame is given by the document that holds it.
     if ((attr === "src" && (tag === "iframe" || tag === "frame" || tag === "embed")) || (tag === "object" && attr === "data")) return "frame";
+    // An image a srcset offers (spec MixedContent: blocked where src is upgraded).
+    if ((attr === "srcset" && (tag === "img" || tag === "source")) || (attr === "imagesrcset" && tag === "link")) return "set";
     if (tag !== "link" || attr !== "href") return null;
     const has = (r: string): boolean => { for (const x of rel) if (x === r) return true; return false; };
     if (has("stylesheet")) return "css";
@@ -190,7 +192,7 @@ export function urlDestOf(el: Element, attr: string): Dest | null {
     try {
         const svg = el.namespaceURI === SVG_NS;
         const tag = svg ? el.localName : el.localName.toLowerCase();
-        if (tag !== "script" && tag !== "link" && tag !== "iframe" && tag !== "frame" && tag !== "embed" && tag !== "object") return null;
+        if (tag !== "script" && tag !== "link" && tag !== "iframe" && tag !== "frame" && tag !== "embed" && tag !== "object" && tag !== "img" && tag !== "source") return null;
         const as = heldAttr(el, "as");
         const dest = urlDest(svg, tag, attr.toLowerCase(), relTokens(heldAttr(el, "rel")), as === null ? null : lowerA(as));
         // An iframe sandboxed without allow-scripts runs nothing (spec Frames.frameDest).

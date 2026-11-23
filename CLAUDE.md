@@ -269,7 +269,11 @@ frame, its `eval`, an `onload` attribute, `contentWindow[k].href`).
   (`spec/js-rewrite/README.md`). Code made with `new Function` names the
   page's calling frame as its eval origin, not the runtime's stand-in
   (a //# sourceURL tag the stack formatter puts back; spec/Stack.agda
-  evalOrigin, untag; Kasada reads it). A member that is written (`obj[k] = …`, `x.top = …`,
+  evalOrigin, untag; Kasada reads it). A stack's first line is V8's: the
+  name the error has when the stack is first read, the message it was
+  made with (recorded by the Error stand-in; `error-header-vs-chromium`;
+  an error V8 throws itself shows a message changed before the first
+  read — it is never seen made). A member that is written (`obj[k] = …`, `x.top = …`,
   `x.parent = …`: the next token a plain `=`) is left as written (R3, R5),
   so V8 names a function from its target as directly (`obj.<computed>`;
   rewritten, frames read `$rewriter.wrap_member_expression`: Adobe Launch).
@@ -656,8 +660,10 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   an http target that is not loopback is upgraded to https for an image,
   audio, video, and blocked (a network error, nothing sent) for anything
   else but a top-level navigation (a-hospital.com's http share.js ran;
-  `mixed-content-vs-chromium`). Gaps: a srcset / <picture> image is
-  upgraded where Chromium blocks it; ws: from an https page.
+  `mixed-content-vs-chromium`) — an image a srcset offers (an img's or a
+  picture source's, imagesrcset) is blocked, as Chromium (its URL marked
+  `!set` by both rewriters: Containment destImageSet). Gap: ws: from an
+  https page.
 - **HTTPS-Upgrades** as Chrome's (`proxy/https_upgrades.go`,
   spec/Upgrades.agda; `make chrome-check` — real Chrome, as Playwright's
   Chromium has the feature off): a main-frame http navigation to a unique

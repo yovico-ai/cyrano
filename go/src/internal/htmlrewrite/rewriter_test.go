@@ -122,17 +122,17 @@ func TestRewrite_PreservesAnchorOnly(t *testing.T) {
 func TestRewrite_Srcset_TwoCandidates(t *testing.T) {
 	got := rewrite(t,
 		`<img srcset="https://cdn.example.com/a.png 1x, https://cdn.example.com/b.png 2x" />`)
-	if !strings.Contains(got, "localhost:9081/cyrano/https/cdn.example.com/a.png 1x") {
+	if !strings.Contains(got, "localhost:9081/cyrano/https!set/cdn.example.com/a.png 1x") {
 		t.Errorf("srcset 1x candidate missing: %s", got)
 	}
-	if !strings.Contains(got, "localhost:9081/cyrano/https/cdn.example.com/b.png 2x") {
+	if !strings.Contains(got, "localhost:9081/cyrano/https!set/cdn.example.com/b.png 2x") {
 		t.Errorf("srcset 2x candidate missing: %s", got)
 	}
 }
 
 func TestRewrite_Srcset_NoDescriptor(t *testing.T) {
 	got := rewrite(t, `<img srcset="https://cdn.example.com/a.png" />`)
-	if !strings.Contains(got, `srcset="http://localhost:9081/cyrano/https/cdn.example.com/a.png"`) {
+	if !strings.Contains(got, `srcset="http://localhost:9081/cyrano/https!set/cdn.example.com/a.png"`) {
 		t.Errorf("srcset single-URL not rewritten: %s", got)
 	}
 }
@@ -580,7 +580,7 @@ func TestRewrite_IframeSrcdoc(t *testing.T) {
 // preloads escaped the proxy).
 func TestRewrite_LinkImageSrcset(t *testing.T) {
 	got := rewrite(t, `<link rel="preload" as="image" imagesrcset="a.webp 16w, https://cdn.example/b.webp 32w" imagesizes="50vw">`)
-	for _, want := range []string{"/cyrano/https/cdn.example/b.webp 32w", "a.webp 16w"} {
+	for _, want := range []string{"/cyrano/https!set/cdn.example/b.webp 32w", "a.webp 16w"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in %s", want, got)
 		}

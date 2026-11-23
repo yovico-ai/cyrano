@@ -29,6 +29,7 @@ import { rawText, rawTextTarget, rewriteTextNode } from "./dynamic-html";
 import { scriptKindOf } from "./script-kind";
 import { trusted } from "../native/trusted";
 import { rewriteSrcsetAttribute } from "./srcset";
+import { rewriteFor } from "./referrer-policy";
 import { kindOf, rewriteByKind, urlAttrsOf } from "./url-attribute-map";
 import { heldText, originalAttr, originalText, recordAttr, recordText, setHeldText } from "../native/originals";
 
@@ -88,7 +89,8 @@ export function patchDynamicIframeAppend(
             if (originalAttr(el, name) !== undefined) continue; // the runtime's already
             const raw = ncall(nativeGetAttr, el, name) as string | null;
             if (!raw) continue;
-            const rewritten = rewriteByKind(kindOf(el, name), raw, rewriteOne, rewriteSrcsetAttribute);
+            // Marked as by the setters: what it is requested for, its policy.
+            const rewritten = rewriteByKind(kindOf(el, name), raw, rewriteFor(el, rewriteOne, name), rewriteSrcsetAttribute);
             if (rewritten === raw) continue;
             ncall(nativeSetAttr, el, name, rewritten);
             recordAttr(el, name, rewritten, raw);

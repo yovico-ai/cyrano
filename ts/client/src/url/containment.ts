@@ -145,8 +145,11 @@ function cyranoTarget(pathname: string): { scheme: string; policy: string | null
 // requesting document is the frame's parent (spec Frames embedderOf).
 // "inert": such a frame in which no script runs (an iframe sandboxed
 // without allow-scripts: frameDest) — its document gets no runtime.
-export type Dest = "js" | "css" | "frame" | "inert";
-const isDest = (t: string): boolean => t === "js" || t === "css" || t === "frame" || t === "inert";
+// "set": an image a srcset offers (an img's or a picture source's, a
+// preload's imagesrcset): blocked as mixed content where an img's src is
+// upgraded (spec MixedContent; measured).
+export type Dest = "js" | "css" | "frame" | "inert" | "set";
+const isDest = (t: string): boolean => t === "js" || t === "css" || t === "frame" || t === "inert" || t === "set";
 
 /**
  * The mark of the document an iframe is given (spec Frames.frameDest):

@@ -35,7 +35,7 @@ open import Url using (Str; is; eqStr; lowerAscii; dropWhile; break)
 open import Data.Product.Base using (_,_)
 import Url
 open import Data.Nat.Base using (ℕ; zero; suc)
-open import Containment using (Dest; destScript; destStyle; destFrame; destInert)
+open import Containment using (Dest; destScript; destStyle; destFrame; destInert; destImageSet)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl)
 
 data Kind : Set where
@@ -205,6 +205,7 @@ responseKind (just destScript) _ _ _ = asJs
 responseKind (just destStyle)  _ _ _ = asCss
 responseKind (just destFrame)  sfd ct sn = unmarked sfd ct sn
 responseKind (just destInert)  sfd ct sn = unmarked sfd ct sn
+responseKind (just destImageSet) sfd ct sn = unmarked sfd ct sn
 responseKind nothing           sfd ct sn = unmarked sfd ct sn
 
 ------------------------------------------------------------------------

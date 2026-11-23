@@ -5,7 +5,8 @@
 // directly it is blocked). Through the proxy every request is same-origin to
 // the browser, so the proxy judges each as the browser would have
 // (spec/MixedContent.agda): an https page's http image, audio, video are
-// upgraded to https; its script, stylesheet, font, fetch(), frame blocked —
+// upgraded to https — but not an image a srcset offers (the rewriters mark
+// its URL `set`); its script, stylesheet, font, fetch(), frame blocked —
 // each asset arrives as directly (over http, over https, or not at all).
 //
 // The page is https on cyrano.test (in /etc/hosts; the dev CA, trusted by the
@@ -52,9 +53,10 @@ describe.skipIf(!wanted)("mixed content, in Chromium, through the proxy", () => 
         const serve = (scheme: string) => (req: IncomingMessage, res: ServerResponse): void => {
             const n = (req.url ?? "").replace(/^\/([a-z]+).*$/, "$1");
             seen.push(`${scheme} ${n}`);
-            const types: Record<string, string> = { img: "image/gif", js: "text/javascript", css: "text/css", font: "font/woff2", frame: "text/html", audio: "audio/wav" };
+            const types: Record<string, string> = { img: "image/gif", set: "image/gif", pic: "image/gif", picimg: "image/gif", onlyimg: "image/gif",
+                js: "text/javascript", css: "text/css", font: "font/woff2", frame: "text/html", audio: "audio/wav" };
             res.writeHead(200, { "content-type": types[n] ?? "text/plain", "access-control-allow-origin": "*" });
-            res.end(n === "img" ? GIF : "");
+            res.end(types[n] === "image/gif" ? GIF : "");
         };
         const plain: HttpServer = createHttp(serve("http"));
         const secure = createHttps(tls, serve("https"));
@@ -72,7 +74,9 @@ describe.skipIf(!wanted)("mixed content, in Chromium, through the proxy", () => 
         const a = `http://${host}:${(assets.address() as { port: number }).port}`;
         page = createHttps(tls, (_req, res) => {
             res.writeHead(200, { "content-type": "text/html" });
-            res.end(`<!doctype html><body><img src="${a}/img.gif"><script src="${a}/js.js"></script><link rel=stylesheet href="${a}/css.css">` +
+            res.end(`<!doctype html><body><img src="${a}/img.gif"><img srcset="${a}/set.gif 1x">` +
+                `<picture><source srcset="${a}/pic.gif"><img src="${a}/picimg.gif"></picture><picture><img src="${a}/onlyimg.gif"></picture>` +
+                `<script src="${a}/js.js"></script><link rel=stylesheet href="${a}/css.css">` +
                 `<iframe src="${a}/frame.html"></iframe><audio src="${a}/audio.wav" preload=auto></audio>` +
                 `<style>@font-face{font-family:f;src:url(${a}/font.woff2)} b{font-family:f}</style><b>x</b>` +
                 `<script>fetch("${a}/fetch").catch(() => {});</script></body>`);
@@ -112,7 +116,9 @@ describe.skipIf(!wanted)("mixed content, in Chromium, through the proxy", () => 
     it("each asset arrives as directly", async () => {
         const direct = await run(`${pageOrigin}/p`);
         const proxied = await run(`${proxyOrigin}/cyrano/https/${pageOrigin.slice(8)}/p`);
-        expect(direct).toEqual(["https audio", "https img"]);
+        // An img's src is upgraded (in a picture or not); an image a srcset
+        // offers — an img's, a picture source's — is blocked (measured).
+        expect(direct).toEqual(["https audio", "https img", "https onlyimg"]);
         expect(proxied).toEqual(direct);
     }, 90_000);
 });

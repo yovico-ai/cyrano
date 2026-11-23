@@ -307,8 +307,22 @@ export function patchErrorStacks(
         const name = caller.getFunctionName?.() ?? "";
         return evalOrigin(caller.isEval?.() && name === "eval" ? "" : name, loc);
     });
+    // V8's first line: the name the error has when its stack is first read,
+    // the message it was made with (measured: a message changed before the
+    // first read, or a getter put on it, does not show). An error made
+    // through the page's Error (and its subclasses' super) has that message
+    // recorded; any other is read as it is now (errors V8 itself throws:
+    // their message changed before the first read shows — a gap).
     const header = (err: unknown): string => {
-        try { return ncall((targetWindow as unknown as { Error: ErrorConstructor }).Error.prototype.toString, err); } catch { return "Error"; }
+        try {
+            if (err !== null && typeof err === "object" && born.has(err)) {
+                const n0 = (err as { name?: unknown }).name;
+                const n = n0 === undefined ? "Error" : `${n0 as string}`;
+                const m = born.get(err)!;
+                return n === "" ? m : m === "" ? n : `${n}: ${m}`;
+            }
+            return ncall((targetWindow as unknown as { Error: ErrorConstructor }).Error.prototype.toString, err);
+        } catch { return "Error"; }
     };
     const format: PrepareStackTrace = (err, sites) => {
         if (sitesMode) return sites;
@@ -330,11 +344,18 @@ export function patchErrorStacks(
     // the built-in; `prepareStackTrace` and `stackTraceLimit` on it are the
     // page's own, read by the formatter above — the limit is copied to the
     // built-in, where V8 reads it, whenever an error is made through it.
+    const made = (err: unknown): unknown => {
+        if (err !== null && typeof err === "object") {
+            const d = nO.getOwnPropertyDescriptor(err, "message");
+            born.set(err, d && typeof d.value === "string" ? d.value : "");
+        }
+        return err;
+    };
     const Shown: ErrorConstructor = standIn(Intrinsic as ErrorConstructor, {
-        apply(target, self, args) { syncLimit(); return nR.apply(target, self, args); },
+        apply(target, self, args) { syncLimit(); return made(nR.apply(target, self, args)); },
         construct(target, args, newTarget) {
             syncLimit();
-            return nR.construct(target, args, (newTarget === Shown ? target : newTarget) as ErrorConstructor) as object;
+            return made(nR.construct(target, args, (newTarget === Shown ? target : newTarget) as ErrorConstructor)) as object;
         },
     });
     // standIn copied the built-in's static members, cyrano's formatter among them.
@@ -359,4 +380,6 @@ export function patchErrorStacks(
 }
 
 const installed = new SafeWeakSet<object>();
+/** The message each error made through a page's Error had when made (its stack's first line). */
+const born = new SafeWeakMap<object, string>();
 const shownErrors = new SafeWeakSet<object>();

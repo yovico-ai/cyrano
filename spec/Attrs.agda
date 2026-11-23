@@ -182,7 +182,7 @@ rewriteUrlList rw s = go s []
 -- rel: the link types (ASCII-lowercased, as split); as: its as
 -- (ASCII-lowercased; nothing: absent).
 
-open import Containment using (Dest; destScript; destStyle; destFrame)
+open import Containment using (Dest; destScript; destStyle; destFrame; destImageSet)
 
 hasRel : String → List Str → Bool
 hasRel r []       = false
@@ -198,6 +198,9 @@ urlDest svgNs t a _ _ =
 urlDest htmlNs t a rel as =
   if eqStr t (toList "script") ∧′ eqStr a (toList "src") then just destScript
   else if eqStr t (toList "link") ∧′ eqStr a (toList "href") then linkDest
+  -- An image a srcset offers (MixedContent: blocked where src is upgraded).
+  else if eqStr a (toList "srcset") ∧′ (eqStr t (toList "img") ∨ eqStr t (toList "source")) then just destImageSet
+  else if eqStr a (toList "imagesrcset") ∧′ eqStr t (toList "link") then just destImageSet
   -- The document a frame is given by the document that holds it.
   else if eqStr a (toList "src") ∧′ (eqStr t (toList "iframe") ∨ eqStr t (toList "frame") ∨ eqStr t (toList "embed")) then just destFrame
   else if eqStr t (toList "object") ∧′ eqStr a (toList "data") then just destFrame

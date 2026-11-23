@@ -19,10 +19,11 @@ func (v MixedVerdict) String() string { return [...]string{"allow", "upgrade", "
 
 // MixedContent is spec mixed: ctx the requesting document's original URL
 // (nil: none known), target the request's, dest its Sec-Fetch-Dest (has:
-// sent). An https context's request for a URL that is not a priori
-// authenticated is upgraded (image, audio, video) or blocked; a top-level
-// navigation is not mixed content.
-func MixedContent(ctx, target *url.URL, dest string, has bool) MixedVerdict {
+// sent), imageSet its URL's srcset mark. An https context's request for a
+// URL that is not a priori authenticated is upgraded (image, audio, video;
+// not an image a srcset offered) or blocked; a top-level navigation is not
+// mixed content.
+func MixedContent(ctx, target *url.URL, dest string, has, imageSet bool) MixedVerdict {
 	if ctx == nil {
 		return MixedAllowed
 	}
@@ -35,7 +36,12 @@ func MixedContent(ctx, target *url.URL, dest string, has bool) MixedVerdict {
 	switch strings.ToLower(dest) {
 	case "document":
 		return MixedAllowed
-	case "image", "audio", "video":
+	case "image":
+		if imageSet {
+			return MixedBlocked
+		}
+		return MixedUpgraded
+	case "audio", "video":
 		return MixedUpgraded
 	}
 	return MixedBlocked

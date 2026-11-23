@@ -85,6 +85,10 @@ func URLDest(svg bool, tag, attr string, rel []string, as string, hasAs bool) ur
 	if attr == "src" && (tag == "iframe" || tag == "frame" || tag == "embed") || tag == "object" && attr == "data" {
 		return urlrewrite.DestFrame
 	}
+	// An image a srcset offers (spec MixedContent: blocked where src is upgraded).
+	if attr == "srcset" && (tag == "img" || tag == "source") || attr == "imagesrcset" && tag == "link" {
+		return urlrewrite.DestImageSet
+	}
 	if tag != "link" || attr != "href" {
 		return ""
 	}

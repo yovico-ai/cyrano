@@ -20,7 +20,12 @@ func TestSpecConformance_MixedContent(t *testing.T) {
 		c := rapid.SampledFrom(ctxs).Draw(rt, "ctx")
 		tg := rapid.SampledFrom(targets).Draw(rt, "target")
 		d := rapid.SampledFrom(dests).Draw(rt, "dest")
-		want, _, err := oracle.Ask("mixed", c, tg, d)
+		set := rapid.Bool().Draw(rt, "set")
+		args := []string{c, tg, d}
+		if set {
+			args = append(args, "set")
+		}
+		want, _, err := oracle.Ask("mixed", args...)
 		if err != nil {
 			rt.Fatalf("oracle: %v", err)
 		}
@@ -29,8 +34,8 @@ func TestSpecConformance_MixedContent(t *testing.T) {
 			cu, _ = url.Parse(c)
 		}
 		tu, _ := url.Parse(tg)
-		if got := MixedContent(cu, tu, d, d != "-").String(); got != want {
-			rt.Fatalf("MixedContent(%q, %q, %q) = %s, spec says %s", c, tg, d, got, want)
+		if got := MixedContent(cu, tu, d, d != "-", set).String(); got != want {
+			rt.Fatalf("MixedContent(%q, %q, %q, set %v) = %s, spec says %s", c, tg, d, set, got, want)
 		}
 	})
 }

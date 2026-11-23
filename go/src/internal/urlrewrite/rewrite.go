@@ -206,6 +206,10 @@ const (
 	// DestInert: such a frame in which no script runs (an iframe sandboxed
 	// without allow-scripts: FrameDest) — its document gets no runtime.
 	DestInert Dest = "inert"
+	// DestImageSet: an image a srcset offers (an img's or a picture
+	// source's, a preload's imagesrcset): blocked as mixed content where an
+	// img's src is upgraded (spec MixedContent; measured).
+	DestImageSet Dest = "set"
 )
 
 // FrameDest is the mark of the document an iframe is given (spec
@@ -343,7 +347,7 @@ func schemeSegment(seg string) (scheme string, m Mark, ok bool) {
 		return "", Mark{}, false
 	}
 	dest := func(t string) Dest {
-		if t == string(DestScript) || t == string(DestStyle) || t == string(DestFrame) || t == string(DestInert) {
+		if t == string(DestScript) || t == string(DestStyle) || t == string(DestFrame) || t == string(DestInert) || t == string(DestImageSet) {
 			return Dest(t)
 		}
 		return ""

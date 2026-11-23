@@ -14,13 +14,13 @@
 --   * a navigation of the top-level document (Sec-Fetch-Dest document) is
 --     not mixed content;
 --   * an image, audio or video is upgraded: requested over https instead
---     (Chromium's autoupgrade of optionally-blockable content);
+--     (Chromium's autoupgrade of optionally-blockable content) — but an
+--     image a srcset offered (an img's or a picture source's: the proxified
+--     URL's `set` mark, Containment destImageSet) is blocked (measured: an
+--     img src, in a picture or not, is upgraded; a srcset candidate is not);
 --   * anything else is blocked: a network error, nothing sent.
 -- Checked against Chromium through the real server (mixed-content-vs-
--- chromium). Known gaps: an image chosen from a srcset or <picture> is
--- blockable in Chromium, not upgradable — the proxy cannot tell it from an
--- <img src> by the request (both Sec-Fetch-Dest image) and upgrades it; a
--- ws: WebSocket from an https page is not judged.
+-- chromium). Known gap: a ws: WebSocket from an https page is not judged.
 ------------------------------------------------------------------------
 
 module MixedContent where
@@ -48,10 +48,11 @@ isHttps wss   = true
 isHttps _     = false
 
 -- context: the requesting document's original URL; dest: Sec-Fetch-Dest
--- (nothing: none sent).
-mixed : Maybe Abs → Abs → Maybe Str → Verdict
-mixed nothing _ _ = allowed
-mixed (just ctx) target dest =
+-- (nothing: none sent); imageSet: the request's URL is marked as a
+-- srcset's image.
+mixed : Maybe Abs → Abs → Maybe Str → Bool → Verdict
+mixed nothing _ _ _ = allowed
+mixed (just ctx) target dest imageSet =
   if not (isHttps (scheme ctx)) ∨ trustworthy target then allowed
   else byDest dest
   where
@@ -61,5 +62,6 @@ mixed (just ctx) target dest =
   byDest nothing  = allowed      -- not a browser request the proxy can judge
   byDest (just d) =
     if is′ d "document" then allowed
+    else if is′ d "image" ∧ imageSet then blocked
     else if is′ d "image" ∨ is′ d "audio" ∨ is′ d "video" then upgraded
     else blocked

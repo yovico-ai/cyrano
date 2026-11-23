@@ -74,7 +74,7 @@
 --   htmltail <scripting 0|1> <markup>  → {"out":"<offset>"|"none"} (where an unfinished construct at the end begins)
 --   nosniff <field lines, LF>          → {"out":"yes"|"no"} (X-Content-Type-Options says nosniff)
 --   workerruns <module 0|1> <mime>      → {"out":"yes"|"no"} (a blob:/data: worker runs)
---   mixed <context|-> <target> <dest|-> → {"out":"allow"|"upgrade"|"block"} (MixedContent.mixed)
+--   mixed <context|-> <target> <dest|-> [set] → {"out":"allow"|"upgrade"|"block"} (MixedContent.mixed; set: a srcset's image)
 --   xmlrw <document>                    → {"out":"<the document rewritten by the stand-ins (XmlDoc.agda)>"}
 --   specrules <proxy> <base> <header>   → {"out":"<the Speculation-Rules value the browser is given>"}
 --   dataurl <url>                       → {"out":"none"} (given as is) or
@@ -536,6 +536,7 @@ dispatch op args =
             else if eqStr t (toList "css") then just (just destStyle)
             else if eqStr t (toList "frame") then just (just destFrame)
             else if eqStr t (toList "inert") then just (just destInert)
+            else if eqStr t (toList "set") then just (just destImageSet)
             else nothing
     byMark : Maybe (Maybe Policy) → Maybe (Maybe Dest) → Str
     byMark (just x) (just d) = answerReply raw (rewriteUrlWith px (mark x d) base raw)
@@ -597,7 +598,8 @@ dispatch op args =
     dst : Maybe Dest
     dst = if eqStr m (toList "js") then just destScript else if eqStr m (toList "css") then just destStyle
           else if eqStr m (toList "frame") then just destFrame
-          else if eqStr m (toList "inert") then just destInert else nothing
+          else if eqStr m (toList "inert") then just destInert
+          else if eqStr m (toList "set") then just destImageSet else nothing
     opt : Str → Str → Maybe Str
     opt p v = if eqStr p (toList "1") then just v else nothing
   dispositionReq _ = errorReply "BadRequest"
@@ -1642,16 +1644,21 @@ dispatch op args =
   xmlRwReq _ = errorReply "BadRequest"
 
   -- mixed <context URL | -> <target URL> <Sec-Fetch-Dest | ->
-  mixedReq : List Str → Str
-  mixedReq (c ∷ t ∷ d ∷ []) with baseOf t
+  mixedWith : Str → Str → Str → Bool → Str
+  mixedWith c t d set with baseOf t
   ... | nothing = errorReply "BadTarget"
-  ... | just target = out (MixedContent.verdictName (MixedContent.mixed ctx target dest))
+  ... | just target = out (MixedContent.verdictName (MixedContent.mixed ctx target dest set))
     where
     ctx : Maybe Abs
     ctx = if eqStr c (toList "-") then nothing else baseOf c
     dest : Maybe Str
     dest = if eqStr d (toList "-") then nothing else just d
+
+  mixedReq : List Str → Str
+  mixedReq (c ∷ t ∷ d ∷ []) = mixedWith c t d false
+  mixedReq (c ∷ t ∷ d ∷ s ∷ []) = mixedWith c t d (eqStr s (toList "set"))
   mixedReq _ = errorReply "BadRequest"
+
 
   specRulesReq : List Str → Str
   specRulesReq (p ∷ b ∷ h ∷ []) with proxyOf p | baseOf b
