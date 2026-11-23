@@ -86,6 +86,11 @@ isCtl c = ((toℕ c <ᵇ 32) ∧ not (is 9 c)) ∨ is 127 c
 data SameSite : Set where
   ssNone ssLax ssStrict ssDefault : SameSite
 
+-- Chromium's Priority attribute (low, medium, high; anything else medium):
+-- it decides which cookies a full jar evicts first (CookieJar.agda).
+data Priority : Set where
+  pLow pMedium pHigh : Priority
+
 record SetCookie : Set where
   constructor mkSet
   field
@@ -96,7 +101,8 @@ record SetCookie : Set where
     httpOnly   : Bool
     sameSite   : SameSite
     maxAge     : Maybe Str    -- "-"? DIGIT+, as written
-    expires    : Maybe Str    -- as written (cookie-date is outside the model)
+    expires    : Maybe Str    -- as written (read by CookieDate.agda)
+    priority   : Priority
 open SetCookie public
 
 -- name=value up to the first ";" — no "=" means a nameless cookie.
@@ -108,6 +114,12 @@ nameValue pair with break (is 61) pair
 validMaxAge : Str → Bool
 validMaxAge []       = false
 validMaxAge (c ∷ cs) = (isDigit c ∨ (is 45 c ∧ not (isEmpty cs))) ∧ all isDigit cs
+
+priorityOf : Str → Priority
+priorityOf v =
+  if eqStr (lower v) (toList "low") then pLow
+  else if eqStr (lower v) (toList "high") then pHigh
+  else pMedium
 
 sameSiteOf : Str → SameSite
 sameSiteOf v =
@@ -142,22 +154,35 @@ applyAttr av c with break (is 61) av
     else if eqStr n (toList "secure") then record c { secure = true }
     else if eqStr n (toList "httponly") then record c { httpOnly = true }
     else if eqStr n (toList "samesite") then record c { sameSite = sameSiteOf v }
+    else if eqStr n (toList "priority") then record c { priority = priorityOf v }
     else c
 
 applyAttrs : List Str → SetCookie → SetCookie
 applyAttrs []       c = c
 applyAttrs (a ∷ as) c = applyAttrs as (applyAttr a c)
 
+-- Chromium (measured 2026-11-23, cookies-vs-chromium): a tab inside a
+-- name, a value, an attribute's name or its value — what is left of it
+-- once trimmed — rejects the cookie; at their edges it is trimmed.
+tabInside : Str → Bool
+tabInside p with break (is 61) p
+... | a , []    = any (is 9) (trim a)
+... | a , _ ∷ v = any (is 9) (trim a) ∨ any (is 9) (trim v)
+
 parseSetCookie : Str → Maybe SetCookie
 parseSetCookie s =
-  if any isCtl s then nothing else fromParts (splitOn (is 59) s)
+  if any isCtl s ∨ anyPart (splitOn (is 59) s) then nothing else fromParts (splitOn (is 59) s)
   where
+  anyPart : List Str → Bool
+  anyPart []       = false
+  anyPart (p ∷ ps) = tabInside p ∨ anyPart ps
+
   fromParts : List Str → Maybe SetCookie
   fromParts []           = nothing
   fromParts (pair ∷ avs) with nameValue pair
   ... | n , v =
     if 4096 <ᵇ (octets n + octets v) then nothing
-    else just (applyAttrs avs (mkSet n v nothing nothing false false ssDefault nothing nothing))
+    else just (applyAttrs avs (mkSet n v nothing nothing false false ssDefault nothing nothing pMedium))
 
 ------------------------------------------------------------------------
 -- §5.1.3, §5.1.4: domain-match, path-match, default-path.
@@ -203,6 +228,7 @@ record Stored : Set where
     sSecure   : Bool
     sHttpOnly : Bool
     sSameSite : SameSite
+    sPriority : Priority
 open Stored public
 
 -- `api`: set by a script (document.cookie), not an HTTP response.
@@ -217,7 +243,7 @@ store api publicSuffix u c =
   else if prefixed "__secure-" (name c) ∧ not (secure c) then nothing
   else if prefixed "__host-" (name c) ∧ not (secure c ∧ hostOnly ∧ eqStr thePath (toList "/")) then nothing
   else if not domainOk then nothing
-  else just (mkStored hostOnly theDomain thePath (name c) (value c) (secure c) (httpOnly c) (sameSite c))
+  else just (mkStored hostOnly theDomain thePath (name c) (value c) (secure c) (httpOnly c) (sameSite c) (priority c))
   where
   prefixed : Data.String.Base.String → Str → Bool
   prefixed p s = startsWith (toList p) (lower s)
@@ -337,7 +363,7 @@ unwire n v = if startsWith wirePrefix n then fields (dropN 6 n) else nothing
   build : Bool → Str → Str → Str → Maybe Stored
   build ho d p nm with flagsOf v
   ... | nothing              = nothing
-  ... | just (sec , ss , val) = just (mkStored ho (pctDecode d) (pctDecode p) nm val sec false ss)
+  ... | just (sec , ss , val) = just (mkStored ho (pctDecode d) (pctDecode p) nm val sec false ss pMedium)
 
   -- hd "!" domain "!" path "!" name
   fields : Str → Maybe Stored
@@ -494,7 +520,7 @@ cookieStoreSet later ps u o =
     longDomain (just d) = 1024 <ᵇ octets d
     longDomain nothing  = false
   ... | true  = rejected malformed
-  ... | false with store true ps u (mkSet n v (lowered (oDomain o)) (just p) true false (oSameSite o) nothing nothing)
+  ... | false with store true ps u (mkSet n v (lowered (oDomain o)) (just p) true false (oSameSite o) nothing nothing pMedium)
     where
     lowered : Maybe Str → Maybe Str
     lowered (just d) = just (lower d)

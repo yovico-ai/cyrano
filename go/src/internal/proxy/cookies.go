@@ -89,11 +89,9 @@ func cookieExpiry(sc urlrewrite.SetCookie, now time.Time) (expires time.Time, go
 		return now.Add(d), false
 	}
 	if sc.Expires != nil {
-		// net/http's own cookie-date reading (the spec leaves cookie-date
-		// outside its model).
-		hdr := http.Header{"Set-Cookie": {"x=y; Expires=" + *sc.Expires}}
-		if cs := (&http.Response{Header: hdr}).Cookies(); len(cs) == 1 && !cs[0].Expires.IsZero() {
-			e := cs[0].Expires
+		// As Chromium reads the date (spec/CookieDate.agda).
+		if secs, ok := urlrewrite.CookieDate(*sc.Expires); ok {
+			e := time.Unix(int64(min(secs, uint64(1)<<40)), 0)
 			if !e.After(now) {
 				return time.Time{}, true
 			}

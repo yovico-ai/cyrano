@@ -1,0 +1,100 @@
+// @vitest-environment node
+//
+// Conformance of src/cookies/jar.ts with spec/CookieJar.agda, asked live:
+// the channel's form both ways (`chan`, `unchan`), and random scripts of a
+// runtime's memory — inbox entries absorbed, its own writes, snapshots,
+// reads (`mem`).
+
+import fc from "fast-check";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+import { absorb, chanName, chanValue, memCookies, snapshot, unchan, write, type Change, type Known } from "../../src/cookies/jar";
+import { parseSetCookie, scope, storeCookie } from "../../src/cookies/rfc";
+import { OracleClient, locateOracle, oracleRequired } from "./oracle-client";
+
+const located = locateOracle();
+if (located.skip !== "" && oracleRequired) throw new Error(located.skip);
+
+const US = "\u001f";
+const URLS = ["https://a.example/", "https://www.a.example/app/x", "http://a.example/", "https://b.example/p"];
+const NAMES = ["sid", "a", "__Host-h", "x"];
+const ATTRS = ["", "; Secure", "; Priority=Low", "; Priority=High", "; Domain=a.example", "; Path=/app", "; SameSite=Lax"];
+
+const change = (u: string, s: string, e: string): Change | null => {
+    const sc = parseSetCookie(s);
+    const c = sc && storeCookie(false, false, new URL(u), sc);
+    if (!c) return null;
+    return e === "x" ? { cookie: c, gone: true, expiry: { session: true } }
+        : e === "" ? { cookie: c, gone: false, expiry: { session: true } } : { cookie: c, gone: false, expiry: { session: false, until: Number(e) } };
+};
+
+const arbChange = fc.tuple(fc.constantFrom(...URLS), fc.constantFrom(...NAMES), fc.constantFrom("1", "", "a:b!c", "é"), fc.constantFrom(...ATTRS),
+    fc.constantFrom("", "x", "1795000100", "1795000900"));
+
+describe.skipIf(located.skip !== "")("the cookie jar's runtime half: the spec", () => {
+    let oracle: OracleClient;
+    beforeAll(() => { oracle = new OracleClient(located.path); });
+    afterAll(() => oracle?.close());
+
+    it("writes and reads the channel's form as the spec", async () => {
+        await fc.assert(fc.asyncProperty(fc.boolean(), arbChange, fc.nat(99), fc.nat(9), async (inbox, [u, n, v, a, e], k, ap) => {
+            const s = `${n}=${v}${a}`;
+            const want = await oracle.ask("chan", [inbox ? "in" : "out", u, s, e, String(k), inbox ? String(ap) : "-"]);
+            const ch = change(u, s, e);
+            if (!ch) { expect(want).toBeNull(); return; }
+            const name = chanName(inbox, ch), value = chanValue(ch, k, inbox ? ap : null);
+            expect(`${name}\n${value}`, s).toBe(want);
+            const back = unchan(inbox, name, value);
+            const wantBack = await oracle.ask("unchan", [inbox ? "in" : "out", name, value]);
+            const c = back!.change.cookie;
+            const dump = [c.hostOnly ? "h" : "d", c.domain, c.path, c.name, back!.change.gone ? "" : c.value, c.secure ? "s" : "i", c.sameSite, c.priority,
+                back!.change.gone ? "x" : back!.change.expiry.session ? "" : String(back!.change.expiry.until), String(back!.n), back!.applied === null ? "-" : String(back!.applied)].join("\n");
+            expect(dump, `${name} ${value}`).toBe(wantBack);
+        }), { numRuns: 600 });
+    });
+
+    it("keeps memory as the spec", async () => {
+        const op = fc.oneof(
+            fc.tuple(fc.constant("absorb"), arbChange, fc.nat(8), fc.nat(5)),
+            fc.tuple(fc.constant("write"), arbChange, fc.nat(8), fc.constant(0)),
+            fc.tuple(fc.constant("snap"), fc.array(arbChange, { maxLength: 3 }), fc.nat(8), fc.constantFrom(...URLS)),
+            fc.tuple(fc.constant("read"), fc.constantFrom(1795000000, 1795000500, 1795001000), fc.constantFrom(...URLS), fc.constant(0)),
+        );
+        await fc.assert(fc.asyncProperty(fc.array(op, { minLength: 1, maxLength: 14 }), async (ops) => {
+            const lines: string[] = [];
+            const mem: Known[] = [];
+            const reads: string[] = [];
+            for (const o of ops) {
+                if (o[0] === "absorb" || o[0] === "write") {
+                    const [, [u, n, v, a, e], k, ap] = o as [string, [string, string, string, string, string], number, number];
+                    const ch = change(u, `${n}=${v}${a}`, e);
+                    if (!ch) continue;
+                    const inbox = o[0] === "absorb";
+                    lines.push([o[0], chanName(inbox, ch), chanValue(ch, k, inbox ? ap : null)].join(US));
+                    if (inbox) absorb(mem, ch, k, ap); else write(mem, ch, k);
+                } else if (o[0] === "snap") {
+                    const [, cs, g, u] = o as [string, [string, string, string, string, string][], number, string];
+                    const entries: { change: Change; n: number; applied: number }[] = [];
+                    const fields: string[] = [];
+                    for (const [cu, n, v, a, e] of cs) {
+                        const ch = change(cu, `${n}=${v}${a}`, e);
+                        if (!ch) continue;
+                        entries.push({ change: ch, n: g, applied: 0 });
+                        fields.push(chanName(true, ch), chanValue(ch, g, 0));
+                    }
+                    lines.push(["snap", u, String(g), ...fields].join(US));
+                    snapshot(mem, new URL(u), g, entries);
+                } else {
+                    const [, now, u] = o as unknown as [string, number, string];
+                    lines.push(["read", String(now), u].join(US));
+                    reads.push("R" + US + memCookies(mem, now, new URL(u)));
+                }
+            }
+            const want = await oracle.ask("mem", [lines.join("\n")]);
+            const known = mem.map((k) => ["K", scope(k.change.cookie), (k.change.cookie.secure ? "s" : "i") + k.change.cookie.sameSite + k.change.cookie.priority,
+                k.change.gone ? "x" : k.change.expiry.session ? "" : String(k.change.expiry.until), String(k.gen), k.pending === null ? "-" : String(k.pending),
+                k.change.gone ? "" : k.change.cookie.value].join(US));
+            expect([...reads, ...known].join("\n"), lines.join("\n").replace(/\u001f/g, " | ")).toBe(want);
+        }), { numRuns: 600 });
+    });
+});

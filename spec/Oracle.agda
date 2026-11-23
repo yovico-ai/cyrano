@@ -54,6 +54,18 @@
 --   toolbarcursor <dragging 0|1> <left> <width> <height> <grip> <jump> <x> <y> → {"out":"page"|"grab"|"grabbing"|"pointer"}
 --   toolbarright <vw> <width>          → {"out":"<left>"} (Toolbar.rightEnd; the left end is 0)
 --   orbblocks <ct|"-"> <body>         → {"out":"yes"|"no"} (ORB blocks a cross-origin no-cors script)
+--   unchan <in|out> <name> <value> → the channel entry read back (lines: h|d, domain, path, name, value,
+--     s|i, samesite, priority, expiry ""|x|seconds, number, applied|-), or null
+--   chan <in|out> <url> <set-cookie> <expiry ""|x|seconds> <number> <applied|-> → name LF value of the
+--     channel entry for the cookie the Set-Cookie stores at url (http), or null
+--   jar <script> → the jar after the script (lines, fields U+001F):
+--     put <api|http> <now> <site> <url> <set-cookie> | outbox <now> <site> <name> <value> | touch <now> <url> | end
+--     out: "E" scope flags expiry created accessed order site value, per entry; "G" gen; "I" name value, per inbox change
+--   mem <script> → a runtime's memory after the script (lines, fields U+001F):
+--     absorb <inbox name> <inbox value> | write <outbox name> <outbox value> |
+--     snap <url> <gen> (<inbox name> <inbox value>)* | read <now> <url>
+--     out: "R" cookie string, per read; "K" scope flags expiry gen pending|- value, per known cookie
+--   cookiedate <Expires string> → {"out":"<seconds after the epoch, 0 before it>"|"none"}
 --   orbproxy <cross-origin 0|1> <redirect 0|1> <ct|"-"> <no-cors 0|1> <body> → {"out":"yes"|"no"} (the proxy fails it: ORB)
 --   sheetnosniff <same-origin 0|1> <ct|"-"> <nosniff 0|1> → {"out":"yes"|"no"} (the proxy adds nosniff)
 --   htmltail <scripting 0|1> <markup>  → {"out":"<offset>"|"none"} (where an unfinished construct at the end begins)
@@ -185,6 +197,9 @@ import HtmlTok
 import Link
 import Disposition
 import Orb
+import CookieDate
+import CookieJar
+open import Data.Nat.Show using () renaming (show to showNat)
 import Toolbar
 import Refresh
 import WsOrigin
@@ -397,6 +412,7 @@ dispatch op args =
   else if eqStr op (toList "toolbarregion") then toolbarRegionReq args
   else if eqStr op (toList "toolbarcursor") then toolbarCursorReq args
   else if eqStr op (toList "toolbarright") then toolbarRightReq args
+  else if eqStr op (toList "cookiedate") then oneArg (λ v → cdOut (CookieDate.cookieDate v)) args
   else if eqStr op (toList "orbproxy") then orbProxyReq args
   else if eqStr op (toList "sheetnosniff") then sheetNosniffReq args
   else if eqStr op (toList "featuresources") then oneArg (λ f → joinNL (Features.sources f)) args
@@ -443,6 +459,10 @@ dispatch op args =
   else if eqStr op (toList "origin") then originReq args
   else if eqStr op (toList "site") then siteReq args
   else if eqStr op (toList "setcookie") then setCookieReq args
+  else if eqStr op (toList "unchan") then unchanReq args
+  else if eqStr op (toList "chan") then chanReq args
+  else if eqStr op (toList "jar") then jarReq args
+  else if eqStr op (toList "mem") then memReq args
   else if eqStr op (toList "cookies") then cookiesReq args
   else if eqStr op (toList "cookiestoreset") then cookieStoreSetReq args
   else if eqStr op (toList "cookiestoredelete") then cookieStoreDeleteReq args
@@ -888,6 +908,10 @@ dispatch op args =
   ... | nothing = out (toList "none")
   priorityReq _ = errorReply "BadRequest"
 
+  cdOut : Maybe ℕ → Str
+  cdOut (just n) = toList (showNat n)
+  cdOut nothing  = toList "none"
+
   oneArg : (Str → Str) → List Str → Str
   oneArg f (v ∷ []) = out (f v)
   oneArg f _        = out (f [])
@@ -1124,7 +1148,203 @@ dispatch op args =
     ( ((if sHostOnly c then 'h' else 'd') ∷ []) ∷ sDomain c ∷ sPath c ∷ sName c ∷ sValue c
     ∷ ((if sSecure c then 's' else 'i') ∷ []) ∷ ((if sHttpOnly c then 'H' else '-') ∷ [])
     ∷ (sameSiteFlag (sSameSite c) ∷ []) ∷ opt (maxAge sc) ∷ opt (expires sc)
-    ∷ wireName c ∷ wireValue c ∷ [] )
+    ∷ wireName c ∷ wireValue c ∷ (prio (sPriority c) ∷ []) ∷ [] )
+    where
+    prio : Priority → Char
+    prio pLow    = 'L'
+    prio pMedium = 'M'
+    prio pHigh   = 'H'
+
+  -- The channel and the jar (CookieJar.agda).
+  usC : Char
+  usC = fromℕ 31
+
+  jarExpTxt : CookieJar.Change → Str
+  jarExpTxt ch = CookieJar.expiryText ch
+
+  jarDumpChan : CookieJar.Change → ℕ → Maybe ℕ → Str
+  jarDumpChan ch k ap = lines
+    ( ((if sHostOnly c then 'h' else 'd') ∷ []) ∷ sDomain c ∷ sPath c ∷ sName c ∷ val ch
+    ∷ ((if sSecure c then 's' else 'i') ∷ []) ∷ (sameSiteFlag (sSameSite c) ∷ []) ∷ (CookieJar.prioFlag (sPriority c) ∷ [])
+    ∷ jarExpTxt ch ∷ toList (showNat k) ∷ apTxt ap ∷ [] )
+    where
+    c : Stored
+    c = CookieJar.changed ch
+    val : CookieJar.Change → Str
+    val (CookieJar.put′ x _) = sValue x
+    val (CookieJar.gone _)   = []
+    apTxt : Maybe ℕ → Str
+    apTxt nothing  = toList "-"
+    apTxt (just a) = toList (showNat a)
+
+  unchanReq : List Str → Str
+  unchanReq (io ∷ n ∷ v ∷ []) with CookieJar.unchan (eqStr io (toList "in")) n v
+  ... | just (ch , k , ap) = out (jarDumpChan ch k ap)
+  ... | nothing = maybeOut nothing
+  unchanReq _ = errorReply "BadRequest"
+
+  jarNat : Str → Maybe ℕ
+  jarNat = CookieJar.natOf
+
+  jarChangeOf : Stored → Str → Maybe CookieJar.Change
+  jarChangeOf c e with e
+  ... | [] = just (CookieJar.put′ c CookieJar.session)
+  ... | x ∷ [] = if is 120 x then just (CookieJar.gone c) else secs (jarNat (x ∷ []))
+    where
+    secs : Maybe ℕ → Maybe CookieJar.Change
+    secs (just t) = just (CookieJar.put′ c (CookieJar.until t))
+    secs nothing  = nothing
+  ... | e′ = secs (jarNat e′)
+    where
+    secs : Maybe ℕ → Maybe CookieJar.Change
+    secs (just t) = just (CookieJar.put′ c (CookieJar.until t))
+    secs nothing  = nothing
+
+  chanReq : List Str → Str
+  chanReq (io ∷ u ∷ str ∷ e ∷ k ∷ ap ∷ []) with baseOf u | parseSetCookie str | jarNat k
+  ... | just base | just sc | just kn with store false false base sc
+  ...   | nothing = maybeOut nothing
+  ...   | just c with jarChangeOf c e
+  ...     | nothing = errorReply "BadRequest"
+  ...     | just ch = out (CookieJar.chanName inbox ch ++ fromℕ 10 ∷ CookieJar.chanValue ch kn (if inbox then jarNat ap else nothing))
+    where
+    inbox : Bool
+    inbox = eqStr io (toList "in")
+  chanReq (io ∷ u ∷ str ∷ e ∷ k ∷ ap ∷ []) | _ | _ | _ = errorReply "BadRequest"
+  chanReq _ = errorReply "BadRequest"
+
+  -- The jar's script.
+  record JarRun : Set where
+    constructor mkJarRun
+    field
+      rJar : CookieJar.Jar
+      rOut : List Str          -- inbox lines, reversed
+
+  jarInboxLine : CookieJar.Jar → CookieJar.Change × ℕ → Str
+  jarInboxLine j (ch , g) =
+    toList "I" ++ usC ∷ CookieJar.chanName true ch ++ usC ∷
+    CookieJar.chanValue ch g (just (CookieJar.lastApplied (CookieJar.scope (CookieJar.changed ch)) (CookieJar.applied j)))
+
+  jarEmit : CookieJar.Jar × List (CookieJar.Change × ℕ) → List Str → JarRun
+  jarEmit (j , chs) acc = mkJarRun j (revApp (Data.List.Base.map (jarInboxLine j) chs) acc)
+    where
+    revApp : List Str → List Str → List Str
+    revApp []       a = a
+    revApp (x ∷ xs) a = revApp xs (x ∷ a)
+
+  jarLine : JarRun → Str → JarRun
+  jarLine r line with splitOn (is 31) line
+  ... | (cmd ∷ ap ∷ now ∷ site ∷ u ∷ str ∷ []) =
+    if eqStr cmd (toList "put") then doPut (jarNat now) (baseOf u) (parseSetCookie str) else r
+    where
+    api : Bool
+    api = eqStr ap (toList "api")
+    doPut : Maybe ℕ → Maybe Abs → Maybe SetCookie → JarRun
+    doPut (just t) (just base) (just sc) with store api false base sc
+    ... | nothing = r
+    ... | just c with CookieJar.expiryOf t sc
+    ...   | just e  = jarEmit (CookieJar.put api t site (CookieJar.put′ c e) (JarRun.rJar r)) (JarRun.rOut r)
+    ...   | nothing = jarEmit (CookieJar.put api t site (CookieJar.gone c) (JarRun.rJar r)) (JarRun.rOut r)
+    doPut _ _ _ = r
+  ... | (cmd ∷ now ∷ site ∷ n ∷ v ∷ []) =
+    if eqStr cmd (toList "outbox") then doOut (jarNat now) (CookieJar.unchan false n v) else r
+    where
+    doOut : Maybe ℕ → Maybe (CookieJar.Change × ℕ × Maybe ℕ) → JarRun
+    doOut (just t) (just (ch , k , _)) = jarEmit (CookieJar.applyOutbox t site ch k (JarRun.rJar r)) (JarRun.rOut r)
+    doOut _ _ = r
+  ... | (cmd ∷ now ∷ u ∷ []) =
+    if eqStr cmd (toList "touch") then doTouch (jarNat now) (baseOf u) else r
+    where
+    doTouch : Maybe ℕ → Maybe Abs → JarRun
+    doTouch (just t) (just base) = record r { rJar = CookieJar.touch t (matches false base) (JarRun.rJar r) }
+    doTouch _ _ = r
+  ... | (cmd ∷ []) = if eqStr cmd (toList "end") then record r { rJar = CookieJar.endSession (JarRun.rJar r) } else r
+  ... | _ = r
+
+  jarAll : JarRun → List Str → JarRun
+  jarAll r []       = r
+  jarAll r (l ∷ ls) = jarAll (jarLine r l) ls
+
+  jarEntryLine : CookieJar.Entry → Str
+  jarEntryLine e =
+    toList "E" ++ usC ∷ CookieJar.scope c ++ usC ∷ CookieJar.flagsOf c ++ ((if sHttpOnly c then 'H' else '-') ∷ []) ++ usC ∷ ex (CookieJar.eExpiry e)
+    ++ usC ∷ toList (showNat (CookieJar.eCreated e)) ++ usC ∷ toList (showNat (CookieJar.eAccessed e)) ++ usC ∷ toList (showNat (CookieJar.eOrder e)) ++ usC ∷ CookieJar.eSite e ++ usC ∷ sValue c
+    where
+    c : Stored
+    c = CookieJar.eCookie e
+    ex : CookieJar.Expiry → Str
+    ex CookieJar.session   = []
+    ex (CookieJar.until t) = toList (showNat t)
+
+  jarReq : List Str → Str
+  jarReq (script ∷ []) = jarOut (jarAll (mkJarRun CookieJar.emptyJar []) (splitOn (is 10) script))
+    where
+    jarOut : JarRun → Str
+    jarOut r = let j = JarRun.rJar r ; outs = JarRun.rOut r in out (lines (Data.List.Base.map jarEntryLine (CookieJar.entries j) ++ (toList "G" ++ usC ∷ toList (showNat (CookieJar.gen j))) ∷ Data.List.Base.reverse outs))
+  jarReq _ = errorReply "BadRequest"
+
+  -- A runtime's memory (CookieJar.Mem), by script.
+  record MemRun : Set where
+    constructor mkMemRun
+    field
+      mMem  : CookieJar.Mem
+      mOut  : List Str            -- reads, reversed
+
+  memSnapEntries : List Str → List (CookieJar.Change × ℕ × ℕ)
+  memSnapEntries (n ∷ v ∷ rest) with CookieJar.unchan true n v
+  ... | just (ch , k , just a) = (ch , k , a) ∷ memSnapEntries rest
+  ... | _ = memSnapEntries rest
+  memSnapEntries _ = []
+
+  memLine : MemRun → Str → MemRun
+  memLine r line with splitOn (is 31) line
+  ... | (cmd ∷ a ∷ b ∷ rest) =
+    if eqStr cmd (toList "absorb") then byAbsorb (CookieJar.unchan true a b)
+    else if eqStr cmd (toList "write") then byWrite (CookieJar.unchan false a b)
+    else if eqStr cmd (toList "snap") then bySnap (baseOf a) (jarNat b)
+    else if eqStr cmd (toList "read") then byRead (jarNat a) (baseOf b)
+    else r
+    where
+    byAbsorb : Maybe (CookieJar.Change × ℕ × Maybe ℕ) → MemRun
+    byAbsorb (just (ch , k , just ap)) = record r { mMem = CookieJar.absorb ch k ap (MemRun.mMem r) }
+    byAbsorb _ = r
+    byWrite : Maybe (CookieJar.Change × ℕ × Maybe ℕ) → MemRun
+    byWrite (just (ch , k , nothing)) = record r { mMem = CookieJar.write ch k (MemRun.mMem r) }
+    byWrite _ = r
+    bySnap : Maybe Abs → Maybe ℕ → MemRun
+    bySnap (just u) (just g) = record r { mMem = CookieJar.snapshot u g (memSnapEntries rest) (MemRun.mMem r) }
+    bySnap _ _ = r
+    byRead : Maybe ℕ → Maybe Abs → MemRun
+    byRead (just t) (just u) = record r { mOut = (toList "R" ++ usC ∷ CookieJar.memCookies t u (MemRun.mMem r)) ∷ MemRun.mOut r }
+    byRead _ _ = r
+  ... | _ = r
+
+  memAll : MemRun → List Str → MemRun
+  memAll r []       = r
+  memAll r (l ∷ ls) = memAll (memLine r l) ls
+
+  memKnownLine : CookieJar.Known → Str
+  memKnownLine k =
+    toList "K" ++ usC ∷ CookieJar.scope c ++ usC ∷ CookieJar.flagsOf c ++ usC ∷ CookieJar.expiryText ch ++ usC ∷ toList (showNat (CookieJar.kGen k))
+    ++ usC ∷ pend (CookieJar.kPending k) ++ usC ∷ val ch
+    where
+    ch : CookieJar.Change
+    ch = CookieJar.kChange k
+    c : Stored
+    c = CookieJar.changed ch
+    pend : Maybe ℕ → Str
+    pend nothing  = toList "-"
+    pend (just p) = toList (showNat p)
+    val : CookieJar.Change → Str
+    val (CookieJar.put′ x _) = sValue x
+    val (CookieJar.gone _)   = []
+
+  memReq : List Str → Str
+  memReq (script ∷ []) = memOut (memAll (mkMemRun [] []) (splitOn (is 10) script))
+    where
+    memOut : MemRun → Str
+    memOut r = out (lines (Data.List.Base.reverse (MemRun.mOut r) ++ Data.List.Base.map memKnownLine (MemRun.mMem r)))
+  memReq _ = errorReply "BadRequest"
 
   setCookieReq : List Str → Str
   setCookieReq (api ∷ ps ∷ u ∷ str ∷ []) with baseOf u | parseSetCookie str

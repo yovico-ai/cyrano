@@ -16,8 +16,12 @@ export interface SetCookie {
     httpOnly: boolean;
     sameSite: SameSite;
     maxAge: string | null;  // "-"? DIGIT+, as written
-    expires: string | null; // as written
+    expires: string | null; // as written (read by cookies/date.ts)
+    priority: Priority;
 }
+
+/** Chromium's Priority attribute (spec Cookies.Priority): which cookies a full jar evicts first. */
+export type Priority = "L" | "M" | "H";
 
 export interface StoredCookie {
     hostOnly: boolean;
@@ -28,6 +32,7 @@ export interface StoredCookie {
     secure: boolean;
     httpOnly: boolean;
     sameSite: SameSite;
+    priority: Priority;
 }
 
 const trimWSP = (s: string): string => s.replace(/^[ \t]+|[ \t]+$/g, "");
@@ -43,10 +48,16 @@ export function parseSetCookie(s: string): SetCookie | null {
     // eslint-disable-next-line no-control-regex
     if (/[\x00-\x08\x0a-\x1f\x7f]/.test(s)) return null;
     const parts = s.split(";");
+    // A tab left inside a name, value, attribute name or value once trimmed
+    // rejects the cookie, as Chromium (spec Cookies.tabInside).
+    for (const p of parts) {
+        const [a, b] = cut(p, "=");
+        if (trimWSP(a).indexOf("\t") >= 0 || trimWSP(b).indexOf("\t") >= 0) return null;
+    }
     const [n, v, has] = cut(parts[0]!, "=");
     const c: SetCookie = {
         name: has ? trimWSP(n) : "", value: trimWSP(has ? v : n),
-        domain: null, path: null, secure: false, httpOnly: false, sameSite: "u", maxAge: null, expires: null,
+        domain: null, path: null, secure: false, httpOnly: false, sameSite: "u", maxAge: null, expires: null, priority: "M",
     };
     if (octets(c.name) + octets(c.value) > 4096) return null;
     for (const av of parts.slice(1)) {
@@ -62,6 +73,11 @@ export function parseSetCookie(s: string): SetCookie | null {
             case "path": c.path = sStarts(val, "/") ? val : null; break;
             case "secure": c.secure = true; break;
             case "httponly": c.httpOnly = true; break;
+            case "priority": {
+                const p = lowerASCII(val);
+                c.priority = p === "low" ? "L" : p === "high" ? "H" : "M";
+                break;
+            }
             case "samesite": {
                 const l = lowerASCII(val);
                 c.sameSite = l === "none" ? "n" : l === "strict" ? "t" : l === "lax" ? "l" : "u";
@@ -135,7 +151,7 @@ export function storeCookie(api: boolean, publicSuffix: boolean, url: URL, c: Se
         (prefixed("__host-", c.name) && !(c.secure && hostOnly && path === "/")) ||
         !domainOK
     ) return null;
-    return { hostOnly, domain, path, name: c.name, value: c.value, secure: c.secure, httpOnly: c.httpOnly, sameSite: c.sameSite };
+    return { hostOnly, domain, path, name: c.name, value: c.value, secure: c.secure, httpOnly: c.httpOnly, sameSite: c.sameSite, priority: c.priority };
 }
 
 export function matches(api: boolean, url: URL, c: StoredCookie): boolean {
@@ -162,6 +178,26 @@ function esc(s: string): string {
 const pctDecode = (s: string): string =>
     s.replace(/%([0-9A-Fa-f]{2})/g, (_, h: string) => String.fromCharCode(parseInt(h, 16)));
 
+/** The cookie's identity as the channel writes it (spec CookieJar.scope). */
+export function scope(c: StoredCookie): string {
+    return `${c.hostOnly ? "h" : "d"}!${esc(c.domain)}!${esc(c.path)}!${c.name}`;
+}
+
+/** A scope read back. */
+export function parseScope(s: string): { hostOnly: boolean; domain: string; path: string; name: string } | null {
+    const f: string[] = [];
+    let from = 0;
+    for (let k = 0; k < 3; k++) {
+        const i = s.indexOf("!", from);
+        if (i < 0) return null;
+        f.push(s.slice(from, i));
+        from = i + 1;
+    }
+    f.push(s.slice(from));
+    if (f[0] !== "h" && f[0] !== "d") return null;
+    return { hostOnly: f[0] === "h", domain: pctDecode(f[1]!), path: pctDecode(f[2]!), name: f[3]! };
+}
+
 export function wireName(c: StoredCookie): string {
     return `${WIRE_PREFIX}${c.hostOnly ? "h" : "d"}!${esc(c.domain)}!${esc(c.path)}!${c.name}`;
 }
@@ -187,7 +223,7 @@ export function unwire(name: string, value: string): StoredCookie | null {
     if (value.length < 3 || value[2] !== ":" || !sIncludes("si", value[0]!) || !sIncludes("nltu", value[1]!)) return null;
     return {
         hostOnly: f[0] === "h", domain: pctDecode(f[1]!), path: pctDecode(f[2]!), name: f[3]!,
-        value: value.slice(3), secure: value[0] === "s", httpOnly: false, sameSite: value[1] as SameSite,
+        value: value.slice(3), secure: value[0] === "s", httpOnly: false, sameSite: value[1] as SameSite, priority: "M",
     };
 }
 
@@ -259,7 +295,7 @@ export function cookieStoreSet(later: boolean, publicSuffix: boolean, url: URL, 
         octets(n) + octets(v) > 4096 || octets(p) > 1024 || (o.domain !== null && octets(o.domain) > 1024)) return { error: "malformed" };
     const c = storeCookie(true, publicSuffix, url, {
         name: n, value: v, domain: o.domain === null ? null : lowerASCII(o.domain), path: p,
-        secure: true, httpOnly: false, sameSite: o.sameSite, maxAge: null, expires: null,
+        secure: true, httpOnly: false, sameSite: o.sameSite, maxAge: null, expires: null, priority: "M",
     });
     return c ?? { error: "malformed" };
 }

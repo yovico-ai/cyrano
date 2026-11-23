@@ -11,15 +11,15 @@ import (
 )
 
 var (
-	cookieNames  = []string{"a", "sid", "__Host-x", "__Secure-y", "__HOST-z", "", " sp ", "n!m", "é"}
-	cookieValues = []string{"1", "", "v=w", " padded ", "a b", `"q"`, "__Host-v", "x;y"}
+	cookieNames  = []string{"a", "sid", "__Host-x", "__Secure-y", "__HOST-z", "", " sp ", "n!m", "é", "n\tm", "\tt\t"}
+	cookieValues = []string{"1", "", "v=w", " padded ", "a b", `"q"`, "__Host-v", "x;y", "a\tb", "\t1\t"}
 	cookieAttrs  = []string{
 		"", "Path=/", "Path=/app", "Path=/app/", "path=nope", "Path=", "Path=/other", "Path=/é",
 		"Domain=a.example", "Domain=.a.example", "Domain=www.a.example", "Domain=A.example", "Domain=b.example",
 		"Domain=", "Domain=example", "Domain=sub.www.a.example", "Domain=1.2.3.4",
 		"Secure", "secure", "HttpOnly", "SameSite=None", "SameSite=Lax", "SameSite=Strict", "SameSite=bogus",
 		"Max-Age=60", "Max-Age=0", "Max-Age=-1", "Max-Age=abc", "Max-Age=", "Max-Age=-", "Unknown=1", " Secure ",
-		"Expires=Wed, 21 Oct 2037 07:28:00 GMT", "Expires=", "\x01",
+		"Expires=Wed, 21 Oct 2037 07:28:00 GMT", "Expires=", "\x01", "Path=/a\tb", "\tSecure", "Priority=High", "priority=low", "Priority=medium", "Priority=bogus", "Max-Age=\t60", "Foo=a\tb", "Expires=1 Jan\t2027 0:0:0",
 	}
 	cookieURLs = []string{
 		"https://www.a.example/app/page?x", "http://www.a.example/app/page", "https://a.example/", "https://www.a.example/app",
@@ -72,10 +72,12 @@ func TestSpecConformance_SetCookie(t *testing.T) {
 				got = strings.Join([]string{
 					flag(c.HostOnly, "h", "d"), c.Domain, c.Path, c.Name, c.Value, flag(c.Secure, "s", "i"),
 					flag(c.HTTPOnly, "H", "-"), string(rune(c.SameSite)), opt(sc.MaxAge), opt(sc.Expires), c.WireName(), c.WireValue(),
+					string(rune(c.Priority)),
 				}, "\n")
 				// The wire form reads back as the cookie (HttpOnly never goes on the wire).
 				back, bok := Unwire(c.WireName(), c.WireValue())
 				c.HTTPOnly = false
+				c.Priority = PriorityMedium // the legacy wire form carries none
 				if !bok || (back != c && !strings.ContainsAny(c.Domain+c.Path, "é")) {
 					rt.Fatalf("Unwire(wire(%+v)) = %+v, %v", c, back, bok)
 				}

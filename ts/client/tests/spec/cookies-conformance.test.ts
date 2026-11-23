@@ -11,15 +11,15 @@ import { OracleClient, locateOracle, oracleRequired } from "./oracle-client";
 const located = locateOracle();
 if (located.skip !== "" && oracleRequired) throw new Error(located.skip);
 
-const names = ["a", "sid", "__Host-x", "__Secure-y", "__HOST-z", "", " sp ", "n!m", "é"];
-const values = ["1", "", "v=w", " padded ", "a b", "\"q\"", "__Host-v", "x;y"];
+const names = ["a", "sid", "__Host-x", "__Secure-y", "__HOST-z", "", " sp ", "n!m", "é", "n\tm", "\tt\t"];
+const values = ["1", "", "v=w", " padded ", "a b", "\"q\"", "__Host-v", "x;y", "a\tb", "\t1\t"];
 const attrs = [
     "", "Path=/", "Path=/app", "Path=/app/", "path=nope", "Path=", "Path=/other", "Path=/é",
     "Domain=a.example", "Domain=.a.example", "Domain=www.a.example", "Domain=A.example", "Domain=b.example",
     "Domain=", "Domain=example", "Domain=sub.www.a.example", "Domain=1.2.3.4",
     "Secure", "secure", "HttpOnly", "SameSite=None", "SameSite=Lax", "SameSite=Strict", "SameSite=bogus",
     "Max-Age=60", "Max-Age=0", "Max-Age=-1", "Max-Age=abc", "Max-Age=", "Max-Age=-", "Unknown=1", " Secure ",
-    "Expires=Wed, 21 Oct 2037 07:28:00 GMT", "Expires=", "\x01",
+    "Expires=Wed, 21 Oct 2037 07:28:00 GMT", "Expires=", "\x01", "Path=/a\tb", "\tSecure", "Priority=High", "priority=low", "Priority=medium", "Priority=bogus", "Max-Age=\t60", "Foo=a\tb", "Expires=1 Jan\t2027 0:0:0",
 ];
 const urls = [
     "https://www.a.example/app/page?x", "http://www.a.example/app/page", "https://a.example/", "https://www.a.example/app",
@@ -45,11 +45,11 @@ describe.skipIf(located.skip !== "")("cookies: spec conformance", () => {
             const c = sc && storeCookie(api, ps, new URL(page), sc);
             const got = !sc || !c ? null : [
                 c.hostOnly ? "h" : "d", c.domain, c.path, c.name, c.value, c.secure ? "s" : "i",
-                c.httpOnly ? "H" : "-", c.sameSite, opt(sc.maxAge), opt(sc.expires), wireName(c), wireValue(c),
+                c.httpOnly ? "H" : "-", c.sameSite, opt(sc.maxAge), opt(sc.expires), wireName(c), wireValue(c), c.priority,
             ].join("\n");
             expect(got, `set-cookie ${JSON.stringify(s)} at ${page} (api=${api} ps=${ps})`).toBe(want);
             if (c && !/é/.test(c.domain + c.path)) {
-                expect(unwire(wireName(c), wireValue(c))).toEqual({ ...c, httpOnly: false });
+                expect(unwire(wireName(c), wireValue(c))).toEqual({ ...c, httpOnly: false, priority: "M" }); // the legacy wire form carries no priority
             }
         }), { numRuns: 1500 });
     });

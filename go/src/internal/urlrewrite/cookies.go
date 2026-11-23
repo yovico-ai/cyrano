@@ -30,8 +30,17 @@ type SetCookie struct {
 	HTTPOnly    bool
 	SameSite    byte
 	MaxAge      *string // "-"? DIGIT+, as written
-	Expires     *string // as written
+	Expires     *string // as written (read by CookieDate)
+	Priority    byte    // PriorityLow, PriorityMedium, PriorityHigh (Chromium's attribute)
 }
+
+// Chromium's Priority attribute (spec Cookies.Priority): which cookies a
+// full jar evicts first.
+const (
+	PriorityLow    byte = 'L'
+	PriorityMedium byte = 'M'
+	PriorityHigh   byte = 'H'
+)
 
 func trimWSP(s string) string { return strings.Trim(s, " \t") }
 
@@ -54,7 +63,15 @@ func ParseSetCookie(s string) (SetCookie, bool) {
 		}
 	}
 	parts := strings.Split(s, ";")
-	c := SetCookie{SameSite: SameSiteDefault}
+	// A tab left inside a name, value, attribute name or value once trimmed
+	// rejects the cookie, as Chromium (spec Cookies.tabInside).
+	for _, p := range parts {
+		a, v, _ := strings.Cut(p, "=")
+		if strings.IndexByte(trimWSP(a), '\t') >= 0 || strings.IndexByte(trimWSP(v), '\t') >= 0 {
+			return SetCookie{}, false
+		}
+	}
+	c := SetCookie{SameSite: SameSiteDefault, Priority: PriorityMedium}
 	if n, v, has := strings.Cut(parts[0], "="); has {
 		c.Name, c.Value = trimWSP(n), trimWSP(v)
 	} else {
@@ -93,6 +110,15 @@ func ParseSetCookie(s string) (SetCookie, bool) {
 			c.Secure = true
 		case "httponly":
 			c.HTTPOnly = true
+		case "priority":
+			switch lowerASCII(v) {
+			case "low":
+				c.Priority = PriorityLow
+			case "high":
+				c.Priority = PriorityHigh
+			default:
+				c.Priority = PriorityMedium
+			}
 		case "samesite":
 			switch lowerASCII(v) {
 			case "none":
@@ -117,6 +143,7 @@ type StoredCookie struct {
 	Secure       bool
 	HTTPOnly     bool
 	SameSite     byte
+	Priority     byte
 }
 
 func isIPHost(h string) bool { return strings.HasPrefix(h, "[") || endsInNumber(h) }
@@ -186,7 +213,7 @@ func storeCookie(api, publicSuffix bool, u absURL, c SetCookie) (StoredCookie, b
 		!domainOK:
 		return StoredCookie{}, false
 	}
-	return StoredCookie{hostOnly, domain, path, c.Name, c.Value, c.Secure, c.HTTPOnly, c.SameSite}, true
+	return StoredCookie{hostOnly, domain, path, c.Name, c.Value, c.Secure, c.HTTPOnly, c.SameSite, c.Priority}, true
 }
 
 func (c StoredCookie) matches(api bool, u absURL) bool {
@@ -217,6 +244,27 @@ func (c StoredCookie) WireName() string {
 	return wirePrefix + hd + "!" + encodeWith(fieldSet, []rune(c.Domain)) + "!" + encodeWith(fieldSet, []rune(c.Path)) + "!" + c.Name
 }
 
+// Scope is the cookie's identity as the channel writes it (spec
+// CookieJar.scope): (h|d) "!" esc(domain) "!" esc(path) "!" name.
+func (c StoredCookie) Scope() string {
+	return strings.TrimPrefix(c.WireName(), wirePrefix)
+}
+
+// ParseScope reads a Scope back.
+func ParseScope(s string) (hostOnly bool, domain, path, name string, ok bool) {
+	f := strings.SplitN(s, "!", 4)
+	if len(f) != 4 || (f[0] != "h" && f[0] != "d") {
+		return false, "", "", "", false
+	}
+	return f[0] == "h", pctDecode(f[1]), pctDecode(f[2]), f[3], true
+}
+
+// MatchesURL: c is sent to / shown at pageURL (spec Cookies.matches).
+func MatchesURL(api bool, pageURL string, c StoredCookie) bool {
+	u, res := parseRef(nil, preprocess(pageURL))
+	return res == parsedURL && c.matches(api, u)
+}
+
 // WireValue carries the Secure and SameSite flags before the value.
 func (c StoredCookie) WireValue() string {
 	s := "i"
@@ -241,7 +289,7 @@ func Unwire(name, value string) (StoredCookie, bool) {
 	}
 	return StoredCookie{
 		HostOnly: f[0] == "h", Domain: pctDecode(f[1]), Path: pctDecode(f[2]), Name: f[3],
-		Value: value[3:], Secure: value[0] == 's', SameSite: value[1],
+		Value: value[3:], Secure: value[0] == 's', SameSite: value[1], Priority: PriorityMedium,
 	}, true
 }
 

@@ -26,14 +26,15 @@ type Page = { goto(u: string): Promise<unknown>; evaluate<T, A>(f: (a: A) => T, 
 type Context = { newPage(): Promise<Page>; close(): Promise<void> };
 type Browser = { newContext(): Promise<Context>; close(): Promise<void>; version(): string };
 
-const names = ["a", "sid", "__Host-x", "__Secure-y", "__HOST-z", "", " sp ", "n!m"];
-const values = ["1", "", "v=w", " padded ", "a b", "\"q\""];
+const names = ["a", "sid", "__Host-x", "__Secure-y", "__HOST-z", "", " sp ", "n!m", "n\tm", "\tt\t"];
+const values = ["1", "", "v=w", " padded ", "a b", "\"q\"", "a\tb", "\t1\t"];
 const attrs = [
     "", "", "Path=/", "Path=/app", "Path=/app/", "path=nope", "Path=", "Path=/other",
     "Domain=site.localhost", "Domain=.site.localhost", "Domain=www.site.localhost", "Domain=SITE.localhost",
     "Domain=other.localhost", "Domain=", "Domain=localhost", "Domain=sub.www.site.localhost",
     "Secure", "secure", "HttpOnly", "SameSite=None", "SameSite=Lax", "SameSite=Strict", "SameSite=bogus",
     "Max-Age=60", "Max-Age=0", "Max-Age=-1", "Max-Age=abc", "Max-Age=", "Unknown=1", " Secure ",
+    "Path=/a\tb", "\tSecure", "Max-Age=\t60", "Unknown=a\tb", "Secure\tx",
 ];
 const cookieString = fc.tuple(
     fc.constantFrom(...names), fc.boolean(), fc.constantFrom(...values),
