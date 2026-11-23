@@ -232,12 +232,13 @@ func TestE2E_NoRuntimeWhereNoScriptRuns(t *testing.T) {
 	}
 }
 
-// TestE2E_OrbBlocksCrossOriginData — a <script> to another origin whose
-// response Chromium's ORB blocks (JSON here) is a network error natively;
-// through the proxy every script is same-origin, so the proxy breaks the
-// connection (spec/Orb.agda proxyBlocks; Lenovo's /leid/assign). Not for a
-// same-origin script, one that is script, or one sent with
-// Access-Control-Allow-Origin (the page's mode then decides).
+// TestE2E_OrbBlocksCrossOriginData — a <script> to another origin is asked
+// in the page's own mode (spec/Orb.agda). No-cors (no crossorigin): a
+// response Chromium's ORB blocks (JSON here) is a network error natively,
+// so the proxy breaks the connection, Access-Control-Allow-Origin or not
+// (Lenovo's /leid/assign; snowball-io's HTML with ACAO *). Cors
+// (crossorigin, a module): the CORS check by the page's origin, a redirect
+// too. Not for a same-origin script or one with no page of ours behind it.
 func TestE2E_OrbBlocksCrossOriginData(t *testing.T) {
 	up := startInlineServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("acao") == "1" {
@@ -261,12 +262,12 @@ func TestE2E_OrbBlocksCrossOriginData(t *testing.T) {
 	})
 	proxy := startProxy(t)
 	port := up.URL[strings.LastIndex(up.URL, ":")+1:]
-	dest := "script"
+	dest, mode := "script", "no-cors"
 	load := func(page, query string) error {
 		u := strings.Replace(gotoURL(proxy, up.URL+"/leid/assign"+query), "/cyrano/http/", "/cyrano/http!js/", 1)
 		req, _ := http.NewRequest("GET", u, nil)
 		req.Header.Set("Sec-Fetch-Dest", dest)
-		req.Header.Set("Sec-Fetch-Mode", "cors")
+		req.Header.Set("Sec-Fetch-Mode", mode)
 		if page != "" {
 			req.Header.Set("Referer", gotoURL(proxy, page))
 		}
@@ -282,17 +283,49 @@ func TestE2E_OrbBlocksCrossOriginData(t *testing.T) {
 		return err
 	}
 	cross := "http://localhost:" + port + "/p"
-	if err := load(cross, ""); err == nil {
-		t.Errorf("cross-origin JSON script: answered, want a broken connection")
-	}
-	// ACAO, a script, a redirect, same-origin, and no page of ours known
-	// behind the request: the response.
-	for _, c := range []struct{ page, query string }{{cross, "?acao=1"}, {cross, "?js=1"}, {cross, "?moved=1"}, {up.URL + "/p", ""}, {"", ""}} {
-		if err := load(c.page, c.query); err != nil {
-			t.Errorf("%q%s: %v, want the response", c.page, c.query, err)
+	type c struct{ page, query string }
+	check := func(fail, pass []c) {
+		for _, x := range fail {
+			if err := load(x.page, x.query); err == nil {
+				t.Errorf("%s %q%s: answered, want a broken connection", mode, x.page, x.query)
+			}
+		}
+		for _, x := range pass {
+			if err := load(x.page, x.query); err != nil {
+				t.Errorf("%s %q%s: %v, want the response", mode, x.page, x.query, err)
+			}
 		}
 	}
-	// Only a script: a fetch() of the same data gets it (CORS decides there).
+	// no-cors: ORB, whatever ACAO says; a script, a redirect, same-origin,
+	// no page known: the response.
+	check([]c{{cross, ""}, {cross, "?acao=1"}},
+		[]c{{cross, "?js=1"}, {cross, "?moved=1"}, {up.URL + "/p", ""}, {"", ""}})
+	// cors: the CORS check — no ACAO fails (a script, a redirect); ORB does not apply.
+	mode = "cors"
+	check([]c{{cross, "?js=1"}, {cross, "?moved=1"}, {cross, ""}},
+		[]c{{cross, "?js=1&acao=1"}, {cross, "?acao=1"}, {up.URL + "/p", "?js=1"}, {"", "?js=1"}})
+	// cors, asked by a script (a module's import: its Referer is the
+	// importing module, marked !js): the page behind it is not known, so
+	// nothing is judged.
+	importer := strings.Replace(gotoURL(proxy, "http://localhost:"+port+"/m.js"), "/cyrano/http/", "/cyrano/http!js/", 1)
+	{
+		u := strings.Replace(gotoURL(proxy, up.URL+"/leid/assign?js=1"), "/cyrano/http/", "/cyrano/http!js/", 1)
+		req, _ := http.NewRequest("GET", u, nil)
+		req.Header.Set("Sec-Fetch-Dest", "script")
+		req.Header.Set("Sec-Fetch-Mode", "cors")
+		req.Header.Set("Referer", importer)
+		if resp, err := noCompressionClient().Do(req); err != nil {
+			t.Errorf("cors import by a module: %v, want the response", err)
+		} else {
+			_, err = io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				t.Errorf("cors import by a module: %v, want the response", err)
+			}
+		}
+	}
+	// Only a script: a fetch() of the same data gets it (the runtime's CORS
+	// headers decide there).
 	dest = "empty"
 	if err := load(cross, ""); err != nil {
 		t.Errorf("fetch of cross-origin JSON: %v, want the response", err)

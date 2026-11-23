@@ -26,7 +26,7 @@ func TestSpecConformance_Orb(t *testing.T) {
 		pad := rapid.SampledFrom([]int{0, 0, 0, 1010, 1018, 1020, 1022, 1030}).Draw(rt, "pad")
 		body := strings.Repeat(" ", pad) + strings.Join(rapid.SliceOfN(rapid.SampledFrom(orbPieces), 0, 7).Draw(rt, "pieces"), "")
 		cross := rapid.Bool().Draw(rt, "cross")
-		acao := rapid.Bool().Draw(rt, "acao")
+		noCors := rapid.Bool().Draw(rt, "noCors")
 		redirect := rapid.Bool().Draw(rt, "redirect")
 		b := func(x bool) string {
 			if x {
@@ -42,12 +42,12 @@ func TestSpecConformance_Orb(t *testing.T) {
 		if got := OrbBlocks(ct, hasCT, []byte(body)); (got && want != "yes") || (!got && want != "no") {
 			rt.Fatalf("OrbBlocks(%q, %q) = %v, spec %s", ct, body, got, want)
 		}
-		wantP, _, err := oracle.Ask("orbproxy", b(cross), b(redirect), ct, b(acao), body)
+		wantP, _, err := oracle.Ask("orbproxy", b(cross), b(redirect), ct, b(noCors), body)
 		if err != nil {
 			rt.Fatalf("oracle: %v", err)
 		}
-		if got := ProxyOrbBlocks(cross, redirect, ct, hasCT, acao, []byte(body)); (got && wantP != "yes") || (!got && wantP != "no") {
-			rt.Fatalf("ProxyOrbBlocks(%v, redirect %v, %q, acao %v, %q) = %v, spec %s", cross, redirect, ct, acao, body, got, wantP)
+		if got := ProxyOrbBlocks(cross, redirect, ct, hasCT, noCors, []byte(body)); (got && wantP != "yes") || (!got && wantP != "no") {
+			rt.Fatalf("ProxyOrbBlocks(%v, redirect %v, %q, no-cors %v, %q) = %v, spec %s", cross, redirect, ct, noCors, body, got, wantP)
 		}
 	})
 }

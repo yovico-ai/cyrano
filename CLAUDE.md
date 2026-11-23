@@ -142,10 +142,17 @@ from it; Disposition.agda judgedDest, togaze.com); a fetch() of the same file ge
 bytes under a different URL, so the browser's cache never hands a script
 the data copy. Unwrap ignores the marks. A cross-origin script response
 Chromium's ORB blocks (JSON, HTML, PDF… — spec/Orb.agda, checked against
-Chromium) is failed by the proxy when it has no Access-Control-Allow-Origin and
-is not a redirect (adform's 301 has an HTML body; the browser follows it)
-(`proxy/orb.go`: scripts are forced crossorigin, so the page's mode is
-unknown; without ACAO both modes fail natively). A typeless response stays
+Chromium) is failed by the proxy when the script was asked in no-cors mode
+(the page's own: a missing crossorigin stays missing), whatever
+Access-Control-Allow-Origin it carries, and is not a redirect (adform's 301
+has an HTML body; the browser follows it); a cors-mode one (crossorigin, a
+module) gets the CORS check by the page's origin, as for anonymous
+(`proxy/orb.go` scriptCORSFails; snowball-io.io, `script-mode-vs-chromium`):
+"null" for a sandboxed document, not judged when the Referer is itself a
+script (a module's import: the page behind it is unknown). A sandboxed
+document's browser runs CORS itself, use-credentials (the runtimes'
+crossorigin): a response the anonymous check allows from "null" is told to
+it as `null` + credentials (`opaqueElementCORS`). A typeless response stays
 typeless (net/http would sniff one: `typelessWriter`).
 
 ## The portal toolbar

@@ -334,6 +334,20 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		if from := h.requestingDocument(req); from != nil { // before directFetchHeaders replaces the Referer
 			*req = *req.WithContext(context.WithValue(req.Context(), requesterKey{}, pageKey(from)))
 		}
+		// A request whose Referer is itself a script or stylesheet (a module's
+		// import, a stylesheet's font): its context is the document behind
+		// that script, which the proxy does not know (orb.go).
+		if ref, err := url.Parse(req.Header.Get("Referer")); err == nil && urlrewrite.OnProxy(ref.String(), h.opts.ProxyCfg) {
+			if d := urlrewrite.TargetDest(ref.EscapedPath()); d == urlrewrite.DestScript || d == urlrewrite.DestStyle {
+				*req = *req.WithContext(context.WithValue(req.Context(), subresourceRequesterKey{}, true))
+			}
+		}
+		// A sandboxed (opaque-origin) document's requests are the only
+		// cross-site ones the browser makes to the proxy: its origin is
+		// "null" (fetch_headers.go). Read before directFetchHeaders.
+		if strings.EqualFold(req.Header.Get("Sec-Fetch-Site"), "cross-site") {
+			*req = *req.WithContext(context.WithValue(req.Context(), opaqueRequesterKey{}, true))
+		}
 		h.directFetchHeaders(req, target, requestPolicy)
 		ensurePriority(req, target, req.ProtoMajor < 2)
 
@@ -357,10 +371,11 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 // to the BodyRewriter (if configured) for content transformation.
 func (h *Handler) modifyResponse(resp *http.Response) error {
 	// A cross-origin request the origin does not allow fails, as natively (cors.go).
-	if corsFails(resp) {
+	if corsFails(resp) || scriptCORSFails(resp) {
 		_ = resp.Body.Close()
 		return errCORS
 	}
+	opaqueElementCORS(resp)
 	h.restartForCriticalCH(resp) // may replace resp with a second response
 	sessionID, _ := resp.Request.Context().Value(SessionContextKey{}).(string)
 	upgradeLoaded(resp, sessionID)
@@ -371,7 +386,6 @@ func (h *Handler) modifyResponse(resp *http.Response) error {
 	if err := fitShortBody(resp); err != nil {
 		return err
 	}
-	noteOrbACAO(resp) // before the headers are translated
 	if err := h.translateResponse(resp); err != nil {
 		if errors.Is(err, ErrOrbBlocked) {
 			return err

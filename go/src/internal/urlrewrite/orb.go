@@ -70,10 +70,11 @@ func OrbBlocks(ct string, hasCT bool, body []byte) bool {
 
 // ProxyOrbBlocks: the proxy fails the response (spec Orb.proxyBlocks) —
 // cross-origin, not a redirect (the browser follows it; ORB judges where
-// it ends), ORB blocks it, and no Access-Control-Allow-Origin came with it
-// (with one the page's mode decides, which the proxy cannot see).
-func ProxyOrbBlocks(crossOrigin, redirect bool, ct string, hasCT, hasACAO bool, body []byte) bool {
-	return crossOrigin && !redirect && !hasACAO && OrbBlocks(ct, hasCT, body)
+// it ends), asked in no-cors mode (the page's own: a <script> without
+// crossorigin), and ORB blocks it, whatever Access-Control-Allow-Origin it
+// carries. A cors-mode one is the CORS check's (proxy/cors.go).
+func ProxyOrbBlocks(crossOrigin, redirect bool, ct string, hasCT, noCors bool, body []byte) bool {
+	return crossOrigin && !redirect && noCors && OrbBlocks(ct, hasCT, body)
 }
 
 type sniffResult int

@@ -31,15 +31,35 @@
 -- whitespace, ":". Parser breakers, at the very start: ")]}'", "{}&&",
 -- "{} &&".
 --
--- The proxy cannot see the page's mode: it forces crossorigin on scripts
--- (Attrs crossoriginValue), so the browser always asks in cors mode. It
--- blocks — breaks the connection — a cross-origin script response that
--- `blocks` and carries no Access-Control-Allow-Origin (`proxyBlocks`).
--- Without that header a cors-mode request fails its CORS check natively
--- anyway, so this is exact for no-cors and never wrong where the proxy
--- was right before (`exactNoCors`, `neverWorse`). Not covered: a
--- response with Access-Control-Allow-Origin (the mode decides), range
--- responses, other destinations (images, media).
+-- What the proxy does (owner 2026-11-23, after measuring): the browser
+-- asks the proxy in the page's own mode — the runtimes change only a
+-- crossorigin the page wrote, so a <script> without one is a no-cors
+-- request (Sec-Fetch-Mode: no-cors) and one with it, or a module, a cors
+-- request. So for a cross-origin script response that is not a redirect:
+--   * no-cors — ORB: the proxy fails (breaks the connection on) a
+--     response that `blocks`, whatever Access-Control-Allow-Origin it
+--     carries (`proxyBlocks`; snowball-io.io's script answered with HTML
+--     and ACAO: * ran, a SyntaxError);
+--   * cors — the CORS check (Fetch.corsCheck, by the page's origin): the
+--     proxy fails a response it refuses (`corsFails`; a crossorigin script
+--     without Access-Control-Allow-Origin ran). The credentials mode is the page's
+--     crossorigin, which the runtimes make use-credentials: the check is
+--     made as for anonymous ("*" allowed, Access-Control-Allow-Credentials
+--     not asked) — a page asking use-credentials of a "*" origin fails
+--     natively and runs here.
+--   The page's origin is its document's: "null" for a sandboxed one
+--   (the browser's own requests from it are the only cross-site ones to
+--   the proxy), and not known when the request's Referer is itself a
+--   script or stylesheet (a module's import: its Referer is the importing
+--   module) — then nothing is judged (`corsOrigin`).
+--   A sandboxed document is cross-origin to the proxy, so the browser runs
+--   the CORS check of its elements' requests itself, use-credentials (the
+--   runtimes' crossorigin): a response the check for anonymous allows from
+--   "null" is told to it as allowing "null" with credentials
+--   (`opaqueAllowHeaders`).
+-- Then a script runs through the proxy exactly when it would natively
+-- (`exact`, for anonymous; redirects aside, which ORB never judges). Not covered: range responses, other
+-- destinations (images, media).
 ------------------------------------------------------------------------
 module Orb where
 
@@ -50,6 +70,7 @@ open import Data.String.Base using (String; toList)
 open import Data.Char.Base using (Char)
 open import Data.Nat.Base using (ℕ)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl)
+open import Data.Product.Base using (_×_; _,_)
 
 open import Url using (Str; is; eqStr; lowerAscii)
 open import Disposition using (inS; takenMime)
@@ -205,51 +226,55 @@ blocks (just ct) body with takenMime ct
 ... | nothing = false
 ... | just m = neverSniffed m ∨ (not (safelisted m) ∧ not (media m) ∧ sniffsBlocked body)
 
--- A cross-origin script response the proxy fails (a broken connection):
--- ORB blocks it and no Access-Control-Allow-Origin came with it. A
--- redirect is never judged — the browser follows it, and ORB looks at the
--- response it ends at (adform's trackpoint script: a 301 with an HTML
--- body; failed, it loaded directly).
+-- A cross-origin script response the proxy fails (a broken connection)
+-- for ORB: a no-cors request whose response ORB blocks. A redirect is
+-- never judged — the browser follows it, and ORB looks at the response it
+-- ends at (adform's trackpoint script: a 301 with an HTML body; failed, it
+-- loaded directly).
 proxyBlocks : Bool → Bool → Maybe Str → Bool → Str → Bool
-proxyBlocks crossOrigin redirect ct hasAcao body = crossOrigin ∧ not redirect ∧ not hasAcao ∧ blocks ct body
+proxyBlocks crossOrigin redirect ct noCors body = crossOrigin ∧ not redirect ∧ noCors ∧ blocks ct body
+
+-- A cross-origin cors-mode script response the proxy fails: the CORS
+-- check refuses it — a redirect too (Fetch's HTTP fetch checks every
+-- response of a cors request, before it follows a redirect).
+corsFails : Bool → Bool → Bool → Bool
+corsFails crossOrigin noCors allows = crossOrigin ∧ not noCors ∧ not allows
 
 ------------------------------------------------------------------------
--- Why only without Access-Control-Allow-Origin (for a response that is
--- not a redirect: a redirect is never judged, natively or here, so there
--- is nothing to compare). Whether the script runs
--- (`mimeOk`: the same response would run same-origin), natively and
--- through the proxy, by the page's mode; `acaoOk`: the CORS check passes,
--- which needs the header (acaoOk = hasAcao ∧ k).
+-- Why this is exact. Whether a cross-origin script runs (`mimeOk`: the
+-- same response would run same-origin), natively and through the proxy,
+-- by the page's mode (`noCors`), whether ORB blocks it, and whether the
+-- CORS check allows it (for anonymous).
 
 native : Bool → Bool → Bool → Bool → Bool
-native noCors acaoOk blocked mimeOk = if noCors then not blocked ∧ mimeOk else acaoOk ∧ mimeOk
+native noCors allows blocked mimeOk = if noCors then not blocked ∧ mimeOk else allows ∧ mimeOk
 
-before after : Bool → Bool → Bool → Bool
-before hasAcao blocked mimeOk = mimeOk
-after hasAcao blocked mimeOk = not (not hasAcao ∧ blocked) ∧ mimeOk
-
-exactNoCors : ∀ blocked mimeOk → after false blocked mimeOk ≡ native true false blocked mimeOk
-exactNoCors true  true  = refl
-exactNoCors true  false = refl
-exactNoCors false true  = refl
-exactNoCors false false = refl
-
--- Wherever the proxy answered as natively before, it still does.
-neverWorse : Bool
-neverWorse = all5 λ nc h k b m →
-  implies (eqB (before h b m) (native nc (h ∧ k) b m)) (eqB (after h b m) (native nc (h ∧ k) b m))
+proxied : Bool → Bool → Bool → Bool → Bool
+proxied noCors allows blocked mimeOk =
+  not (proxyFails noCors) ∧ mimeOk
   where
-  eqB : Bool → Bool → Bool
-  eqB true true = true
-  eqB false false = true
-  eqB _ _ = false
-  implies : Bool → Bool → Bool
-  implies true x = x
-  implies false _ = true
-  all1 : (Bool → Bool) → Bool
-  all1 f = f true ∧ f false
-  all5 : (Bool → Bool → Bool → Bool → Bool → Bool) → Bool
-  all5 f = all1 λ a → all1 λ b → all1 λ c → all1 λ d → all1 λ e → f a b c d e
+  proxyFails : Bool → Bool
+  proxyFails nc = (nc ∧ blocked) ∨ (not nc ∧ not allows)
 
-neverWorseHolds : neverWorse ≡ true
-neverWorseHolds = refl
+exact : ∀ nc k b m → proxied nc k b m ≡ native nc k b m
+exact true  k true  m = refl
+exact true  k false m = refl
+exact false true  b m = refl
+exact false false b m = refl
+
+------------------------------------------------------------------------
+-- Whose origin a cors-mode script is checked against: opaque (a sandboxed
+-- document), whether the Referer is a script or stylesheet, the Referer's
+-- document origin. nothing: not judged.
+
+corsOrigin : Bool → Bool → Str → Maybe Str
+corsOrigin true  _     _ = just (toList "null")
+corsOrigin false true  _ = nothing
+corsOrigin false false o = just o
+
+-- What a sandboxed document's browser is told for an element's cors
+-- request, given the check for anonymous from "null": its
+-- Access-Control-Allow-Origin and -Credentials, or nothing (as sent).
+opaqueAllowHeaders : Bool → Maybe (Str × Str)
+opaqueAllowHeaders true  = just (toList "null" , toList "true")
+opaqueAllowHeaders false = nothing

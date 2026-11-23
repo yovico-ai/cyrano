@@ -54,7 +54,7 @@
 --   toolbarcursor <dragging 0|1> <left> <width> <height> <grip> <jump> <x> <y> → {"out":"page"|"grab"|"grabbing"|"pointer"}
 --   toolbarright <vw> <width>          → {"out":"<left>"} (Toolbar.rightEnd; the left end is 0)
 --   orbblocks <ct|"-"> <body>         → {"out":"yes"|"no"} (ORB blocks a cross-origin no-cors script)
---   orbproxy <cross-origin 0|1> <redirect 0|1> <ct|"-"> <acao 0|1> <body> → {"out":"yes"|"no"} (the proxy fails it)
+--   orbproxy <cross-origin 0|1> <redirect 0|1> <ct|"-"> <no-cors 0|1> <body> → {"out":"yes"|"no"} (the proxy fails it: ORB)
 --   sheetnosniff <same-origin 0|1> <ct|"-"> <nosniff 0|1> → {"out":"yes"|"no"} (the proxy adds nosniff)
 --   htmltail <scripting 0|1> <markup>  → {"out":"<offset>"|"none"} (where an unfinished construct at the end begins)
 --   nosniff <field lines, LF>          → {"out":"yes"|"no"} (X-Content-Type-Options says nosniff)
@@ -807,7 +807,6 @@ dispatch op args =
   orbProxyReq : List Str → Str
   orbProxyReq (co ∷ rd ∷ ct ∷ a ∷ b ∷ []) = yn (Orb.proxyBlocks (eqStr co (toList "1")) (eqStr rd (toList "1")) (ctArg ct) (eqStr a (toList "1")) b)
   orbProxyReq _ = errorReply "BadRequest"
-
   sheetNosniffReq : List Str → Str
   sheetNosniffReq (so ∷ ct ∷ ns ∷ []) = yn (Disposition.addNosniff (eqStr so (toList "1")) (ctArg ct) (eqStr ns (toList "1")))
   sheetNosniffReq _ = errorReply "BadRequest"

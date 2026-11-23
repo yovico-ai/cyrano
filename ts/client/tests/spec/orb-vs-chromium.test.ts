@@ -4,7 +4,7 @@
 // of many Content-Types and bodies, with and without nosniff, fails
 // exactly when the spec blocks it or the same response fails
 // same-origin. Through the proxy every script is same-origin; the proxy
-// fails the response where `orbproxy` says (no Access-Control-Allow-Origin
+// fails the response where `orbproxy` says (no-cors: no crossorigin
 // here), so proxied it fails exactly where it fails directly.
 //
 // Bodies run same-origin: none of them may loop.
@@ -106,7 +106,7 @@ describe.skipIf(!wanted || located.skip !== "")("ORB of cross-origin scripts: th
         expect(ran).toBe(true);
         const html = "<html><head><title>301 Moved Permanently</title></head></html>";
         expect(await oracle.ask("orbblocks", ["text/html", html])).toBe("yes"); // the 301's own body would be blocked
-        expect(await oracle.ask("orbproxy", ["1", "1", "text/html", "0", html])).toBe("no"); // but the proxy lets the redirect through
+        expect(await oracle.ask("orbproxy", ["1", "1", "text/html", "1", html])).toBe("no"); // but the proxy lets the redirect through
     }, 60_000);
 
     it("blocks as the spec says; proxied as directly", async () => {
@@ -137,7 +137,7 @@ describe.skipIf(!wanted || located.skip !== "")("ORB of cross-origin scripts: th
             const c = cases[i]!;
             const ct = c.t === null ? "-" : c.t;
             const spec = (await oracle.ask("orbblocks", [ct, BODIES[c.b]!])) === "yes";
-            const proxyFails = (await oracle.ask("orbproxy", ["1", "0", ct, "0", BODIES[c.b]!])) === "yes";
+            const proxyFails = (await oracle.ask("orbproxy", ["1", "0", ct, "1", BODIES[c.b]!])) === "yes";
             if (spec && same[i]) blocked++;
             const where = `${JSON.stringify(c.t)}${c.ns ? " nosniff" : ""} ${JSON.stringify(BODIES[c.b]!.slice(0, 40))}`;
             if (cross[i] !== (same[i]! && !spec)) bad.push(`${where}: Chromium cross-origin ${cross[i] ? "runs" : "fails"}, same-origin ${same[i] ? "runs" : "fails"}, spec ${spec ? "blocks" : "does not"}`);

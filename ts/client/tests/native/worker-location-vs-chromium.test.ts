@@ -79,7 +79,7 @@ describe.skipIf(!wanted)("a worker's location, in Chromium, through the proxy", 
         await page.evaluate(() => new Promise((res) => setTimeout(res, 1500)));
         const out = await page.evaluate(() => (window as unknown as { out: unknown }).out);
         await page.close();
-        return JSON.stringify(out).replace(/[0-9a-f]{8}-[0-9a-f-]{27}/g, "UUID");
+        return JSON.stringify(Object.fromEntries(Object.entries(out as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : 1)))).replace(/[0-9a-f]{8}-[0-9a-f-]{27}/g, "UUID");
     };
 
     it("reads as direct", async () => {
