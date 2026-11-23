@@ -424,6 +424,12 @@ func (h *Handler) translateResponse(resp *http.Response) error {
 				resp.Header.Add("Link", urlrewrite.RewriteLinkHeader(v, resp.Request.URL, h.opts.ProxyCfg))
 			}
 		}
+		// Speculation-Rules names rule sets the browser fetches itself
+		// (spec/Speculation.agda; chadscafe.com's came from its origin).
+		// Its lines are one list.
+		if vs := resp.Header.Values("Speculation-Rules"); len(vs) > 0 {
+			resp.Header.Set("Speculation-Rules", urlrewrite.RewriteSpeculationRules(strings.Join(vs, ", "), resp.Request.URL, h.opts.ProxyCfg))
+		}
 		if v := resp.Header.Get("Refresh"); v != "" {
 			resp.Header.Set("Refresh", urlrewrite.RewriteRefresh(v, resp.Request.URL, h.opts.ProxyCfg))
 		}

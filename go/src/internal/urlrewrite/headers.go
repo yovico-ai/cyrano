@@ -295,3 +295,40 @@ func refreshURL(v string) (pre, u, post string, ok bool) {
 	}
 	return v[:start], v[start:end], v[end:], true
 }
+
+// RewriteSpeculationRules is the Speculation-Rules value the browser is
+// given (spec/Speculation.agda): when it parses as a structured-field list
+// holding a string, each string member (a rule set's URL, against the
+// response's URL) proxified and written as an sf-string, the members the
+// browser ignores dropped; otherwise as sent.
+func RewriteSpeculationRules(v string, base *url.URL, cfg ProxyConfig) string {
+	ms, ok := SFList(v)
+	if !ok {
+		return v
+	}
+	var out []string
+	for _, m := range ms {
+		if m.Inner || len(m.Items) != 1 || m.Items[0].Kind != SFString {
+			continue
+		}
+		out = append(out, sfQuote(RewriteMarked(m.Items[0].Text, base, cfg, Mark{})))
+	}
+	if len(out) == 0 {
+		return v
+	}
+	return strings.Join(out, ", ")
+}
+
+// sfQuote writes an sf-string: quoted, "\" and `"` escaped.
+func sfQuote(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' || s[i] == '"' {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(s[i])
+	}
+	b.WriteByte('"')
+	return b.String()
+}

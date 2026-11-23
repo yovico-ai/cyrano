@@ -176,6 +176,9 @@ describe.skipIf(!wanted)("written markup makes the direct tree, in Chromium", ()
                 out.push(m.slice(prev));
                 return out;
             }), { numRuns: 200, seed });
+        // Found by seed 390681823: past a <plaintext> start tag split across
+        // writes, every later write is text (it was rewritten as markup).
+        draws.push(["<plainte", "xt data-i=1>a<b data-i=2>", "<img data-i=3 src=x/>", "<script>x</script>"]);
         const direct = await splitShapes(`${origin}/direct`, draws);
         const proxied = await splitShapes(`${origin}/cyrano/https/site.example/page`, draws);
         const bad: string[] = [];

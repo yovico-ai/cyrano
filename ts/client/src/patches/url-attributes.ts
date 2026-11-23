@@ -73,6 +73,12 @@ export function patchUrlAttributes(
                     }
                     // An element given rewritten blob: content reads back the page's URL.
                     if (sStarts(v, "blob:")) { const o = originalAttr(self, attribute); if (o?.value != null && sStarts(o.value.trim().toLowerCase(), "blob:")) return o.value.trim(); }
+                    // So does a script given a data: URL of its rewritten text
+                    // (spec/DataUrl.agda), as the browser serializes the page's.
+                    if (sStarts(v, "data:")) {
+                        const o = originalAttr(self, attribute);
+                        if (o?.value != null) { try { return new NURL(o.value).href; } catch { /* below */ } }
+                    }
                     return unwrapOne(v);
                 },
                 set: (set, self, value) => {

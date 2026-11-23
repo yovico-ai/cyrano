@@ -81,14 +81,20 @@ function maybeInjectBootstrap(
 // written when no write follows — at the next microtask (still the writing
 // script's turn), or at document.close().
 const carried = new SafeWeakMap<object, string>();
+// Documents whose parser is past a <plaintext> start tag: whatever is
+// written after it is text (HTML: the tokenizer never leaves PLAINTEXT), so
+// it goes as written — rewriting it as markup changed the text.
+const plaintext = new SafeWeakSet<object>();
 
 /** Writes `text` (the page's, already joined) to `doc` through its native write, rewritten. */
 function writeThrough(doc: WriteCapable, nativeWrite: (...a: unknown[]) => unknown, text: string, asTrusted: boolean,
     rewrite: (html: string) => string, realm: object): unknown {
+    if (plaintext.has(doc)) return ncall(nativeWrite, doc, asTrusted ? trusted(realm, "HTML", text) : text);
     const all = (carried.get(doc) ?? "") + text;
     carried.delete(doc);
-    const tail = { at: -1 };
+    const tail: { at: number; plaintext?: boolean } = { at: -1 };
     tokenize(all, (doc as unknown as Document).defaultView !== null, undefined, tail);
+    if (tail.plaintext) plaintext.add(doc);
     let now = all;
     if (tail.at >= 0) {
         now = all.slice(0, tail.at);
@@ -233,7 +239,14 @@ export function patchDocumentWrite(
     // close() ends the input: what a split write kept back goes first.
     if (ncall(nOP.hasOwnProperty, holder, "close")) {
         wrapMethod<(...a: unknown[]) => unknown>(holder, "close", (native, self, args) => {
-            if (typeof self === "object" && self !== null) flushers.get(self)?.();
+            if (typeof self === "object" && self !== null) { flushers.get(self)?.(); plaintext.delete(self); }
+            return nR.apply(native, self, args);
+        });
+    }
+    // open() starts a new parser (its three-argument form is window.open).
+    if (ncall(nOP.hasOwnProperty, holder, "open")) {
+        wrapMethod<(...a: unknown[]) => unknown>(holder, "open", (native, self, args) => {
+            if (args.length < 3 && typeof self === "object" && self !== null) plaintext.delete(self);
             return nR.apply(native, self, args);
         });
     }

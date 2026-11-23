@@ -130,6 +130,17 @@ export function originalAttr(el: unknown, name: string): { value: string | null 
     return current === e.now ? { value: e.was } : undefined;
 }
 
+/** A node's text content as it holds it (the native getter; null when the natives are not captured). */
+export function heldText(node: Node): string | null {
+    if (!nat) return null;
+    try { return ncall(nat.textGet, node); } catch { return null; }
+}
+
+/** Sets a node's text content natively (no rewriting, no record). */
+export function setHeldText(node: Node, value: unknown): void {
+    if (nat) ncall(nat.textSet, node, value as string);
+}
+
 /** Records a script's or style's text: now `now`, written by the page as `was`. */
 export function recordText(el: Element, now: string, was: string): void {
     if (now === was) { textStore.delete(el); return; }

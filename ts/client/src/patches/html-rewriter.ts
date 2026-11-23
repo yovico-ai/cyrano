@@ -23,7 +23,7 @@ import { ORIGINALS_ATTR } from "../native/originals";
 import { defaultJsRewriteOptions, rewriteJsSource } from "../js/rewriter";
 import { rewriteSrcsetAttribute } from "./srcset";
 import { rewriteByKind, urlAttrKind, urlDest } from "./url-attribute-map";
-import { blobValue } from "./blob-document";
+import { blobValue, specifierProxifier } from "./blob-document";
 
 const lowerAscii = (s: string): string => s.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
 const relOf = (v: string | null): string[] => (v === null ? [] : lowerAscii(v).split(/[\t\n\f\r ]+/).filter((t) => t !== ""));
@@ -212,7 +212,8 @@ function editStartTag(src: string, t: Extract<Tok, { kind: "start" }>, rewriteOn
         if (a.name === "style") { change(a, "style", rewriteCssText(v, rewriteOne)); continue; }
         // A blob: URL of a document or stylesheet built in the browser: the
         // element gets it rewritten (blob-document.ts; TradingView's chart is such markup).
-        if (html && /^[\x00-\x20]*blob:/i.test(v)) {
+        // So does a script given a data: URL (spec/DataUrl.agda; Go: htmlrewrite).
+        if (html && (/^[\x00-\x20]*blob:/i.test(v) || (t.name === "script" && a.name === "src" && /^[\x00-\x20]*data:/i.test(v)))) {
             const doc = blobValue(globalThis as unknown as Window, t.name, a.name, value("rel"), v, rewriteOne, proxyOrigin, bootstrap,
                 t.name === "script" ? scriptKind(value("type"), value("language")) : null);
             if (doc) { change(a, a.name, doc); continue; }
@@ -345,9 +346,8 @@ export function rewriteHtmlString(
                 const opts = defaultJsRewriteOptions();
                 const base = rw.baseHref?.();
                 if (kind === "module" && base) {
-                    const rwJs = asScript(rw);
                     opts.baseUrl = base;
-                    opts.proxify = (specifier, from) => { try { return rwJs(new URL(specifier, from).href); } catch { return specifier; } };
+                    opts.proxify = specifierProxifier(rw as RewriteOne);
                 }
                 out = rewriteJsSource(text, opts);
             }

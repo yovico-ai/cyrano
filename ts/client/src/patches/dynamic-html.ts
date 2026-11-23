@@ -47,7 +47,7 @@ export function bootstrapOf(node: unknown): (() => string) | undefined {
     }
 }
 import { rewriteSrcsetAttribute } from "./srcset";
-import { elementBlobValue } from "./blob-document";
+import { elementBlobValue, specifierProxifier } from "./blob-document";
 import { XLINK_NS, kindOf, rewriteByKind } from "./url-attribute-map";
 import { remark, rewriteFor, type RewriteOne } from "./referrer-policy";
 import { isRefreshEquiv, rewriteRefresh } from "../url/refresh";
@@ -312,10 +312,7 @@ export function rawText(el: Element, text: string, rewriteOne: (url: string) => 
     } catch { base = null; }
     if (base) {
         opts.baseUrl = base;
-        const rwJs = asScript(rewriteOne);
-        opts.proxify = (specifier, from) => {
-            try { return rwJs(new URL(specifier, from).href); } catch { return specifier; }
-        };
+        opts.proxify = specifierProxifier(rewriteOne as RewriteOne);
     }
     return rewriteJsSource(text, opts);
 }

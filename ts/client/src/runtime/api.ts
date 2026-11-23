@@ -7,7 +7,7 @@
 // expose it on the returned RewriterApi.
 
 import { nO, nR, sStarts } from "../native/intrinsics";
-import { blobScriptFor } from "../patches/blob-document";
+import { blobScriptFor, dataScriptFor } from "../patches/blob-document";
 import { crossOriginView } from "../native/cross-origin";
 import { markSender } from "../messaging/target-origin";
 import { isView } from "../native/cross-origin";
@@ -306,6 +306,13 @@ export function createRewriterApi(
                     withMark: (u: string, p: string | null, d: Dest | null): string => rewriteUrl(u, baseUrlState.get(), config, p ?? undefined, d ?? undefined),
                 });
                 return blobScriptFor(targetWindow, specifier as string, rw, true) ?? specifier;
+            }
+            // A module given as a data: URL: its text rewritten (spec/DataUrl.agda).
+            if (sStarts((specifier as string).replace(/^[\x00-\x20]+/, "").toLowerCase(), "data:")) {
+                const rw = Object.assign((u: string): string => rewriteUrl(u, baseUrlState.get(), config), {
+                    withMark: (u: string, p: string | null, d: Dest | null): string => rewriteUrl(u, baseUrlState.get(), config, p ?? undefined, d ?? undefined),
+                });
+                return dataScriptFor(specifier as string, rw) ?? specifier;
             }
             let base = baseUrlState.get();
             if (typeof scriptUrl === "string") {

@@ -319,6 +319,21 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 		}
 	}
 
+	// <script src="data:…">: its text is JavaScript the rewriter never saw
+	// (WordPress optimisers write inline scripts so): read as the browser
+	// reads it and given a data: URL of the rewritten text (spec/DataUrl.agda;
+	// TS patches/blob-document.ts dataScriptFor). The page reads its own
+	// URL back (originals).
+	if tag == "script" && !svg && cfg.RewriteDataScript != nil {
+		if v, ok := getAttr(attrs, "src"); ok {
+			if k := scriptKindOf(attrs); k == ScriptClassic || k == ScriptModule {
+				if now := urlrewrite.RewriteDataScript(v, func(text string) string { return cfg.RewriteDataScript(v, text) }); now != v {
+					attrs = setAttr(attrs, "src", now)
+				}
+			}
+		}
+	}
+
 	// <iframe srcdoc>: a whole document in an attribute. It is rewritten
 	// like any other — with the runtime first, since the frame's scripts
 	// run as it is parsed. Its base URL is the page's.

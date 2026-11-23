@@ -157,7 +157,12 @@ string), a meta refresh, an unrewritten link or form — is cancelled and
 made to the proxified URL (a form resubmitted to it, method and body
 kept). A destination on the proxy's origin is left alone (the server's
 Referer routing takes bare paths). Browser-side only; the page's own
-navigate listeners see just the navigation that replaces it.
+navigate listeners see just the navigation that replaces it. Limit: a
+frame still on its initial about:blank has the Navigation API's events
+off (HTML), so code no rule saw that navigates such a frame (a
+`setTimeout` string) is not caught; rewritten code is
+(`frame-navigation-net-vs-chromium`: a handler written into an empty
+frame, its `eval`, an `onload` attribute, `contentWindow[k].href`).
 
 ## Known gaps
 
@@ -498,7 +503,24 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   both runtimes (birdies.com, guns.com; `event-handlers-vs-chromium`);
   http: and https: to one host
   use separate upstream clients (tls-client caches a transport per host
-  and port, 443 by default). A closed connection through the proxy
+  and port, 443 by default); a script's text is judged by its kind when
+  it is inserted, not when the text was set (spec/Html.agda scriptKind:
+  consent managers — Cookiebot on jackery.com — write the text under
+  `text/plain`, then flip the type; `script-type-flip-vs-chromium`); a
+  script given a `data:` URL (`<script src>`, `import()`, markup the
+  server sends or the page writes) is read as Chromium reads it
+  (spec/DataUrl.agda, checked against Chromium: `data-url-vs-chromium`)
+  and given a `data:` URL of its rewritten text — not a blob:, so a CSP
+  admitting data: runs it as directly; a tab or newline inside the URL is
+  outside the model (Chromium keeps them in some, drops them in others)
+  and the URL is left as is (vegrecipesofindia.com's PWA module;
+  `data-script-vs-chromium`, Go `TestE2E_DataScriptRewritten`); a worker
+  made inside a worker gets the runtime as one made in a window (blob: /
+  data: source rewritten; douyin.com's decoders; `nested-worker-vs-chromium`). The
+  `Speculation-Rules` header's rule-set URLs are proxified
+  (spec/Speculation.agda; chadscafe.com); a rule set's content (`urls`,
+  `href_matches`, inline `<script type=speculationrules>`) is not
+  rewritten yet. A closed connection through the proxy
   (ERR_EMPTY_RESPONSE) is an upstream failure direct sees as its own net
   error: no such host, refused, the CORS check, ORB.
   Over plain HTTP the proxy keeps 6 connections, and ad-heavy pages

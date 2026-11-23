@@ -46,6 +46,11 @@ type Config struct {
 	// jsrewrite directly. Returns the rewritten source.
 	RewriteInlineJS func([]byte) []byte
 
+	// RewriteDataScript, when non-nil, rewrites the text of a script given
+	// a data: URL (<script src="data:…">, classic or module), the URL its
+	// base (spec/DataUrl.agda; urlrewrite.RewriteDataScript).
+	RewriteDataScript func(dataURL, text string) string
+
 	// RewriteInlineCSS, when non-nil, is invoked on:
 	//   - the text content of every <style> block
 	//   - the value of every `style="..."` attribute

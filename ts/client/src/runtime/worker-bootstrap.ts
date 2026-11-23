@@ -42,6 +42,7 @@ import { patchXmlHttpRequest } from "../patches/xhr";
 import { patchWebSocket } from "../patches/websocket";
 import { patchEventSource } from "../patches/event-source";
 import { patchWorker } from "../patches/worker";
+import { patchBlobWorkerSource } from "../patches/blob-worker-source";
 import { patchFunctionConstructor } from "../patches/function-ctor";
 
 // Subset of RewriterApi (api-types.ts) that's meaningful inside a Worker —
@@ -194,7 +195,11 @@ function patchWorkerScope(
     // names are its origin's, unpartitioned.
     try { patchStorageNames(scope as object, () => "crn\u001f" + baseUrl.origin + "\u001f"); } catch { /* stays native */ }
     patchEventSource(realm, rewriteOne, unwrapOne);
-    patchWorker(realm, rewriteOne);
+    // A worker made inside this one (nested dedicated workers): its URL is
+    // proxified, and one of a blob: or data: script this worker built gets
+    // the runtime and the rewritten source, as in a window (douyin.com's
+    // decoder workers ran without it and fetched their origins).
+    patchWorker(realm, rewriteOne, patchBlobWorkerSource(realm, config, () => baseUrl));
     patchFunctionConstructor(realm);
     // importScripts is classic-worker-only and synchronous.
     if (typeof scope.importScripts === "function") {

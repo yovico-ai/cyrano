@@ -229,7 +229,7 @@ const low = (n: number): string => String.fromCharCode(n >= 65 && n <= 90 ? n + 
  * script or raw-text element whose end tag has not come — or -1
  * (spec/HtmlTok.agda tail).
  */
-export function tokenize(s: string, scripting: boolean, within?: { ns: Ns; name: string; encoding?: string | null }, tail?: { at: number }): Tok[] {
+export function tokenize(s: string, scripting: boolean, within?: { ns: Ns; name: string; encoding?: string | null }, tail?: { at: number; plaintext?: boolean }): Tok[] {
     const out: Tok[] = [];
     const tr = new Tracker(within);
     const n = s.length;
@@ -496,7 +496,11 @@ export function tokenize(s: string, scripting: boolean, within?: { ns: Ns; name:
                 i = n; break;
         }
     }
-    if (tail) tail.at = inRaw ? rawFrom : st === S.Data || st === S.Plaintext ? -1 : p;
+    if (tail) {
+        tail.at = inRaw ? rawFrom : st === S.Data || st === S.Plaintext ? -1 : p;
+        // Past a <plaintext> start tag every later character is text.
+        tail.plaintext = st === S.Plaintext;
+    }
     eofToken();
     return out;
 }

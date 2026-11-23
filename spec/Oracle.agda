@@ -57,6 +57,9 @@
 --   htmltail <scripting 0|1> <markup>  → {"out":"<offset>"|"none"} (where an unfinished construct at the end begins)
 --   nosniff <field lines, LF>          → {"out":"yes"|"no"} (X-Content-Type-Options says nosniff)
 --   workerruns <module 0|1> <mime>      → {"out":"yes"|"no"} (a blob:/data: worker runs)
+--   specrules <proxy> <base> <header>   → {"out":"<the Speculation-Rules value the browser is given>"}
+--   dataurl <url>                       → {"out":"none"} (given as is) or
+--                                         {"out":"<rewritable 0|1>\t<head>\t<bytes, hex>\t<wrapped URL of those bytes>"}
 --   fetchlateradmit <used> <size>       → {"out":"ok"|"<the QuotaExceededError message>"}
 --   storagekey <ancestors> <site> <origin> → {"out":"<the partition key>"}
 --   storageaccess <mode> <dest> <cred> <chain> <from> <to> <site> <0|1> → {"out":"active"|"none"}
@@ -193,6 +196,8 @@ import Dictionary
 import Priority
 import FetchLater
 import WorkerSource
+import DataUrl
+import Speculation
 import Frames
 import Stack
 import H1
@@ -373,6 +378,7 @@ dispatch op args =
   else if eqStr op (toList "fetchlatersize") then fetchLaterSizeReq args
   else if eqStr op (toList "fetchlateradmit") then fetchLaterAdmitReq args
   else if eqStr op (toList "workerruns") then workerRunsReq args
+  else if eqStr op (toList "dataurl") then dataUrlReq args
   else if eqStr op (toList "frameorigin") then frameOriginReq args
   else if eqStr op (toList "htmltail") then htmlTailReq args
   else if eqStr op (toList "nosniff") then oneArg (λ v → if Disposition.nosniff (if Data.List.Base.null v then [] else splitOn (is 10) v) then toList "yes" else toList "no") args
@@ -452,6 +458,7 @@ dispatch op args =
   else if eqStr op (toList "urllist") then urlListReq args
   else if eqStr op (toList "jsonobject") then jsonObjectReq args
   else if eqStr op (toList "link") then linkReq args
+  else if eqStr op (toList "specrules") then specRulesReq args
   else if eqStr op (toList "linkpreloads") then linkPreloadsReq args
   else if eqStr op (toList "htmltags") then htmlTagsReq args
   else if eqStr op (toList "htmlspans") then htmlSpansReq args
@@ -832,6 +839,20 @@ dispatch op args =
   workerRunsReq (m ∷ t ∷ []) = out (if WorkerSource.runs (eqStr m (toList "1")) t then toList "yes" else toList "no")
   workerRunsReq (m ∷ []) = out (if WorkerSource.runs (eqStr m (toList "1")) [] then toList "yes" else toList "no")
   workerRunsReq _ = errorReply "BadRequest"
+
+  dataUrlReq : List Str → Str
+  dataUrlReq (u ∷ []) = answer (DataUrl.read u)
+    where
+    hexOf : List ℕ → Str
+    hexOf []       = []
+    hexOf (b ∷ bs) = dig (b / 16) ∷ dig (b % 16) ∷ hexOf bs
+      where
+      dig : ℕ → Char
+      dig n = if n <ᵇ 10 then fromℕ (48 + n) else fromℕ (87 + n)
+    answer : Maybe DataUrl.DataUrl → Str
+    answer nothing  = out (toList "none")
+    answer (just d) = out ((if DataUrl.rewritable d then toList "1" else toList "0") ++ '\t' ∷ DataUrl.head d ++ '\t' ∷ hexOf (DataUrl.body d) ++ '\t' ∷ DataUrl.wrapped (DataUrl.head d) (DataUrl.body d))
+  dataUrlReq _ = errorReply "BadRequest"
 
   fetchLaterAdmitReq : List Str → Str
   fetchLaterAdmitReq (u ∷ n ∷ []) with FetchLater.admit (Url.digitsValue u) (Url.digitsValue n)
@@ -1345,6 +1366,18 @@ dispatch op args =
   ... | nothing | _ = errorReply "BadProxy"
   ... | just _  | nothing = errorReply "BadBase"
   linkReq _ = errorReply "BadRequest"
+
+  specRulesReq : List Str → Str
+  specRulesReq (p ∷ b ∷ h ∷ []) with proxyOf p | baseOf b
+  ... | just px | just base = out (Speculation.rewriteSpeculationRules rw h)
+    where
+    rw : Str → Maybe Str
+    rw u with rewriteUrlWith px (mark nothing nothing) base u
+    ... | emit _ v = just v
+    ... | _        = nothing
+  ... | nothing | _ = errorReply "BadProxy"
+  ... | just _  | nothing = errorReply "BadBase"
+  specRulesReq _ = errorReply "BadRequest"
 
   linkPreloadsReq : List Str → Str
   linkPreloadsReq (h ∷ []) = out (joinP (Link.links h))

@@ -33,6 +33,7 @@ import { readBlob } from "./blob-worker-source";
 import { rewriteSrcdoc } from "./html-rewriter";
 import type { RewriteOne } from "./referrer-policy";
 import { scriptKindOf, type ScriptKind } from "./script-kind";
+import { rewriteDataScript } from "../url/data-url";
 
 const done = new SafeMap<string, string>(); // "doc|css " + the page's blob URL → the rewritten one's
 
@@ -112,16 +113,48 @@ export function blobScriptFor(win: Window, url: string, rewriteOne: RewriteOne, 
     if (!read) return null;
     const opts = defaultJsRewriteOptions();
     if (module) {
-        const wm = rewriteOne.withMark;
-        const rwJs = wm ? (u: string): string => wm(u, null, "js") : rewriteOne;
         opts.baseUrl = url;
-        opts.proxify = (specifier, from) => {
-            try { return rwJs(new URL(specifier, from).href); } catch { return specifier; }
-        };
+        opts.proxify = specifierProxifier(rewriteOne);
     }
     const js = rewriteJsSource(read.source, opts);
     if (js === read.source) return null;
     return remake(win, key, js, read.type);
+}
+
+/**
+ * The callback a JS rewrite proxifies a module specifier with (resolved
+ * against `from`): a data: module is given the data: URL of its rewritten
+ * text (spec/DataUrl.agda; Go: the server's jsOpts.ProxifyURL), any other
+ * URL is proxified, marked as a script's; one that does not resolve stays.
+ */
+export function specifierProxifier(rewriteOne: RewriteOne): (specifier: string, from: string) => string {
+    const wm = rewriteOne.withMark;
+    const rwJs = wm ? (u: string): string => wm(u, null, "js") : rewriteOne;
+    return (specifier, from) => {
+        if (/^[\x00-\x20]*data:/i.test(specifier)) return dataScriptFor(specifier, rewriteOne) ?? specifier;
+        try { return rwJs(new URL(specifier, from).href); } catch { return specifier; }
+    };
+}
+
+/**
+ * The URL a script is given for a data: URL (classic or module; <script
+ * src>, import()): a data: URL of its text rewritten, or null to give it
+ * as it is (spec/DataUrl.agda; Go urlrewrite.RewriteDataScript). Its own
+ * URL is its base, against which nothing relative resolves — such a
+ * specifier stays as written, as natively — and import.meta.url reads it.
+ */
+export function dataScriptFor(url: string, rewriteOne: RewriteOne): string | null {
+    const key = "data " + url;
+    const hit = done.get(key);
+    if (hit) return hit;
+    const now = rewriteDataScript(url, (text) => {
+        const opts = defaultJsRewriteOptions();
+        opts.baseUrl = url;
+        opts.proxify = specifierProxifier(rewriteOne);
+        return rewriteJsSource(text, opts);
+    });
+    if (now !== null) done.set(key, now);
+    return now;
 }
 
 /** Whether a rel names a stylesheet (ASCII whitespace-separated, any case). */
@@ -138,8 +171,11 @@ export function relStylesheet(rel: string | null): boolean {
  */
 export function blobValue(win: Window | null | undefined, tag: string, attr: string, rel: string | null, value: string,
     rewriteOne: RewriteOne, proxyOrigin: string, bootstrap: (() => string) | undefined, scriptType: ScriptKind | null = null): string | null {
-    if (!win || !/^[\x00-\x20]*blob:/i.test(value)) return null;
-    const t = tag.toLowerCase(), a = attr.toLowerCase(), url = value.replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, "");
+    if (!win) return null;
+    const t = tag.toLowerCase(), a = attr.toLowerCase();
+    if (a === "src" && t === "script" && (scriptType === "classic" || scriptType === "module") && /^[\x00-\x20]*data:/i.test(value)) return dataScriptFor(value, rewriteOne);
+    if (!/^[\x00-\x20]*blob:/i.test(value)) return null;
+    const url = value.replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, "");
     if (a === "src" && (t === "iframe" || t === "frame")) return blobDocumentFor(win, url, rewriteOne, proxyOrigin, bootstrap);
     if (a === "href" && t === "link" && relStylesheet(rel)) return blobStylesheetFor(win, url, rewriteOne);
     if (a === "src" && t === "script" && (scriptType === "classic" || scriptType === "module")) return blobScriptFor(win, url, rewriteOne, scriptType === "module");

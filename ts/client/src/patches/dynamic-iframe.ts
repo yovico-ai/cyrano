@@ -25,10 +25,12 @@ import type { ClientConfig } from "../config";
 import { replaceValue, wrapMethod } from "../native/surface";
 import { unwrapProxiedUrl } from "../url/containment";
 import { injectIntoIframe } from "../runtime/iframe-injection";
-import { rawTextTarget, rewriteTextNode } from "./dynamic-html";
+import { rawText, rawTextTarget, rewriteTextNode } from "./dynamic-html";
+import { scriptKindOf } from "./script-kind";
+import { trusted } from "../native/trusted";
 import { rewriteSrcsetAttribute } from "./srcset";
 import { kindOf, rewriteByKind, urlAttrsOf } from "./url-attribute-map";
-import { originalAttr, recordAttr } from "../native/originals";
+import { heldText, originalAttr, originalText, recordAttr, recordText, setHeldText } from "../native/originals";
 
 interface SavedOriginals {
     proto: Record<string, unknown>;
@@ -92,7 +94,29 @@ export function patchDynamicIframeAppend(
             recordAttr(el, name, rewritten, raw);
         }
     };
-    function rewriteUrlBeforeInsert(node: Node): void {
+    // A script's kind is judged when it is inserted (HTML "prepare the
+    // script element"), not when its text is set: a script whose text was
+    // written while it was no JavaScript (type text/plain — every consent
+    // manager holds scripts so, Cookiebot clones them with the text and
+    // then the type) and that is JavaScript now has the text rewritten
+    // here, the page's text recorded so it reads back as written
+    // (spec/Html.agda scriptKind; tests/native/script-type-flip-vs-chromium).
+    // A script the runtime already rewrote, or one with a src, is left.
+    const fixScript = (el: Element): void => {
+        if (el.localName !== "script" || el.namespaceURI !== "http://www.w3.org/1999/xhtml") return;
+        if (ncall(nativeGetAttr, el, "src") !== null) return;
+        const kind = scriptKindOf(el);
+        if (kind !== "classic" && kind !== "module" && kind !== "importmap") return;
+        if (originalText(el) !== undefined) return;
+        for (let c = el.firstChild; c; c = c.nextSibling) if (c.nodeType !== 3) return;
+        const text = heldText(el);
+        if (!text) return;
+        const raw = rawText(el, text, rewriteOne);
+        if (raw === null || raw === text) return;
+        setHeldText(el, trusted(targetWindow, "Script", raw));
+        recordText(el, raw, text);
+    };
+    function rewriteUrlBeforeInsert(node: Node, moving = false): void {
         try {
             if (node.nodeType === 1) fixElement(node as Element);
             const foreign = node.ownerDocument !== null && node.ownerDocument !== targetWindow.document;
@@ -100,6 +124,14 @@ export function patchDynamicIframeAppend(
             if ((foreign || node.nodeType === 11) && typeof q === "function" && node.firstChild) {
                 const all = ncall(q, node, "*") as ArrayLike<Element>;
                 for (let i = 0; i < all.length; i++) fixElement(all[i]!);
+            }
+            // Scripts anywhere in what is inserted (a move prepares none).
+            if (!moving) {
+                if (node.nodeType === 1) fixScript(node as Element);
+                if (typeof q === "function" && node.firstChild) {
+                    const scripts = ncall(q, node, "script") as ArrayLike<Element>;
+                    for (let i = 0; i < scripts.length; i++) fixScript(scripts[i]!);
+                }
             }
         } catch {
             // Cross-realm DOM exceptions: the element loads as it is.
@@ -185,7 +217,7 @@ export function patchDynamicIframeAppend(
                 if (raw) args = args.map((a) => rewriteTextNode(raw, a, rewriteOne));
                 const frames: Node[] = [];
                 for (const n of nodesOf(args)) {
-                    if (n instanceof Object) rewriteUrlBeforeInsert(n as Node);
+                    if (n instanceof Object) rewriteUrlBeforeInsert(n as Node, key === "moveBefore");
                     frames.push(...framesIn(n));
                 }
                 return inserting(frames, () => nR.apply(native, self, args));

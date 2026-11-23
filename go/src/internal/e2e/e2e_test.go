@@ -4,6 +4,10 @@ package e2e
 
 import (
 	"bytes"
+	"encoding/base64"
+	"html"
+	"net/url"
+	"regexp"
 	"compress/gzip"
 	"io"
 	"net"
@@ -590,5 +594,92 @@ func TestE2E_WebSocketCookies(t *testing.T) {
 	}
 	if cookie != "mine=1" {
 		t.Errorf("handshake Cookie = %q, want only this site's cookie, as named (mine=1)", cookie)
+	}
+}
+
+// TestE2E_DataScriptRewritten — a <script src="data:…"> in markup (classic
+// or module) runs text the rewriter never saw: it is read as the browser
+// reads it, rewritten, and given a data: URL of the rewritten text
+// (spec/DataUrl.agda); a relative specifier stays as written (it resolves
+// against nothing, as natively); a data: URL that does not read, or that
+// is no script's, is left; the page's URL is kept for read-back.
+func TestE2E_DataScriptRewritten(t *testing.T) {
+	enc := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+	classic := `import("https://cdn.example/a.js")`
+	module := `import "https://cdn.example/b.js"; import "./rel.js";`
+	up := startInlineServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = io.WriteString(w, `<!doctype html><head>`+
+			`<script id="c" src="data:text/javascript;base64,`+enc(classic)+`"></script>`+
+			`<script id="m" type="module" src="data:text/javascript,`+url.PathEscape(module)+`"></script>`+
+			`<script id="j" type="application/json" src="data:,`+url.PathEscape(classic)+`"></script>`+
+			`<script id="x" src="data:text/javascript;base64,%%%"></script>`+
+			`<script>import("data:text/javascript,import%20%22https://cdn.example/lit.js%22")</script>`)
+	})
+	proxy := startProxy(t)
+	status, body := getVia(t, proxy, up.URL+"/p")
+	if status != 200 {
+		t.Fatalf("status %d", status)
+	}
+	srcOf := func(id string) string {
+		m := regexp.MustCompile(`id="` + id + `"[^>]*?src="([^"]*)"|src="([^"]*)"[^>]*?id="` + id + `"`).FindStringSubmatch(body)
+		if m == nil {
+			t.Fatalf("no script %s:\n%.900s", id, body)
+		}
+		return html.UnescapeString(m[1] + m[2])
+	}
+	text := func(src string) string {
+		d, ok := urlrewrite.ReadDataURL(src)
+		if !ok {
+			t.Fatalf("not a data: URL that reads: %q", src)
+		}
+		return string(d.Body)
+	}
+	c := text(srcOf("c"))
+	if !strings.Contains(c, "/cyrano/https") || strings.Contains(c, `import("https://cdn.example/a.js")`) {
+		t.Errorf("classic data: script's import() not proxified: %q", c)
+	}
+	m := text(srcOf("m"))
+	if !strings.Contains(m, "/cyrano/https") || !strings.Contains(m, `"./rel.js"`) {
+		t.Errorf("module data: script: absolute proxified, relative as written, got %q", m)
+	}
+	if srcOf("j") != "data:,"+url.PathEscape(classic) || srcOf("x") != "data:text/javascript;base64,%%%" {
+		t.Errorf("a data script that is no JavaScript, or does not read, changed:\n%.900s", body)
+	}
+	if !strings.Contains(body, `crn-o=`) {
+		t.Errorf("no original kept for read-back:\n%.900s", body)
+	}
+	// A literal import() of a data: module: its text rewritten in place.
+	// (The edit is marked: the original in a comment, then the new value.)
+	lit := regexp.MustCompile(`import\([^)]*\*/"(data:text/javascript;base64,[^"]*)"`).FindStringSubmatch(body)
+	if lit == nil {
+		t.Fatalf("no literal data: import:\n%.1500s", body)
+	}
+	if l := text(lit[1]); !strings.Contains(l, "/cyrano/https") {
+		t.Errorf("a literal import() of a data: module not rewritten: %q", l)
+	}
+}
+
+// TestE2E_SpeculationRulesHeader — the rule sets a Speculation-Rules header
+// names are fetched by the browser itself: they go through the proxy
+// (spec/Speculation.agda; chadscafe.com's came from its origin); scripts
+// read the origin's value (Crn-H).
+func TestE2E_SpeculationRulesHeader(t *testing.T) {
+	const sent = `"https://static.cdn-website.com/speculations/rules/prerender-1.0.3.json", "/cdn-cgi/speculation"`
+	up := startInlineServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Header().Set("Speculation-Rules", sent)
+		_, _ = io.WriteString(w, `<!doctype html>x`)
+	})
+	proxy := startProxy(t)
+	resp := getViaRaw(t, proxy, up.URL+"/p")
+	defer resp.Body.Close()
+	got := resp.Header.Get("Speculation-Rules")
+	want := `"` + gotoURL(proxy, "https://static.cdn-website.com/speculations/rules/prerender-1.0.3.json") + `", "` + gotoURL(proxy, up.URL+"/cdn-cgi/speculation") + `"`
+	if got != want {
+		t.Errorf("Speculation-Rules\n got  %s\n want %s", got, want)
+	}
+	if !strings.Contains(resp.Header.Get("Crn-H"), "speculation-rules") {
+		t.Errorf("the origin's value not carried for scripts: Crn-H %q", resp.Header.Get("Crn-H"))
 	}
 }

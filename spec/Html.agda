@@ -60,6 +60,14 @@ jsEssences = map toList
 -- ASCII whitespace stripped; module, importmap and speculationrules on the
 -- string as written (case aside) — Chromium (html-vs-chromium): " module"
 -- does not run.
+--
+-- When: the browser judges a script by its attributes as they are when it
+-- is prepared — on insertion (or its text or src arriving while it is
+-- connected) — and a script that was no JavaScript then is not "already
+-- started": inserted again after its type changed, it runs. So a runtime
+-- judges a script's text by this kind at insertion, not when the text was
+-- set (consent managers write text under text/plain and flip the type;
+-- ts patches/dynamic-iframe.ts fixScript, script-type-flip-vs-chromium).
 scriptKind : Maybe Str → Maybe Str → ScriptKind
 scriptKind (just []) _          = scriptClassic
 scriptKind nothing   (just [])  = scriptClassic

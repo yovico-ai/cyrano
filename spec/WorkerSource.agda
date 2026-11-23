@@ -11,7 +11,9 @@
 -- MIME type (up to ";", HTTP whitespace trimmed, ASCII-lowercased) one of
 -- MIME Sniffing's JavaScript essences — or the worker fails (an error
 -- event). Checked against Chromium (worker-source-vs-chromium; Worker and
--- SharedWorker alike).
+-- SharedWorker alike). The same in a worker's scope: a worker made inside
+-- a worker (nested dedicated workers) is judged and given the runtime as in
+-- a window (ts runtime/worker-bootstrap.ts; nested-worker-vs-chromium).
 module WorkerSource where
 
 open import Data.Bool.Base using (Bool; true; false; _∨_; not)

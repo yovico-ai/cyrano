@@ -51,7 +51,12 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 	jsOpts.Logger = logger.With("component", "jsrewrite")
 	// Module specifiers name modules: marked as scripts, as an import
 	// map's URLs are (spec/Containment.agda Dest).
+	// A data: module's text is rewritten in place (spec/DataUrl.agda).
+	var rewriteDataScript func(dataURL, text string) string
 	jsOpts.ProxifyURL = func(rawURL string, base *url.URL) string {
+		if now := urlrewrite.RewriteDataScript(rawURL, func(text string) string { return rewriteDataScript(rawURL, text) }); now != rawURL {
+			return now
+		}
 		return urlrewrite.RewriteDest(rawURL, base, proxyCfg, urlrewrite.DestScript)
 	}
 	// rewriteJSFor returns a rewriter closure bound to scriptURL so that
@@ -80,6 +85,25 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			}
 		}
 		return func(src []byte) []byte { return jsrewrite.Rewrite(src, opts) }
+	}
+
+	// A data: script's text (spec/DataUrl.agda): its base is its own URL,
+	// against which nothing relative resolves (as natively: such a specifier
+	// stays as written); a specifier naming its scheme is proxified.
+	rewriteDataScript = func(dataURL, text string) string {
+		opts := jsOpts
+		base, err := url.Parse(dataURL)
+		if err != nil || base.Scheme == "" {
+			base = &url.URL{Scheme: "data", Opaque: ","}
+		}
+		opts.BaseURL = base
+		opts.ProxifyURL = func(rawURL string, _ *url.URL) string {
+			if !urlrewrite.NamesScheme(rawURL) {
+				return rawURL
+			}
+			return jsOpts.ProxifyURL(rawURL, nil)
+		}
+		return string(jsrewrite.Rewrite([]byte(text), opts))
 	}
 
 	cssLogger := logger.With("component", "cssrewrite")
@@ -167,6 +191,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			// read `location` natively and report the proxy's URL (Turnstile
 			// then fails with 600010).
 			cfg.RewriteInlineJS = rewriteJSFor(target)
+			cfg.RewriteDataScript = rewriteDataScript
 			cfg.RewriteInlineCSS = rewriteCSS(target)
 			if isChallenge {
 				// Record this session's challenge origin so bare-path /cdn-cgi/
