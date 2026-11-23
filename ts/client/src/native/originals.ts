@@ -287,6 +287,10 @@ export function consume(root: unknown): void {
     for (let i = 0; i < templates.length; i++) content(templates[i]);
 }
 
+// The elements of a node and its descendants, in tree order, each
+// <template>'s content after them (selectors do not reach it; a clone of a
+// template has a clone of its content: heart.org's Vue nav read its
+// in-DOM templates' links back proxied).
 function elementsOf(node: Node): Element[] {
     const out: Element[] = [];
     if (node.nodeType === 1) out.push(node as Element);
@@ -294,6 +298,13 @@ function elementsOf(node: Node): Element[] {
     if (typeof q === "function") {
         const all = ncall(q, node, "*") as ArrayLike<Element>;
         for (let i = 0; i < all.length; i++) out.push(all[i]!);
+    }
+    const n = out.length;
+    for (let i = 0; i < n; i++) {
+        const el = out[i]!;
+        if (el.localName !== "template" || el.namespaceURI !== "http://www.w3.org/1999/xhtml") continue;
+        const content = (el as HTMLTemplateElement).content;
+        if (content) for (const e of elementsOf(content)) out.push(e);
     }
     return out;
 }

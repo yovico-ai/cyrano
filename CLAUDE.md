@@ -364,7 +364,14 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   `PX<n>` names any more (a JSON.stringify hook matched none). On the way:
   `location` reached by reflection (Reflect.get, the window's/document's
   own getter, __lookupGetter__) is the view, as by name
-  (`patches/location-reflect.ts`). Google search answers `/sorry` through the proxy. Akamai Bot Manager's
+  (`patches/location-reflect.ts`). Markup inside a `<template>` reads back as written:
+  serialization pairs template content with its clone's, and a URL in a
+  document with no browsing context (template content, DOMParser) resolves
+  the page's value against that document's base, as natively (heart.org's
+  Vue templates; `template-readback-vs-chromium`). `serviceWorker.getRegistration`
+  is judged by the page's own origin (none can be registered: undefined;
+  another origin: the native's SecurityError naming the page's; staples.com;
+  `service-worker-vs-chromium`). Google search answers `/sorry` through the proxy. Akamai Bot Manager's
   sensor (ibm.com) runs clean. `run.sh` kills every running cyrano: start
   a second (TLS) instance after it.
 - **OAuth / social sign-in** (2026-11-18): from a relying site's "Sign in

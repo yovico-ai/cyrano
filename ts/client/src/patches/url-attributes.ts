@@ -71,6 +71,19 @@ export function patchUrlAttributes(
                         return srcset ? rewriteSrcsetAttribute(v, unwrapOne)
                             : kindOf(self as Element, attribute) === "urllist" ? rewriteUrlList(v, unwrapOne) : unwrapOne(v);
                     }
+                    // In a document with no browsing context (a <template>'s
+                    // content, a DOMParser document) the page's URL resolves
+                    // against that document's base, as the browser resolves it
+                    // there — or reads as written when it does not resolve.
+                    {
+                        const doc = (self as Node).ownerDocument;
+                        if (doc && doc.defaultView === null) {
+                            const o = originalAttr(self, attribute);
+                            if (o && o.value !== null) {
+                                try { return new NURL(o.value, doc.baseURI).href; } catch { return o.value; }
+                            }
+                        }
+                    }
                     // An element given rewritten blob: content reads back the page's URL.
                     if (sStarts(v, "blob:")) { const o = originalAttr(self, attribute); if (o?.value != null && sStarts(o.value.trim().toLowerCase(), "blob:")) return o.value.trim(); }
                     // So does a script given a data: URL of its rewritten text

@@ -139,7 +139,7 @@ export function installPatches(
     step("patchWebSocket", () => patchWebSocket(targetWindow, rewriteOne, unwrapOne, () => getCurrentBaseUrl().origin));
     step("patchEventSource", () => patchEventSource(targetWindow, rewriteOne, unwrapOne));
     step("patchWorker", () => patchWorker(targetWindow, rewriteOne, patchBlobWorkerSource(targetWindow, config, getCurrentBaseUrl)));
-    step("patchServiceWorker", () => patchServiceWorker(targetWindow));
+    step("patchServiceWorker", () => patchServiceWorker(targetWindow, getCurrentBaseUrl));
     // Dynamic-HTML patches must come BEFORE the per-class property-setter
     // patches: dynamic-html captures Element.prototype.setAttribute as the
     // "original", and the property-setter patch later in this list works on
