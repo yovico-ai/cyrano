@@ -151,7 +151,7 @@ func TestSniffedHTML(t *testing.T) {
 	// Only a document whose type Chromium does not take is sniffed at all
 	// (responseKind asks).
 	asked := false
-	sniff := func() bool { asked = true; return true }
+	sniff := func() sniffResult { asked = true; return sniffResult{HTML: true} }
 	if responseKind("", "script", true, "", false, sniff); asked {
 		t.Error("a script fetch sniffed as a document")
 	}

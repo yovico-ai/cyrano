@@ -27,6 +27,7 @@
   {"url": "https://www.toyotaofbellevue.com/", "how": "auto", "fixed": "gubagoo's loader cached scripts with cache.add(url): fetched from the origin; Cache API keys proxified (cache-api-vs-chromium)"},
   {"url": "https://www.nfl.com/news/2026-nfl-draft-saints-pick-arizona-state-wr-jordyn-tyson-with-no-8-overall-selection", "how": "auto", "fixed": "CSS Typed OM url() values loaded from the origin (typed-om-vs-chromium)"},
   {"url": "https://www.hulu.com/", "how": "auto", "fixed": "a gzip script ending without its trailer got a 502; read as far as it inflated, as Chromium (TestReadDecompressedBody_Truncated)"},
+  {"url": "https://forums.pokemon-vortex.com/profile/42655-veerkv/?status=10187&type=status", "how": "auto", "fixed": "an <object> SVG logo loaded its @font-face from the origin: XML documents are rewritten (spec/XmlDoc.agda; svg-document-vs-chromium)"},
   {"url": "https://www.homedepot.com/", "how": "chrome", "fixed": "owner-reported; home page, then search 'cordless drill' from the box", "x": [{"wait": 3000}, {"click": [700, 218]}, {"type": "cordless drill"}, {"key": "Return"}, {"refuseTitle": "^Error Page"}, {"expectTitle": "cordless"}, {"shot": "search"}]},
   {"url": "https://www.costco.com/", "how": "chrome", "fixed": "Kasada: eval origin, padded natives; blob worker read"},
   {"url": "https://www.zillow.com/", "how": "chrome", "fixed": "PerimeterX: /graphql must answer 200"},

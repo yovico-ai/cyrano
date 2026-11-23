@@ -104,6 +104,27 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
 
 ## What a response is rewritten as
 
+An XML document the browser renders — `image/svg+xml`, `application/xhtml+xml`,
+`text/xml`, `application/xml` (measured: Chromium shows `text/*+xml` and the
+feeds as text, downloads other `+xml` types), or an untyped / unknown-typed
+document whose body starts with `<?xml` after whitespace (this case only) —
+for a document destination (navigation, iframe, frame, object, embed) — is
+rewritten as XML (spec/Disposition.agda asXml, spec/XmlDoc.agda; Go
+`htmlrewrite.RewriteXML`): edited in place so it stays well-formed, its
+SVG / XHTML elements' attributes by the `Attrs.agda` table (namespaces
+resolved: `xlink:href` by any prefix bound to XLink), `<style>` / `<script>`
+text and CDATA, `<?xml-stylesheet href?>`, the originals in `crn-o`; the
+bootstrap as SVG or XHTML `<script>` elements after the root's start tag.
+A document that does not read (malformed, an unbound prefix, a DTD entity)
+is given as sent. XHTML used to go through the HTML rewriter, whose output
+need not be well-formed XML. The XML parser has no microtask checkpoint
+before a parser-inserted script, so in such a document the runtime takes an
+element's originals on first reading it (`consumeOriginalsOnRead`).
+pokemon-vortex.com's `<object>` SVG logo loaded its font from the origin
+(`svg-document-vs-chromium`: the real server, Chromium, direct vs proxied).
+An SVG requested as an image is left as it is (images load nothing).
+
+
 By what the request is for, never by its Content-Type, which the proxy
 never changes (spec/Disposition.agda; the browser decides what it runs).
 The rewriter marks the proxified URL of every script and stylesheet it

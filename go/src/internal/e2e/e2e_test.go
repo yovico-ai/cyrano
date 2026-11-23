@@ -5,6 +5,7 @@ package e2e
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/xml"
 	"html"
 	"net/url"
 	"regexp"
@@ -681,5 +682,59 @@ func TestE2E_SpeculationRulesHeader(t *testing.T) {
 	}
 	if !strings.Contains(resp.Header.Get("Crn-H"), "speculation-rules") {
 		t.Errorf("the origin's value not carried for scripts: Crn-H %q", resp.Header.Get("Crn-H"))
+	}
+}
+
+// TestE2E_SVGDocumentRewritten — an SVG loaded as a document (an
+// <object>'s, Sec-Fetch-Dest: object) is rewritten as XML
+// (spec/XmlDoc.agda; pokemon-vortex.com's logo loaded its @font-face from
+// the origin): its style text, its hrefs (plain and xlink, any prefix),
+// its script text; the XML bootstrap after the root's start tag; still
+// well-formed. The same SVG as an image is left as sent.
+func TestE2E_SVGDocumentRewritten(t *testing.T) {
+	const svg = `<?xml version="1.0" encoding="UTF-8"?>` + "\n" +
+		`<svg xmlns="http://www.w3.org/2000/svg" xmlns:l="http://www.w3.org/1999/xlink" width="9" height="9">` +
+		`<style>@font-face { font-family: i; src: url('https://static.example/fonts/impact.ttf') }</style>` +
+		`<image l:href="https://static.example/i.png" width="1" height="1"/><a href="https://static.example/p?a=1&amp;b=2"><text>t</text></a>` +
+		`<script><![CDATA[ location.href.length < 5 && fetch("https://static.example/f") ]]></script></svg>`
+	up := startInlineServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/svg+xml")
+		_, _ = io.WriteString(w, svg)
+	})
+	proxy := startProxy(t)
+	get := func(dest string) string {
+		req, _ := http.NewRequest("GET", gotoURL(proxy, up.URL+"/logo.svg"), nil)
+		req.Header.Set("Sec-Fetch-Dest", dest)
+		resp, err := noCompressionClient().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+	body := get("object")
+	if testing.Verbose() {
+		t.Log(body)
+	}
+	for _, want := range []string{
+		`url(` + `"` + gotoURL(proxy, "https://static.example/fonts/impact.ttf") + `"`, // the CSS rewriter quotes (spec/Css.agda)
+		`l:href="` + gotoURL(proxy, "https://static.example/i.png") + `"`,
+		`href="` + gotoURL(proxy, "https://static.example/p?a=1&b=2") + `"`,
+		`<script xmlns="http://www.w3.org/2000/svg" href="/rewriter.js`,
+	} {
+		w := strings.ReplaceAll(want, "&", "&amp;")
+		if !strings.Contains(body, w) && !strings.Contains(body, want) {
+			t.Errorf("missing %s in\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "'https://static.example/fonts/impact.ttf'") {
+		t.Errorf("the font still names its origin:\n%s", body)
+	}
+	if err := xml.Unmarshal([]byte(body), new(struct{})); err != nil {
+		t.Errorf("not well-formed: %v\n%s", err, body)
+	}
+	if image := get("image"); image != svg {
+		t.Errorf("an SVG image changed:\n%s", image)
 	}
 }

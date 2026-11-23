@@ -121,7 +121,19 @@ export function forgetAttr(el: Element, name: string): void {
  * The attribute as the page wrote it — `{ value }`, null for "the page had
  * none" — or undefined when cyrano did not change it (read it natively).
  */
+// In a document the XML parser builds, a parser-inserted script runs with
+// no microtask checkpoint before it (the HTML parser has one: the
+// MutationObserver in read-back.ts consumes the originals there), so an
+// element's originals are taken on first reading it (read-back.ts sets
+// this for a document that is not HTML; Go htmlrewrite RewriteXML writes
+// them).
+let consumeOnRead = false;
+export function consumeOriginalsOnRead(): void { consumeOnRead = true; }
+
 export function originalAttr(el: unknown, name: string): { value: string | null } | undefined {
+    if (consumeOnRead && nat && typeof el === "object" && el !== null && (el as Node).nodeType === 1) {
+        try { if (ncall(nat.getAttribute, el as Element, ORIGINALS_ATTR) !== null) consume(el); } catch { /* read natively */ }
+    }
     if (!recorded.any || !nat || typeof el !== "object" || el === null) return undefined;
     const e = attrStore.get(el)?.get(lower(name));
     if (!e) return undefined;

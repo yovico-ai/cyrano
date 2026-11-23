@@ -20,6 +20,8 @@
 --   postdelivery <sender> <recipient> <targetOrigin> → {"out":"deliver"|"drop"|"throw"}
 --   setspolicy <dest>                  → {"out":"yes"|"no"} (its response sets a context's referrer policy)
 --   sniffhtml <body>                   → {"out":"yes"|"no"} (Chromium's HTML sniff)
+--   sniff <body>                       → {"out":"<html><xml>"} each 1|0 (Disposition.sniffOf)
+--   disposition … <sniffed html> [<xml magic>] (0 when absent)
 --   metadatasent <name> <0|1>          → {"out":"yes"|"no"} (reaches a target of that trustworthiness)
 --   dictae <accept-encoding>            → {"out":"<without dcb/dcz>"} (Dictionary.acceptEncoding)
 --   dictreg <use-as-dictionary>         → {"out":"<as the browser is given it>"}
@@ -57,6 +59,7 @@
 --   htmltail <scripting 0|1> <markup>  → {"out":"<offset>"|"none"} (where an unfinished construct at the end begins)
 --   nosniff <field lines, LF>          → {"out":"yes"|"no"} (X-Content-Type-Options says nosniff)
 --   workerruns <module 0|1> <mime>      → {"out":"yes"|"no"} (a blob:/data: worker runs)
+--   xmlrw <document>                    → {"out":"<the document rewritten by the stand-ins (XmlDoc.agda)>"}
 --   specrules <proxy> <base> <header>   → {"out":"<the Speculation-Rules value the browser is given>"}
 --   dataurl <url>                       → {"out":"none"} (given as is) or
 --                                         {"out":"<rewritable 0|1>\t<head>\t<bytes, hex>\t<wrapped URL of those bytes>"}
@@ -198,6 +201,7 @@ import FetchLater
 import WorkerSource
 import DataUrl
 import Speculation
+import XmlDoc
 import Frames
 import Stack
 import H1
@@ -355,6 +359,7 @@ dispatch op args =
   else if eqStr op (toList "disposition") then dispositionReq args
   else if eqStr op (toList "judgeddest") then judgedDestReq args
   else if eqStr op (toList "sniffhtml") then sniffHtmlReq args
+  else if eqStr op (toList "sniff") then sniffReq args
   else if eqStr op (toList "setspolicy") then setsPolicyReq args
   else if eqStr op (toList "postdelivery") then postDeliveryReq args
   else if eqStr op (toList "widenselector") then widenSelectorReq args
@@ -459,6 +464,7 @@ dispatch op args =
   else if eqStr op (toList "jsonobject") then jsonObjectReq args
   else if eqStr op (toList "link") then linkReq args
   else if eqStr op (toList "specrules") then specRulesReq args
+  else if eqStr op (toList "xmlrw") then xmlRwReq args
   else if eqStr op (toList "linkpreloads") then linkPreloadsReq args
   else if eqStr op (toList "htmltags") then htmlTagsReq args
   else if eqStr op (toList "htmlspans") then htmlSpansReq args
@@ -555,8 +561,10 @@ dispatch op args =
 
   -- disposition <js|css|-> <0|1 Sec-Fetch-Dest present> <Sec-Fetch-Dest> <0|1 Content-Type present> <Content-Type> <0|1 sniffed>
   dispositionReq : List Str → Str
-  dispositionReq (m ∷ sp ∷ sd ∷ cp ∷ ct ∷ sn ∷ []) =
-    out (toList (Disposition.kindName (Disposition.responseKind dst (opt sp sd) (opt cp ct) (eqStr sn (toList "1")))))
+  dispositionReq (m ∷ sp ∷ sd ∷ cp ∷ ct ∷ sn ∷ []) = dispositionReq (m ∷ sp ∷ sd ∷ cp ∷ ct ∷ sn ∷ toList "0" ∷ [])
+  dispositionReq (m ∷ sp ∷ sd ∷ cp ∷ ct ∷ sn ∷ sx ∷ []) =
+    out (toList (Disposition.kindName (Disposition.responseKind dst (opt sp sd) (opt cp ct)
+      (Disposition.sniff (eqStr sn (toList "1")) (eqStr sx (toList "1"))))))
     where
     dst : Maybe Dest
     dst = if eqStr m (toList "js") then just destScript else if eqStr m (toList "css") then just destStyle
@@ -617,6 +625,15 @@ dispatch op args =
   setsPolicyReq : List Str → Str
   setsPolicyReq (d ∷ []) = out (if Referrer.setsPolicy d then toList "yes" else toList "no")
   setsPolicyReq _ = errorReply "BadRequest"
+
+  -- sniff <body>: what it sniffs as, two flags: html xml ("1"/"0").
+  sniffReq : List Str → Str
+  sniffReq (b ∷ []) = out (f (Disposition.sniffHtml b) ∷ f (Disposition.xmlMagic b) ∷ [])
+    where
+    f : Bool → Char
+    f true  = '1'
+    f false = '0'
+  sniffReq _ = errorReply "BadRequest"
 
   sniffHtmlReq : List Str → Str
   sniffHtmlReq (b ∷ []) = out (if Disposition.sniffHtml b then toList "yes" else toList "no")
@@ -1366,6 +1383,27 @@ dispatch op args =
   ... | nothing | _ = errorReply "BadProxy"
   ... | just _  | nothing = errorReply "BadBase"
   linkReq _ = errorReply "BadRequest"
+
+  -- An XML document rewritten by stand-ins that show what each part was
+  -- taken for: P<dest>:url, L(urls), S(srcset), V(value), D(declarations),
+  -- C(sheet), J(script), Q<url> (xml-stylesheet); the bootstrap <B/>
+  -- (SVG root) or <H/> (XHTML root).
+  xmlRwReq : List Str → Str
+  xmlRwReq (d ∷ []) = out (XmlDoc.rewriteXml rws bootFor d)
+    where
+    wrap : Char → Str → Str
+    wrap t s = t ∷ '(' ∷ s ++ ')' ∷ []
+    destOf : Maybe Dest → Str
+    destOf nothing  = []
+    destOf (just x) = toList (destName x)
+    rws : XmlDoc.Rws
+    rws = record { url = λ x s → 'P' ∷ destOf x ++ ':' ∷ s ; urls = wrap 'L' ; srcset = wrap 'S' ; cssVal = wrap 'V'
+                 ; cssDecl = wrap 'D' ; css = wrap 'C' ; js = wrap 'J' ; sheet = λ s → 'Q' ∷ s }
+    bootFor : XmlDoc.XNs → Str
+    bootFor XmlDoc.xSvg   = toList "<B/>"
+    bootFor XmlDoc.xXhtml = toList "<H/>"
+    bootFor XmlDoc.xOther = []
+  xmlRwReq _ = errorReply "BadRequest"
 
   specRulesReq : List Str → Str
   specRulesReq (p ∷ b ∷ h ∷ []) with proxyOf p | baseOf b

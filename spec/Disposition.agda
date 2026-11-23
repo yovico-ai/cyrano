@@ -14,7 +14,8 @@
 --   * Otherwise the request's Sec-Fetch-Dest says: script and the
 --     worker destinations are JavaScript, style is CSS (whatever the
 --     Content-Type, likewise); a document, frame, iframe, embed or object
---     is HTML when its MIME type is HTML, or when it has none Chromium
+--     is HTML when its MIME type is HTML (XML when it is an XML type:
+--     isXmlType, spec/XmlDoc.agda), or when it has none Chromium
 --     takes (no Content-Type, one without "/", */*, unknown/unknown,
 --     application/unknown) and its bytes sniff as HTML (sniffHtml); a fetch() or XHR (empty)
 --     is the page's data, as sent; any other destination too.
@@ -31,18 +32,20 @@ open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.String.Base using (String; toList)
 
 open import Url using (Str; is; eqStr; lowerAscii; dropWhile; break)
+open import Data.Product.Base using (_,_)
 import Url
 open import Data.Nat.Base using (ℕ; zero; suc)
 open import Containment using (Dest; destScript; destStyle; destFrame; destInert)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl)
 
 data Kind : Set where
-  asJs asCss asHtml asIs : Kind
+  asJs asCss asHtml asXml asIs : Kind
 
 kindName : Kind → String
 kindName asJs   = "js"
 kindName asCss  = "css"
 kindName asHtml = "html"
+kindName asXml  = "xml"
 kindName asIs   = "none"
 
 inS : Str → List String → Bool
@@ -60,7 +63,18 @@ essence ct = map lowerAscii (trim (Data.Product.Base.proj₁ (break (is 59) ct))
   trim s = reverse (dropWhile ws (reverse (dropWhile ws s)))
 
 isHtmlType isJsType isCssType : Str → Bool
-isHtmlType e = inS e ("text/html" ∷ "application/xhtml+xml" ∷ [])
+isHtmlType e = eqStr e (toList "text/html")
+
+-- A document Chromium renders as an XML document (measured:
+-- sniff-vs-chromium; it shows text/*+xml and the feeds application/rss+xml,
+-- application/atom+xml as text, and downloads other types): text/xml,
+-- application/xml, application/xhtml+xml, image/svg+xml — a feed in one of
+-- them too. Such a document is rewritten as XML (spec/XmlDoc.agda; XHTML
+-- too: the HTML rewriter's output need not be well-formed XML, and an
+-- XHTML document that is not gets the browser's XML error page).
+isXmlType : Str → Bool
+isXmlType e = inS e ("text/xml" ∷ "application/xml" ∷ "application/xhtml+xml" ∷ "image/svg+xml" ∷ [])
+
 isCssType e = eqStr e (toList "text/css")
 -- MIME Sniffing §4.6, the JavaScript MIME type essences.
 isJsType e = inS e ("application/ecmascript" ∷ "application/javascript" ∷ "application/x-ecmascript"
@@ -127,13 +141,36 @@ sniffHtml body = anyP htmlPrefixes
   anyP []       = false
   anyP (p ∷ ps) = starts (toList p) rest ∨ anyP ps
 
+-- Chromium's XML sniff (measured: sniff-vs-chromium): of an untyped or
+-- unknown-typed document, after HTML sniffing, "<?xml" (this case only)
+-- after the leading whitespace HTML sniffing skips is text/xml.
+xmlMagic : Str → Bool
+xmlMagic body = starts (toList "<?xml") (dropWhile sws body)
+  where
+  sws : _ → Bool
+  sws c = is 32 c ∨ is 9 c ∨ is 10 c ∨ is 11 c ∨ is 12 c ∨ is 13 c
+  starts : Str → Str → Bool
+  starts [] _ = true
+  starts (p ∷ ps) (c ∷ cs) = eqStr (p ∷ []) (c ∷ []) ∧ starts ps cs
+  starts _ [] = false
+
 -- dest: the URL's mark; sfd: Sec-Fetch-Dest (ASCII case aside; nothing:
--- the request had none); ct: the Content-Type (nothing: none); sniffed: the
--- body's first bytes sniff as HTML.
+-- the request had none); ct: the Content-Type (nothing: none); sn: what
+-- the body's first bytes sniff as.
 -- By the request alone (no mark, or the frame mark, which says nothing
 -- of what the response is).
-unmarked : Maybe Str → Maybe Str → Bool → Kind
-unmarked (just d₀) ct sniffed =
+-- What the body's first bytes sniff as (sniffHtml, xmlMagic).
+record Sniff : Set where
+  constructor sniff
+  field
+    html xml : Bool
+open Sniff public
+
+sniffOf : Str → Sniff
+sniffOf b = sniff (sniffHtml b) (xmlMagic b)
+
+unmarked : Maybe Str → Maybe Str → Sniff → Kind
+unmarked (just d₀) ct sn =
   if inS d ("script" ∷ "worker" ∷ "sharedworker" ∷ "serviceworker" ∷ "audioworklet" ∷ "paintworklet" ∷ []) then asJs
   else if eqStr d (toList "style") then asCss
   else if inS d ("document" ∷ "iframe" ∷ "frame" ∷ "embed" ∷ "object" ∷ []) then document ct
@@ -141,26 +178,34 @@ unmarked (just d₀) ct sniffed =
   where
   d : Str
   d = map lowerAscii d₀
+  -- An untyped or unknown-typed document: HTML sniffed first, then XML's magic.
+  sniffed : Kind
+  sniffed = if html sn then asHtml else if xml sn then asXml else asIs
   document : Maybe Str → Kind
   document (just t) = byTaken (takenMime t)
     where
     byTaken : Maybe Str → Kind
-    byTaken nothing  = if sniffed then asHtml else asIs
-    byTaken (just m) = if isHtmlType m then asHtml else if unknownMime m ∧ sniffed then asHtml else asIs
-  document nothing  = if sniffed then asHtml else asIs
+    byTaken nothing  = sniffed
+    byTaken (just m) =
+      if isHtmlType m then asHtml
+      else if isXmlType m then asXml
+      else if unknownMime m then sniffed
+      else asIs
+  document nothing  = sniffed
 unmarked nothing (just t) _ =
   if isHtmlType (essence t) then asHtml
+  else if eqStr (essence t) (toList "application/xhtml+xml") then asXml
   else if isJsType (essence t) then asJs
   else if isCssType (essence t) then asCss
   else asIs
 unmarked nothing nothing _ = asIs
 
-responseKind : Maybe Dest → Maybe Str → Maybe Str → Bool → Kind
+responseKind : Maybe Dest → Maybe Str → Maybe Str → Sniff → Kind
 responseKind (just destScript) _ _ _ = asJs
 responseKind (just destStyle)  _ _ _ = asCss
-responseKind (just destFrame)  sfd ct sniffed = unmarked sfd ct sniffed
-responseKind (just destInert)  sfd ct sniffed = unmarked sfd ct sniffed
-responseKind nothing           sfd ct sniffed = unmarked sfd ct sniffed
+responseKind (just destFrame)  sfd ct sn = unmarked sfd ct sn
+responseKind (just destInert)  sfd ct sn = unmarked sfd ct sn
+responseKind nothing           sfd ct sn = unmarked sfd ct sn
 
 ------------------------------------------------------------------------
 -- Whether a stylesheet applies (Chromium, checked: quirks-sheets-vs-

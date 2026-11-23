@@ -154,6 +154,32 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				"target", target.String(), "in", len(body), "out", len(rewritten))
 			replaceBody(resp, rewritten)
 
+		case kindXML:
+			// An XML document the browser renders: SVG, XHTML, XML using
+			// their namespaces (spec/XmlDoc.agda); rewritten in place, or
+			// given as sent when it does not read.
+			body, err := readDecompressedBody(resp)
+			if err != nil {
+				logger.Warn("rewriter: read upstream body failed",
+					"target", target.String(), "ct", ct, "err", err)
+				return fmt.Errorf("read upstream body: %w", err)
+			}
+			cfg := htmlrewrite.Config{
+				BaseURL:           target,
+				Proxy:             proxyCfg,
+				RewriterJSPath:    static.RuntimeURL(vhost.RewriterJSPath),
+				InjectBootstrap:   !urlrewrite.NoScriptsRun(originalPolicies(resp)) && !proxy.InertFrame(resp),
+				ClientPassthrough: pageConfig(clientPassthrough, resp),
+				ScriptNonce:       proxy.ScriptNonce(originalPolicies(resp)),
+				ExternalBootstrap: !urlrewrite.InlineScriptAllowed(originalPolicies(resp)),
+				RewriteInlineJS:   rewriteJSFor(target),
+				RewriteInlineCSS:  rewriteCSS(target),
+			}
+			if cfg.ExternalBootstrap {
+				cfg.ClientPassthrough["xb"] = true
+			}
+			replaceBody(resp, htmlrewrite.RewriteXMLDocument(body, &cfg))
+
 		case kindHTML:
 			// Only HTML a browser renders: a fetch/XHR's text/html is the
 			// page's data (Cloudflare's challenge flow API answers text/html
@@ -282,10 +308,23 @@ const (
 	kindJS
 	kindCSS
 	kindHTML
+	kindXML
 )
 
 func (k bodyKind) String() string {
-	return [...]string{"none", "js", "css", "html"}[k]
+	return [...]string{"none", "js", "css", "html", "xml"}[k]
+}
+
+// isXMLType: a document Chromium renders as an XML document (spec
+// Disposition.isXmlType, measured): text/xml, application/xml,
+// application/xhtml+xml, image/svg+xml. It shows text/*+xml and the feeds
+// as text, and downloads other types.
+func isXMLType(e string) bool {
+	switch e {
+	case "text/xml", "application/xml", "application/xhtml+xml", "image/svg+xml":
+		return true
+	}
+	return false
 }
 
 // mimeEssence is a Content-Type's essence: up to ";", HTTP whitespace
@@ -309,7 +348,25 @@ func init() {
 // destination mark; sfd the Sec-Fetch-Dest (has: the request sent one);
 // ct the Content-Type (hasCT: there is one); sniffed reports whether the
 // body sniffs as HTML (asked only for a document with no Content-Type).
-func responseKind(mark urlrewrite.Dest, sfd string, has bool, ct string, hasCT bool, sniffed func() bool) bodyKind {
+// sniffResult is what a body's first bytes sniff as (spec Disposition.Sniff).
+type sniffResult struct{ HTML, XML bool }
+
+func sniffBytes(body []byte) sniffResult {
+	return sniffResult{HTML: sniffHTMLBytes(body), XML: xmlMagicBytes(body)}
+}
+
+// xmlMagicBytes: "<?xml" (this case only) after the leading whitespace HTML
+// sniffing skips (spec xmlMagic, measured): an untyped or unknown-typed
+// document is XML.
+func xmlMagicBytes(b []byte) bool {
+	i := 0
+	for i < len(b) && strings.IndexByte(" \t\n\v\f\r", b[i]) >= 0 {
+		i++
+	}
+	return strings.HasPrefix(string(b[i:]), "<?xml")
+}
+
+func responseKind(mark urlrewrite.Dest, sfd string, has bool, ct string, hasCT bool, sniff func() sniffResult) bodyKind {
 	switch mark {
 	case urlrewrite.DestScript:
 		return kindJS
@@ -317,13 +374,14 @@ func responseKind(mark urlrewrite.Dest, sfd string, has bool, ct string, hasCT b
 		return kindCSS
 	}
 	e := mimeEssence(ct)
-	isHTMLType := e == "text/html" || e == "application/xhtml+xml"
 	if !has {
 		switch {
 		case !hasCT:
 			return kindAsIs
-		case isHTMLType:
+		case e == "text/html":
 			return kindHTML
+		case e == "application/xhtml+xml":
+			return kindXML
 		case jsEssences[e]:
 			return kindJS
 		case e == "text/css":
@@ -341,11 +399,24 @@ func responseKind(mark urlrewrite.Dest, sfd string, has bool, ct string, hasCT b
 		if hasCT {
 			m, taken = takenMime(ct)
 		}
+		// An untyped or unknown-typed document: HTML sniffed first, then XML's magic.
+		sniffed := func() bodyKind {
+			r := sniff()
+			switch {
+			case r.HTML:
+				return kindHTML
+			case r.XML:
+				return kindXML
+			}
+			return kindAsIs
+		}
 		switch {
-		case taken && (m == "text/html" || m == "application/xhtml+xml"):
+		case taken && m == "text/html":
 			return kindHTML
-		case (!taken || m == "unknown/unknown" || m == "application/unknown") && sniffed():
-			return kindHTML
+		case taken && isXMLType(m):
+			return kindXML
+		case !taken || m == "unknown/unknown" || m == "application/unknown":
+			return sniffed()
 		}
 	}
 	return kindAsIs
@@ -417,7 +488,7 @@ func kindOf(resp *http.Response) bodyKind {
 	sfd, has = judgedDest(sfd, has, purpose, hasPurpose)
 	cts := resp.Header.Values("Content-Type")
 	ct, hasCT := strings.Join(cts, ","), len(cts) > 0 // the lines, as one list (Chromium reads them all)
-	return responseKind(proxy.RequestDest(resp), sfd, has, ct, hasCT, func() bool { return sniffedHTML(resp) })
+	return responseKind(proxy.RequestDest(resp), sfd, has, ct, hasCT, func() sniffResult { return sniffed(resp) })
 }
 
 // replaceBody substitutes resp.Body with the given bytes, fixing
@@ -435,17 +506,21 @@ func replaceBody(resp *http.Response, body []byte) {
 // measureadv.com's sync frame is such a page; unrewritten, its pixels went
 // straight to the origins. The body is read (decompressed) to look at it
 // and put back; the Content-Type stays as the origin sent it.
-func sniffedHTML(resp *http.Response) bool {
+func sniffedHTML(resp *http.Response) bool { return sniffed(resp).HTML }
+
+// sniffed is what the response's first bytes sniff as (sniffBytes); the
+// body is read (decompressed) and put back.
+func sniffed(resp *http.Response) sniffResult {
 	if resp.Request == nil {
-		return false
+		return sniffResult{}
 	}
 	body, err := readDecompressedBody(resp)
 	if err != nil {
 		replaceBody(resp, nil)
-		return false
+		return sniffResult{}
 	}
 	replaceBody(resp, body)
-	return sniffHTMLBytes(body)
+	return sniffBytes(body)
 }
 
 // isHTML reports whether the response Content-Type is rewritable HTML.

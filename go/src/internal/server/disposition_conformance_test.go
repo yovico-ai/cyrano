@@ -24,7 +24,10 @@ func TestSpecConformance_Disposition(t *testing.T) {
 	cts := []string{"text/javascript", "text/plain", "TEXT/HTML; charset=utf-8", " text/html ", "application/xhtml+xml", "text/css",
 		"text/css;x", "application/javascript", "application/x-javascript", "text/jscript", "application/json", "image/png",
 		"application/octet-stream", "", "text/htmlx", "text/javascript1.5", "\ttext/css\t", "unknown/unknown", "Application/Unknown", "*/*", "foo",
-		"te xt/html", "text/html,", "foo,text/html", "text/html,*/*", "text/html, text/plain", "/html", "text/", "text/html x", "text/plain;a=b, unknown/unknown"}
+		"te xt/html", "text/html,", "foo,text/html", "text/html,*/*", "text/html, text/plain", "/html", "text/", "text/html x", "text/plain;a=b, unknown/unknown",
+		"image/svg+xml", "image/svg+xml; charset=utf-8", "IMAGE/SVG+XML", "text/xml", "application/xml", "application/rss+xml", "foo/bar+xml",
+		"a/+xml", "/x+xml", "a/b+xm", "a b/c+xml", "text/xml,text/html", "text/html,image/svg+xml", "application/xhtml+xml; q=1",
+		"application/atom+xml", "APPLICATION/RSS+XML", "text/foo+xml", "text/foo+XML", "text/x/y+xml", "text/+xml", "text/{a}+xml", "text/a=b+xml"}
 	rapid.Check(t, func(rt *rapid.T) {
 		mark := rapid.SampledFrom([]string{"-", "-", "js", "css", "frame"}).Draw(rt, "mark")
 		has := rapid.Bool().Draw(rt, "has")
@@ -32,13 +35,14 @@ func TestSpecConformance_Disposition(t *testing.T) {
 		hasCT := rapid.Bool().Draw(rt, "hasCT")
 		ct := rapid.SampledFrom(cts).Draw(rt, "ct")
 		sniffed := rapid.Bool().Draw(rt, "sniffed")
+		xmlMagic := rapid.Bool().Draw(rt, "xmlMagic")
 		b := func(v bool) string {
 			if v {
 				return "1"
 			}
 			return "0"
 		}
-		want, _, err := oracle.Ask("disposition", mark, b(has), sfd, b(hasCT), ct, b(sniffed))
+		want, _, err := oracle.Ask("disposition", mark, b(has), sfd, b(hasCT), ct, b(sniffed), b(xmlMagic))
 		if err != nil {
 			rt.Fatalf("oracle: %v", err)
 		}
@@ -46,8 +50,8 @@ func TestSpecConformance_Disposition(t *testing.T) {
 		if mark != "-" {
 			m = urlrewrite.Dest(mark)
 		}
-		if got := responseKind(m, sfd, has, ct, hasCT, func() bool { return sniffed }).String(); got != want {
-			rt.Fatalf("responseKind(%q, %q/%v, %q/%v, %v) = %s, spec says %s", mark, sfd, has, ct, hasCT, sniffed, got, want)
+		if got := responseKind(m, sfd, has, ct, hasCT, func() sniffResult { return sniffResult{sniffed, xmlMagic} }).String(); got != want {
+			rt.Fatalf("responseKind(%q, %q/%v, %q/%v, %v %v) = %s, spec says %s", mark, sfd, has, ct, hasCT, sniffed, xmlMagic, got, want)
 		}
 	})
 }
@@ -75,11 +79,11 @@ func TestSpecConformance_SniffHTML(t *testing.T) {
 // not to Go's DetectContentType.
 func TestResponseKind_SniffsUntakenTypes(t *testing.T) {
 	for _, ct := range []string{"unknown/unknown", "*/*", "foo", "", "te xt/html"} {
-		if k := responseKind("", "document", true, ct, true, func() bool { return true }); k != kindHTML {
+		if k := responseKind("", "document", true, ct, true, func() sniffResult { return sniffResult{HTML: true} }); k != kindHTML {
 			t.Errorf("%q: %s, want html", ct, k)
 		}
 	}
-	if k := responseKind("", "document", true, "foo, text/html", true, func() bool { return false }); k != kindHTML {
+	if k := responseKind("", "document", true, "foo, text/html", true, func() sniffResult { return sniffResult{} }); k != kindHTML {
 		t.Errorf("the last type taken: %s", k)
 	}
 	if !sniffHTMLBytes([]byte("\v<bx")) || sniffHTMLBytes([]byte("\ufeff<p>")) {
@@ -114,6 +118,30 @@ func TestSpecConformance_JudgedDest(t *testing.T) {
 		}
 		if got != want {
 			rt.Fatalf("judgedDest(%q/%v, %q/%v) = %s, spec says %s", sfd, has, p, hasP, got, want)
+		}
+	})
+}
+
+// What a body sniffs as — HTML, XML's magic — against spec/Disposition.agda sniffOf.
+func TestSpecConformance_Sniff(t *testing.T) {
+	oracle := specoracle.Need(t)
+	pieces := []string{"<?xml", "<?XML", "<?xml version=\"1.0\"?>", " ", "\n", "\v", "\f", "\r", "\t", "<!DOCTYPE rss>", "<!doctype html", "<rss", "<RSS version=\"2.0\">", "<feed",
+		"<Feed xmlns=\"http://www.w3.org/2005/Atom\">", "<svg", "<!--", "<p", "x", "<", strings.Repeat("a", 290), "<?pi?>", "<b"}
+	rapid.Check(t, func(rt *rapid.T) {
+		body := strings.Join(rapid.SliceOfN(rapid.SampledFrom(pieces), 0, 6).Draw(rt, "pieces"), "")
+		want, _, err := oracle.Ask("sniff", body)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		r := sniffBytes([]byte(body))
+		f := func(v bool) string {
+			if v {
+				return "1"
+			}
+			return "0"
+		}
+		if got := f(r.HTML) + f(r.XML); got != want {
+			rt.Fatalf("sniffBytes(%q) = %s, spec says %s", body, got, want)
 		}
 	})
 }

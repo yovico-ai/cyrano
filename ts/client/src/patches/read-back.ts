@@ -15,7 +15,7 @@
 
 import { nO, nOP, nR, ncall } from "../native/intrinsics";
 import {
-    ORIGINALS_ATTR, asWritten, consume, inertDocument, copyOriginals, forgetAttr, mayDiffer, originalAttr, originalText,
+    ORIGINALS_ATTR, asWritten, consume, consumeOriginalsOnRead, inertDocument, copyOriginals, forgetAttr, mayDiffer, originalAttr, originalText,
     serializedAsWritten, textAsWritten,
 } from "../native/originals";
 import { wrapAccessor, wrapConstructor, wrapMethod } from "../native/surface";
@@ -215,8 +215,11 @@ export function patchReadBack(targetWindow: Window, onElement: (el: Element) => 
     }
 
     // ── consume the originals of parser-inserted nodes ─────────────────
-    // (Runs at the microtask checkpoint before each parser-inserted script.)
+    // (Runs at the microtask checkpoint before each parser-inserted script —
+    // in an HTML document; one the XML parser builds has none: there an
+    // element's originals are taken when it is first read.)
     const doc = targetWindow.document;
+    try { if (doc && doc.contentType !== "text/html") consumeOriginalsOnRead(); } catch { /* HTML */ }
     const each = (node: Node): void => {
         if (node.nodeType !== 1) return;
         consume(node);

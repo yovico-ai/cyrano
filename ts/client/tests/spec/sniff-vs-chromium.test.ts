@@ -22,9 +22,9 @@ const seed = Number(process.env.CYRANO_SEED ?? Date.now() % 1e9);
 type Page = { goto(u: string): Promise<unknown>; evaluate<T, A>(f: (a: A) => T | Promise<T>, a: A): Promise<T>; close(): Promise<void> };
 type Browser = { newPage(): Promise<Page>; close(): Promise<void> };
 
-const CT_PIECES = ["text/html", "TEXT/HTML", "text/plain", "application/xhtml+xml", "unknown/unknown", "Application/Unknown", "*/*", "foo", "text", "/", "html",
+const CT_PIECES = ["text/html", "TEXT/HTML", "text/plain", "application/xhtml+xml", "image/svg+xml", "text/xml", "application/rss+xml", "text/foo+xml", "application/foo+xml", "unknown/unknown", "Application/Unknown", "*/*", "foo", "text", "/", "html",
     " ", ";", "charset=utf-8", ",", "x", "/x", "te xt"];
-const BODY_PIECES = ["<p", "<P", "<b", "<bx", "<x", "<h1", "<h2", "<!--", "<!doctype html", "<!DOCTYPE HTM", "<script", "<scrip", "<?xml ?>", "hello", " ", "\f", "\r", "\v",
+const BODY_PIECES = ["<p", "<P", "<b", "<bx", "<x", "<h1", "<h2", "<!--", "<!doctype html", "<!DOCTYPE HTM", "<script", "<scrip", "<?xml ?>", "<?XML ?>", "<rss>", "<feed>", "<!DOCTYPE x>", "hello", " ", "\f", "\r", "\v",
     " ".repeat(300), "<a", "<br", "<body", "<span", "﻿", ">"];
 
 describe.skipIf(!wanted || located.skip !== "")("Documents' MIME types and sniffing: the spec is Chromium", () => {
@@ -60,7 +60,7 @@ describe.skipIf(!wanted || located.skip !== "")("Documents' MIME types and sniff
         server?.close();
     });
 
-    it("rendered as markup exactly when rewritten as HTML", async () => {
+    it("rendered as markup exactly when rewritten as HTML, or as XML", async () => {
         const ct = fc.option(fc.array(fc.constantFrom(...CT_PIECES), { maxLength: 4 }).map((a) => a.join("")), { nil: null });
         const body = fc.array(fc.constantFrom(...BODY_PIECES), { minLength: 1, maxLength: 4 }).map((a) => a.join("") + "<b id=t>x</b>");
         const draws = fc.sample(fc.tuple(ct, body), { numRuns: 150, seed });
@@ -81,7 +81,12 @@ describe.skipIf(!wanted || located.skip !== "")("Documents' MIME types and sniff
                     const d = f.contentDocument;
                     // Rendered (not downloaded: the frame left about:blank) as markup.
                     const at = f.contentWindow?.location.pathname ?? "";
-                    if (d && at === `/d/${k}` && (d.contentType === "application/xhtml+xml" || d.contentType === "text/html")) r = "html";
+                    // An HTML document, or one the XML parser built (XHTML, SVG, XML: rewritten as XML).
+                    // (A document Blink shows as text keeps its response type: judged by what Blink made.)
+                    if (d && at === `/d/${k}`) {
+                        const w = f.contentWindow as unknown as { XMLDocument: typeof XMLDocument; HTMLDocument: typeof HTMLDocument };
+                        r = d instanceof w.XMLDocument ? "xml" : d.contentType === "text/html" && d instanceof w.HTMLDocument ? "html" : "none";
+                    }
                 } catch { r = "err"; }
                 out.push(r);
                 f.remove();
@@ -93,10 +98,10 @@ describe.skipIf(!wanted || located.skip !== "")("Documents' MIME types and sniff
         let html = 0;
         for (let k = 0; k < draws.length; k++) {
             const [c, b] = draws[k]!;
-            const sniffed = await oracle.ask("sniffhtml", [b]);
-            const want = await oracle.ask("disposition", ["-", "1", "document", c === null ? "0" : "1", c ?? "", sniffed === "yes" ? "1" : "0"]);
+            const sn = (await oracle.ask("sniff", [b]))!; // html, xml magic
+            const want = await oracle.ask("disposition", ["-", "1", "document", c === null ? "0" : "1", c ?? "", sn[0]!, sn[1]!]);
             if (want === "html") html++;
-            if (got[k] !== (want === "html" ? "html" : "none")) bad.push(`${JSON.stringify(c)} ${JSON.stringify(b)}: Chromium ${got[k]}, spec ${want}`);
+            if (got[k] !== (want === "html" || want === "xml" ? want : "none")) bad.push(`${JSON.stringify(c)} ${JSON.stringify(b)}: Chromium ${got[k]}, spec ${want}`);
         }
         expect(bad.slice(0, 12), `${bad.length} (seed ${seed})`).toEqual([]);
         expect(html).toBeGreaterThan(10);
