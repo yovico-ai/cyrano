@@ -47,7 +47,8 @@ export function expiryOf(now: number, sc: SetCookie): Expiry | null {
 }
 
 const flags = (c: StoredCookie): string => (c.secure ? "s" : "i") + c.sameSite + c.priority;
-const expiryText = (ch: Change): string => (ch.gone ? "x" : ch.expiry.session ? "" : String(ch.expiry.until));
+// (In whole ms: memory may hold microseconds, the channel's form does not.)
+const expiryText = (ch: Change): string => (ch.gone ? "x" : ch.expiry.session ? "" : String(Math.floor(ch.expiry.until)));
 
 export const chanName = (inbox: boolean, ch: Change): string => (inbox ? INBOX : OUTBOX) + scope(ch.cookie);
 

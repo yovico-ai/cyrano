@@ -14,15 +14,20 @@
 // made on the proxy's jar with an already expired cookie.
 //
 // The native store's change events list the channel's entries: they are
-// stopped before any listener of the page's. Not done: change events of
-// the page's own cookies (a synthesized event is not isTrusted);
-// `partitioned` is not kept; service workers' cookieStore.
+// stopped before any listener of the page's, and the page's own are made
+// instead (measured): one per change to a cookie shown at the page's URL —
+// a write of this document's (even of the same value), another tab's, a
+// response's — dispatched in a later task, its items as Chromium makes
+// them (a deleted one: domain, name, partitioned, path, secure, and
+// sameSite when the cookie stated one). Gaps: such an event is not
+// isTrusted; an expiry from Max-Age has no microseconds; `partitioned` is
+// not kept; service workers' cookieStore.
 import { nO, nR, ncall } from "../native/intrinsics";
 import { wrapMethod } from "../native/surface";
-import { cookieStoreDelete, cookieStoreQuery, cookieStoreSet, itemSameSite, type StoredCookie, type StoreErr } from "../cookies/rfc";
+import { cookieStoreDelete, cookieStoreQuery, cookieStoreSet, itemSameSite, matches, type StoredCookie, type StoreErr } from "../cookies/rfc";
 import { sameId, type Change } from "../cookies/jar";
-import { absorbInbox, knownCookies, liveCookies, snapshotFirst, writeCookie, type CookieAccess } from "../cookies/memory";
-import { cookieAccessor, isPublicSuffix } from "./document-cookie";
+import { absorbInbox, knownCookies, liveCookies, onCookieChange, snapshotFirst, writeCookie, type CookieAccess } from "../cookies/memory";
+import { cookieAccessor, isPublicSuffix, nowMicro } from "./document-cookie";
 
 // Each refusal, made by the native on the proxy's own jar so that the
 // page gets the browser's own TypeError (its message differs between
@@ -160,7 +165,7 @@ export function patchCookieStore(targetWindow: Window, baseUrl: () => URL): void
                 name, value, domain, path, sameSite: ss === "none" ? "n" : ss === "lax" ? "l" : "t",
             });
             if ("error" in r) return refuse(self, r.error, name, value);
-            const now = Date.now();
+            const now = nowMicro();
             if (expires !== null && expires <= now) return write({ cookie: r, gone: true, expiry: { session: true } });
             return write({ cookie: r, gone: false,
                 expiry: expires === null ? { session: true } : { session: false, until: Math.min(expires, now + 400 * 86400 * 1000) } });
@@ -197,12 +202,60 @@ export function patchCookieStore(targetWindow: Window, baseUrl: () => URL): void
     const ET = (targetWindow as unknown as { EventTarget?: { prototype: EventTarget } }).EventTarget;
     const listen = ET?.prototype.addEventListener;
     const stop = (targetWindow as unknown as { Event?: { prototype: Event } }).Event?.prototype.stopImmediatePropagation;
+    const trustedGet = (targetWindow as unknown as { Event?: { prototype: object } }).Event
+        ? nO.getOwnPropertyDescriptor((targetWindow as unknown as { Event: { prototype: object } }).Event.prototype, "isTrusted")?.get : undefined;
+    const isTrusted = (e: Event): boolean => {
+        // isTrusted is an own unforgeable property of each event in Chromium.
+        const d = nO.getOwnPropertyDescriptor(e, "isTrusted");
+        try { return d?.get ? ncall(d.get as AnyFn, e) === true : trustedGet ? ncall(trustedGet as AnyFn, e) === true : false; } catch { return false; }
+    };
     if (store && listen && stop) {
         try {
             ncall(listen as AnyFn, store, "change", (e: Event) => {
+                // Only the browser's own (they list the channel); one the page
+                // dispatches, or the runtime makes below, goes on.
+                if (!isTrusted(e)) return;
                 try { absorbInbox(targetWindow, access()); } catch { /* a document that may not read them */ }
                 ncall(stop as AnyFn, e);
             });
         } catch { /* no store events here */ }
     }
+
+    // The page's change events, from memory's changes.
+    const CCE = (targetWindow as unknown as { CookieChangeEvent?: new (t: string, i: object) => Event }).CookieChangeEvent;
+    const dispatch = (ET?.prototype as { dispatchEvent?: AnyFn } | undefined)?.dispatchEvent;
+    const MC = (targetWindow as unknown as { MessageChannel?: typeof MessageChannel }).MessageChannel;
+    if (!store || !CCE || !dispatch || !MC) return;
+    const queue: Event[] = [];
+    let port: MessagePort | null = null;
+    let post: AnyFn | null = null;
+    const afterTask = (ev: Event): void => {
+        queue.push(ev);
+        if (!port) {
+            const mc = new MC();
+            port = mc.port2;
+            post = mc.port2.postMessage as unknown as AnyFn;
+            mc.port1.onmessage = (): void => {
+                const ev2 = queue.shift();
+                if (ev2) try { ncall(dispatch, store, ev2); } catch { /* the page's listener threw: as natively, reported, not ours */ }
+            };
+        }
+        ncall(post!, port, 0);
+    };
+    const deletedItem = (c: StoredCookie): Item => {
+        const it: Item = { domain: c.hostOnly ? null : c.domain, name: c.name, partitioned: false, path: c.path };
+        if (c.sameSite !== "u") it["sameSite"] = itemSameSite(c.sameSite);
+        it["secure"] = c.secure;
+        return it;
+    };
+    onCookieChange(targetWindow, (ch) => {
+        let url: URL;
+        try { url = baseUrl(); } catch { return; }
+        if (!matches(true, url, ch.cookie)) return;
+        const alive = !ch.gone && (ch.expiry.session || ch.expiry.until > Date.now());
+        const ev = new CCE("change", alive
+            ? { changed: [{ ...item(ch.cookie), expires: ch.expiry.session ? null : ch.expiry.until }], deleted: [] }
+            : { changed: [], deleted: [deletedItem(ch.cookie)] });
+        afterTask(ev);
+    });
 }

@@ -243,10 +243,13 @@ frame, its `eval`, an `onload` attribute, `contentWindow[k].href`).
   dates as Chromium reads them (spec/CookieDate.agda, not the RFC's);
   an overwrite with another value is a new cookie (last in order).
   Cookies of the old wire form (`__crn!`) are read until the jar holds
-  their identity. Gaps: cookieStore change events are stopped (the
-  native ones list the channel; a synthesized one is not isTrusted); a
-  script's write over an HttpOnly cookie shows in its memory until the
-  next document; a third party's cookie a subresource sets reaches a
+  their identity. cookieStore's change events are made from memory's
+  changes, as Chromium's (one per write shown at the page's URL, even of
+  the same value; a later task; the browser's own, listing the channel,
+  are stopped — only trusted ones: `cookie-change-events-vs-chromium`);
+  an expiry keeps microseconds as Chromium's (coarsened). Gaps: a made
+  change event is not isTrusted; a script's write over an HttpOnly cookie
+  shows in its memory until the next document; a third party's cookie a subresource sets reaches a
   live frame of that party only with its next document; last access of
   cookies a script reads is not tracked.
 - **eval** (spec/Eval.agda, checked in Chromium by eval-calls-vs-chromium

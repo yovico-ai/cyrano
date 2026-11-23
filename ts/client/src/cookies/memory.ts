@@ -28,6 +28,8 @@ interface Memory {
     pending: [string, string, number][];
     /** How many slots are in the browser's jar. */
     slots: number;
+    /** Who hears of a change (each window's cookieStore: its change events). */
+    listeners: ((ch: Change) => void)[];
 }
 
 /** A slot's size, short of a cookie's 4096 (name and value). */
@@ -41,7 +43,7 @@ const OUTBOX_LIFE = 86400;
 function memory(win: Window): Memory {
     return sharedData<Memory>("cookieMemory", () => {
         const m: Memory = { known: [], seq: Math.floor(Math.random() * 1000), channel: null,
-            tab: Math.floor(Math.random() * 0x7fffffff).toString(36) + Date.now().toString(36), pending: [], slots: 0 };
+            tab: Math.floor(Math.random() * 0x7fffffff).toString(36) + Date.now().toString(36), pending: [], slots: 0, listeners: [] };
         const BC = (win as unknown as { BroadcastChannel?: typeof BroadcastChannel }).BroadcastChannel;
         try {
             if (BC) {
@@ -50,7 +52,7 @@ function memory(win: Window): Memory {
                     const d = e.data as { n?: unknown; v?: unknown } | null;
                     if (!d || typeof d.n !== "string" || typeof d.v !== "string") return;
                     const o = unchan(false, d.n, d.v);
-                    if (o) write(m.known, o.change, o.n);
+                    if (o) { write(m.known, o.change, o.n); notify(m, o.change); }
                 };
                 m.channel = ch;
             }
@@ -138,7 +140,11 @@ export function absorbInbox(win: Window, access: CookieAccess): StoredCookie[] {
     for (const [n, v] of pairs(jar)) {
         if (sStarts(n, INBOX)) {
             const o = unchan(true, n, v);
-            if (o && o.applied !== null) absorb(m.known, o.change, o.n, o.applied);
+            if (o && o.applied !== null) {
+                const before = stateOf(m.known, o.change.cookie);
+                absorb(m.known, o.change, o.n, o.applied);
+                if (stateOf(m.known, o.change.cookie) !== before) notify(m, o.change);
+            }
         } else if (n === ACK + m.tab && /^[0-9]+![0-9]+$/.test(v)) {
             // The server read this tree's writes up to the ack: they are in,
             // as of the jar's generation then.
@@ -166,6 +172,7 @@ export function writeCookie(win: Window, access: CookieAccess, ch: Change, legac
     const m = memory(win);
     const id = Date.now() * 1000 + (m.seq++ % 1000);
     write(m.known, ch, id);
+    notify(m, ch); // every write is a change event, even of the same value (Chromium)
     const name = chanName(false, ch), value = chanValue(ch, id, null);
     m.pending = m.pending.filter((p) => p[0] !== name);
     m.pending.push([name, value, id]);
@@ -178,3 +185,23 @@ export function writeCookie(win: Window, access: CookieAccess, ch: Change, legac
 /** Every known cookie (live or not): what cookieStore lists from. */
 export function knownCookies(win: Window): readonly Known[] { return memory(win).known; }
 
+/** A known cookie's state, to tell whether a change changed it. */
+function stateOf(known: readonly Known[], c: StoredCookie): string {
+    for (const k of known) {
+        if (!sameId(k.change.cookie, c)) continue;
+        const ch = k.change;
+        return ch.gone ? "gone" : `${ch.cookie.value}|${ch.expiry.session ? "s" : ch.expiry.until}|${ch.cookie.secure}|${ch.cookie.sameSite}`;
+    }
+    return "gone";
+}
+
+function notify(m: Memory, ch: Change): void {
+    for (let i = 0; i < m.listeners.length; i++) {
+        try { m.listeners[i]!(ch); } catch { /* one window's trouble is its own */ }
+    }
+}
+
+/** f hears of every change to the tree's cookies (written here, in another tab, by a response). */
+export function onCookieChange(win: Window, f: (ch: Change) => void): void {
+    memory(win).listeners.push(f);
+}

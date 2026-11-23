@@ -27,13 +27,23 @@ export function isPublicSuffix(d: string): boolean {
     return getPublicSuffix(d, { allowPrivateDomains: true }) === d;
 }
 
+/** Now, in ms to the microsecond (Chromium's clock). */
+export function nowMicro(): number {
+    try {
+        const p = performance;
+        return Math.round((p.timeOrigin + p.now()) * 1000) / 1000;
+    } catch { return Date.now(); }
+}
+
 /** The cookie a write of `value` at `url` makes, or null (spec store, expiryOf). */
 export function cookieWrite(value: string, url: URL): Change | null {
     const sc = parseSetCookie(value);
     if (!sc) return null;
     const c = storeCookie(true, sc.domain !== null && isPublicSuffix(sc.domain), url, sc);
     if (!c) return null;
-    const e = expiryOf(Date.now(), sc);
+    // Chromium's clock has microseconds: an expiry from Max-Age reads back
+    // with them (cookieStore's expires: 1795476386877.137).
+    const e = expiryOf(nowMicro(), sc);
     return e === null ? { cookie: c, gone: true, expiry: { session: true } } : { cookie: c, gone: false, expiry: e };
 }
 
