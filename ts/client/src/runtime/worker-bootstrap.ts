@@ -20,6 +20,7 @@ import { isLocationObject } from "../native/brand";
 import { nR } from "../native/intrinsics";
 import { patchReflection } from "../native/hidden-globals";
 import { patchStorageNames } from "../patches/storage";
+import { patchCacheUrls } from "../patches/cache-urls";
 import { honourOptionalChains } from "./optional";
 import type { ClientConfig } from "../config";
 import { isUrlLikeSpecifier, rewriteUrl, unwrapProxiedUrl } from "../url/containment";
@@ -194,6 +195,7 @@ function patchWorkerScope(
     // (patches/storage.ts). A worker does not know its top document: its
     // names are its origin's, unpartitioned.
     try { patchStorageNames(scope as object, () => "crn\u001f" + baseUrl.origin + "\u001f"); } catch { /* stays native */ }
+    try { patchCacheUrls(scope as object, rewriteOne); } catch { /* stays native */ }
     patchEventSource(realm, rewriteOne, unwrapOne);
     // A worker made inside this one (nested dedicated workers): its URL is
     // proxified, and one of a blob: or data: script this worker built gets

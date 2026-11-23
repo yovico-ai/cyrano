@@ -2,7 +2,9 @@ package server
 
 import (
 	"bytes"
+	"compress/flate"
 	"compress/gzip"
+	"compress/zlib"
 	"fmt"
 	"io"
 	"net/http"
@@ -187,5 +189,54 @@ func TestOriginalSizesNoted(t *testing.T) {
 	}
 	if got := resp.Header.Values("Server-Timing"); len(got) != 2 || got[1] != want {
 		t.Fatalf("after a second read: %q", got)
+	}
+}
+
+// A gzip or deflate body that ends early is read as far as it inflated, as
+// Chromium reads it (hulu.com: a sync-flushed gzip script with no trailer
+// got a 502 proxied and ran direct).
+func TestReadDecompressedBody_Truncated(t *testing.T) {
+	text := strings.Repeat("window.ok = 1; ", 400)
+	var full bytes.Buffer
+	gz := gzip.NewWriter(&full)
+	_, _ = gz.Write([]byte(text))
+	_ = gz.Close()
+	var flushed bytes.Buffer
+	gf := gzip.NewWriter(&flushed)
+	_, _ = gf.Write([]byte(text))
+	_ = gf.Flush() // a sync flush, then nothing: no final block, no trailer
+	var zl bytes.Buffer
+	zw := zlib.NewWriter(&zl)
+	_, _ = zw.Write([]byte(text))
+	_ = zw.Close()
+	var raw bytes.Buffer
+	fw, _ := flate.NewWriter(&raw, flate.DefaultCompression)
+	_, _ = fw.Write([]byte(text))
+	_ = fw.Close()
+	for _, c := range []struct {
+		name, enc string
+		body      []byte
+		whole     bool
+	}{
+		{"gzip", "gzip", full.Bytes(), true},
+		{"gzip sync-flushed, no trailer", "gzip", flushed.Bytes(), true},
+		{"gzip without its trailer", "gzip", full.Bytes()[:full.Len()-8], true},
+		{"gzip cut mid-block", "gzip", full.Bytes()[:full.Len()/2], false},
+		{"deflate (zlib)", "deflate", zl.Bytes(), true},
+		{"deflate (raw)", "deflate", raw.Bytes(), true},
+		{"deflate (zlib) without its checksum", "deflate", zl.Bytes()[:zl.Len()-4], true},
+	} {
+		resp := &http.Response{Header: http.Header{"Content-Encoding": {c.enc}}, Body: io.NopCloser(bytes.NewReader(c.body))}
+		got, err := readDecompressedBody(resp)
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		if c.whole && string(got) != text || !c.whole && !strings.HasPrefix(text, string(got)) {
+			t.Errorf("%s: read %d bytes, not the text (%d)", c.name, len(got), len(text))
+		}
+		if resp.Header.Get("Content-Encoding") != "" {
+			t.Errorf("%s: Content-Encoding left on the decoded body", c.name)
+		}
 	}
 }

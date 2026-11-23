@@ -1,9 +1,13 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
+	"compress/flate"
 	"compress/gzip"
+	"compress/zlib"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -640,7 +644,29 @@ func readDecoded(resp *http.Response, raw io.Reader) ([]byte, error) {
 			return nil, err
 		}
 		defer gz.Close()
-		body, err := io.ReadAll(gz)
+		body, err := lenientInflate(io.ReadAll(gz))
+		if err != nil {
+			return nil, err
+		}
+		resp.Header.Del("Content-Encoding")
+		return body, nil
+	case "deflate":
+		// As Chromium: zlib-wrapped, or raw deflate when there is no zlib header.
+		br := bufio.NewReader(raw)
+		var r io.Reader
+		if h, _ := br.Peek(2); len(h) == 2 && h[0]&0x0f == 8 && (uint16(h[0])<<8|uint16(h[1]))%31 == 0 {
+			zr, err := zlib.NewReader(br)
+			if err != nil {
+				return nil, err
+			}
+			defer zr.Close()
+			r = zr
+		} else {
+			fr := flate.NewReader(br)
+			defer fr.Close()
+			r = fr
+		}
+		body, err := lenientInflate(io.ReadAll(r))
 		if err != nil {
 			return nil, err
 		}
@@ -847,4 +873,17 @@ func bootHandler() http.Handler {
 // stylesheet or script.
 func fetchedAsData(resp *http.Response) bool {
 	return resp.Request != nil && strings.EqualFold(resp.Request.Header.Get("Sec-Fetch-Dest"), "empty")
+}
+
+// lenientInflate keeps what a gzip or deflate stream inflated when it ends
+// early (no final block, no trailer, cut mid-block) or its checksum does
+// not match: Chromium hands on what it has inflated and reports no error
+// (measured: a sync-flushed gzip with no trailer reads whole, one cut
+// mid-block reads as far as it inflated). hulu.com's ad tag (rakuten's
+// ct.js) was such a stream: the proxy answered 502, Chrome ran it.
+func lenientInflate(body []byte, err error) ([]byte, error) {
+	if err == nil || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, gzip.ErrChecksum) || errors.Is(err, zlib.ErrChecksum) {
+		return body, nil
+	}
+	return nil, err
 }

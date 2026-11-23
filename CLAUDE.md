@@ -520,7 +520,17 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   `Speculation-Rules` header's rule-set URLs are proxified
   (spec/Speculation.agda; chadscafe.com); a rule set's content (`urls`,
   `href_matches`, inline `<script type=speculationrules>`) is not
-  rewritten yet. A closed connection through the proxy
+  rewritten yet. The Cache API keys entries by the proxified URL whichever
+  form the page gives (string, URL, Request): `add`/`addAll` fetch through
+  the proxy, lookups by the page's URL find them (`patches/cache-urls.ts`,
+  windows and workers; toyotaofbellevue.com; `cache-api-vs-chromium`). CSS
+  Typed OM text (`StylePropertyMap.set/append`, `CSSStyleValue.parse/
+  parseAll`) is rewritten as a style's (`patches/typed-om.ts`; nfl.com;
+  `typed-om-vs-chromium`); read back it holds the proxied URL, as `style`
+  does. A gzip or deflate body that ends early (no trailer, cut mid-block)
+  or fails its checksum is read as far as it inflated, as Chromium does
+  (measured; hulu.com's ad tag got a 502); `deflate` (zlib or raw) is
+  decoded at all (`server.lenientInflate`). A closed connection through the proxy
   (ERR_EMPTY_RESPONSE) is an upstream failure direct sees as its own net
   error: no such host, refused, the CORS check, ORB.
   Over plain HTTP the proxy keeps 6 connections, and ad-heavy pages
