@@ -197,6 +197,18 @@ func (h *Handler) ServeHTTPWithTarget(w http.ResponseWriter, r *http.Request, ta
 
 // serveTarget runs the httputil.ReverseProxy for an already-resolved target.
 func (h *Handler) serveTarget(w http.ResponseWriter, r *http.Request, target *url.URL) {
+	// Mixed content, as the browser would have judged it (spec/MixedContent.agda):
+	// through the proxy every request is same-origin https, so its own checks
+	// never fire (a-hospital.com's http share.js ran on its https page).
+	switch h.mixedContent(r, target) {
+	case urlrewrite.MixedBlocked:
+		h.opts.Logger.Debug("mixed content blocked", "target", target.String())
+		panic(http.ErrAbortHandler) // a network error, nothing sent
+	case urlrewrite.MixedUpgraded:
+		up := *target
+		up.Scheme = "https"
+		target = &up
+	}
 	// Cloudflare Privacy Access Token (PAT) probes (/cdn-cgi/challenge-platform/
 	// h/b/pat/) are forwarded to the upstream unchanged. PAT (RFC 9577) tokens
 	// are origin-bound and require device attestation the proxy can't satisfy,
@@ -641,4 +653,24 @@ func proxyTargetOf(resp *http.Response) *url.URL {
 		return nil
 	}
 	return resp.Request.URL
+}
+
+// mixedContent judges r as the browser's mixed content checks would have:
+// its context is the runtime's Crn-I (the requesting document of a fetch
+// or XHR), else the document its Referer names.
+func (h *Handler) mixedContent(r *http.Request, target *url.URL) urlrewrite.MixedVerdict {
+	var ctx *url.URL
+	if v := r.Header.Get(InitiatorHeader); v != "" {
+		if u, err := url.Parse(v); err == nil && u.IsAbs() {
+			ctx = u
+		}
+	}
+	if ctx == nil {
+		ctx = h.originalReferrer(r.Header.Get("Referer"))
+	}
+	dest, has := "", false
+	if v := r.Header.Values("Sec-Fetch-Dest"); len(v) > 0 {
+		dest, has = v[0], true
+	}
+	return urlrewrite.MixedContent(ctx, target, dest, has)
 }

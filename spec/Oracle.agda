@@ -59,6 +59,7 @@
 --   htmltail <scripting 0|1> <markup>  → {"out":"<offset>"|"none"} (where an unfinished construct at the end begins)
 --   nosniff <field lines, LF>          → {"out":"yes"|"no"} (X-Content-Type-Options says nosniff)
 --   workerruns <module 0|1> <mime>      → {"out":"yes"|"no"} (a blob:/data: worker runs)
+--   mixed <context|-> <target> <dest|-> → {"out":"allow"|"upgrade"|"block"} (MixedContent.mixed)
 --   xmlrw <document>                    → {"out":"<the document rewritten by the stand-ins (XmlDoc.agda)>"}
 --   specrules <proxy> <base> <header>   → {"out":"<the Speculation-Rules value the browser is given>"}
 --   dataurl <url>                       → {"out":"none"} (given as is) or
@@ -202,6 +203,7 @@ import WorkerSource
 import DataUrl
 import Speculation
 import XmlDoc
+import MixedContent
 import Frames
 import Stack
 import H1
@@ -465,6 +467,7 @@ dispatch op args =
   else if eqStr op (toList "link") then linkReq args
   else if eqStr op (toList "specrules") then specRulesReq args
   else if eqStr op (toList "xmlrw") then xmlRwReq args
+  else if eqStr op (toList "mixed") then mixedReq args
   else if eqStr op (toList "linkpreloads") then linkPreloadsReq args
   else if eqStr op (toList "htmltags") then htmlTagsReq args
   else if eqStr op (toList "htmlspans") then htmlSpansReq args
@@ -1404,6 +1407,18 @@ dispatch op args =
     bootFor XmlDoc.xXhtml = toList "<H/>"
     bootFor XmlDoc.xOther = []
   xmlRwReq _ = errorReply "BadRequest"
+
+  -- mixed <context URL | -> <target URL> <Sec-Fetch-Dest | ->
+  mixedReq : List Str → Str
+  mixedReq (c ∷ t ∷ d ∷ []) with baseOf t
+  ... | nothing = errorReply "BadTarget"
+  ... | just target = out (MixedContent.verdictName (MixedContent.mixed ctx target dest))
+    where
+    ctx : Maybe Abs
+    ctx = if eqStr c (toList "-") then nothing else baseOf c
+    dest : Maybe Str
+    dest = if eqStr d (toList "-") then nothing else just d
+  mixedReq _ = errorReply "BadRequest"
 
   specRulesReq : List Str → Str
   specRulesReq (p ∷ b ∷ h ∷ []) with proxyOf p | baseOf b

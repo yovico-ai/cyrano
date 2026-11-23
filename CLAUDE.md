@@ -587,6 +587,14 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   --assets go/assets` (self-signed cert; Playwright `ignoreHTTPSErrors`).
   Header order is then Chrome's template, not the browser's own
   (`internal/headerorder` reads HTTP/1.x only).
+- **Mixed content** is judged by the proxy as the browser would have
+  (spec/MixedContent.agda; through the proxy every request is same-origin
+  https to the browser): for an https page (its Crn-I, else its Referer)
+  an http target that is not loopback is upgraded to https for an image,
+  audio, video, and blocked (a network error, nothing sent) for anything
+  else but a top-level navigation (a-hospital.com's http share.js ran;
+  `mixed-content-vs-chromium`). Gaps: a srcset / <picture> image is
+  upgraded where Chromium blocks it; ws: from an https page.
 - **HTTPS-Upgrades** as Chrome's (`proxy/https_upgrades.go`,
   spec/Upgrades.agda; `make chrome-check` — real Chrome, as Playwright's
   Chromium has the feature off): a main-frame http navigation to a unique
