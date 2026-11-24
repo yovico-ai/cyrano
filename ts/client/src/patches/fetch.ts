@@ -136,12 +136,12 @@ export function patchFetch(
         const policy = policyOf(rest[0]);
         if (policy !== null) rest[0] = unsafeUrlInit(rest[0] as object);
         if (rest.length) rest[0] = referrerInit(rest[0], baseUrl, cors?.origin, rewriteOne) as RequestInit | undefined;
-        const rewritten = policy !== null && rewriteOne.withPolicy ? rewriteOne.withPolicy(original, policy) : rewriteOne(original);
+        let rewritten = policy !== null && rewriteOne.withPolicy ? rewriteOne.withPolicy(original, policy) : rewriteOne(original);
         // The page's own Request goes to the native as it is wherever it
         // already names the proxied URL (the Request constructor below
         // proxifies it): a Request rebuilt from another has that one's body
         // as a stream, which no HTTP/1.1 connection can send.
-        const asIs = viaRequest && nativeUrl !== undefined && sameUrl(ncall(nativeUrl, input), rewritten);
+        let asIs = viaRequest && nativeUrl !== undefined && sameUrl(ncall(nativeUrl, input), rewritten);
         const plain = (): Promise<Response> => {
             if (!viaRequest) return nR.apply(native, self, [rewritten, ...rest]) as Promise<Response>;
             if (asIs) return nR.apply(native, self, args) as Promise<Response>;
@@ -156,11 +156,22 @@ export function patchFetch(
         const target = unwrapOne(rewritten);
         const cross = own !== undefined && isCrossOrigin(target, baseUrl(), own) &&
             !(cors!.proxy && sStarts(target, cors!.proxy + "/"));
-        if (own === undefined || !namesContext(cors?.opaque === true, cross, cors?.always === true)) return plain();
-
         const init = (typeof rest[0] === "object" && rest[0] !== null ? rest[0] : undefined) as RequestInit | undefined;
         const mode = init?.mode ?? (viaRequest ? input.mode : "cors");
         const credentials = init?.credentials ?? (viaRequest ? input.credentials : "same-origin");
+        // no-cors to another origin with no credentials for it (fetch's
+        // default "same-origin"): the browser drops the runtime's headers in
+        // no-cors, so the URL says it (spec Containment destAnon). A page's
+        // Request with a body is not rebuilt (a stream body).
+        if (cross && cors?.opaque !== true && mode === "no-cors" && !includesCredentials(String(credentials), false) && rewriteOne.withMark) {
+            const method = String(init?.method ?? (viaRequest ? input.method : "GET")).toUpperCase();
+            if (!viaRequest || (init?.body == null && (method === "GET" || method === "HEAD"))) {
+                rewritten = rewriteOne.withMark(original, policy, "anon");
+                asIs = false;
+            }
+        }
+        if (own === undefined || !namesContext(cors?.opaque === true, cross, cors?.always === true)) return plain();
+
         const credentialed = credentials === "include";
         const redirect = init?.redirect ?? (viaRequest ? input.redirect : "follow");
         // The browser refuses this before any request: let it, on the original URL.

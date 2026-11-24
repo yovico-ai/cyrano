@@ -196,3 +196,22 @@ func TestSpecConformance_ElementCookies(t *testing.T) {
 		}
 	}
 }
+
+func TestSpecConformance_MarkedCookies(t *testing.T) {
+	oracle := specoracle.Need(t)
+	for _, anon := range []bool{true, false} {
+		for _, cors := range []bool{true, false} {
+			for _, cred := range []bool{true, false} {
+				for _, same := range []bool{true, false} {
+					want, _, err := oracle.Ask("markedcookies", flag(anon, "anon", "other"), flag(cors, "cors", "other"), flag(cred, "cred", "plain"), flag(same, "same", "cross"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if got := flag(MarkedCookies(anon, cors, cred, same), "yes", "no"); got != want {
+						t.Errorf("MarkedCookies(%v, %v, %v, %v) = %s, spec %s", anon, cors, cred, same, got, want)
+					}
+				}
+			}
+		}
+	}
+}

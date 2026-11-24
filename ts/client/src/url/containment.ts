@@ -155,8 +155,10 @@ function cyranoTarget(pathname: string): { scheme: string; policy: string | null
 // include (crossorigin=use-credentials, a credentialed EventSource): an
 // unmarked CORS-mode element request has "same-origin" credentials
 // (spec Cookies.elementCookies).
-export type Dest = "js" | "css" | "frame" | "inert" | "set" | "mjs" | "cred" | "jsc" | "cssc";
-const isDest = (t: string): boolean => t === "js" || t === "css" || t === "frame" || t === "inert" || t === "set" || t === "mjs" || t === "cred" || t === "jsc" || t === "cssc";
+// "anon": a no-cors fetch() whose credentials mode includes none for its
+// target (spec Cookies.markedCookies): it can carry no header of the runtime's.
+export type Dest = "js" | "css" | "frame" | "inert" | "set" | "mjs" | "cred" | "jsc" | "cssc" | "anon";
+const isDest = (t: string): boolean => t === "js" || t === "css" || t === "frame" || t === "inert" || t === "set" || t === "mjs" || t === "cred" || t === "jsc" || t === "cssc" || t === "anon";
 
 /** spec Attrs.credDest: a use-credentials element's destination in its credentialed form. */
 export function credDest(useCredentials: boolean, d: Dest | null): Dest | null {

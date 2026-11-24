@@ -19,14 +19,49 @@ export function patchMessageEventOrigin(targetWindow: Window, config: ClientConf
     const proxyOrigin = new URL(config.apiBaseURL).origin;
     const unwrap = (h: string) => unwrapProxiedUrl(h, config);
     const sourceGet = nO.getOwnPropertyDescriptor(ME.prototype, "source")?.get;
+    // A stream's message (EventSource, WebSocket) has the stream URL's
+    // origin (spec/Messaging.agda streamOrigin; round H/K: the proxy's, and
+    // its ws: one). The url getters are the runtime's (installed before
+    // this): they read the page's URL back.
+    const g = targetWindow as unknown as Record<string, { prototype: object } | undefined>;
+    const targetGet = g["Event"] ? nO.getOwnPropertyDescriptor(g["Event"].prototype, "target")?.get : undefined;
+    const urlGets = ["EventSource", "WebSocket"].flatMap((k) => {
+        const d = g[k] ? nO.getOwnPropertyDescriptor(g[k]!.prototype, "url")?.get : undefined;
+        return d ? [d] : [];
+    });
+    const wsProxyOrigin = proxyOrigin.replace(/^http/, "ws");
+    const ofStream = (self: unknown): string | null => {
+        if (!targetGet) return null;
+        const t = ncall(targetGet, self) as object | null;
+        if (!t) return null;
+        for (const u of urlGets) {
+            let raw: unknown;
+            try { raw = ncall(u, t); } catch { continue; } // not this kind of stream
+            return typeof raw === "string" ? streamOriginOf(raw) : null;
+        }
+        return null;
+    };
     wrapAccessor<string>(ME.prototype, "origin", {
         get: (get, self) => {
             const origin = ncall(get, self);
+            if (origin !== proxyOrigin && origin !== wsProxyOrigin) return origin;
+            const stream = ofStream(self);
+            if (stream !== null) return stream;
             if (origin !== proxyOrigin || !sourceGet) return origin;
             const source = ncall(sourceGet, self) as unknown;
             return (source ? originalOrigin(source, unwrap) : null) ?? origin;
         },
     });
+}
+
+/** spec/Messaging.agda streamOrigin: a stream URL's origin, or null where it has no tuple origin. */
+export function streamOriginOf(url: string): string | null {
+    try {
+        const u = new URL(url);
+        return u.protocol === "http:" || u.protocol === "https:" || u.protocol === "ws:" || u.protocol === "wss:" ? u.origin : null;
+    } catch {
+        return null;
+    }
 }
 
 // Exported for unit testing only.

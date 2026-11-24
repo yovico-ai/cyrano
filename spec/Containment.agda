@@ -135,8 +135,13 @@ underCyrano (c ∷ _ ∷ _)  = isCyrano c
 -- use-credentials, and to the browser every request is same-origin, so
 -- nothing else tells the proxy; an unmarked CORS-mode element request has
 -- the default "same-origin" credentials (Cookies.elementCookies).
+-- destAnon: a fetch() in no-cors mode whose credentials mode includes none
+-- for its target (the default "same-origin", to another origin): it can
+-- carry no header of the runtime's (the browser drops them in no-cors), and
+-- its Sec-Fetch-Dest (empty) is a beacon's or a ping's too, which carry
+-- credentials (Cookies.markedCookies).
 data Dest : Set where
-  destScript destStyle destFrame destInert destImageSet destModuleWorker destCred destScriptCred destStyleCred : Dest
+  destScript destStyle destFrame destInert destImageSet destModuleWorker destCred destScriptCred destStyleCred destAnon : Dest
 
 destName : Dest → String
 destName destScript = "js"
@@ -148,6 +153,7 @@ destName destModuleWorker = "mjs"
 destName destCred = "cred"
 destName destScriptCred = "jsc"
 destName destStyleCred = "cssc"
+destName destAnon = "anon"
 
 -- What a proxified URL carries besides its target.
 record Mark : Set where
@@ -200,6 +206,7 @@ schemeSegment s = bySplit (splitOn (is 33) s)
                 else if eqStr t (toList "cred") then just destCred
                 else if eqStr t (toList "jsc") then just destScriptCred
                 else if eqStr t (toList "cssc") then just destStyleCred
+                else if eqStr t (toList "anon") then just destAnon
                 else nothing
 
   withScheme : Maybe Scheme → Maybe Mark → Maybe (Scheme × Mark)
@@ -466,6 +473,7 @@ segment-mark http (mark nothing (just destModuleWorker)) = refl
 segment-mark http (mark nothing (just destCred)) = refl
 segment-mark http (mark nothing (just destScriptCred)) = refl
 segment-mark http (mark nothing (just destStyleCred)) = refl
+segment-mark http (mark nothing (just destAnon)) = refl
 segment-mark http (mark (just R.noReferrer) nothing) = refl
 segment-mark http (mark (just R.noReferrer) (just destScript)) = refl
 segment-mark http (mark (just R.noReferrer) (just destStyle)) = refl
@@ -476,6 +484,7 @@ segment-mark http (mark (just R.noReferrer) (just destModuleWorker)) = refl
 segment-mark http (mark (just R.noReferrer) (just destCred)) = refl
 segment-mark http (mark (just R.noReferrer) (just destScriptCred)) = refl
 segment-mark http (mark (just R.noReferrer) (just destStyleCred)) = refl
+segment-mark http (mark (just R.noReferrer) (just destAnon)) = refl
 segment-mark http (mark (just R.noReferrerWhenDowngrade) nothing) = refl
 segment-mark http (mark (just R.noReferrerWhenDowngrade) (just destScript)) = refl
 segment-mark http (mark (just R.noReferrerWhenDowngrade) (just destStyle)) = refl
@@ -486,6 +495,7 @@ segment-mark http (mark (just R.noReferrerWhenDowngrade) (just destModuleWorker)
 segment-mark http (mark (just R.noReferrerWhenDowngrade) (just destCred)) = refl
 segment-mark http (mark (just R.noReferrerWhenDowngrade) (just destScriptCred)) = refl
 segment-mark http (mark (just R.noReferrerWhenDowngrade) (just destStyleCred)) = refl
+segment-mark http (mark (just R.noReferrerWhenDowngrade) (just destAnon)) = refl
 segment-mark http (mark (just R.sameOrigin) nothing) = refl
 segment-mark http (mark (just R.sameOrigin) (just destScript)) = refl
 segment-mark http (mark (just R.sameOrigin) (just destStyle)) = refl
@@ -496,6 +506,7 @@ segment-mark http (mark (just R.sameOrigin) (just destModuleWorker)) = refl
 segment-mark http (mark (just R.sameOrigin) (just destCred)) = refl
 segment-mark http (mark (just R.sameOrigin) (just destScriptCred)) = refl
 segment-mark http (mark (just R.sameOrigin) (just destStyleCred)) = refl
+segment-mark http (mark (just R.sameOrigin) (just destAnon)) = refl
 segment-mark http (mark (just R.origin) nothing) = refl
 segment-mark http (mark (just R.origin) (just destScript)) = refl
 segment-mark http (mark (just R.origin) (just destStyle)) = refl
@@ -506,6 +517,7 @@ segment-mark http (mark (just R.origin) (just destModuleWorker)) = refl
 segment-mark http (mark (just R.origin) (just destCred)) = refl
 segment-mark http (mark (just R.origin) (just destScriptCred)) = refl
 segment-mark http (mark (just R.origin) (just destStyleCred)) = refl
+segment-mark http (mark (just R.origin) (just destAnon)) = refl
 segment-mark http (mark (just R.strictOrigin) nothing) = refl
 segment-mark http (mark (just R.strictOrigin) (just destScript)) = refl
 segment-mark http (mark (just R.strictOrigin) (just destStyle)) = refl
@@ -516,6 +528,7 @@ segment-mark http (mark (just R.strictOrigin) (just destModuleWorker)) = refl
 segment-mark http (mark (just R.strictOrigin) (just destCred)) = refl
 segment-mark http (mark (just R.strictOrigin) (just destScriptCred)) = refl
 segment-mark http (mark (just R.strictOrigin) (just destStyleCred)) = refl
+segment-mark http (mark (just R.strictOrigin) (just destAnon)) = refl
 segment-mark http (mark (just R.originWhenCrossOrigin) nothing) = refl
 segment-mark http (mark (just R.originWhenCrossOrigin) (just destScript)) = refl
 segment-mark http (mark (just R.originWhenCrossOrigin) (just destStyle)) = refl
@@ -526,6 +539,7 @@ segment-mark http (mark (just R.originWhenCrossOrigin) (just destModuleWorker)) 
 segment-mark http (mark (just R.originWhenCrossOrigin) (just destCred)) = refl
 segment-mark http (mark (just R.originWhenCrossOrigin) (just destScriptCred)) = refl
 segment-mark http (mark (just R.originWhenCrossOrigin) (just destStyleCred)) = refl
+segment-mark http (mark (just R.originWhenCrossOrigin) (just destAnon)) = refl
 segment-mark http (mark (just R.strictOriginWhenCrossOrigin) nothing) = refl
 segment-mark http (mark (just R.strictOriginWhenCrossOrigin) (just destScript)) = refl
 segment-mark http (mark (just R.strictOriginWhenCrossOrigin) (just destStyle)) = refl
@@ -536,6 +550,7 @@ segment-mark http (mark (just R.strictOriginWhenCrossOrigin) (just destModuleWor
 segment-mark http (mark (just R.strictOriginWhenCrossOrigin) (just destCred)) = refl
 segment-mark http (mark (just R.strictOriginWhenCrossOrigin) (just destScriptCred)) = refl
 segment-mark http (mark (just R.strictOriginWhenCrossOrigin) (just destStyleCred)) = refl
+segment-mark http (mark (just R.strictOriginWhenCrossOrigin) (just destAnon)) = refl
 segment-mark http (mark (just R.unsafeUrl) nothing) = refl
 segment-mark http (mark (just R.unsafeUrl) (just destScript)) = refl
 segment-mark http (mark (just R.unsafeUrl) (just destStyle)) = refl
@@ -546,6 +561,7 @@ segment-mark http (mark (just R.unsafeUrl) (just destModuleWorker)) = refl
 segment-mark http (mark (just R.unsafeUrl) (just destCred)) = refl
 segment-mark http (mark (just R.unsafeUrl) (just destScriptCred)) = refl
 segment-mark http (mark (just R.unsafeUrl) (just destStyleCred)) = refl
+segment-mark http (mark (just R.unsafeUrl) (just destAnon)) = refl
 segment-mark https (mark nothing nothing) = refl
 segment-mark https (mark nothing (just destScript)) = refl
 segment-mark https (mark nothing (just destStyle)) = refl
@@ -556,6 +572,7 @@ segment-mark https (mark nothing (just destModuleWorker)) = refl
 segment-mark https (mark nothing (just destCred)) = refl
 segment-mark https (mark nothing (just destScriptCred)) = refl
 segment-mark https (mark nothing (just destStyleCred)) = refl
+segment-mark https (mark nothing (just destAnon)) = refl
 segment-mark https (mark (just R.noReferrer) nothing) = refl
 segment-mark https (mark (just R.noReferrer) (just destScript)) = refl
 segment-mark https (mark (just R.noReferrer) (just destStyle)) = refl
@@ -566,6 +583,7 @@ segment-mark https (mark (just R.noReferrer) (just destModuleWorker)) = refl
 segment-mark https (mark (just R.noReferrer) (just destCred)) = refl
 segment-mark https (mark (just R.noReferrer) (just destScriptCred)) = refl
 segment-mark https (mark (just R.noReferrer) (just destStyleCred)) = refl
+segment-mark https (mark (just R.noReferrer) (just destAnon)) = refl
 segment-mark https (mark (just R.noReferrerWhenDowngrade) nothing) = refl
 segment-mark https (mark (just R.noReferrerWhenDowngrade) (just destScript)) = refl
 segment-mark https (mark (just R.noReferrerWhenDowngrade) (just destStyle)) = refl
@@ -576,6 +594,7 @@ segment-mark https (mark (just R.noReferrerWhenDowngrade) (just destModuleWorker
 segment-mark https (mark (just R.noReferrerWhenDowngrade) (just destCred)) = refl
 segment-mark https (mark (just R.noReferrerWhenDowngrade) (just destScriptCred)) = refl
 segment-mark https (mark (just R.noReferrerWhenDowngrade) (just destStyleCred)) = refl
+segment-mark https (mark (just R.noReferrerWhenDowngrade) (just destAnon)) = refl
 segment-mark https (mark (just R.sameOrigin) nothing) = refl
 segment-mark https (mark (just R.sameOrigin) (just destScript)) = refl
 segment-mark https (mark (just R.sameOrigin) (just destStyle)) = refl
@@ -586,6 +605,7 @@ segment-mark https (mark (just R.sameOrigin) (just destModuleWorker)) = refl
 segment-mark https (mark (just R.sameOrigin) (just destCred)) = refl
 segment-mark https (mark (just R.sameOrigin) (just destScriptCred)) = refl
 segment-mark https (mark (just R.sameOrigin) (just destStyleCred)) = refl
+segment-mark https (mark (just R.sameOrigin) (just destAnon)) = refl
 segment-mark https (mark (just R.origin) nothing) = refl
 segment-mark https (mark (just R.origin) (just destScript)) = refl
 segment-mark https (mark (just R.origin) (just destStyle)) = refl
@@ -596,6 +616,7 @@ segment-mark https (mark (just R.origin) (just destModuleWorker)) = refl
 segment-mark https (mark (just R.origin) (just destCred)) = refl
 segment-mark https (mark (just R.origin) (just destScriptCred)) = refl
 segment-mark https (mark (just R.origin) (just destStyleCred)) = refl
+segment-mark https (mark (just R.origin) (just destAnon)) = refl
 segment-mark https (mark (just R.strictOrigin) nothing) = refl
 segment-mark https (mark (just R.strictOrigin) (just destScript)) = refl
 segment-mark https (mark (just R.strictOrigin) (just destStyle)) = refl
@@ -606,6 +627,7 @@ segment-mark https (mark (just R.strictOrigin) (just destModuleWorker)) = refl
 segment-mark https (mark (just R.strictOrigin) (just destCred)) = refl
 segment-mark https (mark (just R.strictOrigin) (just destScriptCred)) = refl
 segment-mark https (mark (just R.strictOrigin) (just destStyleCred)) = refl
+segment-mark https (mark (just R.strictOrigin) (just destAnon)) = refl
 segment-mark https (mark (just R.originWhenCrossOrigin) nothing) = refl
 segment-mark https (mark (just R.originWhenCrossOrigin) (just destScript)) = refl
 segment-mark https (mark (just R.originWhenCrossOrigin) (just destStyle)) = refl
@@ -616,6 +638,7 @@ segment-mark https (mark (just R.originWhenCrossOrigin) (just destModuleWorker))
 segment-mark https (mark (just R.originWhenCrossOrigin) (just destCred)) = refl
 segment-mark https (mark (just R.originWhenCrossOrigin) (just destScriptCred)) = refl
 segment-mark https (mark (just R.originWhenCrossOrigin) (just destStyleCred)) = refl
+segment-mark https (mark (just R.originWhenCrossOrigin) (just destAnon)) = refl
 segment-mark https (mark (just R.strictOriginWhenCrossOrigin) nothing) = refl
 segment-mark https (mark (just R.strictOriginWhenCrossOrigin) (just destScript)) = refl
 segment-mark https (mark (just R.strictOriginWhenCrossOrigin) (just destStyle)) = refl
@@ -626,6 +649,7 @@ segment-mark https (mark (just R.strictOriginWhenCrossOrigin) (just destModuleWo
 segment-mark https (mark (just R.strictOriginWhenCrossOrigin) (just destCred)) = refl
 segment-mark https (mark (just R.strictOriginWhenCrossOrigin) (just destScriptCred)) = refl
 segment-mark https (mark (just R.strictOriginWhenCrossOrigin) (just destStyleCred)) = refl
+segment-mark https (mark (just R.strictOriginWhenCrossOrigin) (just destAnon)) = refl
 segment-mark https (mark (just R.unsafeUrl) nothing) = refl
 segment-mark https (mark (just R.unsafeUrl) (just destScript)) = refl
 segment-mark https (mark (just R.unsafeUrl) (just destStyle)) = refl
@@ -636,6 +660,7 @@ segment-mark https (mark (just R.unsafeUrl) (just destModuleWorker)) = refl
 segment-mark https (mark (just R.unsafeUrl) (just destCred)) = refl
 segment-mark https (mark (just R.unsafeUrl) (just destScriptCred)) = refl
 segment-mark https (mark (just R.unsafeUrl) (just destStyleCred)) = refl
+segment-mark https (mark (just R.unsafeUrl) (just destAnon)) = refl
 segment-mark ws (mark nothing nothing) = refl
 segment-mark ws (mark nothing (just destScript)) = refl
 segment-mark ws (mark nothing (just destStyle)) = refl
@@ -646,6 +671,7 @@ segment-mark ws (mark nothing (just destModuleWorker)) = refl
 segment-mark ws (mark nothing (just destCred)) = refl
 segment-mark ws (mark nothing (just destScriptCred)) = refl
 segment-mark ws (mark nothing (just destStyleCred)) = refl
+segment-mark ws (mark nothing (just destAnon)) = refl
 segment-mark ws (mark (just R.noReferrer) nothing) = refl
 segment-mark ws (mark (just R.noReferrer) (just destScript)) = refl
 segment-mark ws (mark (just R.noReferrer) (just destStyle)) = refl
@@ -656,6 +682,7 @@ segment-mark ws (mark (just R.noReferrer) (just destModuleWorker)) = refl
 segment-mark ws (mark (just R.noReferrer) (just destCred)) = refl
 segment-mark ws (mark (just R.noReferrer) (just destScriptCred)) = refl
 segment-mark ws (mark (just R.noReferrer) (just destStyleCred)) = refl
+segment-mark ws (mark (just R.noReferrer) (just destAnon)) = refl
 segment-mark ws (mark (just R.noReferrerWhenDowngrade) nothing) = refl
 segment-mark ws (mark (just R.noReferrerWhenDowngrade) (just destScript)) = refl
 segment-mark ws (mark (just R.noReferrerWhenDowngrade) (just destStyle)) = refl
@@ -666,6 +693,7 @@ segment-mark ws (mark (just R.noReferrerWhenDowngrade) (just destModuleWorker)) 
 segment-mark ws (mark (just R.noReferrerWhenDowngrade) (just destCred)) = refl
 segment-mark ws (mark (just R.noReferrerWhenDowngrade) (just destScriptCred)) = refl
 segment-mark ws (mark (just R.noReferrerWhenDowngrade) (just destStyleCred)) = refl
+segment-mark ws (mark (just R.noReferrerWhenDowngrade) (just destAnon)) = refl
 segment-mark ws (mark (just R.sameOrigin) nothing) = refl
 segment-mark ws (mark (just R.sameOrigin) (just destScript)) = refl
 segment-mark ws (mark (just R.sameOrigin) (just destStyle)) = refl
@@ -676,6 +704,7 @@ segment-mark ws (mark (just R.sameOrigin) (just destModuleWorker)) = refl
 segment-mark ws (mark (just R.sameOrigin) (just destCred)) = refl
 segment-mark ws (mark (just R.sameOrigin) (just destScriptCred)) = refl
 segment-mark ws (mark (just R.sameOrigin) (just destStyleCred)) = refl
+segment-mark ws (mark (just R.sameOrigin) (just destAnon)) = refl
 segment-mark ws (mark (just R.origin) nothing) = refl
 segment-mark ws (mark (just R.origin) (just destScript)) = refl
 segment-mark ws (mark (just R.origin) (just destStyle)) = refl
@@ -686,6 +715,7 @@ segment-mark ws (mark (just R.origin) (just destModuleWorker)) = refl
 segment-mark ws (mark (just R.origin) (just destCred)) = refl
 segment-mark ws (mark (just R.origin) (just destScriptCred)) = refl
 segment-mark ws (mark (just R.origin) (just destStyleCred)) = refl
+segment-mark ws (mark (just R.origin) (just destAnon)) = refl
 segment-mark ws (mark (just R.strictOrigin) nothing) = refl
 segment-mark ws (mark (just R.strictOrigin) (just destScript)) = refl
 segment-mark ws (mark (just R.strictOrigin) (just destStyle)) = refl
@@ -696,6 +726,7 @@ segment-mark ws (mark (just R.strictOrigin) (just destModuleWorker)) = refl
 segment-mark ws (mark (just R.strictOrigin) (just destCred)) = refl
 segment-mark ws (mark (just R.strictOrigin) (just destScriptCred)) = refl
 segment-mark ws (mark (just R.strictOrigin) (just destStyleCred)) = refl
+segment-mark ws (mark (just R.strictOrigin) (just destAnon)) = refl
 segment-mark ws (mark (just R.originWhenCrossOrigin) nothing) = refl
 segment-mark ws (mark (just R.originWhenCrossOrigin) (just destScript)) = refl
 segment-mark ws (mark (just R.originWhenCrossOrigin) (just destStyle)) = refl
@@ -706,6 +737,7 @@ segment-mark ws (mark (just R.originWhenCrossOrigin) (just destModuleWorker)) = 
 segment-mark ws (mark (just R.originWhenCrossOrigin) (just destCred)) = refl
 segment-mark ws (mark (just R.originWhenCrossOrigin) (just destScriptCred)) = refl
 segment-mark ws (mark (just R.originWhenCrossOrigin) (just destStyleCred)) = refl
+segment-mark ws (mark (just R.originWhenCrossOrigin) (just destAnon)) = refl
 segment-mark ws (mark (just R.strictOriginWhenCrossOrigin) nothing) = refl
 segment-mark ws (mark (just R.strictOriginWhenCrossOrigin) (just destScript)) = refl
 segment-mark ws (mark (just R.strictOriginWhenCrossOrigin) (just destStyle)) = refl
@@ -716,6 +748,7 @@ segment-mark ws (mark (just R.strictOriginWhenCrossOrigin) (just destModuleWorke
 segment-mark ws (mark (just R.strictOriginWhenCrossOrigin) (just destCred)) = refl
 segment-mark ws (mark (just R.strictOriginWhenCrossOrigin) (just destScriptCred)) = refl
 segment-mark ws (mark (just R.strictOriginWhenCrossOrigin) (just destStyleCred)) = refl
+segment-mark ws (mark (just R.strictOriginWhenCrossOrigin) (just destAnon)) = refl
 segment-mark ws (mark (just R.unsafeUrl) nothing) = refl
 segment-mark ws (mark (just R.unsafeUrl) (just destScript)) = refl
 segment-mark ws (mark (just R.unsafeUrl) (just destStyle)) = refl
@@ -726,6 +759,7 @@ segment-mark ws (mark (just R.unsafeUrl) (just destModuleWorker)) = refl
 segment-mark ws (mark (just R.unsafeUrl) (just destCred)) = refl
 segment-mark ws (mark (just R.unsafeUrl) (just destScriptCred)) = refl
 segment-mark ws (mark (just R.unsafeUrl) (just destStyleCred)) = refl
+segment-mark ws (mark (just R.unsafeUrl) (just destAnon)) = refl
 segment-mark wss (mark nothing nothing) = refl
 segment-mark wss (mark nothing (just destScript)) = refl
 segment-mark wss (mark nothing (just destStyle)) = refl
@@ -736,6 +770,7 @@ segment-mark wss (mark nothing (just destModuleWorker)) = refl
 segment-mark wss (mark nothing (just destCred)) = refl
 segment-mark wss (mark nothing (just destScriptCred)) = refl
 segment-mark wss (mark nothing (just destStyleCred)) = refl
+segment-mark wss (mark nothing (just destAnon)) = refl
 segment-mark wss (mark (just R.noReferrer) nothing) = refl
 segment-mark wss (mark (just R.noReferrer) (just destScript)) = refl
 segment-mark wss (mark (just R.noReferrer) (just destStyle)) = refl
@@ -746,6 +781,7 @@ segment-mark wss (mark (just R.noReferrer) (just destModuleWorker)) = refl
 segment-mark wss (mark (just R.noReferrer) (just destCred)) = refl
 segment-mark wss (mark (just R.noReferrer) (just destScriptCred)) = refl
 segment-mark wss (mark (just R.noReferrer) (just destStyleCred)) = refl
+segment-mark wss (mark (just R.noReferrer) (just destAnon)) = refl
 segment-mark wss (mark (just R.noReferrerWhenDowngrade) nothing) = refl
 segment-mark wss (mark (just R.noReferrerWhenDowngrade) (just destScript)) = refl
 segment-mark wss (mark (just R.noReferrerWhenDowngrade) (just destStyle)) = refl
@@ -756,6 +792,7 @@ segment-mark wss (mark (just R.noReferrerWhenDowngrade) (just destModuleWorker))
 segment-mark wss (mark (just R.noReferrerWhenDowngrade) (just destCred)) = refl
 segment-mark wss (mark (just R.noReferrerWhenDowngrade) (just destScriptCred)) = refl
 segment-mark wss (mark (just R.noReferrerWhenDowngrade) (just destStyleCred)) = refl
+segment-mark wss (mark (just R.noReferrerWhenDowngrade) (just destAnon)) = refl
 segment-mark wss (mark (just R.sameOrigin) nothing) = refl
 segment-mark wss (mark (just R.sameOrigin) (just destScript)) = refl
 segment-mark wss (mark (just R.sameOrigin) (just destStyle)) = refl
@@ -766,6 +803,7 @@ segment-mark wss (mark (just R.sameOrigin) (just destModuleWorker)) = refl
 segment-mark wss (mark (just R.sameOrigin) (just destCred)) = refl
 segment-mark wss (mark (just R.sameOrigin) (just destScriptCred)) = refl
 segment-mark wss (mark (just R.sameOrigin) (just destStyleCred)) = refl
+segment-mark wss (mark (just R.sameOrigin) (just destAnon)) = refl
 segment-mark wss (mark (just R.origin) nothing) = refl
 segment-mark wss (mark (just R.origin) (just destScript)) = refl
 segment-mark wss (mark (just R.origin) (just destStyle)) = refl
@@ -776,6 +814,7 @@ segment-mark wss (mark (just R.origin) (just destModuleWorker)) = refl
 segment-mark wss (mark (just R.origin) (just destCred)) = refl
 segment-mark wss (mark (just R.origin) (just destScriptCred)) = refl
 segment-mark wss (mark (just R.origin) (just destStyleCred)) = refl
+segment-mark wss (mark (just R.origin) (just destAnon)) = refl
 segment-mark wss (mark (just R.strictOrigin) nothing) = refl
 segment-mark wss (mark (just R.strictOrigin) (just destScript)) = refl
 segment-mark wss (mark (just R.strictOrigin) (just destStyle)) = refl
@@ -786,6 +825,7 @@ segment-mark wss (mark (just R.strictOrigin) (just destModuleWorker)) = refl
 segment-mark wss (mark (just R.strictOrigin) (just destCred)) = refl
 segment-mark wss (mark (just R.strictOrigin) (just destScriptCred)) = refl
 segment-mark wss (mark (just R.strictOrigin) (just destStyleCred)) = refl
+segment-mark wss (mark (just R.strictOrigin) (just destAnon)) = refl
 segment-mark wss (mark (just R.originWhenCrossOrigin) nothing) = refl
 segment-mark wss (mark (just R.originWhenCrossOrigin) (just destScript)) = refl
 segment-mark wss (mark (just R.originWhenCrossOrigin) (just destStyle)) = refl
@@ -796,6 +836,7 @@ segment-mark wss (mark (just R.originWhenCrossOrigin) (just destModuleWorker)) =
 segment-mark wss (mark (just R.originWhenCrossOrigin) (just destCred)) = refl
 segment-mark wss (mark (just R.originWhenCrossOrigin) (just destScriptCred)) = refl
 segment-mark wss (mark (just R.originWhenCrossOrigin) (just destStyleCred)) = refl
+segment-mark wss (mark (just R.originWhenCrossOrigin) (just destAnon)) = refl
 segment-mark wss (mark (just R.strictOriginWhenCrossOrigin) nothing) = refl
 segment-mark wss (mark (just R.strictOriginWhenCrossOrigin) (just destScript)) = refl
 segment-mark wss (mark (just R.strictOriginWhenCrossOrigin) (just destStyle)) = refl
@@ -806,6 +847,7 @@ segment-mark wss (mark (just R.strictOriginWhenCrossOrigin) (just destModuleWork
 segment-mark wss (mark (just R.strictOriginWhenCrossOrigin) (just destCred)) = refl
 segment-mark wss (mark (just R.strictOriginWhenCrossOrigin) (just destScriptCred)) = refl
 segment-mark wss (mark (just R.strictOriginWhenCrossOrigin) (just destStyleCred)) = refl
+segment-mark wss (mark (just R.strictOriginWhenCrossOrigin) (just destAnon)) = refl
 segment-mark wss (mark (just R.unsafeUrl) nothing) = refl
 segment-mark wss (mark (just R.unsafeUrl) (just destScript)) = refl
 segment-mark wss (mark (just R.unsafeUrl) (just destStyle)) = refl
@@ -816,6 +858,7 @@ segment-mark wss (mark (just R.unsafeUrl) (just destModuleWorker)) = refl
 segment-mark wss (mark (just R.unsafeUrl) (just destCred)) = refl
 segment-mark wss (mark (just R.unsafeUrl) (just destScriptCred)) = refl
 segment-mark wss (mark (just R.unsafeUrl) (just destStyleCred)) = refl
+segment-mark wss (mark (just R.unsafeUrl) (just destAnon)) = refl
 
 -- The law for a marked URL: the marker is not part of what page code
 -- reads back.

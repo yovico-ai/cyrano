@@ -441,6 +441,8 @@ dispatch op args =
   else if eqStr op (toList "paymentrefused") then oneArg (λ t → paymentAnswer (Payment.refused t)) args
   else if eqStr op (toList "blobbase") then oneArg (λ t → if Frames.blobBase t then toList "yes" else toList "no") args
   else if eqStr op (toList "blobdocument") then oneArg (λ t → if Frames.blobDocument t then toList "yes" else toList "no") args
+  else if eqStr op (toList "opfsdir") then oneArg (λ k → Storage.opfsDir k) args
+  else if eqStr op (toList "lockname") then twoArgs (λ k n → lockOut (Storage.lockName k n)) args
   else if eqStr op (toList "storename") then twoArgs (λ k n → Storage.stored k n) args
   else if eqStr op (toList "storeshown") then storeShownReq args
   else if eqStr op (toList "lsfits") then lsFitsReq args
@@ -451,6 +453,7 @@ dispatch op args =
   else if eqStr op (toList "stackurls") then oneArg (λ st → joinNL (Stack.stackUrls st)) args
   else if eqStr op (toList "evalorigin") then twoArgs (λ n l → Stack.evalOrigin n l) args
   else if eqStr op (toList "untag") then threeArgs (λ t o f → Stack.untag t o f) args
+  else if eqStr op (toList "streamorigin") then oneArg (λ u → streamOut (Messaging.streamOrigin u)) args
   else if eqStr op (toList "frameoriginof") then frameOriginOfReq args
   else if eqStr op (toList "embedder") then embedderReq args
   else if eqStr op (toList "framedest") then frameDestReq args
@@ -488,6 +491,7 @@ dispatch op args =
   else if eqStr op (toList "corp") then corpReq args
   else if eqStr op (toList "encquery") then encQueryReq args
   else if eqStr op (toList "elemcookies") then elemCookiesReq args
+  else if eqStr op (toList "markedcookies") then markedCookiesReq args
   else if eqStr op (toList "inctx") then inCtxReq args
   else if eqStr op (toList "unpack") then oneArg (λ v → lines (Data.List.Base.map (λ r → Data.Product.Base.proj₁ r ++ usC ∷ Data.Product.Base.proj₂ r) (CookieJar.unpackSlot v))) args
   else if eqStr op (toList "pack") then oneArg (λ v → CookieJar.packSlot (packArgs (splitOn (is 31) v))) args
@@ -567,6 +571,7 @@ dispatch op args =
             else if eqStr t (toList "cred") then just (just destCred)
             else if eqStr t (toList "jsc") then just (just destScriptCred)
             else if eqStr t (toList "cssc") then just (just destStyleCred)
+            else if eqStr t (toList "anon") then just (just destAnon)
             else nothing
     byMark : Maybe (Maybe Policy) → Maybe (Maybe Dest) → Str
     byMark (just x) (just d) = answerReply raw (rewriteUrlWith px (mark x d) base raw)
@@ -632,7 +637,8 @@ dispatch op args =
           else if eqStr m (toList "set") then just destImageSet
           else if eqStr m (toList "mjs") then just destModuleWorker
           else if eqStr m (toList "cred") then just destCred else if eqStr m (toList "jsc") then just destScriptCred
-          else if eqStr m (toList "cssc") then just destStyleCred else nothing
+          else if eqStr m (toList "cssc") then just destStyleCred
+          else if eqStr m (toList "anon") then just destAnon else nothing
     opt : Str → Str → Maybe Str
     opt p v = if eqStr p (toList "1") then just v else nothing
   dispositionReq _ = errorReply "BadRequest"
@@ -647,6 +653,14 @@ dispatch op args =
     joinName (just AdAuction.denied) = "denied"
     joinName nothing = "outside"
   adJoinReq _ = errorReply "BadRequest"
+
+  streamOut : Maybe Str → Str
+  streamOut (just o) = o
+  streamOut nothing  = toList "-none-"
+
+  lockOut : Maybe Str → Str
+  lockOut (just n) = n
+  lockOut nothing  = toList "-native-"
 
   paymentAnswer : Maybe Bool → Str
   paymentAnswer (just true)  = toList "yes"
@@ -1516,6 +1530,11 @@ dispatch op args =
   elemCookiesReq : List Str → Str
   elemCookiesReq (m ∷ c ∷ o ∷ []) = out (toList (if elementCookies (eqStr m (toList "cors")) (eqStr c (toList "cred")) (eqStr o (toList "same")) then "yes" else "no"))
   elemCookiesReq _ = errorReply "BadRequest"
+
+  -- markedcookies <anon|other> <cors|other> <cred|plain> <same|cross> → yes/no
+  markedCookiesReq : List Str → Str
+  markedCookiesReq (a ∷ m ∷ c ∷ o ∷ []) = out (toList (if markedCookies (eqStr a (toList "anon")) (eqStr m (toList "cors")) (eqStr c (toList "cred")) (eqStr o (toList "same")) then "yes" else "no"))
+  markedCookiesReq _ = errorReply "BadRequest"
 
   -- storable <top> <cross|same> <Set-Cookie>: whether that context stores it,
   -- and its partition key ("-": none).

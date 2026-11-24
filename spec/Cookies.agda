@@ -642,3 +642,10 @@ socketCookieScheme s   = s
 -- credentialed: the URL's cred mark (Containment destCred …).
 elementCookies : Bool → Bool → Bool → Bool
 elementCookies cors credentialed sameOrigin = not cors ∨ credentialed ∨ sameOrigin
+
+-- A request the runtime marked anonymous (Containment destAnon: a no-cors
+-- fetch() whose credentials mode includes none for its target) carries
+-- none; any other goes by elementCookies.
+markedCookies : Bool → Bool → Bool → Bool → Bool
+markedCookies true  _    _            _          = false
+markedCookies false cors credentialed sameOrigin = elementCookies cors credentialed sameOrigin

@@ -138,3 +138,33 @@ private
 -- A name reads back as it was given.
 shown-stored : ∀ key name → shown key (stored key name) ≡ just name
 shown-stored key name = drop-own (namePrefix key) name
+
+-- ---------------------------------------------------------------------
+-- Web Locks names (TS: patches/storage.ts patchStorageNames, windows and
+-- workers): every proxied site shares the proxy origin's one lock manager
+-- (round H: a lock one site held blocked another's of the same name, and
+-- query() listed it). A lock's name is stored under the key as any other
+-- name; a Lock's name and query()'s entries read back through shown /
+-- listed. A name starting with "-" goes to the native as given (nothing):
+-- it refuses it ("Names cannot start with '-'"), the prefixed name it
+-- would not.
+lockName : Str → Str → Maybe Str
+lockName key ('-' ∷ _) = nothing
+lockName key name      = just (stored key name)
+
+-- ---------------------------------------------------------------------
+-- The Origin Private File System (TS: patches/storage.ts): every proxied
+-- site had the proxy origin's one root (round H: a file one site made was
+-- listed and read by every other). The page's root is a directory of the
+-- real one named for the key — "crn" ␟ KEY' ␟, KEY' the key with "%", "/"
+-- and "\" percent-encoded (an entry's name may hold no slash) — and its
+-- name reads as a root's: "".
+encodeDirKey : Str → Str
+encodeDirKey []         = []
+encodeDirKey ('%' ∷ s)  = '%' ∷ '2' ∷ '5' ∷ encodeDirKey s
+encodeDirKey ('/' ∷ s)  = '%' ∷ '2' ∷ 'F' ∷ encodeDirKey s
+encodeDirKey ('\\' ∷ s) = '%' ∷ '5' ∷ 'C' ∷ encodeDirKey s
+encodeDirKey (c ∷ s)    = c ∷ encodeDirKey s
+
+opfsDir : Str → Str
+opfsDir key = toList "crn" ++ (sep ∷ encodeDirKey key ++ (sep ∷ []))

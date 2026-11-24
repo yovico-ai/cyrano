@@ -166,9 +166,17 @@ func (h *Handler) storageAccess(req *http.Request, target *url.URL, sessionID st
 	}
 	cred := credentials
 	if cred == "" {
-		if navigation || mode == "no-cors" {
+		// The URL's mark says what no header could (spec Containment
+		// destAnon, destCred): an anonymous no-cors fetch, a
+		// use-credentials element.
+		switch {
+		case mark == urlrewrite.DestAnon:
+			cred = "omit"
+		case mark.Credentialed():
 			cred = "include"
-		} else {
+		case navigation || mode == "no-cors":
+			cred = "include"
+		default:
 			cred = "same-origin" // fetch's and a cors element's default
 		}
 	}

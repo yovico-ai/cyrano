@@ -221,6 +221,10 @@ const (
 	DestCred       Dest = "cred"
 	DestScriptCred Dest = "jsc"
 	DestStyleCred  Dest = "cssc"
+	// DestAnon: a no-cors fetch() whose credentials mode includes none for
+	// its target (spec Cookies.markedCookies): it can carry no header of
+	// the runtime's.
+	DestAnon Dest = "anon"
 )
 
 // FrameDest is the mark of the document an iframe is given (spec
@@ -359,7 +363,7 @@ func schemeSegment(seg string) (scheme string, m Mark, ok bool) {
 	}
 	dest := func(t string) Dest {
 		if t == string(DestScript) || t == string(DestStyle) || t == string(DestFrame) || t == string(DestInert) || t == string(DestImageSet) || t == string(DestModuleWorker) ||
-			t == string(DestCred) || t == string(DestScriptCred) || t == string(DestStyleCred) {
+			t == string(DestCred) || t == string(DestScriptCred) || t == string(DestStyleCred) || t == string(DestAnon) {
 			return Dest(t)
 		}
 		return ""
@@ -512,5 +516,12 @@ func CredDest(useCredentials bool, d Dest) Dest {
 // Credentialed: the mark says the element request carries credentials.
 func (d Dest) Credentialed() bool { return d == DestCred || d == DestScriptCred || d == DestStyleCred }
 
+// MarkedCookies is spec Cookies.markedCookies.
+func MarkedCookies(anon, cors, credentialed, sameOrigin bool) bool {
+	return !anon && ElementCookies(cors, credentialed, sameOrigin)
+}
+
 // ElementCookies is spec Cookies.elementCookies.
-func ElementCookies(cors, credentialed, sameOrigin bool) bool { return !cors || credentialed || sameOrigin }
+func ElementCookies(cors, credentialed, sameOrigin bool) bool {
+	return !cors || credentialed || sameOrigin
+}

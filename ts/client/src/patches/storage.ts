@@ -23,7 +23,10 @@
 //
 // The IndexedDB, cache and channel parts also run in workers.
 //
-// Known gaps: SharedWorker names and Web Locks names are shared; data
+//   - Web Locks: lock names (request, query, a Lock's name);
+//   - the Origin Private File System: the root is the key's directory.
+//
+// Known gaps: SharedWorker names are shared; data
 // stored before this existed stays, invisible, under its bare names.
 
 import { getDomain } from "tldts";
@@ -44,6 +47,20 @@ export function storedName(key: string, name: string): string { return namePrefi
 export function shownName(key: string, stored: string): string | null {
     const p = namePrefix(key);
     return sStarts(stored, p) ? stored.slice(p.length) : null;
+}
+
+/**
+ * spec/Storage.agda lockName: a Web Locks name as given to the native under
+ * a prefix — one starting with "-" as given (the native refuses it with
+ * its own error; prefixed it would not).
+ */
+export function lockName(prefix: string, name: string): string {
+    return sStarts(name, "-") ? name : prefix + name;
+}
+
+/** spec/Storage.agda opfsDir: the real root's directory that is a key's OPFS root. */
+export function opfsDirName(key: string): string {
+    return TAG + key.replace(/[%/\\]/g, (c) => (c === "%" ? "%25" : c === "/" ? "%2F" : "%5C")) + SEP;
 }
 
 /** The prefix of this context's names: its storage key (partitionKey). */
@@ -114,6 +131,46 @@ export function patchStorageNames(scope: object, prefix: Prefix): void {
     const DB = g["IDBDatabase"]?.prototype as object | undefined;
     if (DB && nO.getOwnPropertyDescriptor(DB, "name")) {
         wrapAccessor<string>(DB, "name", { get: (get, self) => { const n = ncall(get, self); return shown(n) ?? n; } });
+    }
+
+    // Web Locks: names (request, query; a Lock's name). A name the native
+    // refuses before prefixing would change its error — one starting with
+    // "-" (NotSupportedError), a Symbol, missing arguments — goes as given.
+    const LM = g["LockManager"]?.prototype as object | undefined;
+    if (LM && typeof nO.getOwnPropertyDescriptor(LM, "request")?.value === "function") {
+        wrapMethod<(...a: unknown[]) => unknown>(LM, "request", (native, self, args) => {
+            if (args.length < 2 || typeof args[0] === "symbol") return nR.apply(native, self, args);
+            let name: string;
+            try { name = String(args[0]); } catch (e) { return nR.apply(native, self, [{ toString(): never { throw e; } }, ...args.slice(1)]); }
+            return nR.apply(native, self, [lockName(prefix(), name), ...args.slice(1)]);
+        });
+        if (typeof nO.getOwnPropertyDescriptor(LM, "query")?.value === "function") {
+            type Info = { name?: string; mode?: string; clientId?: string };
+            const own = (list: Info[] | undefined): Info[] => (list ?? []).flatMap((x) => {
+                const n = typeof x.name === "string" ? shown(x.name) : null;
+                return n === null ? [] : [{ ...x, name: n }];
+            });
+            wrapMethod<(...a: unknown[]) => Promise<{ held?: Info[]; pending?: Info[] }>>(LM, "query", (native, self, args) =>
+                (nR.apply(native, self, args) as Promise<{ held?: Info[]; pending?: Info[] }>).then((s) => ({ held: own(s.held), pending: own(s.pending) })));
+        }
+    }
+    const LK = g["Lock"]?.prototype as object | undefined;
+    if (LK && nO.getOwnPropertyDescriptor(LK, "name")) {
+        wrapAccessor<string>(LK, "name", { get: (get, self) => { const n = ncall(get, self); return shown(n) ?? n; } });
+    }
+
+    // The Origin Private File System: the page's root is its key's
+    // directory of the real one, made on first use; its name reads "".
+    const SM = g["StorageManager"]?.prototype as object | undefined;
+    const ownDir = (): string => opfsDirName(prefix().slice(TAG.length, -SEP.length));
+    const getDir = (g["FileSystemDirectoryHandle"]?.prototype as { getDirectoryHandle?: (n: string, o: object) => Promise<unknown> } | undefined)?.getDirectoryHandle;
+    if (SM && getDir && typeof nO.getOwnPropertyDescriptor(SM, "getDirectory")?.value === "function") {
+        wrapMethod<(...a: unknown[]) => Promise<FileSystemDirectoryHandle>>(SM, "getDirectory", (native, self, args) =>
+            (nR.apply(native, self, args) as Promise<FileSystemDirectoryHandle>).then((root) => ncall(getDir!, root, ownDir(), { create: true }) as Promise<FileSystemDirectoryHandle>));
+    }
+    const FH = g["FileSystemHandle"]?.prototype as object | undefined;
+    if (FH && nO.getOwnPropertyDescriptor(FH, "name")) {
+        wrapAccessor<string>(FH, "name", { get: (get, self) => { const n = ncall(get, self); return n === ownDir() ? "" : n; } });
     }
 
     const C = g["CacheStorage"]?.prototype as object | undefined;

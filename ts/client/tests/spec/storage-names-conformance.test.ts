@@ -11,7 +11,7 @@
 import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { namePrefix, shownName, storedName } from "../../src/patches/storage";
+import { lockName, namePrefix, opfsDirName, shownName, storedName } from "../../src/patches/storage";
 import { Partition, QUOTA, fitsQuota, type NativeStorage } from "../../src/patches/local-store";
 import { OracleClient, locateOracle, oracleRequired } from "./oracle-client";
 
@@ -31,6 +31,20 @@ describe.skipIf(located.skip !== "")("storage names and localStorage quota: spec
         await fc.assert(fc.asyncProperty(fc.constantFrom(...KEYS), name, async (k, n) => {
             expect(storedName(k, n)).toBe(await oracle.ask("storename", [k, n]));
             expect(shownName(k, storedName(k, n))).toBe(n);
+        }), { numRuns: 300 });
+    });
+
+    it("a key's OPFS root is the directory the spec names", async () => {
+        for (const k of [...KEYS, "https://x.com/%\\\\"]) expect(opfsDirName(k)).toBe(await oracle.ask("opfsdir", [k]));
+        expect(opfsDirName("https://one.com")).toBe("crn\u001fhttps:%2F%2Fone.com\u001f");
+    });
+
+    it("a Web Locks name goes to the native as the spec says (one starting with \"-\" as given)", async () => {
+        const lock = fc.string({ maxLength: 8, unit: fc.constantFrom("a", "-", "\u001f", "é", " ") });
+        await fc.assert(fc.asyncProperty(fc.constantFrom(...KEYS), lock, async (k, n) => {
+            const spec = await oracle.ask("lockname", [k, n]);
+            expect(lockName(namePrefix(k), n)).toBe(spec === "-native-" ? n : spec);
+            if (spec === "-native-") expect(n.startsWith("-")).toBe(true);
         }), { numRuns: 300 });
     });
 

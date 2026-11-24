@@ -226,7 +226,10 @@ and origin are the opener's (`popup-blank-vs-chromium`).
   (least recently used, only those IndexedDB holds); a write fails only
   when the writer's own partition passes the quota. Limit: entries evicted
   from the native store read as missing for the first moments of the
-  site's next load, until IndexedDB answers. sessionStorage stays native (prefixed; a native refusal names the page's
+  site's next load, until IndexedDB answers. Web Locks names and the Origin Private File System are per
+  partition too (spec/Storage.agda lockName, opfsDir: the page's root is
+  its key's directory of the real one, named ""; `web-locks-vs-chromium`).
+  sessionStorage stays native (prefixed; a native refusal names the page's
   key). The native store is only a cache: its own refusals (a frame's
   Storage gone) never reach the page.
 - **Cookies live on the server** (spec/CookieJar.agda, `internal/cookiejar`,
@@ -444,7 +447,10 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   a blob: worker's the page's blob URL with the page's origin; Turbopack's
   `#params=` on thangs.com: `worker-location-vs-chromium`).
   `WebSocket#url` reads the page's URL made ws(s) as the browser makes it
-  (toutiao.com: `websocket-url-vs-chromium`). A frame whose document has
+  (toutiao.com: `websocket-url-vs-chromium`). `WebSocketStream` is wrapped as WebSocket
+  is (it connected from the browser straight to the origin). A message an
+  EventSource or WebSocket dispatches has the stream URL's `origin`
+  (spec/Messaging.agda streamOrigin; `stream-origins-vs-chromium`). A frame whose document has
   committed is that document's origin, not its src's (a frame sent
   elsewhere and redirected back to the page's origin: ir.netflix.net's
   Q4 sign-in; `frame-redirect-back-vs-chromium`); only an empty frame
@@ -751,7 +757,10 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   script or stylesheet; a credentialed EventSource too). A CORS-mode
   element request (Sec-Fetch-Mode cors, no Crn-C) to another origin without
   the mark carries no cookies and stores none, as directly: module
-  scripts, fonts, anonymous crossorigin elements, EventSource
+  scripts, fonts, anonymous crossorigin elements, EventSource; a no-cors
+  `fetch()` with no credentials for its target is marked `!anon` (the
+  browser drops the runtime's headers in no-cors; Cookies.markedCookies),
+  and Sec-Fetch-Storage-Access follows the marks
   (`element-credentials-vs-chromium`).
 - **CORP / COEP** (spec/Corp.agda): the proxy runs the cross-origin
   resource policy check for no-cors subresource requests by the page's

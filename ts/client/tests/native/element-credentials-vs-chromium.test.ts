@@ -6,7 +6,11 @@
 // is same-origin to the browser, and the rewriters give every crossorigin
 // element use-credentials). A CORS-mode element request has "same-origin"
 // credentials unless use-credentials (marked !cred): what the origin
-// receives, as directly (spec Cookies.elementCookies, Attrs.credDest).
+// receives, as directly (spec Cookies.elementCookies, Attrs.credDest). A
+// no-cors fetch() likewise: fetch's default credentials are "same-origin",
+// and the runtime's headers cannot go in no-cors — its URL is marked
+// !anon (Cookies.markedCookies); a beacon carries them. Sec-Fetch-Storage-
+// Access goes with the credentialed ones only, as directly.
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -39,7 +43,7 @@ describe.skipIf(!wanted)("cookies on element requests, in Chromium, through the 
         upstream = createServer((req, res) => {
             const u = new URL(req.url ?? "/", "http://x");
             const k = u.searchParams.get("k");
-            if (k) got[k] = /tpc=1/.test(req.headers.cookie ?? "") ? "cookie" : "none";
+            if (k) got[k] = (/tpc=1/.test(req.headers.cookie ?? "") ? "cookie" : "none") + (req.headers["sec-fetch-storage-access"] ? " sfsa=" + String(req.headers["sec-fetch-storage-access"]) : "");
             const a = `http://127.0.0.1:${port0}`;
             const cors = { "access-control-allow-origin": a, "access-control-allow-credentials": "true" };
             if (u.pathname === "/set") { res.writeHead(200, { "content-type": "text/html", "set-cookie": "tpc=1; Path=/; SameSite=None; Secure" }); return res.end("set"); }
@@ -53,7 +57,10 @@ describe.skipIf(!wanted)("cookies on element requests, in Chromium, through the 
             return res.end(`<!doctype html><script type=module src="${b}/m.js?k=module"></script><script src="${b}/s.js?k=classic"></script>
                 <img crossorigin src="${b}/i.gif?k=imgAnon"><img crossorigin=use-credentials src="${b}/i.gif?k=imgCred"><img src="${b}/i.gif?k=img">
                 <link rel=stylesheet crossorigin href="${b}/c.css?k=cssAnon"><style>@font-face{font-family:f;src:url(${b}/f.woff2?k=font)} b{font-family:f}</style><b>x</b>
-                <script>new EventSource("${b}/es?k=es"); new EventSource("${b}/es?k=esCred", { withCredentials: true });</script>`);
+                <script>new EventSource("${b}/es?k=es"); new EventSource("${b}/es?k=esCred", { withCredentials: true });
+                fetch("${b}/i.gif?k=fetchNc", { mode: "no-cors" }); fetch("${b}/i.gif?k=fetchNcCred", { mode: "no-cors", credentials: "include" });
+                fetch(new Request("${b}/i.gif?k=fetchNcReq", { mode: "no-cors" })); fetch("${b}/i.gif?k=fetchNcKeep", { mode: "no-cors", keepalive: true });
+                navigator.sendBeacon("${b}/i.gif?k=beacon", "x");</script>`);
         });
         await new Promise<void>((r) => upstream.listen(0, "0.0.0.0", () => r()));
         port0 = (upstream.address() as { port: number }).port;
@@ -95,7 +102,9 @@ describe.skipIf(!wanted)("cookies on element requests, in Chromium, through the 
     it("sends cookies where direct does", async () => {
         const direct = await run(false);
         const proxied = await run(true);
-        expect(direct).toEqual({ module: "none", classic: "cookie", imgAnon: "none", imgCred: "cookie", img: "cookie", cssAnon: "none", font: "none", es: "none", esCred: "cookie" });
+        const c = "cookie sfsa=active";
+        expect(direct).toEqual({ module: "none", classic: c, imgAnon: "none", imgCred: c, img: c, cssAnon: "none", font: "none", es: "none", esCred: c,
+            fetchNc: "none", fetchNcCred: c, fetchNcReq: "none", fetchNcKeep: "none", beacon: c });
         expect(proxied).toEqual(direct);
     }, 60_000);
 });

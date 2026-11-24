@@ -151,12 +151,16 @@ func (h *Handler) upstreamCookies(req *http.Request, target *url.URL, sessionID 
 	// credentialed EventSource): to another origin it carries no cookies
 	// (spec Cookies.elementCookies; round I: module scripts, fonts,
 	// crossorigin elements went with the target's cookies).
+	// A no-cors fetch() the runtime marked anonymous carries none either
+	// (spec Cookies.markedCookies: it can carry no header of the runtime's).
 	elementOmits := false
-	if req.Header.Get(CredentialsHeader) == "" && strings.EqualFold(req.Header.Get("Sec-Fetch-Mode"), "cors") {
-		mark, _ := req.Context().Value(destContextKey{}).(urlrewrite.Dest)
+	mark, _ := req.Context().Value(destContextKey{}).(urlrewrite.Dest)
+	if mark == urlrewrite.DestAnon {
+		elementOmits = true
+	} else if req.Header.Get(CredentialsHeader) == "" && strings.EqualFold(req.Header.Get("Sec-Fetch-Mode"), "cors") {
 		if from := h.requestingDocument(req); from != nil {
 			same := strings.EqualFold(from.Scheme+"://"+from.Host, target.Scheme+"://"+target.Host)
-			elementOmits = !urlrewrite.ElementCookies(true, mark.Credentialed(), same)
+			elementOmits = !urlrewrite.MarkedCookies(false, true, mark.Credentialed(), same)
 		}
 	}
 	if elementOmits || strings.EqualFold(req.Header.Get(CredentialsHeader), "omit") {

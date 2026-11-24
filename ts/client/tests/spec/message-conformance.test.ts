@@ -10,6 +10,7 @@ import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { delivery } from "../../src/messaging/target-origin";
+import { streamOriginOf } from "../../src/patches/message-event";
 import { OracleClient, locateOracle, oracleRequired } from "./oracle-client";
 
 const located = locateOracle();
@@ -24,6 +25,18 @@ describe.skipIf(located.skip !== "")("postMessage delivery: spec conformance", (
     let oracle: OracleClient;
     beforeAll(() => { oracle = new OracleClient(located.path); });
     afterAll(() => oracle?.close());
+
+    it("a stream message's origin is streamOrigin", async () => {
+        const part = fc.constantFrom("ws://", "wss://", "http://", "https://", "WSS://", "ftp://", "data:,", "a.example", "A.Example", ":80", ":443", ":8080", "/p", "?q", "#f", "u:p@", "[::1]");
+        await fc.assert(fc.asyncProperty(fc.array(part, { minLength: 1, maxLength: 4 }), async (ps) => {
+            const u = ps.join("");
+            const spec = await oracle.ask("streamorigin", [u]);
+            if (spec === "-none-") { if (streamOriginOf(u) !== null && !/^(ftp|file):/i.test(u)) expect(streamOriginOf(u)).toBe(null); return; }
+            expect(streamOriginOf(u)).toBe(spec);
+        }), { numRuns: 500 });
+        expect(streamOriginOf("ws://127.0.0.1:8775/p")).toBe("ws://127.0.0.1:8775");
+        expect(streamOriginOf("wss://a.example:443/p")).toBe("wss://a.example");
+    });
 
     it("delivery is delivery", async () => {
         await fc.assert(fc.asyncProperty(fc.constantFrom(...ORIGINS), fc.constantFrom(...ORIGINS), fc.constantFrom(...TARGETS), async (sender, recipient, t) => {

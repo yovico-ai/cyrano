@@ -72,3 +72,14 @@ delivery sender recipient t =
   byOrigin opaqueO   = throws
   byOrigin bad       = throws
   byOrigin elsewhere = drop
+
+-- A message an EventSource or WebSocket dispatches has the stream URL's
+-- origin (HTML: "the origin of the event stream's final URL"; WebSockets:
+-- the serialization of the URL's origin) — under the proxy the native
+-- gives the proxy's (its wss: one for a socket: round H/K). The runtime
+-- gives the origin of the stream's original URL. nothing: no tuple origin
+-- (the stream would not have been made).
+streamOrigin : Str → Maybe Str
+streamOrigin s with originOfParsed (parse nothing (preprocess s))
+... | tuple o = just o
+... | _       = nothing

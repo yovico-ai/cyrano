@@ -215,7 +215,7 @@ func TestSpecConformance_RewriteMarked(t *testing.T) {
 		base := rapid.SampledFrom(specoracle.Bases).Draw(rt, "base")
 		raw := specoracle.URL(rt, proxy)
 		pol := rapid.SampledFrom(append([]string{"-", "-"}, specoracle.Policies...)).Draw(rt, "policy")
-		dest := rapid.SampledFrom([]string{"-", "js", "css", "frame", "inert", "set", "mjs", "cred", "jsc", "cssc"}).Draw(rt, "dest")
+		dest := rapid.SampledFrom([]string{"-", "js", "css", "frame", "inert", "set", "mjs", "cred", "jsc", "cssc", "anon"}).Draw(rt, "dest")
 		want, _, err := oracle.Ask("rewritemark", proxy, base, pol, dest, raw)
 		if errors.Is(err, specoracle.ErrOutOfModel) {
 			rt.Skip("outside the spec's model")
