@@ -188,9 +188,10 @@ func TestRewriteCSP_StripsHashSourcesSoUnsafeInlineApplies(t *testing.T) {
 func TestRewriteCSP_HashPinnedFallsBack(t *testing.T) {
 	// A hash is of the page's original inline script; the rewritten one cannot
 	// match. Such a directive loses its hashes, nonces and strict-dynamic and
-	// allows inline scripts instead.
+	// allows inline scripts instead — and what 'strict-dynamic' admitted
+	// (data: and blob: scripts a trusted one loads) stays admitted.
 	got := rewriteCSP("script-src 'sha256-AAAA' 'nonce-abc' 'strict-dynamic' https://cdn.example", "")
-	if want := "script-src https://cdn.example 'unsafe-inline' 'self'"; got != want {
+	if want := "script-src https://cdn.example 'unsafe-inline' 'self' data: blob:"; got != want {
 		t.Errorf("\n got:  %q\n want: %q", got, want)
 	}
 }

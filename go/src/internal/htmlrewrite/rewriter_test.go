@@ -665,3 +665,20 @@ func TestRewrite_EventHandlerAttributes(t *testing.T) {
 		t.Errorf("want originals on the two rewritten handlers only:\n%s", got)
 	}
 }
+
+// A relative <base href> is resolved against the document's URL, its own
+// rewritten href too (multistate.us: <base href="../"> on
+// /elections/results/x came out /elections/… one level too high).
+func TestRewrite_RelativeBaseOnce(t *testing.T) {
+	for _, c := range []struct{ href, want string }{
+		{"../", "/cyrano/https/example.com/a/b/"},
+		{"sub/", "/cyrano/https/example.com/a/b/c/sub/"},
+		{"../../", "/cyrano/https/example.com/a/"},
+		{"..", "/cyrano/https/example.com/a/b/"},
+	} {
+		got := rewrite(t, `<base href="`+c.href+`"><a href="rel">x</a>`, func(cfg *Config) { cfg.BaseURL = mustURL(t, "https://example.com/a/b/c/page") })
+		if !strings.Contains(got, `<base href="http://localhost:9081`+c.want+`"`) {
+			t.Errorf("%q: %s", c.href, got)
+		}
+	}
+}

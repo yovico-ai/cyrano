@@ -82,6 +82,23 @@ export function patchReadBack(targetWindow: Window, onElement: (el: Element) => 
                     return o && o.value !== null ? o.value : ncall(get, self);
                 },
             });
+            // An Attr's nodeValue and textContent are its value.
+            const N = g["Node"]?.prototype;
+            const type = N ? nO.getOwnPropertyDescriptor(N, "nodeType")?.get : undefined;
+            if (N && type) {
+                for (const key of ["nodeValue", "textContent"]) {
+                    if (!ncall(nOP.hasOwnProperty, N, key)) continue;
+                    wrapAccessor<unknown>(N, key, {
+                        get: (get, self) => {
+                            if (typeof self === "object" && self !== null && ncall(type, self) === 2) {
+                                const o = originalAttr(ncall(owner, self), ncall(name, self) as string);
+                                if (o && o.value !== null) return o.value;
+                            }
+                            return ncall(get, self);
+                        },
+                    });
+                }
+            }
         }
     }
 

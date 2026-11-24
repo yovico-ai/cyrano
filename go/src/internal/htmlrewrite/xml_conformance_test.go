@@ -50,7 +50,9 @@ func TestSpecConformance_XmlDoc(t *testing.T) {
 		`<link xmlns="http://www.w3.org/1999/xhtml" rel="preload" as="Script" href="p.js"/>`, `<a href="&nbsp;"/>`,
 		`<g><![CDATA[not raw]]></g>`, `<g a="1"b="2"/>`, `<g a="<"/>`, `<g>text &amp; more</g>`, `</g>`, `<g`, `<!-- x -->`,
 		`<s:a href="h"/>`, `<a ping="p q"/>`, `<a href="x" onclick="g()"/>`, `<rect style="x"></rect>`, `<q:x/>`, `<g>]]></g>`,
-		`<style>a]]&gt;b</style>`, `<x xmlns="other"><img src="n"/></x>`}
+		`<style>a]]&gt;b</style>`, `<x xmlns="other"><img src="n"/></x>`,
+		`<animate attributeName="href" values="a.svg; b.svg;"/>`, `<set attributeName="xlink:href" to="s.svg"/>`,
+		`<set attributeName="clip-path" to="url(c.svg#c)"/>`, `<animate attributeName="x" values="1;2" from="u"/>`, `<set to="t.svg"/>`}
 	rapid.Check(t, func(rt *rapid.T) {
 		doc := rapid.SampledFrom(prologs).Draw(rt, "prolog") + rapid.SampledFrom(roots).Draw(rt, "root") + rapid.SampledFrom(rootAttrs).Draw(rt, "rootattrs")
 		closing := ""

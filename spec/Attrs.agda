@@ -66,6 +66,7 @@ open import Data.List.Base using (List; []; _∷_; _++_; map; reverse)
 open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.String.Base using (String; toList)
 open import Data.Char.Base using (Char)
+open import Data.Product.Base using (_×_; _,_; proj₁; proj₂)
 
 open import Url
 
@@ -73,7 +74,7 @@ data Ns : Set where
   htmlNs svgNs : Ns
 
 data AttrKind : Set where
-  oneUrl urlList srcsetList cssValue reflected handler none : AttrKind
+  oneUrl urlList srcsetList cssValue reflected handler animUrls none : AttrKind
 
 kindName : AttrKind → Str
 kindName oneUrl     = toList "url"
@@ -82,6 +83,7 @@ kindName srcsetList = toList "srcset"
 kindName cssValue   = toList "css"
 kindName reflected  = toList "reflected"
 kindName handler    = toList "handler"
+kindName animUrls   = toList "animurls"
 kindName none       = toList "none"
 
 inS : Str → List Str → Bool
@@ -145,6 +147,60 @@ attrKind n t a with isHandler a
 ... | true = handler
 attrKind htmlNs t a | false = htmlKind (if eqStr t (toList "image") then toList "img" else t) a
 attrKind svgNs  t a | false = svgKind t a
+
+------------------------------------------------------------------------
+-- SVG animation (SMIL; round H probe, measured in Chromium): a <set> or
+-- <animate> gives the attribute its attributeName names the values of its
+-- to, from, by and values (a ';'-separated list), and Chromium loads them
+-- as it loads that attribute: href / xlink:href (an <image>'s, a <use>'s),
+-- and the presentation attributes that take a <url> (clip-path, cursor,
+-- filter, mask — CSS). So their kind is the animated attribute's: a URL
+-- (values: animUrls, each item a URL), CSS (a values list is CSS text with
+-- ';' between: rewritten as one); any other attribute's values stay. The
+-- target element is not looked at (an <a>'s href, which loads nothing, is
+-- rewritten too and reads back as written).
+
+animated : Str → Str → Bool
+animated t a = inS t (strs ("set" ∷ "animate" ∷ [])) ∧ inS a (strs ("to" ∷ "from" ∷ "by" ∷ "values" ∷ []))
+
+animKind : Str → Maybe Str → AttrKind
+animKind a nothing   = none
+animKind a (just an) =
+  if eqStr an (toList "href") ∨ eqStr an (toList "xlink:href")
+  then (if eqStr a (toList "values") then animUrls else oneUrl)
+  else if inS an (strs ("clip-path" ∷ "cursor" ∷ "fill" ∷ "filter" ∷ "marker-start" ∷ "marker-mid" ∷ "marker-end" ∷ "mask" ∷ "stroke" ∷ []))
+  then cssValue
+  else none
+
+-- The kind of an attribute of an element whose attributeName is `an`
+-- (nothing: it has none).
+attrKindIn : Ns → Str → Str → Maybe Str → AttrKind
+attrKindIn svgNs t a an = if animated t a then animKind a an else attrKind svgNs t a
+attrKindIn htmlNs t a _ = attrKind htmlNs t a
+
+-- A values list of URLs: items separated by ';', each one's URL rewritten,
+-- the whitespace around it kept as written (an empty item stays).
+isAnimWS : Char → Bool
+isAnimWS c = is 9 c ∨ is 10 c ∨ is 12 c ∨ is 13 c ∨ is 32 c
+
+rewriteAnimUrls : (Str → Maybe Str) → Str → Str
+rewriteAnimUrls rw s = joinSemi (map item (splitOn (is 59) s))
+  where
+  dropWS : Str → Str × Str   -- leading whitespace, the rest
+  dropWS [] = [] , []
+  dropWS (c ∷ cs) = if isAnimWS c then (let r = dropWS cs in (c ∷ proj₁ r) , proj₂ r) else [] , c ∷ cs
+  item : Str → Str
+  item x with dropWS x
+  ... | (lead , rest) with dropWS (reverse rest)
+  ...   | (trailR , coreR) with reverse coreR
+  ...     | [] = x
+  ...     | core with rw core
+  ...       | just u  = lead ++ u ++ reverse trailR
+  ...       | nothing = x
+  joinSemi : List Str → Str
+  joinSemi []       = []
+  joinSemi (y ∷ []) = y
+  joinSemi (y ∷ ys) = y ++ ';' ∷ joinSemi ys
 
 ------------------------------------------------------------------------
 -- A URL list: tokens separated by ASCII whitespace (HTML "split a string

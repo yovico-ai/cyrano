@@ -28,7 +28,8 @@
 --   * a script/style directive (and default-src) with a hash source: the
 --     rewritten inline scripts cannot match their hashes, and a hash makes
 --     the browser ignore 'unsafe-inline' — its nonces, hashes and
---     'strict-dynamic' are dropped and 'unsafe-inline' and 'self' added.
+--     'strict-dynamic' are dropped and 'unsafe-inline' and 'self' added
+--     (and data: and blob:, which 'strict-dynamic' had admitted).
 --     Without a hash, nonces and 'strict-dynamic' stay (the bootstrap is
 --     given the nonce: scriptNonce).
 --
@@ -158,12 +159,19 @@ filterL p (x ∷ xs) = if p x then x ∷ filterL p xs else filterL p xs
 appendIfAbsent : Str → List Str → List Str
 appendIfAbsent t vs = if memberCI t vs then vs else vs ++ (t ∷ [])
 
--- The hash fallback of a script/style directive.
+-- The hash fallback of a script/style directive. What 'strict-dynamic'
+-- admitted — any script a trusted one loads — is through the proxy 'self'
+-- and the proxy (every http(s) URL), and data: and blob:, added when it
+-- was there (devforum.okta.com: Discourse's data: and blob: module stubs
+-- were refused).
 unhash : List Str → List Str
-unhash vs =
-  appendIfAbsent (toList "'self'")
+unhash vs = dynamic (appendIfAbsent (toList "'self'")
     (appendIfAbsent (toList "'unsafe-inline'")
-      (filterL (λ t → not (hashSource t ∨ isNonce t ∨ eqStr (lowerAll t) (toList "'strict-dynamic'"))) vs))
+      (filterL (λ t → not (hashSource t ∨ isNonce t ∨ eqStr (lowerAll t) (toList "'strict-dynamic'"))) vs)))
+  where
+  dynamic : List Str → List Str
+  dynamic ws = if anyL (λ t → eqStr (lowerAll t) (toList "'strict-dynamic'")) vs
+               then appendIfAbsent (toList "blob:") (appendIfAbsent (toList "data:") ws) else ws
 
 -- A source list that allows nothing: 'none', with nothing beside it but
 -- 'report-sample' (x.com's script-src-attr 'none' 'report-sample': with

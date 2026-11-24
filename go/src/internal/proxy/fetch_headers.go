@@ -136,7 +136,7 @@ func (h *Handler) directFetchHeaders(req *http.Request, target *url.URL, request
 		if requestPolicy != "" {
 			pol = requestPolicy
 		}
-		if v, ok := urlrewrite.OriginHeader(mode, safe, pol, initiator+"/", to); ok {
+		if v, ok := urlrewrite.OriginHeader(mode, safe, pol, initiator+"/", to, strings.ToLower(req.Header.Get("Sec-Fetch-Dest"))); ok {
 			req.Header.Set("Origin", v)
 		} else {
 			req.Header.Del("Origin")
@@ -184,7 +184,7 @@ func (h *Handler) directFetchHeaders(req *http.Request, target *url.URL, request
 	if strings.EqualFold(req.Header.Get("Sec-Fetch-Site"), "cross-site") {
 		init = "null"
 	}
-	if v, ok := urlrewrite.OriginHeader(mode, safe, policy, init, to); ok && (browserSent || scripted) {
+	if v, ok := urlrewrite.OriginHeader(mode, safe, policy, init, to, strings.ToLower(req.Header.Get("Sec-Fetch-Dest"))); ok && (browserSent || scripted) {
 		req.Header.Set("Origin", v)
 	} else if browserSent && !ok {
 		req.Header.Del("Origin")

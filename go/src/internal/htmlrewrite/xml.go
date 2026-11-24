@@ -584,11 +584,17 @@ func xmlAttrEdits(rw XMLRewriters, svg bool, tag string, attrs []xattr, scope []
 			}
 		}
 		var now string
-		switch URLAttrKind(svg, tag, key) {
+		var anim *string
+		if v, ok := decodedOf("attributeName"); ok {
+			anim = &v
+		}
+		switch URLAttrKindIn(svg, tag, key, anim) {
 		case AttrURL:
 			rel, _ := decodedOf("rel")
 			as, hasAs := decodedOf("as")
 			now = rw.URL(URLDest(svg, tag, key, strings.Fields(strings.ToLower(rel)), strings.ToLower(as), hasAs), d)
+		case AttrAnimURLs:
+			now = RewriteAnimURLs(d, func(u string) string { return rw.URL("", u) })
 		case AttrURLList:
 			now = rw.URLs(d)
 		case AttrSrcset:

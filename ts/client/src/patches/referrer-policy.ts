@@ -36,6 +36,11 @@ export interface RewriteOne {
     withBase?: (href: string) => RewriteOne | null;
     /** A <base href> withBase cannot resolve is passed over, not the end of the search (a blob document's). */
     skipBase?: boolean;
+    /**
+     * The same, resolving against the document's own URL (its fallback base):
+     * a `<base href>` is resolved against that, never the base before it.
+     */
+    atDocumentUrl?: RewriteOne;
     /** The base it resolves against, as the page has it (a module's import.meta.url and specifiers). */
     baseHref?: () => string;
 }
@@ -65,7 +70,14 @@ export function elementPolicy(el: Element): string | null {
  * referrer policy, if it states one, and with what it is requested for — a
  * script or a stylesheet (spec/Attrs.agda urlDest).
  */
-export function rewriteFor(el: Element, rewriteOne: RewriteOne, attr?: string): (url: string) => string {
+export function rewriteFor(el: Element, rewriteOne0: RewriteOne, attr?: string): (url: string) => string {
+    // A <base href>: against the document's URL (spec/Html.agda documentBase),
+    // not the base it replaces (multistate.us: a base set again and again
+    // stepped up a directory each time).
+    let rewriteOne = rewriteOne0;
+    try {
+        if (attr === "href" && rewriteOne0.atDocumentUrl && el.localName === "base" && el.namespaceURI === "http://www.w3.org/1999/xhtml") rewriteOne = rewriteOne0.atDocumentUrl;
+    } catch { /* as it is */ }
     const p = elementPolicy(el);
     const d = attr === undefined ? null : urlDestOf(el, attr);
     const withMark = rewriteOne.withMark;

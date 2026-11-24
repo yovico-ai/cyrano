@@ -188,6 +188,8 @@ export function patchDynamicHtml(
         recordAttr(self as Element, qname, v, given);
         return;
     });
+    patchAttrNodes(targetWindow, rewriteOne, proxyOrigin);
+    patchEditingCommands(targetWindow, rewriteOne, proxyOrigin);
     save(proto, "setAttribute");
     wrapMethod<(...a: unknown[]) => void>(proto, "setAttribute", (native, self, args) => {
         if (args.length < 2 || typeof args[0] !== "string") {
@@ -209,6 +211,19 @@ export function patchDynamicHtml(
         if (args[0].toLowerCase() === "referrerpolicy") remark(self as Element, rewriteOne);
         // It became a refresh or a policy: its content as the page wrote
         // it is read again as such (or as nothing: no longer one).
+        // The attribute an animation animates changed: its values are read
+        // again as that one's (spec/Attrs.agda attrKindIn).
+        if (args[0] === "attributeName" && (self as Element).namespaceURI === "http://www.w3.org/2000/svg") {
+            const el = self as Element;
+            for (const a of ["to", "from", "by", "values"]) {
+                const o = originalAttr(el, a);
+                const was = o ? o.value : heldAttr(el, a);
+                if (was === null) continue;
+                const now = attributeValue(el, a, was, rewriteOne, proxyOrigin) ?? was;
+                if (now !== heldAttr(el, a)) nR.apply(native, el, [a, now]);
+                recordAttr(el, a, now, was);
+            }
+        }
         if (args[0].toLowerCase() === "http-equiv") {
             const el = self as Element;
             const o = originalAttr(el, "content");
@@ -225,6 +240,78 @@ export function patchDynamicHtml(
     patchSrcdocProperty(targetWindow);
     patchAllowProperty(targetWindow);
     patchMetaProperties(targetWindow);
+}
+
+/**
+ * An attached Attr's value set through the node itself (`value`, Node's
+ * `nodeValue` / `textContent`) is a write of its element's attribute
+ * (round H probe: an img's `attributes.src.value = url` loaded it from its
+ * origin; a frame's, a stylesheet link's): rewritten as setAttributeNS
+ * rewrites it, the original kept for read-back. A detached Attr is fixed
+ * up when it is attached (setAttributeNode) or its element inserted.
+ */
+function patchAttrNodes(targetWindow: Window, rewriteOne: (url: string) => string, proxyOrigin: string): void {
+    const g = targetWindow as unknown as Record<string, { prototype: object } | undefined>;
+    const A = g["Attr"]?.prototype;
+    const N = g["Node"]?.prototype;
+    if (!A || !N) return;
+    const get = (proto: object, key: string): ((this: unknown) => unknown) | undefined =>
+        nO.getOwnPropertyDescriptor(proto, key)?.get as ((this: unknown) => unknown) | undefined;
+    const owner = get(A, "ownerElement"), qname = get(A, "name"), ns = get(A, "namespaceURI"), local = get(A, "localName"), type = get(N, "nodeType");
+    const valueSet = nO.getOwnPropertyDescriptor(A, "value")?.set as ((this: unknown, v: string) => void) | undefined;
+    if (!owner || !qname || !ns || !local || !type || !valueSet) return;
+    /** Writes v to an attached Attr rewritten; false when it is not one or nothing changes. */
+    const write = (self: unknown, value: unknown): boolean => {
+        if (typeof self !== "object" || self === null || ncall(type, self) !== 2) return false;
+        const el = ncall(owner, self) as Element | null;
+        if (!el) return false;
+        const space = ncall(ns, self) as string | null;
+        const name = space === XLINK_NS && sLower(ncall(local, self) as string) === "href" ? "xlink:href" : space === null ? ncall(qname, self) as string : null;
+        if (name === null) return false;
+        const given = value === null ? "" : String(value);
+        const v = attributeValue(el, name, given, rewriteOne, proxyOrigin);
+        if (v === null || v === given) return false;
+        ncall(valueSet, self, v);
+        recordAttr(el, ncall(qname, self) as string, v, given);
+        return true;
+    };
+    wrapAccessor<unknown>(A, "value", { set: (set, self, value) => { if (!write(self, value)) ncall(set, self, value); } });
+    for (const key of ["nodeValue", "textContent"]) {
+        if (!ncall(nOP.hasOwnProperty, N, key)) continue;
+        wrapAccessor<unknown>(N, key, { set: (set, self, value) => { if (!write(self, value)) ncall(set, self, value); } });
+    }
+}
+
+/**
+ * Editing commands that load what they insert (round H probe): insertImage
+ * takes a URL, insertHTML markup, both parsed by the browser itself. The URL
+ * is proxified and the markup rewritten as insertAdjacentHTML's, in the
+ * context of the editing host. (The inserted image reads back the proxified
+ * URL: the element is the browser's.) createLink's anchor loads nothing.
+ */
+function patchEditingCommands(targetWindow: Window, rewriteOne: (url: string) => string, proxyOrigin: string): void {
+    const D = (targetWindow as unknown as { Document?: { prototype: object } }).Document?.prototype;
+    if (!D || typeof (D as Record<string, unknown>)["execCommand"] !== "function") return;
+    wrapMethod<(...a: unknown[]) => unknown>(D, "execCommand", (native, self, args) => {
+        if (args.length < 3 || typeof args[0] !== "string") return nR.apply(native, self, args);
+        const cmd = sLower(args[0]);
+        if (cmd === "insertimage") {
+            const given = String(args[2]);
+            return nR.apply(native, self, [args[0], args[1], given === "" ? given : rewriteOne(given), ...args.slice(3)]);
+        }
+        if (cmd === "inserthtml") {
+            const text = sinkText(args[2]);
+            if (text === null) return nR.apply(native, self, args);
+            let ctx: Node | null = null;
+            try { ctx = (self as Document).getSelection()?.anchorNode ?? null; } catch { ctx = null; }
+            if (ctx && ctx.nodeType !== 1) ctx = ctx.parentNode;
+            const out = nR.apply(native, self, [args[0], args[1], rewriteHtmlString(text, rewriteOne, proxyOrigin, undefined, contextOf(ctx ?? (self as Document).body)), ...args.slice(3)]);
+            const root = ctx ?? (self as Document).body;
+            if (root) { consume(root); injectFramesIn(targetWindow, root); }
+            return out;
+        }
+        return nR.apply(native, self, args);
+    });
 }
 
 /**

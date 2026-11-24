@@ -108,7 +108,7 @@
 --                                         (a RequestInit's referrer, Chromium's reading)
 --   policy  <Referrer-Policy value>     → {"out":"strict-origin"} / {"out":""}
 --   referrer <policy> <from> <to>       → {"out":"…"} / {"none":true}
---   origin  <mode> <safe|unsafe> <policy> <from> <to>
+--   origin  <mode> <safe|unsafe> <policy> <from> <to> [<dest>]
 --                                       → {"out":"…"} / {"none":true}
 --   setcookie <api|http> <ps|nops> <url> <set-cookie-string>
 --                                       → {"out":"<12 lines>"} / {"none":true}
@@ -145,6 +145,8 @@
 --   attrkind <html|svg> <tag> <attr>    → {"out":"url|urllist|srcset|css|reflected|handler|none"}
 --   urldest <html|svg> <tag> <attr> <rel types> <as|-> → {"out":"js|css|-"}
 --   urllist <proxy> <base> <text>       → {"out":"<each token proxified>"}
+--   animurls <proxy> <base> <text>      → {"out":"<each ';' item proxified>"}
+--   attrkind <html|svg> <tag> <attr> <attributeName|->  (an animation's)
 --   urllike <specifier>                 → {"out":"yes"} / {"out":"no"}
 --   jsonobject <text>                   → {"out":"yes"} / {"out":"no"} (a JSON object)
 --   link    <proxy> <base> <Link header> → {"out":"<rewritten header>"}
@@ -488,6 +490,7 @@ dispatch op args =
   else if eqStr op (toList "attrkind") then attrKindReq args
   else if eqStr op (toList "urldest") then urlDestReq args
   else if eqStr op (toList "urllist") then urlListReq args
+  else if eqStr op (toList "animurls") then animUrlsReq args
   else if eqStr op (toList "jsonobject") then jsonObjectReq args
   else if eqStr op (toList "link") then linkReq args
   else if eqStr op (toList "specrules") then specRulesReq args
@@ -1116,17 +1119,21 @@ dispatch op args =
   ... | _        | _         | _       = errorReply "OutOfModel"
   referrerReq _ = errorReply "BadRequest"
 
-  originUrl : Str → Str → Str → Str → Str → Str
-  originUrl m sm p f t with modeOf m | policyToken p | baseOf f | baseOf t
+  originUrl : Str → Str → Str → Str → Str → Maybe Str → Str
+  originUrl m sm p f t d with modeOf m | policyToken p | baseOf f | baseOf t
   ... | just mode | just pol | just from | just to =
-    maybeOut (originHeader mode (eqStr sm (toList "safe")) pol from to)
+    maybeOut (originHeader mode (eqStr sm (toList "safe")) pol from to d)
   ... | _ | _ | _ | _ = errorReply "OutOfModel"
 
   originReq : List Str → Str
   originReq (m ∷ sm ∷ p ∷ f ∷ t ∷ []) with eqStr f (toList "null") | modeOf m
   ... | true | just mode = maybeOut (originHeaderOpaque mode (eqStr sm (toList "safe")))
   ... | true | nothing   = errorReply "OutOfModel"
-  ... | false | _ = originUrl m sm p f t
+  ... | false | _ = originUrl m sm p f t nothing
+  originReq (m ∷ sm ∷ p ∷ f ∷ t ∷ d ∷ []) with eqStr f (toList "null") | modeOf m
+  ... | true | just mode = maybeOut (originHeaderOpaque mode (eqStr sm (toList "safe")))
+  ... | true | nothing   = errorReply "OutOfModel"
+  ... | false | _ = originUrl m sm p f t (just d)
   originReq _ = errorReply "BadRequest"
 
   siteReq : List Str → Str
@@ -1551,7 +1558,22 @@ dispatch op args =
     if eqStr n (toList "svg") then out (Attrs.kindName (Attrs.attrKind Attrs.svgNs t a))
     else if eqStr n (toList "html") then out (Attrs.kindName (Attrs.attrKind Attrs.htmlNs t a))
     else errorReply "BadRequest"
+  attrKindReq (n ∷ t ∷ a ∷ an ∷ []) =
+    out (Attrs.kindName (Attrs.attrKindIn (if eqStr n (toList "svg") then Attrs.svgNs else Attrs.htmlNs) t a
+                          (if eqStr an (toList "-") then nothing else just an)))
   attrKindReq _ = errorReply "BadRequest"
+
+  animUrlsReq : List Str → Str
+  animUrlsReq (p ∷ b ∷ text ∷ []) with proxyOf p | baseOf b
+  ... | just px | just base = out (Attrs.rewriteAnimUrls rw text)
+    where
+    rw : Str → Maybe Str
+    rw u with rewriteUrl px base u
+    ... | emit _ v = just v
+    ... | _        = nothing
+  ... | nothing | _ = errorReply "BadProxy"
+  ... | just _  | nothing = errorReply "BadBase"
+  animUrlsReq _ = errorReply "BadRequest"
 
   -- urldest <html|svg> <tag> <attr> <rel types, space-separated> <as|->
   urlDestReq : List Str → Str

@@ -27,7 +27,7 @@ import { installToolbar } from "../ui/toolbar";
 import { patchSelectors } from "./selectors";
 import { patchStorageNames, patchWebStorage, storagePrefix } from "./storage";
 import { patchCacheUrls } from "./cache-urls";
-import { patchTypedOm } from "./typed-om";
+import { patchTypedOm, patchWebAnimations } from "./typed-om";
 import { patchMediaMetadata } from "./media-metadata";
 import { patchReflection } from "../native/hidden-globals";
 import { patchDocumentWrite } from "../wrappers/document-write";
@@ -101,6 +101,7 @@ export function installPatches(
         },
     });
     const rewriteOne: RewriteOne = rewriterFor(documentBase);
+    rewriteOne.atDocumentUrl = rewriterFor(getCurrentBaseUrl);
     const unwrapOne = (proxiedUrl: string): string =>
         unwrapProxiedUrl(proxiedUrl, config);
 
@@ -187,6 +188,7 @@ export function installPatches(
     step("patchStorageNames", () => patchStorageNames(targetWindow, prefix));
     step("patchCacheUrls", () => patchCacheUrls(targetWindow, rewriteOne));
     step("patchTypedOm", () => patchTypedOm(targetWindow, rewriteOne));
+    step("patchWebAnimations", () => patchWebAnimations(targetWindow, rewriteOne));
     step("patchMediaMetadata", () => patchMediaMetadata(targetWindow, rewriteOne, unwrapOne));
     // Before document.cookie is wrapped: it writes with the native setter.
     // The document's cookies, from the session's jar: memory's from its first access.

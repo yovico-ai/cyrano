@@ -167,14 +167,21 @@ func translateCSPDirective(d cspDirective, proxyOrigin string) (cspDirective, bo
 			}
 			if hashed {
 				var kept []string
+				dynamic := false
 				for _, t := range vals {
 					l := strings.ToLower(t)
+					dynamic = dynamic || l == "'strict-dynamic'"
 					if isHashSource(l) || strings.HasPrefix(l, "'nonce-") || l == "'strict-dynamic'" {
 						continue
 					}
 					kept = append(kept, t)
 				}
 				vals = appendIfAbsent(appendIfAbsent(kept, "'unsafe-inline'"), "'self'")
+				// What 'strict-dynamic' admitted: through the proxy 'self' and
+				// the proxy, and data: and blob: (devforum.okta.com).
+				if dynamic {
+					vals = appendIfAbsent(appendIfAbsent(vals, "data:"), "blob:")
+				}
 			}
 		}
 		if proxyOrigin != "" && !allowsNothing(vals) {

@@ -18,10 +18,11 @@ const (
 	AttrReflected          // never fetched; its IDL getter resolves it (cite, longdesc): kept
 	AttrCSS                // an SVG presentation attribute taking a <url>: CSS, rewritten as a style attribute
 	AttrHandler            // an event handler content attribute: a function body, JS-rewritten
+	AttrAnimURLs           // an SVG animation's values of a URL attribute: ';'-separated URLs
 )
 
 func (k AttrKind) String() string {
-	return [...]string{"none", "url", "urllist", "srcset", "reflected", "css", "handler"}[k]
+	return [...]string{"none", "url", "urllist", "srcset", "reflected", "css", "handler", "animurls"}[k]
 }
 
 // svgPresentationURLAttrs are the SVG presentation attributes that take a
@@ -133,6 +134,50 @@ func URLAttrKind(svg bool, tag, attr string) AttrKind {
 		tag = "img"
 	}
 	return htmlAttrKinds[tag][attr]
+}
+
+// URLAttrKindIn is spec attrKindIn: the kind of an attribute of an element
+// whose attributeName is anim (nil: none) — an SVG <set> / <animate>'s to,
+// from, by and values take the kind of the attribute they animate, as
+// Chromium loads them (href / xlink:href: URLs; a presentation attribute
+// taking a <url>: CSS).
+func URLAttrKindIn(svg bool, tag, attr string, anim *string) AttrKind {
+	if !svg || (tag != "set" && tag != "animate") || (attr != "to" && attr != "from" && attr != "by" && attr != "values") {
+		return URLAttrKind(svg, tag, attr)
+	}
+	if anim == nil {
+		return AttrNone
+	}
+	switch {
+	case *anim == "href" || *anim == "xlink:href":
+		if attr == "values" {
+			return AttrAnimURLs
+		}
+		return AttrURL
+	case svgPresentationURLAttrs[*anim]:
+		return AttrCSS
+	}
+	return AttrNone
+}
+
+// RewriteAnimURLs is spec rewriteAnimUrls: the items between ';' each
+// rewritten, the whitespace around each as written (an empty one stays).
+func RewriteAnimURLs(v string, rw func(string) string) string {
+	parts := strings.Split(v, ";")
+	isWS := func(c byte) bool { return c == '\t' || c == '\n' || c == '\f' || c == '\r' || c == ' ' }
+	for i, p := range parts {
+		a, b := 0, len(p)
+		for a < b && isWS(p[a]) {
+			a++
+		}
+		for b > a && isWS(p[b-1]) {
+			b--
+		}
+		if a < b {
+			parts[i] = p[:a] + rw(p[a:b]) + p[b:]
+		}
+	}
+	return strings.Join(parts, ";")
 }
 
 // RewriteURLList is spec rewriteUrlList: each token between ASCII

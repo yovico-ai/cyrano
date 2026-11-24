@@ -7,7 +7,7 @@
 import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { rewriteUrlList, urlAttrKind, urlDest } from "../../src/patches/url-attribute-map";
+import { rewriteAnimUrls, rewriteUrlList, urlAttrKind, urlAttrKindIn, urlDest } from "../../src/patches/url-attribute-map";
 import { rewriteUrl } from "../../src/url/containment";
 import type { ClientConfig } from "../../src/config";
 import { OracleClient, locateOracle, oracleRequired } from "./oracle-client";
@@ -47,6 +47,26 @@ describe.skipIf(located.skip !== "")("URL attributes: spec conformance", () => {
                 if (got !== want) bad.push(`${ns} ${t} ${a} rel=${rel} as=${as}: ${got}, spec ${want}`);
             }
         expect(bad).toEqual([]);
+    });
+
+    it("urlAttrKindIn is attrKindIn", async () => {
+        const bad: string[] = [];
+        for (const ns of ["html", "svg"]) for (const t of ["set", "animate", "animateTransform", "image", "a"]) for (const a of ["to", "from", "by", "values", "href", "fill", "begin"])
+            for (const an of ["-", "href", "xlink:href", "HREF", "clip-path", "fill", "cursor", "x", "style"]) {
+                const want = await oracle.ask("attrkind", [ns, t, a, an]);
+                const got = urlAttrKindIn(ns === "svg", t, a, an === "-" ? null : an);
+                if (got !== want) bad.push(`${ns} ${t} ${a} ${an}: ${got}, spec ${want}`);
+            }
+        expect(bad).toEqual([]);
+    });
+
+    it("rewriteAnimUrls is rewriteAnimUrls", async () => {
+        const items = [";", ";", " ", "\t", "\n", "/a", "b/c", "https://x.example/p", "//h.example/", "?q", "#f", "http://[::1", "data:,x", "é"];
+        await fc.assert(fc.asyncProperty(fc.constantFrom(...proxies), fc.constantFrom(...bases), fc.array(fc.constantFrom(...items), { maxLength: 8 }), async (proxy, base, p) => {
+            const v = p.join("");
+            const want = await oracle.ask("animurls", [proxy, base, v]);
+            expect(rewriteAnimUrls(v, (u) => rewriteUrl(u, new URL(base), config(proxy))), JSON.stringify(v)).toBe(want);
+        }), { numRuns: 400 });
     });
 
     it("rewriteUrlList is rewriteUrlList", async () => {

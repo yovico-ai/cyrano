@@ -58,7 +58,7 @@ open import Data.String.Base using (String; toList)
 open import Url using (Str; is; within; isDigit; isHex; hexVal; eqStr; lowerAscii)
 open import Containment using (Dest)
 import Attrs
-open Attrs using (AttrKind; oneUrl; urlList; srcsetList; cssValue; reflected; handler; none; htmlNs; svgNs)
+open Attrs using (AttrKind; oneUrl; urlList; srcsetList; cssValue; reflected; handler; animUrls; none; htmlNs; svgNs)
 
 ------------------------------------------------------------------------
 -- Characters
@@ -430,9 +430,14 @@ attrEdit rw ns tag as sc (xattr n v q from to) with qname n
   words : Maybe Str → List Str
   words nothing  = []
   words (just s) = Url.splitOn isWs (lowerS s)
+  -- (an SVG animation's attributeName: the attribute it animates)
+  animOf : List XAttr → Maybe Str
+  animOf [] = nothing
+  animOf (xattr m w _ _ _ ∷ r) = if eqStr m (toList "attributeName") then decode true w else animOf r
   now : Str → Str
-  now k with Attrs.attrKind ns tag k
+  now k with Attrs.attrKindIn ns tag k (animOf as)
   ... | oneUrl     = url rw (Attrs.urlDest ns tag k (words (relOf as)) (asOf as)) d
+  ... | animUrls   = Attrs.rewriteAnimUrls (λ u → just (url rw nothing u)) d
   ... | urlList    = urls rw d
   ... | srcsetList = srcset rw d
   ... | cssValue   = cssVal rw d

@@ -417,8 +417,11 @@ export function rewriteCspContent(csp: string, proxyOrigin: string, ttPolicy?: s
             if (ttPolicy && !aIncludes(vals, ttPolicy) && !aIncludes(vals, "*")) vals.push(ttPolicy);
         } else if (CSP_FETCH.has(name)) {
             if (CSP_SCRIPT_STYLE.has(name) && vals.some(isHashSource)) {
+                const dynamic = vals.some((t) => asciiLower(t) === "'strict-dynamic'");
                 vals = vals.filter((t) => { const l = asciiLower(t); return !isHashSource(t) && !sStarts(l, "'nonce-") && l !== "'strict-dynamic'"; });
                 vals = appendIfAbsent(appendIfAbsent(vals, "'unsafe-inline'"), "'self'");
+                // What 'strict-dynamic' admitted: through the proxy 'self' and the proxy, and data: and blob:.
+                if (dynamic) vals = appendIfAbsent(appendIfAbsent(vals, "data:"), "blob:");
             }
             if (proxyOrigin !== "" && !allowsNothing(vals)) vals = appendIfAbsent(vals, proxyOrigin);
             if (name === "connect-src") vals = readableCsp(vals, proxyOrigin);

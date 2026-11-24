@@ -132,3 +132,49 @@ func TestSpecConformance_Crossorigin(t *testing.T) {
 		}
 	})
 }
+
+// An SVG animation's attributes by the attribute it animates (spec attrKindIn).
+func TestSpecConformance_AttrKindIn(t *testing.T) {
+	oracle := specoracle.Need(t)
+	anims := []string{"-", "href", "xlink:href", "HREF", "clip-path", "fill", "cursor", "mask", "x", "style", "values"}
+	for _, ns := range []string{"html", "svg"} {
+		for _, tag := range []string{"set", "animate", "animateTransform", "animateMotion", "image", "a"} {
+			for _, a := range []string{"to", "from", "by", "values", "href", "fill", "attributeName", "begin"} {
+				for _, an := range anims {
+					want, _, err := oracle.Ask("attrkind", ns, tag, a, an)
+					if err != nil {
+						t.Fatalf("oracle: %v", err)
+					}
+					var p *string
+					if an != "-" {
+						v := an
+						p = &v
+					}
+					if got := URLAttrKindIn(ns == "svg", tag, a, p).String(); got != want {
+						t.Errorf("URLAttrKindIn(%s, %s, %s, %s) = %s, spec says %s", ns, tag, a, an, got, want)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestSpecConformance_AnimURLs(t *testing.T) {
+	oracle := specoracle.Need(t)
+	pieces := []string{";", ";", " ", "\t", "\n", "/a", "b/c", "https://x.example/p", "//h.example/", "?q", "#f", "http://[::1", "data:,x", "é"}
+	rapid.Check(t, func(rt *rapid.T) {
+		proxy := rapid.SampledFrom(specoracle.Proxies).Draw(rt, "proxy")
+		base := rapid.SampledFrom(specoracle.Bases).Draw(rt, "base")
+		v := strings.Join(rapid.SliceOfN(rapid.SampledFrom(pieces), 0, 8).Draw(rt, "pieces"), "")
+		want, _, err := oracle.Ask("animurls", proxy, base, v)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		pu, _ := url.Parse(proxy)
+		bu, _ := url.Parse(base)
+		cfg := urlrewrite.ProxyConfig{PublicURL: pu}
+		if got := RewriteAnimURLs(v, func(u string) string { return urlrewrite.Rewrite(u, bu, cfg) }); got != want {
+			rt.Fatalf("RewriteAnimURLs(%q) = %q, spec says %q", v, got, want)
+		}
+	})
+}

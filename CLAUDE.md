@@ -312,13 +312,20 @@ and origin are the opener's (`popup-blank-vs-chromium`).
   X-Frame-Options) is judged by the proxy for the real embedder, checked
   against Chromium (`framing-vs-chromium`). A faithful translation
   (host-sources → proxied path prefixes, rehashed inline scripts) is not
-  done: a proxied page is allowed more than direct.
+  done: a proxied page is allowed more than direct. A hash drops its
+  list's nonces, hashes and 'strict-dynamic' for 'unsafe-inline' 'self';
+  what 'strict-dynamic' admitted stays admitted (data: and blob: added:
+  Discourse's module stubs on devforum.okta.com;
+  `csp-strict-dynamic-vs-chromium`).
 - **Referrer policy**: the document's (header, `<meta name=referrer>`) is
   recorded per page; a request's own (an element's `referrerpolicy`,
   `fetch`/`Request` `referrerPolicy`) travels in its proxified URL,
   `/cyrano/https!origin/…` (spec/Containment.agda `rewriteUrlWith`,
   `targetPolicy`; unwrap ignores it — proved). The browser is always told
   unsafe-url; the proxy applies the policy (`proxy/fetch_headers.go`).
+  Origin as Chromium sends it (spec/Referrer.agda originHeader), on a
+  same-origin CORS request for a script, style, font or image too (jetblue's
+  CDN refused its own modules without it; `origin-same-origin-cors-vs-chromium`).
 - **Request fingerprint** (checked against tls.peet.ws in real Chrome: TLS
   JA4, HTTP/2 settings and header order equal a direct Chrome's). Header
   order is the browser's own, recorded off its HTTP/1.x connection
@@ -465,7 +472,9 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   harness: direct vs proxied, headed Chrome). What that took: a page whose
   CSP lets no inline script run gets its bootstrap as external scripts
   (`htmlrewrite.BootPath`; appleid.apple.com, api.twitter.com);
-  `<base href>` is rewritten; `frame-ancestors` / `X-Frame-Options` are
+  `<base href>` is rewritten (resolved against the document's URL, never
+  the base before it, both runtimes: multistate.us's `../`;
+  `base-href-vs-chromium`); `frame-ancestors` / `X-Frame-Options` are
   judged against the real embedder (`proxy/frame_ancestors.go`): the
   frame's parent. A document gives its frames marked URLs —
   `/cyrano/https!frame/…` for an iframe's / frame's / embed's src, an
@@ -765,7 +774,18 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   `codebase` stay as written, their getters unwrapped; an SVG presentation
   attribute that takes a <url> (clip-path, fill, mask, …) is CSS, rewritten
   as a style attribute (Attrs.agda cssValue: Google Charts' clip-path naming
-  the page was, proxied, an external document fetched outside the proxy). Markup is tokenized
+  the page was, proxied, an external document fetched outside the proxy).
+  An SVG `<set>` / `<animate>`'s to / from / by / values take the kind of
+  the attribute its attributeName names (Attrs.agda attrKindIn, measured:
+  href values load, as do clip-path / cursor / filter / mask; values a
+  `;`-list), both runtimes, again when attributeName changes
+  (`smil-urls-vs-chromium`). An attached Attr written through itself
+  (`value`, `nodeValue`, `textContent`) is its element's attribute written;
+  `execCommand` insertImage / insertHTML are rewritten (the inserted image
+  reads back proxied: `attr-nodes-vs-chromium`). Web Animations keyframes
+  (`animate`, `KeyframeEffect`, `setKeyframes`) and `CSS.registerProperty`'s
+  initialValue are CSS values, rewritten in a copy (`patches/typed-om.ts`;
+  `getKeyframes` reads them proxied; `web-animations-vs-chromium`). Markup is tokenized
   as the browser does (spec/HtmlTok.agda, checked against Chromium): raw
   text only for HTML elements (`<svg><style>` holds markup), the
   namespace from a simplified tree construction; Go feeds that back to

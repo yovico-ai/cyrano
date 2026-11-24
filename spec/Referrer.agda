@@ -187,16 +187,23 @@ referrer p ref target = decide p
 ------------------------------------------------------------------------
 -- Fetch §3.1: the Origin header, for a request with this mode and method
 -- from a document at `init` to `target`. A request that would natively be
--- cross-origin CORS (or a WebSocket) carries the initiator's origin; any
--- other request does only when its method is neither GET nor HEAD, and
--- then the policy may turn it into "null".
+-- cross-origin CORS (or a WebSocket) carries the initiator's origin; so
+-- does a same-origin CORS one for a script, style, font or image (Chromium,
+-- measured: a module or crossorigin script, a crossorigin stylesheet or
+-- image, an @font-face font — not fetch(), XHR, audio; jetblue's CDN
+-- answers 403 without it); any other request does only when its method is
+-- neither GET nor HEAD, and then the policy may turn it into "null".
 
 data Mode : Set where
   navigate sameOriginMode noCors cors websocket : Mode
 
-originHeader : Mode → Bool → Policy → Abs → Abs → Maybe Str
-originHeader m safeMethod p init target = byMode m
+originHeader : Mode → Bool → Policy → Abs → Abs → Maybe Str → Maybe Str
+originHeader m safeMethod p init target dest = byMode m
   where
+  carries : Maybe Str → Bool
+  carries nothing  = false
+  carries (just d) = eqStr d (toList "script") ∨ eqStr d (toList "style") ∨ eqStr d (toList "font") ∨ eqStr d (toList "image")
+
   o : Str
   o = originOf init
 
@@ -218,7 +225,7 @@ originHeader m safeMethod p init target = byMode m
 
   byMode : Mode → Maybe Str
   byMode websocket = just o
-  byMode cors      = if sameOriginOf init target then otherwise else just o
+  byMode cors      = if sameOriginOf init target then (if carries dest then just o else otherwise) else just o
   byMode _         = otherwise
 
 -- From a context whose origin is opaque (a sandboxed document; the oracle

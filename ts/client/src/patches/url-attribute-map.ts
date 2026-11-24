@@ -28,7 +28,7 @@ import { frameDest, type Dest } from "../url/containment";
 // "handler": an event handler attribute (onclick, onload — "on" and ASCII
 // lowercase letters, any element), a function body JS-rewritten
 // (birdies.com's Lijit frame: `onload="q(location,document)"`).
-export type AttrKind = "url" | "urllist" | "srcset" | "css" | "reflected" | "handler" | "none";
+export type AttrKind = "url" | "urllist" | "srcset" | "css" | "reflected" | "handler" | "animurls" | "none";
 
 /** spec/Attrs.agda isHandler: "on" and one or more of a–z. */
 export function isHandlerAttr(name: string): boolean {
@@ -73,6 +73,32 @@ export function urlAttrKind(svg: boolean, localName: string, attr: string): Attr
     return svg && SVG_CSS_ATTRS.indexOf(attr) >= 0 ? "css" : "none";
 }
 
+/**
+ * spec/Attrs.agda attrKindIn: an SVG <set> / <animate>'s to, from, by and
+ * values take the kind of the attribute its attributeName names (null:
+ * none), as Chromium loads them — href / xlink:href URLs (values: a
+ * ';'-list), a presentation attribute taking a <url> CSS.
+ */
+export function urlAttrKindIn(svg: boolean, localName: string, attr: string, anim: string | null): AttrKind {
+    if (!svg || (localName !== "set" && localName !== "animate") || (attr !== "to" && attr !== "from" && attr !== "by" && attr !== "values")) {
+        return urlAttrKind(svg, localName, attr);
+    }
+    if (anim === null) return "none";
+    if (anim === "href" || anim === "xlink:href") return attr === "values" ? "animurls" : "url";
+    return SVG_CSS_ATTRS.indexOf(anim) >= 0 ? "css" : "none";
+}
+
+/** spec rewriteAnimUrls: each ';' item rewritten, the whitespace around it as written. */
+export function rewriteAnimUrls(v: string, rw: (url: string) => string): string {
+    const ws = (c: string): boolean => c === "\t" || c === "\n" || c === "\f" || c === "\r" || c === " ";
+    return v.split(";").map((p) => {
+        let a = 0, b = p.length;
+        while (a < b && ws(p[a]!)) a++;
+        while (b > a && ws(p[b - 1]!)) b--;
+        return a < b ? p.slice(0, a) + rw(p.slice(a, b)) + p.slice(b) : p;
+    }).join(";");
+}
+
 /** The element's attributes the runtimes rewrite (url, urllist, srcset, css). */
 export function urlAttrsOf(el: Element): readonly string[] {
     const svg = el.namespaceURI === SVG_NS;
@@ -95,13 +121,19 @@ export function rewriteByKind(kind: AttrKind, v: string, rw: (url: string) => st
         case "srcset": return srcset(v, rw);
         case "css": return rewriteCssText(v, rw);
         case "handler": return rewriteHandlerSource(v);
+        case "animurls": return rewriteAnimUrls(v, rw);
         default: return v;
     }
 }
 
 /** The kind of an element's attribute. */
 export function kindOf(el: Element, attr: string): AttrKind {
-    return urlAttrKind(el.namespaceURI === SVG_NS, el.localName.toLowerCase(), attr.toLowerCase());
+    const svg = el.namespaceURI === SVG_NS;
+    const name = el.localName.toLowerCase();
+    const a = attr.toLowerCase();
+    return svg && (name === "set" || name === "animate")
+        ? urlAttrKindIn(true, name, a, heldAttr(el, "attributeName"))
+        : urlAttrKind(svg, name, a);
 }
 
 // The IDL properties that reflect URL-bearing attributes, for the getter

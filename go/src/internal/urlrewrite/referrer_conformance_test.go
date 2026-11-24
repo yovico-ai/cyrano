@@ -73,10 +73,15 @@ func TestSpecConformance_OriginHeader(t *testing.T) {
 		if safe {
 			sm = "safe"
 		}
-		want, wantOK := ask(rt, oracle, "origin", mode, sm, p, from, to)
-		got, ok := OriginHeader(mode, safe, Policy(p), from, to)
+		dest := rapid.SampledFrom([]string{"", "script", "style", "font", "image", "empty", "audio", "worker", "document"}).Draw(rt, "dest")
+		args := []string{mode, sm, p, from, to}
+		if dest != "" {
+			args = append(args, dest)
+		}
+		want, wantOK := ask(rt, oracle, "origin", args...)
+		got, ok := OriginHeader(mode, safe, Policy(p), from, to, dest)
 		if ok != wantOK || (ok && got != want) {
-			rt.Fatalf("OriginHeader(%s, safe=%v, %s, %q → %q) = %q,%v; spec says %q,%v", mode, safe, p, from, to, got, ok, want, wantOK)
+			rt.Fatalf("OriginHeader(%s, safe=%v, %s, %q → %q, %q) = %q,%v; spec says %q,%v", mode, safe, p, from, to, dest, got, ok, want, wantOK)
 		}
 	})
 }

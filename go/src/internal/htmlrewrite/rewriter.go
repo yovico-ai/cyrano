@@ -231,6 +231,10 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 	// the proxy to rewrite it as such whatever its Content-Type.
 	rel, _ := getAttr(attrs, "rel")
 	as, hasAs := getAttr(attrs, "as")
+	// A <base href> is resolved against the document's URL (spec/Html.agda
+	// documentBase), its own attribute too: not against the base it sets
+	// below (multistate.us's <base href="../"> came out one level too high).
+	preBase := cfg.BaseURL
 	rewriteOne := func(raw string, opts urlOpts) string {
 		dest := URLDest(svg, tag, opts.attr, strings.Fields(strings.ToLower(rel)), strings.ToLower(as), hasAs)
 		// An iframe sandboxed without allow-scripts runs nothing: its
@@ -239,7 +243,11 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 			sandbox, has := getAttr(attrs, "sandbox")
 			dest = urlrewrite.FrameDest(sandbox, has)
 		}
-		return urlrewrite.RewriteMarked(raw, cfg.BaseURL, cfg.Proxy, urlrewrite.Mark{Policy: policy, Dest: dest})
+		base := cfg.BaseURL
+		if tag == "base" && !svg {
+			base = preBase
+		}
+		return urlrewrite.RewriteMarked(raw, base, cfg.Proxy, urlrewrite.Mark{Policy: policy, Dest: dest})
 	}
 
 	// HTML_BASETAG — <base href> updates the in-flight base URL so all
@@ -366,15 +374,21 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 
 	// The URL-bearing attributes (spec/Attrs.agda attrKind): a URL, a URL
 	// list, a srcset; reflected ones (cite, longdesc) stay as written.
+	var anim *string
+	if v, ok := getAttr(attrs, "attributename"); ok && svg {
+		anim = &v
+	}
 	for _, at := range append([]html.Attribute(nil), attrs...) {
 		key := at.Key
 		if at.Namespace != "" {
 			key = at.Namespace + ":" + key
 		}
 		one := func(u string) string { return rewriteOne(u, urlOpts{tag: tag, attr: key}) }
-		switch URLAttrKind(svg, tag, key) {
+		switch URLAttrKindIn(svg, tag, key, anim) {
 		case AttrURL:
 			attrs = setAttr(attrs, key, one(at.Val))
+		case AttrAnimURLs:
+			attrs = setAttr(attrs, key, RewriteAnimURLs(at.Val, one))
 		case AttrURLList:
 			attrs = setAttr(attrs, key, RewriteURLList(at.Val, one))
 		case AttrSrcset:

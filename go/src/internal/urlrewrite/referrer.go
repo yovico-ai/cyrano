@@ -164,11 +164,14 @@ func Referrer(p Policy, ref, target string) (string, bool) {
 
 // OriginHeader is the Origin header a direct browser sends (Fetch §3.1) for
 // a request with this Sec-Fetch-Mode and method from a document at init to
-// target; ok is false for none.
+// target, for a request destination (Sec-Fetch-Dest; "" for none known);
+// ok is false for none. A same-origin CORS request for a script, style,
+// font or image carries it too (Chromium, measured; jetblue's CDN refuses
+// its own module scripts, stylesheets and fonts without it).
 //
 // init "null" is a context whose origin is opaque (a sandboxed document;
 // spec originHeaderOpaque): Origin "null" wherever there is one.
-func OriginHeader(mode string, safeMethod bool, p Policy, init, target string) (string, bool) {
+func OriginHeader(mode string, safeMethod bool, p Policy, init, target, dest string) (string, bool) {
 	if init == "null" {
 		if mode == "websocket" || mode == "cors" || !safeMethod {
 			return "null", true
@@ -181,7 +184,7 @@ func OriginHeader(mode string, safeMethod bool, p Policy, init, target string) (
 		return "", false
 	}
 	o := i.originText()
-	if mode == "websocket" || (mode == "cors" && !sameOriginURL(i, t)) {
+	if mode == "websocket" || (mode == "cors" && (!sameOriginURL(i, t) || originCarryingDest(dest))) {
 		return o, true
 	}
 	if safeMethod {
@@ -258,4 +261,10 @@ func secFetchSite(i absURL, iSite string, t absURL, tSite string) string {
 		}
 	}
 	return "cross-site"
+}
+
+// originCarryingDest: the destinations whose same-origin CORS requests carry
+// Origin (spec/Referrer.agda originHeader carries).
+func originCarryingDest(d string) bool {
+	return d == "script" || d == "style" || d == "font" || d == "image"
 }
