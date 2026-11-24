@@ -36,6 +36,8 @@ type session struct {
 	Jar            cookiejar.Jar `json:"jar"`
 	BrowserSession string        `json:"bs"`
 	Issued         int64         `json:"bsAt"` // when the marker was issued (unix seconds)
+	MarkerSeen     bool          `json:"bsSeen"` // a request has come with it: the browser has it
+	undelivered    []string      // inbox entries of failed responses, for the next one
 }
 
 // NewSessionJar returns a jar kept in dir ("" keeps it in memory only).
@@ -136,9 +138,10 @@ func (j *SessionJar) With(sessionID string, f func(*cookiejar.Jar)) {
 // set ("" for none). A request without one is the first of a browser
 // session (the marker is a session cookie: the browser was restarted): the
 // session cookies end, as natively, and a new marker is issued — the same
-// one to every request without a marker in the next 30 seconds (they were
-// sent before the browser had it). A request with a marker other than the
-// jar's is taken at its word.
+// one to a request without a marker in the next 30 seconds while none has
+// come with it yet (they were sent before the browser had it; once one has
+// come with it, a request without one is a restart). A request with a
+// marker other than the jar's is taken at its word.
 func (j *SessionJar) NoteBrowserSession(sessionID, marker string) string {
 	if sessionID == "" {
 		return ""
@@ -147,18 +150,18 @@ func (j *SessionJar) NoteBrowserSession(sessionID, marker string) string {
 	defer j.mu.Unlock()
 	s := j.get(sessionID)
 	if marker != "" {
-		if s.BrowserSession != marker {
-			s.BrowserSession = marker
+		if s.BrowserSession != marker || !s.MarkerSeen {
+			s.BrowserSession, s.MarkerSeen = marker, true
 			j.changed(sessionID)
 		}
 		return ""
 	}
 	now := time.Now().Unix()
-	if s.BrowserSession != "" && now-s.Issued < 30 {
+	if s.BrowserSession != "" && !s.MarkerSeen && now-s.Issued < 30 {
 		return s.BrowserSession
 	}
 	s.Jar.EndSession()
-	s.BrowserSession, s.Issued = GenerateSessionID(), now
+	s.BrowserSession, s.Issued, s.MarkerSeen = GenerateSessionID(), now, false
 	j.changed(sessionID)
 	return s.BrowserSession
 }
@@ -253,4 +256,31 @@ func (j *SessionJar) Snapshot(sessionID, pageURL string) map[string]any {
 		j.mu.Unlock()
 	}
 	return map[string]any{"g": gen, "e": entries}
+}
+
+// KeepUndelivered keeps inbox entries a failed response could not carry.
+func (j *SessionJar) KeepUndelivered(sessionID string, entries []string) {
+	if sessionID == "" || len(entries) == 0 {
+		return
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	s := j.get(sessionID)
+	s.undelivered = append(s.undelivered, entries...)
+	if len(s.undelivered) > 64 {
+		s.undelivered = s.undelivered[len(s.undelivered)-64:]
+	}
+}
+
+// TakeUndelivered hands them to the session's next response.
+func (j *SessionJar) TakeUndelivered(sessionID string) []string {
+	if sessionID == "" {
+		return nil
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	s := j.get(sessionID)
+	out := s.undelivered
+	s.undelivered = nil
+	return out
 }

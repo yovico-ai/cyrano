@@ -210,6 +210,10 @@ const (
 	// source's, a preload's imagesrcset): blocked as mixed content where an
 	// img's src is upgraded (spec MixedContent; measured).
 	DestImageSet Dest = "set"
+	// DestModuleWorker: a module worker's script ({type: "module"}): a
+	// script, given the module form of the worker preamble (through the
+	// proxy it is asked for same-origin, as a classic one).
+	DestModuleWorker Dest = "mjs"
 )
 
 // FrameDest is the mark of the document an iframe is given (spec
@@ -347,7 +351,7 @@ func schemeSegment(seg string) (scheme string, m Mark, ok bool) {
 		return "", Mark{}, false
 	}
 	dest := func(t string) Dest {
-		if t == string(DestScript) || t == string(DestStyle) || t == string(DestFrame) || t == string(DestInert) || t == string(DestImageSet) {
+		if t == string(DestScript) || t == string(DestStyle) || t == string(DestFrame) || t == string(DestInert) || t == string(DestImageSet) || t == string(DestModuleWorker) {
 			return Dest(t)
 		}
 		return ""

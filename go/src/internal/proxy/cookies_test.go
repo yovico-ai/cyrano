@@ -57,12 +57,11 @@ func TestCookies_SetCookieRouting(t *testing.T) {
 		toBrowser = append(toBrowser, v)
 	}
 	host := up.Hostname()
-	// Every cookie stays in the server's jar; a request with no page of its
-	// own behind it (typed) is told nothing back (CookieJar.inboxFor).
-	_ = host
-	var want []string
-	if strings.Join(toBrowser, " | ") != strings.Join(want, " | ") {
-		t.Errorf("Set-Cookie to the browser:\n got  %q\n want %q", toBrowser, want)
+	// Every cookie stays in the server's jar; the browser is told the change
+	// scripts see of the response's own site (no page behind a typed
+	// request: CookieJar.inboxFor) — an inbox entry, generation 1.
+	if len(toBrowser) != 1 || !strings.HasPrefix(toBrowser[0], "__crn~i!h!"+host+"!%2Fapp!visible=iuM!") || !strings.Contains(toBrowser[0], "!1!0:1;") {
+		t.Errorf("Set-Cookie to the browser: %q, want the one inbox entry", toBrowser)
 	}
 	if session == "" {
 		t.Fatal("no session cookie issued")

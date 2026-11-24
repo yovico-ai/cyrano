@@ -373,6 +373,8 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 func (h *Handler) modifyResponse(resp *http.Response) error {
 	// A cross-origin request the origin does not allow fails, as natively (cors.go).
 	if corsFails(resp) || scriptCORSFails(resp) {
+		// The browser stores a refused response's cookies (before the check).
+		h.failedCookies(resp, false)
 		_ = resp.Body.Close()
 		return errCORS
 	}
@@ -473,6 +475,9 @@ func (h *Handler) translateResponse(resp *http.Response) error {
 		// Director copied the upstream URL into resp.Request.URL — it's
 		// the page's original URL, exactly what rewriters need as base.
 		if err := h.opts.BodyRewriter(resp, resp.Request.URL); err != nil {
+			if errors.Is(err, ErrOrbBlocked) {
+				h.failedCookies(resp, true) // stored already; its inbox entries wait
+			}
 			return err
 		}
 	}

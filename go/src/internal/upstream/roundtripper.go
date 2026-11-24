@@ -16,6 +16,7 @@
 package upstream
 
 import (
+	"io"
 	"github.com/bogdanfinn/fhttp/httptrace"
 	"github.com/yovico/cyrano/internal/dnscache"
 	"github.com/yovico/cyrano/internal/headerorder"
@@ -150,7 +151,15 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 			asHTTP1(fReq.Header, host)
 		}
 	}})
-	fReq, err = fhttp.NewRequestWithContext(ctx, req.Method, req.URL.String(), req.Body)
+	// The body, counted: a request whose chain must be completed failed in
+	// the handshake, before any of it was sent — it can go again.
+	var body *countedBody
+	if req.Body != nil && req.Body != http.NoBody {
+		body = &countedBody{r: req.Body}
+		fReq, err = fhttp.NewRequestWithContext(ctx, req.Method, req.URL.String(), body)
+	} else {
+		fReq, err = fhttp.NewRequestWithContext(ctx, req.Method, req.URL.String(), req.Body)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -184,8 +193,9 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	fResp, err := client.Do(fReq)
 	// A chain the server sent short: complete it from AIA, as Chrome does,
-	// and try once more (a request whose body can be sent again).
-	if err != nil && !rt.skipVerify && (req.Body == nil || req.Body == http.NoBody) && rt.aiaFor(sessionID).complete(err) {
+	// and try once more (a request with a body too, when none of it was sent:
+	// bigotires' POSTs to metrics.kmsmep.com failed with "unknown authority").
+	if err != nil && !rt.skipVerify && (body == nil || body.n == 0) && rt.aiaFor(sessionID).complete(err) {
 		rt.dropClients(sessionID)
 		if client, err = rt.clientFor(clientKey, profile); err != nil {
 			return nil, err
@@ -476,3 +486,18 @@ func copyHeaders(out fhttp.Header, req *http.Request) {
 		ensureClientHints(out, req.Header.Get("User-Agent"))
 	}
 }
+
+// countedBody is a request body that counts what was read of it.
+type countedBody struct {
+	r io.ReadCloser
+	n int64
+}
+
+func (b *countedBody) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	b.n += int64(n)
+	return n, err
+}
+
+func (b *countedBody) Close() error { return b.r.Close() }
+

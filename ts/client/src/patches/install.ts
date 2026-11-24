@@ -140,7 +140,7 @@ export function installPatches(
     step("patchXmlHttpRequest", () => patchXmlHttpRequest(targetWindow, rewriteOne, unwrapOne, getCurrentBaseUrl, cors));
     step("patchWebSocket", () => patchWebSocket(targetWindow, rewriteOne, unwrapOne, () => getCurrentBaseUrl().origin));
     step("patchEventSource", () => patchEventSource(targetWindow, rewriteOne, unwrapOne));
-    step("patchWorker", () => patchWorker(targetWindow, rewriteOne, patchBlobWorkerSource(targetWindow, config, getCurrentBaseUrl)));
+    step("patchWorker", () => patchWorker(targetWindow, rewriteOne, patchBlobWorkerSource(targetWindow, config, getCurrentBaseUrl), config));
     step("patchServiceWorker", () => patchServiceWorker(targetWindow, getCurrentBaseUrl));
     // Dynamic-HTML patches must come BEFORE the per-class property-setter
     // patches: dynamic-html captures Element.prototype.setAttribute as the
@@ -160,7 +160,7 @@ export function installPatches(
     step("patchHistory", () => patchHistory(targetWindow, rewriteOne, setBaseUrl, unwrapOne, getCurrentBaseUrl));
     step("patchNavigation", () => patchNavigation(targetWindow, rewriteOne, unwrapOne, setBaseUrl, config.identity ? undefined : new URL(config.apiBaseURL).origin));
     step("patchSendBeacon", () => patchSendBeacon(targetWindow, rewriteOne));
-    step("patchWindowOpen", () => patchWindowOpen(targetWindow, rewriteOne));
+    step("patchWindowOpen", () => patchWindowOpen(targetWindow, rewriteOne, config, getCurrentBaseUrl));
     // (Not with the page on its own origins — config.identity: the
     // browser itself keeps the origins apart.)
     const flattened = !config.identity;

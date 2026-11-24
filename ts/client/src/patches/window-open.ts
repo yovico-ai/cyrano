@@ -3,13 +3,31 @@
 // javascript:, blob:, data: … as written). The features' attributionsrc
 // URLs, which the browser requests itself, are proxified in place
 // (spec/Features.agda); the rest of the string is passed as written.
+//
+// A window opened on about:blank (no URL, "", about:blank — the usual
+// OAuth / payment popup, opened in the click and sent somewhere later, or
+// written into) is given its opener's runtime, as an empty frame is its
+// creator's: what the page writes into it, and where it sends it, goes
+// through the proxy (round H: its images, its location set by the opener
+// went to their origins; its document.cookie was the browser's raw jar).
 
 import { nR } from "../native/intrinsics";
 import { crossOriginView } from "../native/cross-origin";
 import { wrapMethod } from "../native/surface";
 import { decodeSource, mapSources } from "../url/features";
+import { injectIntoWindow } from "../runtime/iframe-injection";
+import type { ClientConfig } from "../config";
 
-export function patchWindowOpen(targetWindow: Window, rewriteOne: (url: string) => string): void {
+/** An opened window still on about: gets the opener's runtime. */
+function giveRuntime(w: Window | null, opener: Window, config: ClientConfig | undefined, base: (() => URL) | undefined): void {
+    if (!w || !config || !base || w === opener) return;
+    try {
+        if (!/^about:/i.test(String(w.location.href))) return;
+        injectIntoWindow(w, opener, config, base().href);
+    } catch { /* another origin's window: nothing to give */ }
+}
+
+export function patchWindowOpen(targetWindow: Window, rewriteOne: (url: string) => string, config?: ClientConfig, base?: () => URL): void {
     wrapMethod<(...a: unknown[]) => Window | null>(targetWindow, "open", (native, self, a) => {
         let args = a;
         if (typeof args[2] === "string" && args[2] !== "") {
@@ -17,7 +35,13 @@ export function patchWindowOpen(targetWindow: Window, rewriteOne: (url: string) 
             if (features !== args[2]) args = [args[0], args[1], features, ...args.slice(3)];
         }
         // The opened window is another window: cross-origin, it is a view.
-        if (!args.length || args[0] == null || String(args[0]) === "") return crossOriginView(nR.apply(native, self, args) as Window | null, null, targetWindow);
-        return crossOriginView(nR.apply(native, self, [rewriteOne(String(args[0])), ...args.slice(1)]) as Window | null, null, targetWindow);
+        if (!args.length || args[0] == null || String(args[0]) === "") {
+            const w = nR.apply(native, self, args) as Window | null;
+            giveRuntime(w, targetWindow, config, base);
+            return crossOriginView(w, null, targetWindow);
+        }
+        const w = nR.apply(native, self, [rewriteOne(String(args[0])), ...args.slice(1)]) as Window | null;
+        if (/^\s*about:/i.test(String(args[0]))) giveRuntime(w, targetWindow, config, base);
+        return crossOriginView(w, null, targetWindow);
     });
 }

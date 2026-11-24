@@ -328,12 +328,15 @@ ackOf ((_ , k) ∷ ws) = maxN k (ackOf ws)
   maxN a b = if a <ᵇ b then b else a
 
 -- Which changes the browser is told as inbox entries: those of the
--- requesting page's own site (other runtimes of the session are given the
--- jar with their next document), never on a document's own response (its
--- snapshot holds them). So the inbox stays a few entries.
-inboxFor : Bool → Maybe Str → Str → Bool
-inboxFor document (just requester) site = not document ∧ eqStr requester site
-inboxFor document nothing          site = false
+-- requesting page's own site; with no page known (a blob worker's fetch
+-- names none), or on a document's own response (a download, a frame sent
+-- to a JSON answer: no snapshot comes with it), those of the response's
+-- own site. Other runtimes of the session are given the jar with their
+-- next document; so the inbox stays a few entries. (round H: a hidden
+-- frame's download, jQuery fileDownload, never showed its cookie.)
+inboxFor : Bool → Maybe Str → Str → Str → Bool
+inboxFor document (just requester) target site = if document then eqStr target site else eqStr requester site
+inboxFor document nothing          target site = eqStr target site
 
 ------------------------------------------------------------------------
 -- The server's jar: a session's cookies, in creation order.

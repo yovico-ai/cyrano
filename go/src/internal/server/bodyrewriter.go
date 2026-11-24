@@ -278,8 +278,14 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			// client runtime's worker preamble (workerPreamble).
 			if resp.Request != nil {
 				dest := strings.ToLower(resp.Request.Header.Get("Sec-Fetch-Dest"))
-				if dest == "worker" || dest == "sharedworker" {
-					module := strings.EqualFold(resp.Request.Header.Get("Sec-Fetch-Mode"), "cors")
+				// Only a worker's own script: a module worker's is marked so by
+				// the runtime's Worker (through the proxy it is asked for
+				// same-origin, as a classic one's); a module it imports is asked
+				// for as a worker's too, marked as a script (`!js`: no preamble —
+				// it was given one, and the runtime made again for its URL).
+				mark := proxy.RequestDest(resp)
+				if (dest == "worker" || dest == "sharedworker") && mark != urlrewrite.DestScript {
+					module := mark == urlrewrite.DestModuleWorker
 					pre := workerPreamble(urlrewrite.APIBase(proxyCfg), static.RuntimeURL(vhost.RewriterJSPath), clientPassthrough, target.String(), module)
 					rewritten = append(pre, rewritten...)
 					// Prevent the browser from caching the shimmed worker script.
@@ -370,7 +376,7 @@ func xmlMagicBytes(b []byte) bool {
 
 func responseKind(mark urlrewrite.Dest, sfd string, has bool, ct string, hasCT bool, sniff func() sniffResult) bodyKind {
 	switch mark {
-	case urlrewrite.DestScript:
+	case urlrewrite.DestScript, urlrewrite.DestModuleWorker:
 		return kindJS
 	case urlrewrite.DestStyle:
 		return kindCSS
@@ -712,8 +718,18 @@ func readDecompressedBody(resp *http.Response) ([]byte, error) {
 	return body, nil
 }
 
-func readDecoded(resp *http.Response, raw io.Reader) ([]byte, error) {
+func readDecoded(resp *http.Response, rawIn io.Reader) ([]byte, error) {
 	defer resp.Body.Close()
+	// An empty body is empty whatever its Content-Encoding says: a gzip
+	// reader fails on it (no header), Chromium shows nothing (southern.edu's
+	// empty gzip-labelled answer got a 502).
+	raw := bufio.NewReader(rawIn)
+	if _, err := raw.Peek(1); err == io.EOF {
+		if resp.Header.Get("Content-Encoding") != "" {
+			resp.Header.Del("Content-Encoding")
+		}
+		return []byte{}, nil
+	}
 	switch strings.ToLower(resp.Header.Get("Content-Encoding")) {
 	case "gzip":
 		gz, err := gzip.NewReader(raw)

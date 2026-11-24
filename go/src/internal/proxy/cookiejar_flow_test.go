@@ -88,8 +88,9 @@ func TestJarFlow_OutboxAppliedOnceAndAcked(t *testing.T) {
 	}
 }
 
-// A response's cookie is told back (inbox) only to a page of its own site,
-// and not on a document's own response (its snapshot has it).
+// A response's cookie is told back (inbox) to a page of its own site; with
+// no page known, or on a document's own response, when it is the
+// response's own site.
 func TestJarFlow_InboxOnlyForThePagesSite(t *testing.T) {
 	jar := NewSessionJar()
 	jar.NoteBrowserSession("s1", "b1")
@@ -121,11 +122,17 @@ func TestJarFlow_InboxOnlyForThePagesSite(t *testing.T) {
 	if n := inbox("https://other.example/page", "image"); n != 0 {
 		t.Errorf("a third party's subresource: %d inbox entries, want 0", n)
 	}
-	if n := inbox("http://"+u.Host+"/page", "document"); n != 0 {
-		t.Errorf("a document's own response: %d inbox entries, want 0 (its snapshot)", n)
+	// A document's own response (a download, a frame sent to JSON: no
+	// snapshot comes with it), and one with no page known (a blob worker's
+	// fetch): its own site's cookie is told.
+	if n := inbox("http://"+u.Host+"/page", "document"); n != 1 {
+		t.Errorf("a document's own response: %d inbox entries, want 1", n)
 	}
-	if n := inbox("", "empty"); n != 0 {
-		t.Errorf("no page known: %d inbox entries, want 0", n)
+	if n := inbox("", "empty"); n != 1 {
+		t.Errorf("no page known: %d inbox entries, want 1 (the response's own site)", n)
+	}
+	if n := inbox("https://other.example/page", "document"); n != 1 {
+		t.Errorf("a document's own response from another site's link: %d inbox entries, want 1", n)
 	}
 }
 
@@ -150,9 +157,8 @@ func TestJarFlow_BrowserRestartEndsSessionCookies(t *testing.T) {
 		t.Errorf("same browser session: upstream Cookie = %q", got)
 	}
 	// A restart (no marker), past the 30 s window of the last issue.
-	jar.mu.Lock()
-	jar.get(sid).Issued -= 60 // (seconds: the marker's window)
-	jar.mu.Unlock()
+	// A restart (no marker) — at once: the browser had sent the marker, so
+	// this is a new browser session however soon (round H restarted in 5 s).
 	rec = serve(h, up+"/", "crnsct="+sid)
 	if got := captured.headers.Get("Cookie"); got != "kept=2" {
 		t.Errorf("after a browser restart: upstream Cookie = %q, want the persistent cookie only", got)
@@ -164,8 +170,9 @@ func TestJarFlow_BrowserRestartEndsSessionCookies(t *testing.T) {
 	if !issued {
 		t.Error("no new browser-session marker issued")
 	}
-	// A second request without the marker in the window: the same one, nothing ended again.
-	serve(h, up+"/set", "crnsct="+sid+"; crnsctb=x")
+	// Requests sent before the browser stored the new marker (none has come
+	// with it yet): the same one again, nothing ended again.
+	serve(h, up+"/set", "crnsct="+sid)
 	rec = serve(h, up+"/", "crnsct="+sid)
 	// (sess was made again after the restart: kept, older, comes first.)
 	if got := captured.headers.Get("Cookie"); got != "kept=2; sess=1" {
@@ -239,4 +246,82 @@ func TestJarFlow_ASiteLimitIsItsOwn(t *testing.T) {
 		t.Errorf("busy.example keeps %d (≤ %d), quiet.example %d (want its one)", busy, cookiejar.DomainMax, quiet)
 	}
 	_ = http.StatusOK
+}
+
+// Chromium's Lax-allowing-unsafe: a cookie stating no SameSite goes on a
+// cross-site top-level POST while at most two minutes old (OIDC form_post,
+// SAML); one stating Lax does not, nor one older.
+func TestJarFlow_LaxAllowingUnsafe(t *testing.T) {
+	jar := NewSessionJar()
+	jar.NoteBrowserSession("s1", "b1")
+	h, up, captured := jarHandler(t, jar, "dflt=1; Path=/", "lax=1; Path=/; SameSite=Lax")
+	serve(h, up+"/set", "crnsct=s1; crnsctb=b1")
+	post := func() string {
+		req := httptest.NewRequest("POST", cyranoPath(up+"/callback"), strings.NewReader("code=x"))
+		req.Host = "localhost:9081"
+		req.Header.Set("Cookie", "crnsct=s1; crnsctb=b1")
+		req.Header.Set("Referer", urlrewrite.Rewrite("https://idp.example/login", nil, devProxyCfg()))
+		req.Header.Set("Sec-Fetch-Mode", "navigate")
+		req.Header.Set("Sec-Fetch-Dest", "document")
+		h.ServeHTTP(httptest.NewRecorder(), req)
+		return captured.headers.Get("Cookie")
+	}
+	if got := post(); got != "dflt=1" {
+		t.Errorf("a cross-site top-level POST at once: upstream Cookie = %q, want the fresh default one only", got)
+	}
+	// Two minutes and more later.
+	jar.mu.Lock()
+	for i := range jar.get("s1").Jar.Entries {
+		jar.get("s1").Jar.Entries[i].Created -= 121000
+	}
+	jar.mu.Unlock()
+	if got := post(); got != "" {
+		t.Errorf("the same POST past two minutes: upstream Cookie = %q, want none", got)
+	}
+}
+
+// A response the proxy fails (the CORS check, ORB) still stores its
+// cookies, as the browser does before either check; the inbox entry rides
+// the session's next response.
+func TestJarFlow_FailedResponseCookiesArriveNext(t *testing.T) {
+	jar := NewSessionJar()
+	jar.NoteBrowserSession("s1", "b1")
+	h, up, _ := jarHandler(t, jar, "late=1; Path=/")
+	u, _ := url.Parse(up)
+	page := "http://" + u.Host + "/page"
+	req := httptest.NewRequest("GET", cyranoPath(up+"/set"), nil)
+	req.Host = "localhost:9081"
+	req.Header.Set("Cookie", "crnsct=s1; crnsctb=b1")
+	// A page of the same site on another port: cross-origin, the CORS check applies.
+	other := "http://" + u.Hostname() + ":1/x"
+	req.Header.Set("Referer", urlrewrite.Rewrite(other, nil, devProxyCfg()))
+	req.Header.Set("Sec-Fetch-Mode", "cors")
+	req.Header.Set("Sec-Fetch-Dest", "empty")
+	req.Header.Set(InitiatorHeader, other)
+	req.Header.Set(CredentialsHeader, "include")
+	rec := httptest.NewRecorder()
+	func() { // no ACAO: the CORS check fails — the connection is broken (ErrAbortHandler)
+		defer func() { _ = recover() }()
+		h.ServeHTTP(rec, req)
+	}()
+	found := false
+	for _, c := range jar.Cookies("s1") {
+		found = found || c.Name == "late"
+	}
+	if !found {
+		t.Fatal("a CORS-failed response's cookie was not stored")
+	}
+	next := httptest.NewRequest("GET", cyranoPath(up+"/"), nil)
+	next.Host = "localhost:9081"
+	next.Header.Set("Cookie", "crnsct=s1; crnsctb=b1")
+	next.Header.Set("Referer", urlrewrite.Rewrite(page, nil, devProxyCfg()))
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, next)
+	told := false
+	for _, v := range rec2.Header().Values("Set-Cookie") {
+		told = told || strings.HasPrefix(v, cookiejar.InboxPrefix) && strings.Contains(v, "!late=")
+	}
+	if !told {
+		t.Errorf("its inbox entry did not ride the next response: %q", rec2.Header().Values("Set-Cookie"))
+	}
 }

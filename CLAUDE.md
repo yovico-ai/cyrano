@@ -190,7 +190,12 @@ frame still on its initial about:blank has the Navigation API's events
 off (HTML), so code no rule saw that navigates such a frame (a
 `setTimeout` string) is not caught; rewritten code is
 (`frame-navigation-net-vs-chromium`: a handler written into an empty
-frame, its `eval`, an `onload` attribute, `contentWindow[k].href`).
+frame, its `eval`, an `onload` attribute, `contentWindow[k].href`). A
+popup opened on about:blank (`window.open("")`, `"about:blank"`: the
+OAuth / payment pattern) gets its opener's runtime as an empty frame its
+creator's (`patches/window-open.ts`, `injectIntoWindow`): what is written
+into it and where the opener sends it go through the proxy, its cookies
+and origin are the opener's (`popup-blank-vs-chromium`).
 
 ## Known gaps
 
@@ -232,15 +237,26 @@ frame, its `eval`, an `onload` attribute, `contentWindow[k].href`).
   (`CYRANO_COOKIE_DIR`, default the user cache dir). The browser's jar
   carries the session cookie (persistent: 400 days), a browser-session
   marker (a session cookie; a request without it ends the jar's session
-  cookies, as a restart does) and the channel, all `Priority=Low`: a
+  cookies, as a restart does — once the browser has sent it, however
+  soon; requests sent before it stored a new one get it again) and the channel, all `Priority=Low`: a
   script's writes packed into a few outbox slots per page tree (ride the
   next request; the server's one ack per tree clears them), and inbox
   entries for changes a response made to the requesting page's own site
-  (absorbed before every read and on cookieStore's change event). A
+  (absorbed before every read and on cookieStore's change event), and —
+  with no page known (a blob worker's fetch) or on a document's own
+  response (a download, a frame sent to JSON) — for the response's own
+  site; a response the proxy fails (ORB, CORS) still stores its cookies,
+  its inbox entries riding the session's next response. A
   document gets its cookies inline in its config (`ck`; an external
   bootstrap's from the boot handler, never in a URL) and is revalidated
   (`no-cache`). Other tabs hear of a write on a BroadcastChannel. Cookie
   dates as Chromium reads them (spec/CookieDate.agda, not the RFC's);
+  Chromium's Lax-allowing-unsafe: a cookie stating no SameSite goes on a
+  cross-site top-level POST while at most two minutes old (OIDC
+  form_post, SAML; the jar's creation times; Cookies.sameSiteAllows);
+  another window's cookie accessor called on a document serves it through
+  that document's own window (Quantum Metric takes its natives from a
+  frame: `cookie-cross-realm-vs-chromium`);
   an overwrite with another value is a new cookie (last in order).
   Cookies of the old wire form (`__crn!`) are read until the jar holds
   their identity. cookieStore's change events are made from memory's
@@ -390,7 +406,12 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   visitoslo.com; `media-metadata-vs-chromium`). Markup written into a
   document with no `<base href>` yet takes the first one it writes as the
   base of what follows in the same write (Flashtalking richloads on
-  ginifab.com: `written-base-vs-chromium`). A worker reads its own URL,
+  ginifab.com: `written-base-vs-chromium`). A module worker (`{type: "module"}`) has
+  its URL marked `!mjs` by the runtime's Worker (through the proxy it is
+  asked for same-origin, as a classic one) and gets the module preamble; a
+  module it imports gets none (asked for as a worker's, marked `!js`); a
+  blob module worker's static imports are proxified against its own URL
+  (crumblcookies.com's MapLibre; `module-worker-vs-chromium`). A worker reads its own URL,
   fragment included (a served worker's from its own location, unwrapped;
   a blob: worker's the page's blob URL with the page's origin; Turbopack's
   `#params=` on thangs.com: `worker-location-vs-chromium`).

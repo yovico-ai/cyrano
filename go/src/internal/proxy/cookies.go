@@ -95,6 +95,26 @@ func channelAttrs(maxAge int) string {
 	return "; Path=/; Max-Age=" + strconv.Itoa(maxAge) + "; Priority=Low"
 }
 
+// failedCookies stores the cookies of a response the proxy fails (ORB, the
+// CORS check) — the browser would have, before either check — and keeps
+// the inbox entries scripts must see for the session's next response.
+func (h *Handler) failedCookies(resp *http.Response, routed bool) {
+	if h.opts.CookieJar == nil || resp.Request == nil {
+		return
+	}
+	if !routed {
+		h.routeSetCookies(resp)
+	}
+	sid, _ := resp.Request.Context().Value(SessionContextKey{}).(string)
+	var keep []string
+	for _, v := range resp.Header.Values("Set-Cookie") {
+		if strings.HasPrefix(v, cookiejar.InboxPrefix) {
+			keep = append(keep, v)
+		}
+	}
+	h.opts.CookieJar.KeepUndelivered(sid, keep)
+}
+
 // noCredentialsKey marks a request made without credentials.
 type noCredentialsKey struct{}
 
@@ -132,6 +152,7 @@ func (h *Handler) upstreamCookies(req *http.Request, target *url.URL, sessionID 
 	}
 	outbox, writers, legacy, legacyNames := browserPairs(strings.Join(req.Header.Values("Cookie"), "; "))
 	var cookies []urlrewrite.StoredCookie
+	created := map[string]uint64{} // scope → when made (ms): Lax-allowing-unsafe
 	jar := h.opts.CookieJar
 	if jar != nil && sessionID != "" {
 		pend := &pendingCookies{legacy: legacyNames}
@@ -145,6 +166,11 @@ func (h *Handler) upstreamCookies(req *http.Request, target *url.URL, sessionID 
 			}
 			gen = j.Gen
 			cookies = j.Live(now)
+			for _, c := range cookies {
+				if t, ok := j.Created(now, c); ok {
+					created[c.Scope()] = t
+				}
+			}
 		})
 		for tab, k := range writers {
 			// The highest number read, and the jar's generation then: what
@@ -184,9 +210,16 @@ func (h *Handler) upstreamCookies(req *http.Request, target *url.URL, sessionID 
 		strings.EqualFold(req.Header.Get("Sec-Fetch-Dest"), "document") &&
 		(req.Method == http.MethodGet || req.Method == http.MethodHead)
 
+	topNav := strings.EqualFold(req.Header.Get("Sec-Fetch-Mode"), "navigate") &&
+		strings.EqualFold(req.Header.Get("Sec-Fetch-Dest"), "document")
+	nowMs := unixNow()
 	var send []urlrewrite.StoredCookie
 	for _, c := range urlrewrite.SelectCookies(false, to, cookies) {
-		if urlrewrite.SameSiteAllows(c.SameSite, sameSiteReq, topSafeNav) {
+		age := uint64(1 << 62) // the old wire form's: its age is not known
+		if t, ok := created[c.Scope()]; ok && t <= nowMs {
+			age = nowMs - t
+		}
+		if urlrewrite.SameSiteAllows(c.SameSite, sameSiteReq, topSafeNav, topNav, age) {
 			send = append(send, c)
 		}
 	}
@@ -306,6 +339,9 @@ func (h *Handler) routeSetCookies(resp *http.Response) {
 		if pend != nil {
 			forBrowser = append(forBrowser, pend.inbox...)
 		}
+		// Changes a failed response made (ORB, CORS: its headers never
+		// reached the browser) ride this one.
+		forBrowser = append(forBrowser, jar.TakeUndelivered(sessionID)...)
 		now := unixNow()
 		// The requesting page's site, and whether this is a document's own
 		// response (spec CookieJar.inboxFor).
@@ -338,7 +374,7 @@ func (h *Handler) routeSetCookies(resp *http.Response) {
 					ch.Gone = true
 				}
 				for _, n := range j.Put(false, now, cookieSite(c.Domain), ch) {
-					if cookiejar.InboxFor(document, requester, cookieSite(n.Cookie.Domain)) {
+					if cookiejar.InboxFor(document, requester, cookieSite(resp.Request.URL.Hostname()), cookieSite(n.Cookie.Domain)) {
 						forBrowser = append(forBrowser, inboxSetCookie(n, j.LastApplied(n.Cookie)))
 					}
 				}
@@ -418,7 +454,7 @@ func WebSocketCookies(req *http.Request, target *url.URL, pageOrigin string, jar
 	sameSite := pageOrigin == "" || urlrewrite.SecFetchSite(pageOrigin, to) != "cross-site"
 	var send []urlrewrite.StoredCookie
 	for _, c := range urlrewrite.SelectCookies(false, to, cookies) {
-		if urlrewrite.SameSiteAllows(c.SameSite, sameSite, false) {
+		if urlrewrite.SameSiteAllows(c.SameSite, sameSite, false, false, 0) {
 			send = append(send, c)
 		}
 	}

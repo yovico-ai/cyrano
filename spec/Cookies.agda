@@ -297,13 +297,18 @@ matches api u c =
 -- goes only on a same-site request — or, when Lax (the default), on a
 -- top-level navigation with a safe method. `sameSiteReq`: the request's
 -- initiator is same-site with its target, or there is none (the user
--- typed the address). (Chromium's two-minute "Lax-allowing-unsafe"
--- allowance for default cookies is not modelled.)
-sameSiteAllows : SameSite → Bool → Bool → Bool
-sameSiteAllows ssNone    sameSiteReq topSafeNav = true
-sameSiteAllows ssStrict  sameSiteReq topSafeNav = sameSiteReq
-sameSiteAllows ssLax     sameSiteReq topSafeNav = sameSiteReq ∨ topSafeNav
-sameSiteAllows ssDefault sameSiteReq topSafeNav = sameSiteReq ∨ topSafeNav
+-- typed the address). And Chromium's "Lax-allowing-unsafe": a cookie that
+-- states no SameSite goes on a top-level navigation of any method (a POST:
+-- OIDC form_post, SAML) while it is at most two minutes old (`topNav`,
+-- `age` in ms; measured 2026-11-23 — one stated Lax does not).
+laxUnsafeWindow : ℕ
+laxUnsafeWindow = 120000
+
+sameSiteAllows : SameSite → Bool → Bool → Bool → ℕ → Bool
+sameSiteAllows ssNone    sameSiteReq topSafeNav topNav age = true
+sameSiteAllows ssStrict  sameSiteReq topSafeNav topNav age = sameSiteReq
+sameSiteAllows ssLax     sameSiteReq topSafeNav topNav age = sameSiteReq ∨ topSafeNav
+sameSiteAllows ssDefault sameSiteReq topSafeNav topNav age = sameSiteReq ∨ topSafeNav ∨ (topNav ∧ (age ≤ᵇ laxUnsafeWindow))
 
 ------------------------------------------------------------------------
 -- The wire form: how a script-visible cookie is kept in the browser's jar

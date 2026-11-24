@@ -240,3 +240,15 @@ func TestReadDecompressedBody_Truncated(t *testing.T) {
 		}
 	}
 }
+
+// An empty body labelled with an encoding is empty (southern.edu: an empty
+// gzip-labelled answer got a 502 — a gzip reader fails on no header).
+func TestReadDecompressedBody_EmptyEncoded(t *testing.T) {
+	for _, enc := range []string{"gzip", "deflate", "br", "zstd"} {
+		resp := &http.Response{Header: http.Header{"Content-Encoding": {enc}}, Body: io.NopCloser(strings.NewReader(""))}
+		body, err := readDecompressedBody(resp)
+		if err != nil || len(body) != 0 {
+			t.Errorf("%s, empty: %q, %v; want an empty body", enc, body, err)
+		}
+	}
+}

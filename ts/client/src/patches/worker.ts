@@ -8,11 +8,14 @@ import { nR } from "../native/intrinsics";
 import { isTrustedValue, trusted } from "../native/trusted";
 import { wrapConstructor } from "../native/surface";
 import type { WorkerScriptFor } from "./blob-worker-source";
+import { unwrapProxiedUrl, type Dest } from "../url/containment";
+import type { ClientConfig } from "../config";
 
 export function patchWorker(
     targetWindow: Window,
-    rewriteOne: (url: string) => string,
+    rewriteOne: ((url: string) => string) & { withMark?: (url: string, policy: string | null, dest: Dest | null) => string },
     workerScriptFor: WorkerScriptFor = () => undefined,
+    config?: ClientConfig,
 ): void {
     for (const name of ["Worker", "SharedWorker"] as const) {
         wrapConstructor<typeof Worker>(targetWindow, name, (Native, args, newTarget) => {
@@ -20,7 +23,12 @@ export function patchWorker(
             const url = String(args[0]);
             const opts = args[1] as { type?: unknown } | string | undefined;
             const module = typeof opts === "object" && opts !== null && opts.type === "module";
-            const script = workerScriptFor(url, module) ?? rewriteOne(url);
+            // A module worker's URL says so (the server gives it the module
+            // preamble: asked for same-origin, it cannot tell).
+            // (The JS rules have proxified a URL in the source already — R10
+            // does not see the options: it is marked again, from its target.)
+            const script = workerScriptFor(url, module) ??
+                (module && rewriteOne.withMark ? rewriteOne.withMark(config ? unwrapProxiedUrl(url, config) ?? url : url, null, "mjs") : rewriteOne(url));
             // A TrustedScriptURL (the page's, under Trusted Types) stays trusted.
             return nR.construct(Native, [isTrustedValue(args[0]) ? trusted(targetWindow, "ScriptURL", script) : script, ...args.slice(1)], newTarget as typeof Worker);
         });

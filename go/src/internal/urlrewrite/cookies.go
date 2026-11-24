@@ -343,14 +343,20 @@ func CookieString(cookies []StoredCookie) string {
 // SameSiteAllows: may a cookie with this SameSite go on an HTTP request
 // (§5.2)? sameSiteReq: the request's initiator is same-site with its
 // target, or there is none; topSafeNav: a top-level navigation with a safe
-// method.
-func SameSiteAllows(sameSite byte, sameSiteReq, topSafeNav bool) bool {
+// method; topNav: a top-level navigation of any method, and ageMs the
+// cookie's age — Chromium's Lax-allowing-unsafe: a cookie stating no
+// SameSite goes on a top-level POST while at most two minutes old.
+func SameSiteAllows(sameSite byte, sameSiteReq, topSafeNav, topNav bool, ageMs uint64) bool {
 	switch sameSite {
 	case SameSiteNone:
 		return true
 	case SameSiteStrict:
 		return sameSiteReq
-	default: // Lax, and the default
+	case SameSiteLax:
 		return sameSiteReq || topSafeNav
 	}
+	return sameSiteReq || topSafeNav || topNav && ageMs <= LaxUnsafeWindow
 }
+
+// LaxUnsafeWindow: Lax-allowing-unsafe's two minutes, in ms.
+const LaxUnsafeWindow = 120000

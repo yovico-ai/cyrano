@@ -3,6 +3,7 @@ package urlrewrite
 // Conformance of cookies.go with spec/Cookies.agda, asked live.
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -117,12 +118,16 @@ func TestSpecConformance_SameSite(t *testing.T) {
 	for _, ss := range []byte{SameSiteNone, SameSiteLax, SameSiteStrict, SameSiteDefault} {
 		for _, same := range []bool{true, false} {
 			for _, nav := range []bool{true, false} {
-				out, _, err := oracle.Ask("samesite", string(rune(ss)), flag(same, "same", "cross"), flag(nav, "nav", "other"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if got := flag(SameSiteAllows(ss, same, nav), "yes", "no"); got != out {
-					t.Errorf("SameSiteAllows(%c, same=%v, nav=%v) = %s, spec says %s", ss, same, nav, got, out)
+				for _, top := range []bool{true, false} {
+					for _, age := range []uint64{0, 119999, 120000, 120001, 999999999} {
+						out, _, err := oracle.Ask("samesite", string(rune(ss)), flag(same, "same", "cross"), flag(nav, "nav", "other"), flag(top, "top", "other"), strconv.FormatUint(age, 10))
+						if err != nil {
+							t.Fatal(err)
+						}
+						if got := flag(SameSiteAllows(ss, same, nav, top, age), "yes", "no"); got != out {
+							t.Errorf("SameSiteAllows(%c, same=%v, nav=%v, top=%v, age=%d) = %s, spec says %s", ss, same, nav, top, age, got, out)
+						}
+					}
 				}
 			}
 		}

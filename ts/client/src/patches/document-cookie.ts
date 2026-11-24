@@ -63,11 +63,30 @@ export function patchDocumentCookie(targetWindow: Window, baseUrl: () => URL, on
     if (!nativeGet || !nativeSet) return;
     const access = (self: unknown): CookieAccess => ({ get: () => ncall(nativeGet, self), set: (v: string) => ncall(nativeSet, self, v) });
     const ours = (self: unknown): boolean => self === targetWindow.document;
+    // Another window's document (this realm's accessor called on it — a
+    // script that takes its natives from a frame: Quantum Metric): its own
+    // window's accessor serves it, which keeps that window's cookies.
+    const viewDesc = (() => { for (let o: object | null = targetWindow.document; o; o = nO.getPrototypeOf(o) as object | null) { const d = nO.getOwnPropertyDescriptor(o, "defaultView"); if (d) return d; } return undefined; })();
+    const theirs = (self: unknown): PropertyDescriptor | undefined => {
+        try {
+            const w = viewDesc?.get ? (ncall(viewDesc.get as (this: unknown) => unknown, self) as Window | null) : null;
+            if (!w || w === targetWindow) return undefined;
+            const d = cookieAccessor(w.document);
+            return d && d.get !== desc?.get ? d : undefined;
+        } catch { return undefined; }
+    };
+    // This realm's own wrapped accessor (once installed): never handed back to itself.
+    const wrappedGet = (): unknown => cookieAccessor(targetWindow.document)?.get;
+    const wrappedSet = (): unknown => cookieAccessor(targetWindow.document)?.set;
     wrapAccessor<string>(targetWindow.document, "cookie", {
         ...(only !== "set" ? {
             get: (get: (this: unknown) => string, self: unknown) => {
-                const jar = ncall(get, self);
-                if (!ours(self)) return jar;
+                if (!ours(self)) {
+                    const d = theirs(self);
+                    if (d?.get && d.get !== wrappedGet()) return ncall(d.get as (this: unknown) => string, self);
+                    return ncall(get, self);
+                }
+                ncall(get, self); // a document that may not read cookies throws here, as natively
                 snapshotFirst(targetWindow, baseUrl());
                 const legacy = absorbInbox(targetWindow, access(self));
                 return cookieString(selectCookies(true, baseUrl(), liveCookies(targetWindow, legacy)));
@@ -75,7 +94,12 @@ export function patchDocumentCookie(targetWindow: Window, baseUrl: () => URL, on
         } : {}),
         ...(only !== "get" ? {
             set: (set: (this: unknown, v: string) => void, self: unknown, value: string) => {
-                if (!ours(self)) { ncall(set, self, value); return; }
+                if (!ours(self)) {
+                    const d = theirs(self);
+                    if (d?.set && d.set !== wrappedSet()) { ncall(d.set as (this: unknown, v: string) => void, self, value); return; }
+                    ncall(set, self, value);
+                    return;
+                }
                 ncall(nativeGet, self); // a document that may not write cookies throws here, as natively
                 const ch = cookieWrite(String(value), baseUrl());
                 if (ch === null) return;

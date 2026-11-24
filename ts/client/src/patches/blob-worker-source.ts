@@ -32,6 +32,9 @@
 //
 // Known gap: the object URL's origin is the proxy's (blob:http://proxy/…)
 // where natively it is the site's; translating blob: URLs is a follow-up.
+import { specifierProxifier } from "./blob-document";
+import { rewriteUrl, type Dest } from "../url/containment";
+import type { RewriteOne } from "./referrer-policy";
 import { SafeMap, SafeWeakMap, nO, nR, ncall, sIncludes, sStarts } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
 import { rewriteJsSource, defaultJsRewriteOptions } from "../js/rewriter";
@@ -90,8 +93,17 @@ export function patchBlobWorkerSource(
                 const proxyOrigin = new URL(config.apiBaseURL).origin;
                 if (sStarts(own, "blob:" + proxyOrigin + "/")) own = "blob:" + getCurrentBaseUrl().origin + own.slice(5 + proxyOrigin.length);
             } catch { own = getCurrentBaseUrl().href; }
-            const body = buildWorkerPreamble(config, own, module) +
-                rewriteJsSource(src.source, defaultJsRewriteOptions());
+            // A module's static imports are proxified against its own URL (an
+            // absolute one, as a blob's base resolves nothing relative): they
+            // went to their origins.
+            const opts = defaultJsRewriteOptions();
+            if (module) {
+                opts.baseUrl = own;
+                opts.proxify = specifierProxifier(Object.assign((u: string): string => rewriteUrl(u, getCurrentBaseUrl(), config), {
+                    withMark: (u: string, p: string | null, d: Dest | null): string => rewriteUrl(u, getCurrentBaseUrl(), config, p ?? undefined, d ?? undefined),
+                }) as unknown as RewriteOne);
+            }
+            const body = buildWorkerPreamble(config, own, module) + rewriteJsSource(src.source, opts);
             priv = nR.apply(nativeCreate, URLs, [new NativeBlob([body], { type: module ? src.type : "text/javascript" })]) as string;
             privateUrl.set(key, priv);
         }

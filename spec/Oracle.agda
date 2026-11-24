@@ -115,7 +115,7 @@
 --                                         lines: h|d, domain, path, name, value,
 --                                         s|i, H|-, n|l|t|u, "="maxAge|"",
 --                                         "="expires|"", wire name, wire value
---   samesite <n|l|t|u> <same|cross> <nav|other>
+--   samesite <n|l|t|u> <same|cross> <nav|other> [<top|other> <age ms>]
 --                                       → {"out":"yes"} / {"out":"no"}
 --   cookies <api|http> <url> <jar "n=v; n=v">
 --                                       → {"out":"a=1; b=2"}
@@ -537,6 +537,7 @@ dispatch op args =
             else if eqStr t (toList "frame") then just (just destFrame)
             else if eqStr t (toList "inert") then just (just destInert)
             else if eqStr t (toList "set") then just (just destImageSet)
+            else if eqStr t (toList "mjs") then just (just destModuleWorker)
             else nothing
     byMark : Maybe (Maybe Policy) → Maybe (Maybe Dest) → Str
     byMark (just x) (just d) = answerReply raw (rewriteUrlWith px (mark x d) base raw)
@@ -599,7 +600,8 @@ dispatch op args =
     dst = if eqStr m (toList "js") then just destScript else if eqStr m (toList "css") then just destStyle
           else if eqStr m (toList "frame") then just destFrame
           else if eqStr m (toList "inert") then just destInert
-          else if eqStr m (toList "set") then just destImageSet else nothing
+          else if eqStr m (toList "set") then just destImageSet
+          else if eqStr m (toList "mjs") then just destModuleWorker else nothing
     opt : Str → Str → Maybe Str
     opt p v = if eqStr p (toList "1") then just v else nothing
   dispositionReq _ = errorReply "BadRequest"
@@ -1372,14 +1374,15 @@ dispatch op args =
   setCookieReq _ = errorReply "BadRequest"
 
   sameSiteReq : List Str → Str
-  sameSiteReq (f ∷ site ∷ nav ∷ []) with flagOf f
+  sameSiteReq (f ∷ site ∷ nav ∷ []) = sameSiteReq (f ∷ site ∷ nav ∷ toList "other" ∷ toList "999999999" ∷ [])
+  sameSiteReq (f ∷ site ∷ nav ∷ top ∷ age ∷ []) with flagOf f | CookieJar.natOf age
     where
     flagOf : Str → Maybe SameSite
     flagOf x = if eqStr x (toList "n") then just ssNone else if eqStr x (toList "l") then just ssLax
                else if eqStr x (toList "t") then just ssStrict else if eqStr x (toList "u") then just ssDefault
                else nothing
-  ... | just ss = out (toList (if sameSiteAllows ss (eqStr site (toList "same")) (eqStr nav (toList "nav")) then "yes" else "no"))
-  ... | nothing = errorReply "BadRequest"
+  ... | just ss | just a = out (toList (if sameSiteAllows ss (eqStr site (toList "same")) (eqStr nav (toList "nav")) (eqStr top (toList "top")) a then "yes" else "no"))
+  ... | _ | _ = errorReply "BadRequest"
   sameSiteReq _ = errorReply "BadRequest"
 
   cookiesReq : List Str → Str

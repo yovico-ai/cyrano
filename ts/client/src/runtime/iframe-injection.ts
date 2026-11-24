@@ -48,6 +48,21 @@ export function injectIntoIframe(
         if (src && unwrapProxiedUrl(src, parentConfig) !== src) return;
     } catch { return; }
 
+    injectIntoWindow(childWindow, parentWindow, parentConfig, parentBaseHref);
+}
+
+/**
+ * Gives an empty window (a frame's, a popup's — on about:) its creator's
+ * runtime: the same bundle's entry point, the creator's config, the
+ * creator's URL as its base.
+ */
+export function injectIntoWindow(
+    child: Window,
+    parentWindow: Window,
+    parentConfig: ClientConfig,
+    parentBaseHref: string,
+): void {
+    const childWindow = child as WindowWithRewriter;
     try {
         // If the child already has $rewriter (the proxy injected bootstrap into
         // the iframe's HTML and it already ran), there's nothing to do. The

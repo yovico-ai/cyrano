@@ -502,6 +502,14 @@ func (j *Jar) EndSession() {
 	j.Entries = keep
 }
 
+// Created is when the live cookie of c's identity was made (ms), if any.
+func (j *Jar) Created(now uint64, c urlrewrite.StoredCookie) (uint64, bool) {
+	if e := j.findLive(now, c); e != nil {
+		return e.Created, true
+	}
+	return 0, false
+}
+
 // Live is the jar's live cookies at now, in creation order.
 func (j *Jar) Live(now uint64) []urlrewrite.StoredCookie {
 	var out []urlrewrite.StoredCookie
@@ -579,8 +587,13 @@ func OutboxOf(slotValue string) []Numbered {
 }
 
 // InboxFor reports whether a change of a cookie of site is told to the
-// browser as an inbox entry (spec inboxFor): only on a response to a page
-// of that same site, and never on a document's own (its snapshot has it).
-func InboxFor(document bool, requesterSite *string, site string) bool {
-	return requesterSite != nil && !document && *requesterSite == site
+// browser as an inbox entry (spec inboxFor): on a response to a page of that
+// same site; with no page known, or on a document's own response (a
+// download, a frame sent to JSON: no snapshot comes with it), when it is
+// the response's own site (targetSite).
+func InboxFor(document bool, requesterSite *string, targetSite, site string) bool {
+	if requesterSite == nil || document {
+		return targetSite == site
+	}
+	return *requesterSite == site
 }

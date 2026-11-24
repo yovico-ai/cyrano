@@ -51,9 +51,12 @@ func newAIAState() *aiaState {
 			}
 			return io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		},
-		sysPool: x509.SystemCertPool,
+		sysPool: systemPool,
 	}
 }
+
+// systemPool is the system's roots (a test gives its own).
+var systemPool = x509.SystemCertPool
 
 // pool is the root pool upstream clients verify with (nil: the system's).
 func (a *aiaState) pool() *x509.CertPool {

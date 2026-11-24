@@ -148,8 +148,11 @@ function cyranoTarget(pathname: string): { scheme: string; policy: string | null
 // "set": an image a srcset offers (an img's or a picture source's, a
 // preload's imagesrcset): blocked as mixed content where an img's src is
 // upgraded (spec MixedContent; measured).
-export type Dest = "js" | "css" | "frame" | "inert" | "set";
-const isDest = (t: string): boolean => t === "js" || t === "css" || t === "frame" || t === "inert" || t === "set";
+// "mjs": a module worker's script: a script, given the module form of the
+// worker preamble (through the proxy it is asked for same-origin, as a
+// classic one: crumblcookies.com's MapLibre worker got importScripts).
+export type Dest = "js" | "css" | "frame" | "inert" | "set" | "mjs";
+const isDest = (t: string): boolean => t === "js" || t === "css" || t === "frame" || t === "inert" || t === "set" || t === "mjs";
 
 /**
  * The mark of the document an iframe is given (spec Frames.frameDest):
