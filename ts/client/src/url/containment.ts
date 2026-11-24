@@ -151,8 +151,21 @@ function cyranoTarget(pathname: string): { scheme: string; policy: string | null
 // "mjs": a module worker's script: a script, given the module form of the
 // worker preamble (through the proxy it is asked for same-origin, as a
 // classic one: crumblcookies.com's MapLibre worker got importScripts).
-export type Dest = "js" | "css" | "frame" | "inert" | "set" | "mjs";
-const isDest = (t: string): boolean => t === "js" || t === "css" || t === "frame" || t === "inert" || t === "set" || t === "mjs";
+// "cred" / "jsc" / "cssc": an element request whose credentials mode is
+// include (crossorigin=use-credentials, a credentialed EventSource): an
+// unmarked CORS-mode element request has "same-origin" credentials
+// (spec Cookies.elementCookies).
+export type Dest = "js" | "css" | "frame" | "inert" | "set" | "mjs" | "cred" | "jsc" | "cssc";
+const isDest = (t: string): boolean => t === "js" || t === "css" || t === "frame" || t === "inert" || t === "set" || t === "mjs" || t === "cred" || t === "jsc" || t === "cssc";
+
+/** spec Attrs.credDest: a use-credentials element's destination in its credentialed form. */
+export function credDest(useCredentials: boolean, d: Dest | null): Dest | null {
+    if (!useCredentials) return d;
+    if (d === null) return "cred";
+    if (d === "js") return "jsc";
+    if (d === "css") return "cssc";
+    return d;
+}
 
 /**
  * The mark of the document an iframe is given (spec Frames.frameDest):

@@ -6,7 +6,6 @@ package htmlrewrite
 // does not read as the spec reads it is returned unchanged.
 
 import (
-	"encoding/json"
 	"strconv"
 	"strings"
 
@@ -592,7 +591,9 @@ func xmlAttrEdits(rw XMLRewriters, svg bool, tag string, attrs []xattr, scope []
 		case AttrURL:
 			rel, _ := decodedOf("rel")
 			as, hasAs := decodedOf("as")
-			now = rw.URL(URLDest(svg, tag, key, strings.Fields(strings.ToLower(rel)), strings.ToLower(as), hasAs), d)
+			co, coHas := decodedOf("crossorigin")
+			now = rw.URL(urlrewrite.CredDest(!svg && coHas && strings.EqualFold(strings.TrimSpace(co), "use-credentials"),
+				URLDest(svg, tag, key, strings.Fields(strings.ToLower(rel)), strings.ToLower(as), hasAs)), d)
 		case AttrAnimURLs:
 			now = RewriteAnimURLs(d, func(u string) string { return rw.URL("", u) })
 		case AttrURLList:
@@ -665,7 +666,7 @@ func XMLBootstrap(cfg *Config, ns XMLNs) string {
 	} else if ns != XMLSvg {
 		return ""
 	}
-	configJSON, err := json.Marshal(cfg.ClientPassthrough)
+	configJSON, err := asciiJSON(cfg.ClientPassthrough)
 	if err != nil {
 		configJSON = []byte(`{}`)
 	}

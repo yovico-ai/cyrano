@@ -16,11 +16,11 @@
 package upstream
 
 import (
-	"io"
 	"github.com/bogdanfinn/fhttp/httptrace"
 	"github.com/yovico/cyrano/internal/dnscache"
 	"github.com/yovico/cyrano/internal/headerorder"
 	"github.com/yovico/cyrano/internal/urlrewrite"
+	"io"
 	"net"
 	"net/http"
 	"net/textproto"
@@ -83,8 +83,8 @@ type RoundTripper struct {
 func NewRoundTripper(skipVerify bool) *RoundTripper {
 	return &RoundTripper{
 		skipVerify: skipVerify,
-		clients: make(map[string]*clientEntry),
-		aia:     make(map[string]*aiaState),
+		clients:    make(map[string]*clientEntry),
+		aia:        make(map[string]*aiaState),
 	}
 }
 
@@ -95,6 +95,10 @@ type ConnInfo struct {
 	Local, Remote string
 	Reused        bool
 }
+
+// XHRKey marks a request an XHR made (the runtime's Crn-K): Chrome orders
+// its page-set headers first (headerorder.ChromeDefault).
+type XHRKey struct{}
 
 // ConnInfoKey is the context key of a *ConnInfo.
 type ConnInfoKey struct{}
@@ -183,11 +187,18 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		names = append(names, strings.ToLower(k))
 	}
+	// Content-Length is written by the transport, not held in the header:
+	// named here so it takes Chrome's place (after Host and Connection),
+	// not the end (round K).
+	if fReq.ContentLength > 0 || fReq.ContentLength < 0 && fReq.Body != nil && req.Method != http.MethodGet && req.Method != http.MethodHead {
+		names = append(names, "content-length")
+	}
 	sort.Strings(names) // a stable starting point
 	if order := headerorder.FromContext(req.Context()); order != nil {
 		names = headerorder.Apply(order, names)
 	} else {
-		names = headerorder.ChromeDefault(names, strings.EqualFold(req.Header.Get("Sec-Fetch-Mode"), "navigate"))
+		xhr, _ := req.Context().Value(XHRKey{}).(bool)
+		names = headerorder.ChromeDefault(names, strings.EqualFold(req.Header.Get("Sec-Fetch-Mode"), "navigate"), xhr)
 	}
 	fReq.Header[fhttp.HeaderOrderKey] = names
 
@@ -251,6 +262,13 @@ func (rt *RoundTripper) clientFor(key string, profile profiles.ClientProfile) (t
 	idle := 90 * time.Second
 	opts := []tls_client.HttpClientOption{
 		tls_client.WithClientProfile(profile),
+		// Chrome sends its ClientHello extensions in a new order on every
+		// connection (since 108: TLS ClientHello extension permutation); a
+		// profile's fixed order is one constant full JA3 — a known library's
+		// signature — where a browser's never repeats. JA4 sorts them, so it
+		// matched direct while sofascore's edge refused every navigation and
+		// passed a real Chrome 139 a minute later (2026-11-24).
+		tls_client.WithRandomTLSExtensionOrder(),
 		tls_client.WithNotFollowRedirects(),
 		// No overall timeout: rely on the request context (cancelled when the
 		// browser disconnects) so large/streamed downloads aren't cut off.
@@ -500,4 +518,3 @@ func (b *countedBody) Read(p []byte) (int, error) {
 }
 
 func (b *countedBody) Close() error { return b.r.Close() }
-

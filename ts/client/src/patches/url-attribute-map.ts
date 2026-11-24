@@ -1,7 +1,7 @@
 import { rewriteHandlerSource } from "../js/rewriter";
 import { rewriteCssText } from "../css/rewriter";
-import { heldAttr } from "../native/originals";
-import { frameDest, type Dest } from "../url/containment";
+import { heldAttr, originalAttr } from "../native/originals";
+import { credDest, frameDest, type Dest } from "../url/containment";
 // Single source of truth for the URL-bearing attribute list.
 //
 // Three consumers:
@@ -224,11 +224,15 @@ export function urlDestOf(el: Element, attr: string): Dest | null {
     try {
         const svg = el.namespaceURI === SVG_NS;
         const tag = svg ? el.localName : el.localName.toLowerCase();
-        if (tag !== "script" && tag !== "link" && tag !== "iframe" && tag !== "frame" && tag !== "embed" && tag !== "object" && tag !== "img" && tag !== "source") return null;
+        // crossorigin as the page wrote it (the runtime gives every one
+        // use-credentials): use-credentials marks the URL (spec Attrs.credDest).
+        const co = svg ? null : (originalAttr(el, "crossorigin")?.value ?? heldAttr(el, "crossorigin"));
+        const cred = co !== null && lowerA(co.trim()) === "use-credentials";
+        if (tag !== "script" && tag !== "link" && tag !== "iframe" && tag !== "frame" && tag !== "embed" && tag !== "object" && tag !== "img" && tag !== "source") return credDest(cred, null);
         const as = heldAttr(el, "as");
         const dest = urlDest(svg, tag, attr.toLowerCase(), relTokens(heldAttr(el, "rel")), as === null ? null : lowerA(as));
         // An iframe sandboxed without allow-scripts runs nothing (spec Frames.frameDest).
-        return dest === "frame" && tag === "iframe" && !svg ? frameDest(heldAttr(el, "sandbox")) : dest;
+        return credDest(cred, dest === "frame" && tag === "iframe" && !svg ? frameDest(heldAttr(el, "sandbox")) : dest);
     } catch {
         return null;
     }

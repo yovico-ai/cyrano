@@ -83,11 +83,17 @@ func TestApply(t *testing.T) {
 }
 
 func TestChromeDefault(t *testing.T) {
-	// A fetch, as Chrome 139 was measured sending it.
-	have := []string{"accept", "accept-encoding", "accept-language", "dnt", "priority", "referer", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site", "user-agent", "x-custom"}
-	want := "sec-ch-ua-platform user-agent sec-ch-ua x-custom dnt sec-ch-ua-mobile accept sec-fetch-site sec-fetch-mode sec-fetch-dest referer accept-encoding accept-language priority"
+	// A fetch and an XHR, as Chrome 139 was measured sending them (tls.peet.ws,
+	// 2026-11-24, DNT on): a fetch's page-set headers follow
+	// sec-ch-ua-mobile, an XHR's come first; Content-Length leads.
+	have := []string{"accept", "accept-encoding", "accept-language", "content-length", "dnt", "priority", "referer", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site", "user-agent", "x-custom"}
+	want := "content-length sec-ch-ua-platform user-agent sec-ch-ua dnt sec-ch-ua-mobile x-custom accept sec-fetch-site sec-fetch-mode sec-fetch-dest referer accept-encoding accept-language priority"
 	if got := strings.Join(ChromeDefault(have, false), " "); got != want {
 		t.Errorf("fetch:\n got  %s\n want %s", got, want)
+	}
+	wantXHR := "content-length x-custom sec-ch-ua-platform user-agent sec-ch-ua dnt sec-ch-ua-mobile accept sec-fetch-site sec-fetch-mode sec-fetch-dest referer accept-encoding accept-language priority"
+	if got := strings.Join(ChromeDefault(have, false, true), " "); got != wantXHR {
+		t.Errorf("xhr:\n got  %s\n want %s", got, wantXHR)
 	}
 	nav := []string{"accept", "accept-encoding", "accept-language", "cookie", "priority", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site", "sec-fetch-user", "upgrade-insecure-requests", "user-agent"}
 	wantNav := "sec-ch-ua sec-ch-ua-mobile sec-ch-ua-platform upgrade-insecure-requests user-agent accept sec-fetch-site sec-fetch-mode sec-fetch-user sec-fetch-dest accept-encoding accept-language cookie priority"

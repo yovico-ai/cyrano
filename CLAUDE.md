@@ -308,7 +308,16 @@ and origin are the opener's (`popup-blank-vs-chromium`).
   `x.parent = …`: the next token a plain `=`) is left as written (R3, R5),
   so V8 names a function from its target as directly (`obj.<computed>`;
   rewritten, frames read `$rewriter.wrap_member_expression`: Adobe Launch).
-  `window[k] = url` is then the navigation net's (below). Open: stack-trace columns are the
+  `window[k] = url` is then the navigation net's (below). A failed `import()`'s
+  rejection and a worker's `importScripts` NetworkError name the page's
+  URL (R7 wraps import()'s result: the page gets a promise of its own
+  settling as the native's, a microtask later, its rejection's message put
+  right — so unhandledrejection fires as directly; a DOMException is made
+  again, its message being unsettable — `url/error-text.ts`,
+  `error-message-urls-vs-chromium`). R13: an outermost `with` whose body
+  reaches the runtime declares the holder `_crn$g` in a block of its own,
+  so no strict function in it compiles "return this" (the Facebook SDK's
+  `var globalThis = this; with (this)`: kosho.or.jp). Open: stack-trace columns are the
   rewritten text's (a Function body's first line: the preamble's); a server-rewritten inline script's text is restored
   only through the read-back paths (not CSS attribute selectors etc.).
 - **CSP** is weakened, not translated — spec/Csp.agda (both runtimes
@@ -616,7 +625,10 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   hints lower case, other names Title-Case, no Priority. Applied in the
   client trace's GotConn, once ALPN is known; HTTP/2 is untouched. http:
   origins go through the impersonating client too (Go's transport wrote
-  its own order to them). A Cloudflare site that negotiates HTTP/1.1
+  its own order to them). Content-Length goes right after Connection; with no
+  recorded order (the browser on HTTP/2) a fetch's page-set headers follow
+  `sec-ch-ua-mobile`, an XHR's come first (the runtime marks an XHR
+  `Crn-K: xhr`, consumed by the proxy; measured Chrome 139, DNT on and off). A Cloudflare site that negotiates HTTP/1.1
   refused Go's head (spokanecounty.gov). The TLS/H2 fingerprint checks never
   saw this: compare an HTTP/1.1 head by capturing it (a local
   http/1.1-only TLS server, direct Chrome vs `mitmprobe`).
@@ -718,6 +730,29 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   slot assignment, re-assigned at every insertion so a script measures
   the box at once: oarsrowing.com's `<div slot=…>` bar;
   `toolbar-slot-vs-chromium`).
+- **Legacy-encoded documents** (spec/Encoding.agda): a document whose
+  encoding is declared and not UTF-8 (BOM, Content-Type, a `<meta>`
+  anywhere in its head) is decoded, rewritten as text and encoded back, a
+  character the encoding lacks as a character reference
+  (`server.declaredEncoding`); its element URLs', navigations' and XHR's
+  query is the browser's — the input's own query in the document's
+  encoding (server: x/text encoders; client: the browser's own, through
+  an anchor of the document, `url/doc-query.ts`); a meta-declared encoding
+  is also stated in the Content-Type (the bootstrap pushed the meta past
+  the 1024-byte prescan); the bootstrap's JSON is ASCII. Undeclared
+  documents are left as they are (the browser sniffs them)
+  (`legacy-encoding-vs-chromium`, Go `TestE2E_LegacyEncodedDocument`).
+  Gap: a legacy-encoded external script or stylesheet; navigations by
+  location assignment.
+- **Cookies on element requests** (spec/Cookies.agda elementCookies,
+  Attrs.agda credDest): the rewriters give every crossorigin element
+  use-credentials, and to the browser every request is same-origin, so a
+  use-credentials element's URL is marked `!cred` (`!jsc`, `!cssc` for a
+  script or stylesheet; a credentialed EventSource too). A CORS-mode
+  element request (Sec-Fetch-Mode cors, no Crn-C) to another origin without
+  the mark carries no cookies and stores none, as directly: module
+  scripts, fonts, anonymous crossorigin elements, EventSource
+  (`element-credentials-vs-chromium`).
 - **CORP / COEP** (spec/Corp.agda): the proxy runs the cross-origin
   resource policy check for no-cors subresource requests by the page's
   original origin and its recorded embedder policy (COEP /
@@ -792,8 +827,9 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   `internal/dnscache` (browser-like host cache, joined + hedged lookups).
   `CYRANO_PPROF=127.0.0.1:6060` serves pprof for such hunts. A chain the
   server sends short is completed from the certificate's AIA (CA Issuers),
-  as Chrome does: the issuer is accepted only if it verifies to a system
-  root, and the request is tried once more (`upstream/aia.go`; per session, like the clients).
+  as Chrome does, up the chain (at most 4 fetches: Let's Encrypt's
+  Generation Y takes two): accepted only once the leaf verifies to a system
+  root through what was fetched, and the request is tried once more (`upstream/aia.go`; per session, like the clients).
 - **Publisher harness**: direct vs proxied (TLS instance) per site — ad
   requests, filled ad frames, escapes, page errors; ad auctions vary run to
   run, so compare over several runs.
@@ -835,6 +871,12 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   method (spec/Payment.agda, `patches/payment-request.ts`: Chrome fetches
   the method's manifest and app at construction — Stripe's Google Pay on
   kenhub.com fetched gstatic): answered as a method without an app.
+  Protected Audience (spec/AdAuction.agda, `patches/ad-auction.ts`): a
+  join for another owner had the browser fetch the owner's
+  `.well-known/interest-group/permissions/` itself; joins and auctions are
+  answered as Chrome answers a caller it does not allow (own origin:
+  resolves; another owner: NotAllowedError; runAdAuction: null; an
+  incomplete one: the native's TypeError) — `ad-auction-vs-chromium`.
 - **Not wrapped yet**: `AsyncFunction`/`GeneratorFunction` constructors;
   an SVG element's `href.baseVal` (SVGAnimatedString; setAttribute /
   setAttributeNS are rewritten). URL-bearing attributes are one table in

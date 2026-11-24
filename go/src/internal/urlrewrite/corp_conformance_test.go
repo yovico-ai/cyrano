@@ -11,7 +11,7 @@ func TestSpecConformance_CORP(t *testing.T) {
 	oracle := specoracle.Need(t)
 	urls := []string{"https://a.example/p", "http://a.example/p", "https://www.a.example/x", "https://b.example/y", "http://127.0.0.1:8/z", "http://127.0.0.1:9/z", "http://localhost:8/q"}
 	rapid.Check(t, func(rt *rapid.T) {
-		h := rapid.SampledFrom([]string{"-", "same-origin", "same-site", "cross-origin", " same-site ", "Same-Origin", "same-origin, x", ""}).Draw(rt, "header")
+		h := rapid.SampledFrom([]string{"-", "same-origin", "same-site", "cross-origin", " same-site ", "Same-Origin", "same-origin, x", "", "\tsame-origin", "cross-origin\t", "same-sitet", "tsame-origin"}).Draw(rt, "header")
 		emb := rapid.SampledFrom([]string{"none", "require-corp", "credentialless"}).Draw(rt, "embedder")
 		cred := rapid.Bool().Draw(rt, "credentialed")
 		o := rapid.SampledFrom(urls).Draw(rt, "origin")

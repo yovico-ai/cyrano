@@ -238,7 +238,7 @@ rewriteUrlList rw s = go s []
 -- rel: the link types (ASCII-lowercased, as split); as: its as
 -- (ASCII-lowercased; nothing: absent).
 
-open import Containment using (Dest; destScript; destStyle; destFrame; destImageSet)
+open import Containment using (Dest; destScript; destStyle; destFrame; destImageSet; destCred; destScriptCred; destStyleCred)
 
 hasRel : String → List Str → Bool
 hasRel r []       = false
@@ -292,3 +292,14 @@ crossoriginValue html tag rel as =
   r a : Str
   r = map lowerAscii rel
   a = map lowerAscii as
+
+-- The destination of an element whose crossorigin is use-credentials (as
+-- the page wrote it): its credentialed form (Containment destCred …) — a
+-- script's, a stylesheet's, or none other's; a frame's or a srcset's is
+-- no CORS request and stays.
+credDest : Bool → Maybe Dest → Maybe Dest
+credDest false d                  = d
+credDest true  nothing            = just destCred
+credDest true  (just destScript)  = just destScriptCred
+credDest true  (just destStyle)   = just destStyleCred
+credDest true  d                  = d

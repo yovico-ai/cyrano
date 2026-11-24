@@ -145,7 +145,21 @@ func (h *Handler) upstreamCookies(req *http.Request, target *url.URL, sessionID 
 	// A request the page made without credentials (fetch's "omit", or its
 	// default to another origin) carries no cookies, and its response's
 	// Set-Cookie is not stored (Fetch; spec/Fetch.agda includesCredentials).
-	if strings.EqualFold(req.Header.Get(CredentialsHeader), "omit") {
+	// An element's CORS-mode request (no credentials mode named by the
+	// runtime: not fetch() / XHR) has "same-origin" credentials unless its
+	// URL is marked credentialed (crossorigin=use-credentials, a
+	// credentialed EventSource): to another origin it carries no cookies
+	// (spec Cookies.elementCookies; round I: module scripts, fonts,
+	// crossorigin elements went with the target's cookies).
+	elementOmits := false
+	if req.Header.Get(CredentialsHeader) == "" && strings.EqualFold(req.Header.Get("Sec-Fetch-Mode"), "cors") {
+		mark, _ := req.Context().Value(destContextKey{}).(urlrewrite.Dest)
+		if from := h.requestingDocument(req); from != nil {
+			same := strings.EqualFold(from.Scheme+"://"+from.Host, target.Scheme+"://"+target.Host)
+			elementOmits = !urlrewrite.ElementCookies(true, mark.Credentialed(), same)
+		}
+	}
+	if elementOmits || strings.EqualFold(req.Header.Get(CredentialsHeader), "omit") {
 		req.Header.Del("Cookie")
 		*req = *req.WithContext(context.WithValue(req.Context(), noCredentialsKey{}, true))
 		return

@@ -7,6 +7,7 @@
 import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { credDest } from "../../src/url/containment";
 import { rewriteAnimUrls, rewriteUrlList, urlAttrKind, urlAttrKindIn, urlDest } from "../../src/patches/url-attribute-map";
 import { rewriteUrl } from "../../src/url/containment";
 import type { ClientConfig } from "../../src/config";
@@ -42,9 +43,11 @@ describe.skipIf(located.skip !== "")("URL attributes: spec conformance", () => {
         const bad: string[] = [];
         for (const ns of ["html", "svg"]) for (const t of ["script", "link", "img", "a", "image"]) for (const a of ["src", "href", "xlink:href"])
             for (const rel of rels) for (const as of ases) {
-                const want = await oracle.ask("urldest", [ns, t, a, rel, as]);
-                const got = urlDest(ns === "svg", t, a, rel.split(" ").filter((x) => x !== ""), as === "-" ? null : as) ?? "-";
-                if (got !== want) bad.push(`${ns} ${t} ${a} rel=${rel} as=${as}: ${got}, spec ${want}`);
+                for (const cred of [false, true]) {
+                    const want = await oracle.ask("urldest", [ns, t, a, rel, as, ...(cred ? ["cred"] : [])]);
+                    const got = credDest(cred, urlDest(ns === "svg", t, a, rel.split(" ").filter((x) => x !== ""), as === "-" ? null : as)) ?? "-";
+                    if (got !== want) bad.push(`${ns} ${t} ${a} rel=${rel} as=${as} cred=${cred}: ${got}, spec ${want}`);
+                }
             }
         expect(bad).toEqual([]);
     });

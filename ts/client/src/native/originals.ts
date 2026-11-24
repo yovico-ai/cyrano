@@ -404,13 +404,22 @@ export function serializedAsWritten(node: Node, serialize: (n: Node) => string):
  * text `raw` it holds now. A rewritten script's text is the only text that
  * differs: by its marked edits (js/marks.ts), or by the store.
  */
+/**
+ * A <script> or <style>, HTML's or SVG's, in any document (tagName keeps
+ * an XML document's case: an SVG sprite's <style>, an XHTML <script>).
+ */
+export function isScriptOrStyle(el: Element): boolean {
+    const ns = el.namespaceURI, l = el.localName;
+    return (l === "script" || l === "style") && (ns === "http://www.w3.org/1999/xhtml" || ns === "http://www.w3.org/2000/svg");
+}
+
 export function textAsWritten(node: unknown, raw: string): string {
     if (!nat || typeof node !== "object" || node === null) return raw;
     const n = node as Node;
     try {
         if (n.nodeType === 3 || n.nodeType === 4) {
             const parent = n.parentNode as Element | null;
-            if (!parent || parent.nodeType !== 1 || (parent.tagName !== "SCRIPT" && parent.tagName !== "STYLE")) return raw;
+            if (!parent || parent.nodeType !== 1 || !isScriptOrStyle(parent)) return raw;
             const own = textNodeAsWritten(n);
             if (own !== undefined) return own;
             if (!n.previousSibling && !n.nextSibling) return originalText(parent) ?? raw;

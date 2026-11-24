@@ -359,10 +359,12 @@ func matches(order []string, r *http.Request) bool {
 
 // ChromeDefault orders `have` as Chrome typically does, for when the
 // browser's own order is not known (it reached the proxy over HTTP/2).
-// Measured from Chrome on the wire (tls.peet.ws): a navigation and a
-// fetch/subresource request differ in where the client hints and
-// user-agent go; headers set by page code follow content-type.
-func ChromeDefault(have []string, navigation bool) []string {
+// Measured from Chrome on the wire (tls.peet.ws, 2026-11-24): a navigation
+// and a fetch/subresource request differ in where the client hints and
+// user-agent go; headers set by page code follow sec-ch-ua-mobile for a
+// fetch(), and come first for an XHR (xhr).
+func ChromeDefault(have []string, navigation bool, xhr ...bool) []string {
+	isXHR := len(xhr) > 0 && xhr[0]
 	nav := []string{
 		"content-length", "cache-control", "pragma", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "origin", "content-type",
 		"upgrade-insecure-requests", "user-agent", "accept", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-user", "sec-fetch-dest",
@@ -370,12 +372,20 @@ func ChromeDefault(have []string, navigation bool) []string {
 	}
 	other := []string{
 		"content-length", "pragma", "cache-control", "sec-ch-ua-platform", "authorization", "user-agent", "sec-ch-ua", "content-type",
-		"\x00custom", "dnt", "sec-ch-ua-mobile", "accept", "range", "origin", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest",
+		"dnt", "sec-ch-ua-mobile", "\x00custom", "accept", "range", "origin", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest",
+		"sec-fetch-storage-access", "referer", "accept-encoding", "accept-language", "if-none-match", "if-modified-since", "cookie", "priority",
+	}
+	xhrOrder := []string{
+		"content-length", "\x00custom", "pragma", "cache-control", "sec-ch-ua-platform", "authorization", "user-agent", "sec-ch-ua", "content-type",
+		"dnt", "sec-ch-ua-mobile", "accept", "range", "origin", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest",
 		"sec-fetch-storage-access", "referer", "accept-encoding", "accept-language", "if-none-match", "if-modified-since", "cookie", "priority",
 	}
 	tmpl := other
-	if navigation {
+	switch {
+	case navigation:
 		tmpl = nav
+	case isXHR:
+		tmpl = xhrOrder
 	}
 	present := make(map[string]bool, len(have))
 	for _, h := range have {

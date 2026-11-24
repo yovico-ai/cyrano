@@ -20,12 +20,13 @@
 // before any onload event fires. The only reliable interception point is
 // inside appendChild itself, before it returns to the caller.
 
-import { SafeWeakMap, nO, nOP, nR, ncall } from "../native/intrinsics";
+import { SafeWeakMap, SafeWeakSet, nO, nOP, nR, ncall } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
 import { replaceValue, wrapMethod } from "../native/surface";
 import { unwrapProxiedUrl } from "../url/containment";
 import { injectIntoIframe } from "../runtime/iframe-injection";
 import { rawText, rawTextTarget, rewriteTextNode } from "./dynamic-html";
+import { rewriteCssText } from "../css/rewriter";
 import { scriptKindOf } from "./script-kind";
 import { trusted } from "../native/trusted";
 import { rewriteSrcsetAttribute } from "./srcset";
@@ -84,18 +85,27 @@ export function patchDynamicIframeAppend(
     // value recorded so it reads back. A tree from another document is
     // walked whole; one of this document's, only its root (its own
     // descendants went through the setters).
-    const fixElement = (el: Element): void => {
-        for (const name of urlAttrsOf(el)) {
+    // The edits fixElement makes: [attribute, the page's value, rewritten].
+    // A tree handed over from another document has its style attributes
+    // rewritten too (the page's own went through the style setters).
+    const fixAttrs = (el: Element, record: boolean, styles: boolean): Array<[string, string, string]> => {
+        const done: Array<[string, string, string]> = [];
+        const names = urlAttrsOf(el);
+        for (const name of styles ? [...names, "style"] : names) {
             if (originalAttr(el, name) !== undefined) continue; // the runtime's already
             const raw = ncall(nativeGetAttr, el, name) as string | null;
             if (!raw) continue;
             // Marked as by the setters: what it is requested for, its policy.
-            const rewritten = rewriteByKind(kindOf(el, name), raw, rewriteFor(el, rewriteOne, name), rewriteSrcsetAttribute);
+            const rewritten = name === "style" ? rewriteCssText(raw, rewriteOne)
+                : rewriteByKind(kindOf(el, name), raw, rewriteFor(el, rewriteOne, name), rewriteSrcsetAttribute);
             if (rewritten === raw) continue;
             ncall(nativeSetAttr, el, name, rewritten);
-            recordAttr(el, name, rewritten, raw);
+            if (record) recordAttr(el, name, rewritten, raw);
+            done.push([name, raw, rewritten]);
         }
+        return done;
     };
+    const fixElement = (el: Element, styles = false): void => { fixAttrs(el, true, styles); };
     // A script's kind is judged when it is inserted (HTML "prepare the
     // script element"), not when its text is set: a script whose text was
     // written while it was no JavaScript (type text/plain — every consent
@@ -118,14 +128,33 @@ export function patchDynamicIframeAppend(
         setHeldText(el, trusted(targetWindow, "Script", raw));
         recordText(el, raw, text);
     };
+    // A <style> of a tree from another document (an XML one's: no setter
+    // and no HTML parse rewrote it — an SVG sprite's @import, url()): its
+    // CSS, the page's text recorded so it reads back as written.
+    const fixStyle = (el: Element): void => {
+        if (el.localName !== "style" || originalText(el) !== undefined) return;
+        for (let c = el.firstChild; c; c = c.nextSibling) if (c.nodeType !== 3 && c.nodeType !== 4) return;
+        const text = heldText(el);
+        if (!text) return;
+        const raw = rewriteCssText(text, rewriteOne);
+        if (raw === text) return;
+        setHeldText(el, raw);
+        recordText(el, raw, text);
+    };
     function rewriteUrlBeforeInsert(node: Node, moving = false): void {
         try {
             if (node.nodeType === 1) fixElement(node as Element);
-            const foreign = node.ownerDocument !== null && node.ownerDocument !== targetWindow.document;
+            // importNode / adoptNode hand a tree over before it is inserted:
+            // it is the page document's then, still as its own was written.
+            const foreign = node.ownerDocument !== null && node.ownerDocument !== targetWindow.document || handedOver.has(node);
             const q = (node as { querySelectorAll?: (s: string) => ArrayLike<Element> }).querySelectorAll;
+            if (foreign && node.nodeType === 1) { fixElement(node as Element, true); fixStyle(node as Element); }
             if ((foreign || node.nodeType === 11) && typeof q === "function" && node.firstChild) {
                 const all = ncall(q, node, "*") as ArrayLike<Element>;
-                for (let i = 0; i < all.length; i++) fixElement(all[i]!);
+                for (let i = 0; i < all.length; i++) {
+                    fixElement(all[i]!, foreign);
+                    if (foreign) fixStyle(all[i]!);
+                }
             }
             // Scripts anywhere in what is inserted (a move prepares none).
             if (!moving) {
@@ -192,6 +221,62 @@ export function patchDynamicIframeAppend(
     };
     frameInjectors.set(targetWindow, (root) => { injectAll(framesIn(root)); inserted(targetWindow); });
 
+    // Nodes importNode / adoptNode handed over from another document (each
+    // element of the tree: one may be inserted alone).
+    const handedOver = new SafeWeakSet<object>();
+    // A tree's elements in document order (the root first, when it is one).
+    const elementsOf = (node: Node, deep: boolean): Element[] => {
+        const out: Element[] = [];
+        if (node.nodeType === 1) out.push(node as Element);
+        const q = (node as { querySelectorAll?: (s: string) => ArrayLike<Element> }).querySelectorAll;
+        if (deep && typeof q === "function" && node.firstChild) {
+            const all = ncall(q, node, "*") as ArrayLike<Element>;
+            for (let i = 0; i < all.length; i++) out.push(all[i]!);
+        }
+        return out;
+    };
+    // Chromium starts some fetches as an element enters the page's document
+    // (an external <use>), before it is inserted: the tree's URLs are put
+    // right before the native hands it over — adoptNode's in place (in its
+    // own document, which fetches nothing), importNode's in the source for
+    // the moment of the clone, the page's values given back to the source
+    // and recorded on the clone.
+    const docProto = globals["Document"]?.prototype as object | undefined;
+    const handOver = (native: (...a: unknown[]) => unknown, self: unknown, args: unknown[], adopt: boolean): unknown => {
+        const node = args[0];
+        let from: unknown = null;
+        try { from = node instanceof Object ? (node as Node).ownerDocument : null; } catch { from = null; }
+        if (from === null || from === self || !(node instanceof Object)) return nR.apply(native, self, args);
+        let src: Element[] = [];
+        const edits: Array<Array<[string, string, string]>> = [];
+        try {
+            src = elementsOf(node as Node, adopt || Boolean(args[1]));
+            for (const el of src) edits.push(fixAttrs(el, adopt, true));
+        } catch { /* as it is */ }
+        let out: unknown;
+        try {
+            out = nR.apply(native, self, args);
+        } finally {
+            if (!adopt) {
+                for (let i = 0; i < edits.length; i++) for (const [name, raw] of edits[i]!) {
+                    try { ncall(nativeSetAttr, src[i]!, name, raw); } catch { /* as it is */ }
+                }
+            }
+        }
+        try {
+            const made = elementsOf(out as Node, true);
+            for (const el of made) handedOver.add(el);
+            handedOver.add(out as object);
+            if (!adopt) for (let i = 0; i < edits.length && i < made.length; i++) for (const [name, raw, rewritten] of edits[i]!) recordAttr(made[i]!, name, rewritten, raw);
+        } catch { /* as it is */ }
+        return out;
+    };
+    if (docProto) {
+        for (const key of ["importNode", "adoptNode"] as const) {
+            if (typeof nO.getOwnPropertyDescriptor(docProto, key)?.value !== "function") continue;
+            wrapMethod<(...a: unknown[]) => unknown>(docProto, key, (native, self, args) => handOver(native, self, args, key === "adoptNode"));
+        }
+    }
     for (const key of ["appendChild", "insertBefore", "replaceChild"] as const) {
         wrapMethod<(...a: unknown[]) => Node>(proto, key, (native, self, args) => {
             const node = args[0];

@@ -88,7 +88,9 @@ func asHTTP1(h fhttp.Header, host string) {
 	seen := map[string]bool{}
 	names := make([]string, 0, len(vals))
 	for _, n := range order {
-		if l := strings.ToLower(n); vals[l] != nil && !seen[l] {
+		// Content-Length is added by the transport as it writes the head
+		// (not in the map yet): its place in the order is kept.
+		if l := strings.ToLower(n); (vals[l] != nil || l == "content-length") && !seen[l] {
 			seen[l] = true
 			names = append(names, l)
 		}
@@ -108,7 +110,9 @@ func asHTTP1(h fhttp.Header, host string) {
 		case "connection":
 			h[n] = []string{"keep-alive"}
 		default:
-			h[n] = vals[lower[i]]
+			if v := vals[lower[i]]; v != nil {
+				h[n] = v
+			}
 		}
 	}
 	h[fhttp.HeaderOrderKey] = lower

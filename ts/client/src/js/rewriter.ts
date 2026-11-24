@@ -352,6 +352,8 @@ const SET_LOCATION = "$rewriter.wrap_set_location(location, function(v){location
  * SDK's strict modules inside a with, in Disqus frames: armorgames.com).
  */
 const WITH_GLOBAL = '((typeof _crn$g!=="undefined"&&_crn$g)||(function(){return this})()||(typeof globalThis!=="undefined"&&globalThis&&globalThis.$rewriter&&globalThis)||(function(){}).constructor("return this")()).';
+/** R13: the holder an outermost with's block declares (its sites take it first). */
+const WITH_BLOCK = "{let _crn$g={$rewriter:$rewriter,$__crn_key__:$__crn_key__};";
 function inWith(ins: string): string {
     return ins.replace(/\$rewriter\./g, WITH_GLOBAL + "$rewriter.").replace(/\$__crn_key__/g, WITH_GLOBAL + "$__crn_key__");
 }
@@ -434,7 +436,7 @@ function memberHelper(name: string, called: boolean, o: JsRewriteOptions): strin
  *      it gives eval itself, so a later `eval(s)` stays direct. The runtime's
  *      wrap_eval_arg rewrites only when F is an evaluator (spec/Eval.agda:
  *      passthrough). A call of eval under another name is not rewritten.
- *  R7  import(s)  →  import($rewriter.wrap_import_arg(s,"<script URL>"))
+ *  R7  import(s)  →  $rewriter.wrap_import_result(import($rewriter.wrap_import_arg(s,"<script URL>")))
  *      (a literal s, when it can be proxified now, is replaced instead)
  *  R8  import … from "s" / export … from "s"  →  the specifier proxified
  *  R9  import.meta.url  →  "<script URL>"
@@ -563,6 +565,12 @@ class Splicer {
                     this.close(s.end, this.o.baseUrl ? "," + JSON.stringify(this.o.baseUrl) + ")" : ")");
                 }
                 this.visit(n["options"], "expr", false);
+                // Its rejection names the page's URL, as natively (the browser
+                // was asked for the proxified one).
+                if (this.o.wrapImportArg) {
+                    this.open(n.start, "$rewriter.wrap_import_result(");
+                    this.close(n.end, ")");
+                }
                 return;
             }
 
@@ -687,12 +695,26 @@ class Splicer {
             case "EmptyStatement":
                 return;
 
-            case "WithStatement": // R13
+            case "WithStatement": { // R13
                 this.visit(n["object"] as N, "expr", false);
+                const e0 = this.edits.length;
                 this.withDepth++;
                 this.visit(n["body"] as N, "expr", false);
                 this.withDepth--;
+                // The outermost with whose body reaches the runtime gets the
+                // holder, in a block of its own, made outside the with (where
+                // $rewriter is reachable): its R13 sites find it first, so
+                // none compiles "return this" (refused without 'unsafe-eval';
+                // a compile per evaluation otherwise — the Facebook SDK's
+                // strict modules in its with: kosho.or.jp).
+                let reaches = false;
+                for (let i = e0; i < this.edits.length && !reaches; i++) reaches = sIncludes(this.edits[i]!.ins, "_crn$g");
+                if (this.withDepth === 0 && reaches) {
+                    this.open(n.start, WITH_BLOCK);
+                    this.close(n.end, "}");
+                }
                 return;
+            }
 
             case "DebuggerStatement": // R12
                 if (this.o.stripDebugger) this.replace(n.start, n.end - n.start, ";");

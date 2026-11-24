@@ -90,7 +90,7 @@ describe.skipIf(!wanted)("mixed content, in Chromium, through the proxy", () => 
         pageOrigin = `https://${host}:${(page.address() as { port: number }).port}`;
         const port = await free();
         proxyOrigin = `http://localhost:${port}`;
-        proxy = spawn(binary, ["--assets", resolve(root, "go/assets"), "--log-level", "warn"], {
+        proxy = spawn(binary, ["--assets", process.env.CYRANO_ASSETS ?? resolve(root, "go/assets"), "--log-level", "warn"], {
             env: { ...process.env, SSL_CERT_FILE: `${ca}/ca.pem`, CYRANO_PUBLIC_URL: proxyOrigin, CYRANO_PORT: String(port), CYRANO_HOSTNAME: "localhost", CYRANO_HTTPS_ENABLED: "false" },
             stdio: "ignore",
         });

@@ -214,6 +214,13 @@ const (
 	// script, given the module form of the worker preamble (through the
 	// proxy it is asked for same-origin, as a classic one).
 	DestModuleWorker Dest = "mjs"
+	// DestCred, DestScriptCred, DestStyleCred: an element request whose
+	// credentials mode is include (crossorigin=use-credentials, a
+	// credentialed EventSource); an unmarked CORS-mode element request has
+	// "same-origin" credentials (spec Cookies.elementCookies).
+	DestCred       Dest = "cred"
+	DestScriptCred Dest = "jsc"
+	DestStyleCred  Dest = "cssc"
 )
 
 // FrameDest is the mark of the document an iframe is given (spec
@@ -351,7 +358,8 @@ func schemeSegment(seg string) (scheme string, m Mark, ok bool) {
 		return "", Mark{}, false
 	}
 	dest := func(t string) Dest {
-		if t == string(DestScript) || t == string(DestStyle) || t == string(DestFrame) || t == string(DestInert) || t == string(DestImageSet) || t == string(DestModuleWorker) {
+		if t == string(DestScript) || t == string(DestStyle) || t == string(DestFrame) || t == string(DestInert) || t == string(DestImageSet) || t == string(DestModuleWorker) ||
+			t == string(DestCred) || t == string(DestScriptCred) || t == string(DestStyleCred) {
 			return Dest(t)
 		}
 		return ""
@@ -483,3 +491,26 @@ func DocumentBase(doc *url.URL, href string) *url.URL {
 	}
 	return doc
 }
+
+// CredDest is spec Attrs.credDest: a use-credentials element's destination
+// in its credentialed form.
+func CredDest(useCredentials bool, d Dest) Dest {
+	if !useCredentials {
+		return d
+	}
+	switch d {
+	case "":
+		return DestCred
+	case DestScript:
+		return DestScriptCred
+	case DestStyle:
+		return DestStyleCred
+	}
+	return d
+}
+
+// Credentialed: the mark says the element request carries credentials.
+func (d Dest) Credentialed() bool { return d == DestCred || d == DestScriptCred || d == DestStyleCred }
+
+// ElementCookies is spec Cookies.elementCookies.
+func ElementCookies(cors, credentialed, sameOrigin bool) bool { return !cors || credentialed || sameOrigin }

@@ -47,6 +47,10 @@ func (p *parser) replace(pos, del int, ins string) {
 // 'unsafe-eval'). R13 (TS: WITH_GLOBAL in ts/client/src/js/rewriter.ts).
 const withGlobal = `((typeof _crn$g!=="undefined"&&_crn$g)||(function(){return this})()||(typeof globalThis!=="undefined"&&globalThis&&globalThis.$rewriter&&globalThis)||(function(){}).constructor("return this")()).`
 
+// withBlock opens the block an outermost with is given, declaring the
+// holder its R13 sites take first (TS: WITH_BLOCK).
+const withBlock = "{let _crn$g={$rewriter:$rewriter,$__crn_key__:$__crn_key__};"
+
 // rt is an edit's text as written where it lands: inside a with body the
 // runtime's names go through the global object (Vue's compiled templates
 // run in with(_ctx), whose Proxy claims every name).

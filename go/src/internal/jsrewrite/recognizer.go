@@ -623,11 +623,26 @@ func (p *parser) statement() {
 			p.next()
 			return
 		case "with":
+			start := p.tok.start
 			p.next()
 			p.parenExpr()
+			e0 := len(p.edits)
 			p.withDepth++ // R13
 			p.statement()
 			p.withDepth--
+			// The outermost with whose body reaches the runtime gets the
+			// holder, in a block of its own, made outside the with: its R13
+			// sites find it first, so none compiles "return this" (TS:
+			// WITH_BLOCK; the Facebook SDK's strict modules, kosho.or.jp).
+			if p.withDepth == 0 {
+				for _, e := range p.edits[e0:] {
+					if strings.Contains(e.ins, "_crn$g") {
+						p.open(start, withBlock)
+						p.close(p.prevEnd, "}")
+						break
+					}
+				}
+			}
 			return
 		case "debugger":
 			// R12: an empty statement in its place (with its semicolon, so
@@ -1719,6 +1734,11 @@ func (p *parser) importCall(start int) expr {
 	}
 	p.noIn, p.forInit = noIn, forInit
 	p.expect(")")
+	// Its rejection names the page's URL, as natively (TS: the same).
+	if p.o.WrapImportArg {
+		p.open(start, "$rewriter.wrap_import_result(")
+		p.close(p.prevEnd, ")")
+	}
 	return expr{start: start, end: p.prevEnd}
 }
 

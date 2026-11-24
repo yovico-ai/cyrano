@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+
+	"github.com/yovico/cyrano/internal/upstream"
 )
 
 func TestCORSCheck(t *testing.T) {
@@ -42,6 +44,26 @@ func TestCORSCheck(t *testing.T) {
 	} {
 		if got := mk(c.mode, c.init, c.creds, c.h); got != c.fails {
 			t.Errorf("%s: fails=%v, want %v", c.name, got, c.fails)
+		}
+	}
+}
+
+// The runtime's Crn-K marks an XHR for the header order and is consumed:
+// the origin never sees it.
+func TestKindHeaderConsumed(t *testing.T) {
+	target, _ := url.Parse("https://api.test/data")
+	for _, kind := range []string{"xhr", ""} {
+		req := httptest.NewRequest("GET", "https://api.test/data", nil)
+		if kind != "" {
+			req.Header.Set(KindHeader, kind)
+		}
+		noteCORS(req, target)
+		if req.Header.Get(KindHeader) != "" {
+			t.Errorf("%q: Crn-K left on the request", kind)
+		}
+		xhr, _ := req.Context().Value(upstream.XHRKey{}).(bool)
+		if xhr != (kind == "xhr") {
+			t.Errorf("%q: XHR mark %v", kind, xhr)
 		}
 	}
 }

@@ -3,8 +3,10 @@
 // R13 (a strict function inside a `with` reaching the runtime) under a CSP
 // without 'unsafe-eval', in real Chromium, direct and proxied
 // (armorgames.com, okmagazine.com, 2026-11-23: the Facebook SDK in Disqus
-// frames). The global object is found without compiling code: no EvalError
-// and no CSP violation, the value as direct.
+// frames; kosho.or.jp, 2026-11-24: the SDK's own `var globalThis = this`
+// over its sandbox object, `with (this)`). The global object is found
+// without compiling code: no EvalError and no CSP violation, the value as
+// direct.
 //
 // Needs the built bundle and Playwright's Chromium; `make browser-check`.
 
@@ -25,6 +27,7 @@ type Browser = { newPage(): Promise<Page>; close(): Promise<void> };
 const FRAME = `<meta http-equiv="Content-Security-Policy" content="script-src 'unsafe-inline'"><script>
 window.out = []; document.addEventListener("securitypolicyviolation", (e) => out.push("CSPV " + e.violatedDirective));
 try { with ({ z: 1 }) { out.push("val " + (function () { "use strict"; var o = { a: 1 }, k = "a"; return o[k]; })()); } } catch (e) { out.push("THROW " + e.name); }
+try { (function () { var globalThis = this; with (this) { out.push("sdk " + (function () { "use strict"; var r = { object: 2 }, e = {}; return r[typeof e]; })()); } }).call({ window, document }); } catch (e) { out.push("THROW " + e.name); }
 <\/script>`;
 const SCRIPT = `
 const f = document.createElement("iframe"); f.srcdoc = ${JSON.stringify("__FRAME__")}; document.body.append(f);
@@ -75,7 +78,7 @@ describe.skipIf(!wanted)("R13 under a CSP without 'unsafe-eval', in Chromium", (
     it("runs as direct, with no eval", async () => {
         const direct = await run("/direct");
         const proxied = await run("/cyrano/https/site.example/page");
-        expect(direct).toEqual(["val 1"]);
+        expect(direct).toEqual(["val 1", "sdk 2"]);
         expect(proxied).toEqual(direct);
     });
 });

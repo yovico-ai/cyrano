@@ -178,3 +178,49 @@ func TestHTTPAfterHTTPSSameHostPort(t *testing.T) {
 		resp.Body.Close() // the TLS server answers 400 to plain HTTP: what matters is that it was HTTP/1.1
 	}
 }
+
+// A POST with a body and a page-set header, as Chrome writes it over
+// HTTP/1.1 (measured direct, round K): Content-Length right after
+// Connection, the page's header after sec-ch-ua-mobile for a fetch(), first
+// for an XHR. The browser reached the proxy over HTTP/2: no recorded order.
+func TestHTTP1HeadPostIsChromes(t *testing.T) {
+	rt := NewRoundTripper(true)
+	for _, xhr := range []bool{false, true} {
+		base, heads := headServer(t, false)
+		ctx := context.Background()
+		if xhr {
+			ctx = context.WithValue(ctx, XHRKey{}, true)
+		}
+		req, _ := http.NewRequestWithContext(ctx, "POST", base+"/p", strings.NewReader("x"))
+		for _, kv := range [][2]string{
+			{"sec-ch-ua-platform", `"Linux"`}, {"user-agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"},
+			{"sec-ch-ua", `"Not;A=Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"`}, {"content-type", "text/plain;charset=UTF-8"},
+			{"sec-ch-ua-mobile", "?0"}, {"x-mine", "1"}, {"accept", "*/*"}, {"origin", "http://a.test"}, {"sec-fetch-site", "same-origin"},
+			{"sec-fetch-mode", "cors"}, {"sec-fetch-dest", "empty"}, {"referer", "http://a.test/"}, {"accept-encoding", "gzip, deflate, br, zstd"},
+		} {
+			req.Header.Set(kv[0], kv[1])
+		}
+		resp, err := rt.RoundTrip(req)
+		if err != nil {
+			t.Fatalf("xhr=%v: %v", xhr, err)
+		}
+		resp.Body.Close()
+		var head string
+		select {
+		case head = <-heads:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("xhr=%v: no request arrived", xhr)
+		}
+		var names []string
+		for _, l := range strings.Split(strings.TrimRight(head, "\r\n"), "\r\n")[1:] {
+			names = append(names, strings.ToLower(l[:strings.IndexByte(l, ':')]))
+		}
+		want := "host connection content-length sec-ch-ua-platform user-agent sec-ch-ua content-type sec-ch-ua-mobile x-mine accept origin sec-fetch-site sec-fetch-mode sec-fetch-dest referer accept-encoding"
+		if xhr {
+			want = "host connection content-length x-mine sec-ch-ua-platform user-agent sec-ch-ua content-type sec-ch-ua-mobile accept origin sec-fetch-site sec-fetch-mode sec-fetch-dest referer accept-encoding"
+		}
+		if got := strings.Join(names, " "); got != want {
+			t.Errorf("xhr=%v: head names\n got  %s\n want %s", xhr, got, want)
+		}
+	}
+}

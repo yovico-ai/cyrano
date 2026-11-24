@@ -23,6 +23,7 @@ import { patchStorageNames } from "../patches/storage";
 import { patchCacheUrls } from "../patches/cache-urls";
 import { honourOptionalChains } from "./optional";
 import type { ClientConfig } from "../config";
+import { unwrapErrorMessage, unwrapRejection } from "../url/error-text";
 import { isUrlLikeSpecifier, rewriteUrl, unwrapProxiedUrl } from "../url/containment";
 import { metaResolver } from "../wrappers/meta-resolve";
 import { WorkerWrappedLocation } from "../wrappers/worker-location";
@@ -63,6 +64,7 @@ export interface WorkerRewriterApi {
     wrap_eval_arg(evalFn: typeof eval, source: unknown): unknown;
     wrap_eval_memexp(obj: unknown): unknown;
     wrap_import_arg(specifier: unknown, scriptUrl?: unknown): unknown;
+    wrap_import_result<T>(p: T): T;
     wrap_meta_resolve(meta: unknown): unknown;
     wrap_worker_url(url: unknown): unknown;
 }
@@ -107,6 +109,7 @@ export function initWorker(
     const isOwn = (loc: unknown): boolean =>
         loc === wrappedLocation || (loc !== undefined && loc === scopeLocation) || isLocationObject(loc);
 
+    const scopeDOMException = (scope as unknown as { DOMException?: new (m: string, n: string) => unknown }).DOMException;
     const api: WorkerRewriterApi = {
         // The scope's location is the view; a local binding named
         // `location` is the page's own value (api.ts).
@@ -156,6 +159,7 @@ export function initWorker(
         wrap_eval: wrapEval,
         wrap_eval_arg: wrapEvalArg,
         wrap_eval_memexp: wrapEvalMemexp,
+        wrap_import_result: (p) => unwrapRejection(p, new URL(config.apiBaseURL).origin, unwrapOne, scopeDOMException),
         wrap_import_arg: (specifier, scriptUrl) => {
             if (typeof specifier !== "string" || !isUrlLikeSpecifier(specifier)) return specifier;
             let base = baseUrl;
@@ -217,12 +221,21 @@ function patchWorkerScope(
     patchFunctionConstructor(realm);
     // importScripts is classic-worker-only and synchronous.
     if (typeof scope.importScripts === "function") {
-        wrapMethod<(...a: unknown[]) => void>(scope, "importScripts", (native, self, args) =>
-            nR.apply(native, self, args.map((u) => {
+        const proxy = new URL(config.apiBaseURL).origin;
+        const DE = (scope as unknown as { DOMException?: new (m: string, n: string) => unknown }).DOMException;
+        wrapMethod<(...a: unknown[]) => void>(scope, "importScripts", (native, self, args) => {
+            const urls = args.map((u) => {
                 // A script's URL: marked so (spec/Containment.agda Dest).
                 const r = rewriteUrl(String(u), baseUrl, config, undefined, "js");
                 return isTrustedValue(u) ? trusted(scope, "ScriptURL", r) : r;
-            })) as void);
+            });
+            try {
+                return nR.apply(native, self, urls) as void;
+            } catch (e) {
+                // Its NetworkError names the script's URL as the page gave it, as natively.
+                throw unwrapErrorMessage(e, proxy, unwrapOne, DE);
+            }
+        });
     }
     // self.location is a WorkerLocation; its accessors report the worker's
     // original URL (natively the worker script's own URL).

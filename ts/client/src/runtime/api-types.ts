@@ -48,6 +48,8 @@ export interface RewriterApi {
     wrap_eval_args(evalFn: unknown, args: unknown): unknown;
     wrap_eval_memexp(obj: unknown): unknown;
     wrap_import_arg(specifier: unknown, scriptUrl?: unknown): unknown;
+    /** R7: import()'s promise, its rejection's message naming the page's URL. */
+    wrap_import_result<T>(p: T): T;
     /** R15: import.meta.resolve, resolving as import() does and giving the original URL. */
     wrap_meta_resolve(meta: unknown): unknown;
     wrap_worker_url(url: unknown): unknown;

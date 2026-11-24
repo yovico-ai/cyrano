@@ -179,3 +179,20 @@ func TestSpecConformance_ClearSiteData(t *testing.T) {
 		}
 	})
 }
+
+func TestSpecConformance_ElementCookies(t *testing.T) {
+	oracle := specoracle.Need(t)
+	for _, cors := range []bool{true, false} {
+		for _, cred := range []bool{true, false} {
+			for _, same := range []bool{true, false} {
+				want, _, err := oracle.Ask("elemcookies", flag(cors, "cors", "other"), flag(cred, "cred", "plain"), flag(same, "same", "cross"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := flag(ElementCookies(cors, cred, same), "yes", "no"); got != want {
+					t.Errorf("ElementCookies(%v, %v, %v) = %s, spec %s", cors, cred, same, got, want)
+				}
+			}
+		}
+	}
+}

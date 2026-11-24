@@ -633,3 +633,12 @@ socketCookieScheme : Scheme → Scheme
 socketCookieScheme ws  = http
 socketCookieScheme wss = https
 socketCookieScheme s   = s
+
+-- An element's request (no credentials mode named by the runtime: not a
+-- fetch() / XHR) carries the target's cookies unless it is in CORS mode
+-- with the default "same-origin" credentials (a crossorigin element not
+-- use-credentials, a module script, a font, an EventSource without
+-- withCredentials) to another origin (round I: they went with cookies).
+-- credentialed: the URL's cred mark (Containment destCred …).
+elementCookies : Bool → Bool → Bool → Bool
+elementCookies cors credentialed sameOrigin = not cors ∨ credentialed ∨ sameOrigin

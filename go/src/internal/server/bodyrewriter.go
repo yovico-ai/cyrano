@@ -9,8 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/charset"
+	"golang.org/x/text/encoding"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -237,14 +241,48 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				}
 				logger.Debug("rewriter: challenge page", "target", target.String())
 			}
-			if err := htmlrewrite.Rewrite(&out, bytes.NewReader(body), cfg); err != nil {
+			// A document in a declared legacy encoding (spec/Encoding.agda) is
+			// rewritten as text, then given back in its encoding — a
+			// character it lacks as a character reference. Read as UTF-8
+			// bytes, its attribute URLs came out U+FFFD, its decoded
+			// references as mojibake, a Shift_JIS trail byte as a backslash.
+			src := body
+			enc, encName := declaredEncoding(body, resp.Header.Get("Content-Type"))
+			if enc != nil {
+				if dec, err := enc.NewDecoder().Bytes(body); err == nil {
+					src = dec
+					cfg.QueryEncoder = queryEncoderOf(enc)
+				} else {
+					enc = nil
+				}
+			}
+			// Any declared encoding goes in the Content-Type too: the
+			// bootstrap comes before the page's <meta charset>, which a
+			// large one (a cookie snapshot) pushed past the browser's
+			// 1024-byte prescan — it then re-parsed the page. (The page
+			// reads the origin's header: Crn-H.)
+			if encName != "" {
+				if mt, params, err := mime.ParseMediaType(resp.Header.Get("Content-Type")); err == nil && params["charset"] == "" {
+					params["charset"] = encName
+					resp.Header.Set("Content-Type", mime.FormatMediaType(mt, params))
+				}
+			}
+			if err := htmlrewrite.Rewrite(&out, bytes.NewReader(src), cfg); err != nil {
 				logger.Warn("rewriter: html rewrite failed",
 					"target", target.String(), "size", len(body), "err", err)
 				return fmt.Errorf("html rewrite: %w", err)
 			}
+			rewritten := out.Bytes()
+			if enc != nil {
+				b, err := encoding.HTMLEscapeUnsupported(enc.NewEncoder()).Bytes(rewritten)
+				if err != nil {
+					return fmt.Errorf("html re-encode: %w", err)
+				}
+				rewritten = b
+			}
 			logger.Debug("rewriter: html rewritten",
-				"target", target.String(), "in", len(body), "out", out.Len())
-			replaceBody(resp, out.Bytes())
+				"target", target.String(), "in", len(body), "out", len(rewritten))
+			replaceBody(resp, rewritten)
 
 		case kindJS:
 			// Challenge and bot-detection scripts (Cloudflare's orchestrate,
@@ -285,7 +323,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				// for as a worker's too, marked as a script (`!js`: no preamble —
 				// it was given one, and the runtime made again for its URL).
 				mark := proxy.RequestDest(resp)
-				if (dest == "worker" || dest == "sharedworker") && mark != urlrewrite.DestScript {
+				if (dest == "worker" || dest == "sharedworker") && mark != urlrewrite.DestScript && mark != urlrewrite.DestScriptCred {
 					module := mark == urlrewrite.DestModuleWorker
 					pre := workerPreamble(urlrewrite.APIBase(proxyCfg), static.RuntimeURL(vhost.RewriterJSPath), clientPassthrough, target.String(), module)
 					rewritten = append(pre, rewritten...)
@@ -377,9 +415,9 @@ func xmlMagicBytes(b []byte) bool {
 
 func responseKind(mark urlrewrite.Dest, sfd string, has bool, ct string, hasCT bool, sniff func() sniffResult) bodyKind {
 	switch mark {
-	case urlrewrite.DestScript, urlrewrite.DestModuleWorker:
+	case urlrewrite.DestScript, urlrewrite.DestModuleWorker, urlrewrite.DestScriptCred:
 		return kindJS
-	case urlrewrite.DestStyle:
+	case urlrewrite.DestStyle, urlrewrite.DestStyleCred:
 		return kindCSS
 	}
 	e := mimeEssence(ct)
@@ -1027,4 +1065,89 @@ func lenientInflate(body []byte, err error) ([]byte, error) {
 		return body, nil
 	}
 	return nil, err
+}
+
+// declaredEncoding is a document's encoding when it is declared and not
+// UTF-8 (nil otherwise): a byte order mark, the Content-Type's charset, or a
+// <meta charset> / <meta http-equiv=content-type> in its head (the browser
+// re-parses for one found past its 1024-byte prescan). An undeclared
+// document is left as it is: the browser sniffs those.
+// name: the encoding a <meta> declared, when it did (UTF-8 too), else "".
+func declaredEncoding(body []byte, contentType string) (encoding.Encoding, string) {
+	switch {
+	case bytes.HasPrefix(body, []byte{0xEF, 0xBB, 0xBF}), bytes.HasPrefix(body, []byte{0xFE, 0xFF}), bytes.HasPrefix(body, []byte{0xFF, 0xFE}):
+		return nil, ""
+	}
+	pick := func(name string) (encoding.Encoding, string, bool) {
+		e, canon := charset.Lookup(strings.TrimSpace(name))
+		if e == nil {
+			return nil, "", false
+		}
+		// (a meta declaring UTF-16 means UTF-8: HTML)
+		if strings.HasPrefix(canon, "utf-16") {
+			canon = "utf-8"
+		}
+		if canon == "utf-8" || canon == "replacement" || canon == "x-user-defined" {
+			return nil, canon, true
+		}
+		return e, canon, true
+	}
+	if _, params, err := mime.ParseMediaType(contentType); err == nil {
+		if cs, ok := params["charset"]; ok {
+			if e, _, ok := pick(cs); ok {
+				return e, ""
+			}
+		}
+	}
+	head := body
+	if len(head) > 64<<10 {
+		head = head[:64<<10]
+	}
+	z := html.NewTokenizer(bytes.NewReader(head))
+	for {
+		tt := z.Next()
+		if tt == html.ErrorToken {
+			return nil, ""
+		}
+		if tt != html.StartTagToken && tt != html.SelfClosingTagToken {
+			continue
+		}
+		name, hasAttr := z.TagName()
+		switch string(name) {
+		case "body":
+			return nil, ""
+		case "meta":
+			var cs, httpEquiv, content string
+			for hasAttr {
+				var k, v []byte
+				k, v, hasAttr = z.TagAttr()
+				switch strings.ToLower(string(k)) {
+				case "charset":
+					cs = string(v)
+				case "http-equiv":
+					httpEquiv = strings.ToLower(strings.TrimSpace(string(v)))
+				case "content":
+					content = string(v)
+				}
+			}
+			if cs == "" && httpEquiv == "content-type" {
+				if i := strings.Index(strings.ToLower(content), "charset="); i >= 0 {
+					cs = strings.Trim(strings.Fields(strings.ReplaceAll(content[i+8:], ";", " ") + " ")[0], `"'`)
+				}
+			}
+			if cs != "" {
+				if e, canon, ok := pick(cs); ok {
+					return e, canon
+				}
+			}
+		}
+	}
+}
+
+// queryEncoderOf encodes one code point in enc (spec/Encoding.agda Encoder).
+func queryEncoderOf(enc encoding.Encoding) urlrewrite.QueryEncoder {
+	return func(r rune) ([]byte, bool) {
+		b, err := enc.NewEncoder().Bytes([]byte(string(r)))
+		return b, err == nil
+	}
 }

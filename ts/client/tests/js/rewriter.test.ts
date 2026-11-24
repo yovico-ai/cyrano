@@ -49,7 +49,7 @@ describe("JS rewriting rules", () => {
         const src = 'import a from "./a.js"; import "react"; export * from "../b.js"; x = import.meta.url; import("./c.js"); import(v);';
         const out = rewriteJsSource(src, o);
         expect(code(out)).toBe('import a from "P:https://cdn.example/app/a.js"; import "react"; export * from "P:https://cdn.example/b.js"; ' +
-            'x = "https://cdn.example/app/main.js"; import("P:https://cdn.example/app/c.js"); import($rewriter.wrap_import_arg(v,"https://cdn.example/app/main.js"));');
+            'x = "https://cdn.example/app/main.js"; $rewriter.wrap_import_result(import("P:https://cdn.example/app/c.js")); $rewriter.wrap_import_result(import($rewriter.wrap_import_arg(v,"https://cdn.example/app/main.js")));');
         expect(original(out)).toBe(src);
     });
 

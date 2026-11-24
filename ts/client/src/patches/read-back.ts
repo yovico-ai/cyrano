@@ -17,14 +17,14 @@ import { nO, nOP, nR, ncall } from "../native/intrinsics";
 import {
     ORIGINALS_ATTR, asWritten, consume, consumeOriginalsOnRead, inertDocument, copyOriginals, forgetAttr, mayDiffer, originalAttr, originalText,
     serializedAsWritten, textAsWritten,
+    isScriptOrStyle,
 } from "../native/originals";
 import { wrapAccessor, wrapConstructor, wrapMethod } from "../native/surface";
 
 type Protos = Record<string, { prototype: object } | undefined>;
 
 const isRawText = (x: unknown): x is Element =>
-    typeof x === "object" && x !== null && (x as Node).nodeType === 1 &&
-    ((x as Element).tagName === "SCRIPT" || (x as Element).tagName === "STYLE");
+    typeof x === "object" && x !== null && (x as Node).nodeType === 1 && isScriptOrStyle(x as Element);
 
 export function patchReadBack(targetWindow: Window, onElement: (el: Element) => void = () => undefined): void {
     const g = targetWindow as unknown as Protos;

@@ -23,6 +23,7 @@ import { patchResponseHeaders } from "./response-headers";
 import { patchEmbeddedContext } from "./embedded";
 import { patchFedCM } from "./fedcm";
 import { patchPaymentRequest } from "./payment-request";
+import { patchAdAuction } from "./ad-auction";
 import { installToolbar } from "../ui/toolbar";
 import { patchSelectors } from "./selectors";
 import { patchStorageNames, patchWebStorage, storagePrefix } from "./storage";
@@ -40,6 +41,7 @@ import { patchWebSocket } from "./websocket";
 import { patchEventSource } from "./event-source";
 import { patchWorker } from "./worker";
 import { patchBlobWorkerSource } from "./blob-worker-source";
+import { initDocumentQuery } from "../url/doc-query";
 import { patchUrlAttributes, patchAnchorUrlReflection, patchAudioConstructor, patchFontFaceConstructor } from "./url-attributes";
 import { patchDynamicHtml } from "./dynamic-html";
 import { patchCssRules } from "./css-rules";
@@ -135,6 +137,8 @@ export function installPatches(
     // Anchor/area URL-part reflection must be patched before patchUrlAttributes
     // wraps the href getter/setter — we need the native getter/setter to read
     // and write raw proxified values on the DOM node.
+    // (the anchor's natives a legacy-encoded document's queries are encoded with, first)
+    step("initDocumentQuery", () => initDocumentQuery(targetWindow));
     step("patchAnchorUrlReflection", () => patchAnchorUrlReflection(targetWindow, unwrapOne, rewriteOne));
     // Requests to other origins are under CORS (patches/cors.ts).
     const cors = config.identity ? undefined
@@ -184,6 +188,8 @@ export function installPatches(
     step("patchFedCM", () => patchFedCM(targetWindow));
     // URL-based payment methods would have the browser fetch outside the proxy (patches/payment-request.ts).
     step("patchPaymentRequest", () => patchPaymentRequest(targetWindow));
+    // Protected Audience joins and auctions would have the browser fetch outside the proxy (patches/ad-auction.ts).
+    step("patchAdAuction", () => patchAdAuction(targetWindow, () => getCurrentBaseUrl().origin));
     // What a frame of another origin's page is denied (patches/embedded.ts).
     if (flattened) step("patchEmbeddedContext", () => patchEmbeddedContext(targetWindow, () => getCurrentBaseUrl().origin));
     // Storage of every kind is this origin's alone (patches/storage.ts).

@@ -20,6 +20,7 @@ import type { ClientConfig } from "../config";
 import type { RewriterApi } from "./api-types";
 import { BaseUrlState } from "./base-url-state";
 import { isUrlLikeSpecifier, rewriteUrl, unwrapProxiedUrl, type Dest } from "../url/containment";
+import { unwrapRejection } from "../url/error-text";
 import { metaResolver } from "../wrappers/meta-resolve";
 import { foreignLocationView, makeLocationView } from "../wrappers/wrapped-location";
 import {
@@ -102,6 +103,8 @@ export function createRewriterApi(
     // else is handed back as it is, so `obj.location` / `obj["location"]`
     // is the object's own property — read, called (with obj as `this`) or
     // assigned exactly as written.
+    // Saved at setup: a page may replace it (url/error-text.ts).
+    const pageDOMException = (targetWindow as unknown as { DOMException?: new (m: string, n: string) => unknown }).DOMException;
     const isWindowLike = (obj: unknown): boolean =>
         obj === targetWindow || obj === targetWindow.document || isWindowObject(obj) || isDocumentObject(obj) || isView(obj);
     const locationHolder = (obj: unknown): { location: unknown } => {
@@ -294,6 +297,8 @@ export function createRewriterApi(
         // loads go through URL containment like all other resource fetches.
         // A relative specifier resolves against the importing script's own URL
         // (`scriptUrl`, passed by the server-side rewriter), not the page's.
+        // The import's rejection names the page's URL, as natively (url/error-text.ts).
+        wrap_import_result: (p) => unwrapRejection(p, new URL(config.apiBaseURL).origin, (u) => unwrapProxiedUrl(u, config), pageDOMException),
         wrap_import_arg: (specifier, scriptUrl) => {
             // import() takes the string of whatever it is given: a URL object
             // (`import(new URL("/a.js", import.meta.url))`: Vite, Yext's

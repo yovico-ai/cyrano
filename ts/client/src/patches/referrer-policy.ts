@@ -14,6 +14,7 @@
 // the referrerPolicy property (the keyword, or "" when invalid), and its URLs
 // unmarked.
 
+import { documentQueryEncoder, requery } from "../url/doc-query";
 import { SafeSet, nO, ncall } from "../native/intrinsics";
 import { heldAttr, holdAttr, originalAttr, recordAttr } from "../native/originals";
 import { wrapAccessor, wrapMethod } from "../native/surface";
@@ -71,6 +72,20 @@ export function elementPolicy(el: Element): string | null {
  * script or a stylesheet (spec/Attrs.agda urlDest).
  */
 export function rewriteFor(el: Element, rewriteOne0: RewriteOne, attr?: string): (url: string) => string {
+    const plain = rewriteFor0(el, rewriteOne0, attr);
+    // In a legacy-encoded document the query is the document's encoding's
+    // (spec/Encoding.agda; not for CSS, which is UTF-8).
+    let enc: ((q: string) => string) | null = null;
+    try {
+        const win = el.ownerDocument?.defaultView;
+        enc = win ? documentQueryEncoder(win) : null;
+    } catch { enc = null; }
+    if (!enc || attr === "style") return plain;
+    const e = enc;
+    return (u) => requery(plain(u), u, e);
+}
+
+function rewriteFor0(el: Element, rewriteOne0: RewriteOne, attr?: string): (url: string) => string {
     // A <base href>: against the document's URL (spec/Html.agda documentBase),
     // not the base it replaces (multistate.us: a base set again and again
     // stepped up a directory each time).

@@ -225,6 +225,10 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 // invariant). cfg is by pointer so HTML_BASETAG can shift BaseURL for
 // subsequent tags in the same document.
 func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) []html.Attribute {
+	// crossorigin as the page wrote it: use-credentials marks the URL so
+	// (spec Attrs.credDest; the rules below give every one use-credentials).
+	coWritten, coHas := getAttr(attrs, "crossorigin")
+	credentialed := !svg && coHas && strings.EqualFold(strings.TrimSpace(coWritten), "use-credentials")
 	// An element's own referrer policy: its requests carry it in their
 	// proxified URLs (urlrewrite.RewriteWithPolicy) and the browser is told
 	// unsafe-url, so the proxy learns the page and applies the policy
@@ -242,7 +246,7 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 	// below (multistate.us's <base href="../"> came out one level too high).
 	preBase := cfg.BaseURL
 	rewriteOne := func(raw string, opts urlOpts) string {
-		dest := URLDest(svg, tag, opts.attr, strings.Fields(strings.ToLower(rel)), strings.ToLower(as), hasAs)
+		dest := urlrewrite.CredDest(credentialed, URLDest(svg, tag, opts.attr, strings.Fields(strings.ToLower(rel)), strings.ToLower(as), hasAs))
 		// An iframe sandboxed without allow-scripts runs nothing: its
 		// document gets no runtime (spec Frames.frameDest).
 		if dest == urlrewrite.DestFrame && tag == "iframe" && !svg {
@@ -253,7 +257,9 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 		if tag == "base" && !svg {
 			base = preBase
 		}
-		return urlrewrite.RewriteMarked(raw, base, cfg.Proxy, urlrewrite.Mark{Policy: policy, Dest: dest})
+		// In a legacy-encoded document the query is the browser's: in the
+		// document's encoding (spec/Encoding.agda).
+		return urlrewrite.Requery(urlrewrite.RewriteMarked(raw, base, cfg.Proxy, urlrewrite.Mark{Policy: policy, Dest: dest}), raw, cfg.QueryEncoder)
 	}
 
 	// HTML_BASETAG — <base href> updates the in-flight base URL so all

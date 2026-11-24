@@ -123,6 +123,7 @@
 --                                       → {"out":"same-origin|same-site|cross-site"}
 --   uirdeclared <CSP header>             → yes/no
 --   uir <context|-> <target> <dest|->   → yes/no: an upgrade-insecure-requests document upgrades it
+--   encquery <special|other> <query>   → {"out":"<the query, latin1, percent-encoded>"}
 --   corp <CORP|-> <none|require-corp|credentialless> <yes|no> <origin> <site|-> <target> <site|-> → block/allow
 --   challenge <site> <WWW-Authenticate line> → {"out":"<the line the browser gets>"}
 --   clearsitedata <yes|no> <value>      → yes/no: it clears the response's site's cookies
@@ -232,6 +233,7 @@ import Speculation
 import ClearSiteData
 import Auth
 import Corp
+import Encoding
 import XmlDoc
 import MixedContent
 import Frames
@@ -239,6 +241,7 @@ import Stack
 import H1
 import Eval
 import Payment
+import AdAuction
 import LocalStore
 import Route
 import Features
@@ -434,6 +437,7 @@ dispatch op args =
   else if eqStr op (toList "featuresmap") then oneArg (Features.mapSources (λ v → fromℕ 91 ∷ v ++ fromℕ 93 ∷ [])) args
   else if eqStr op (toList "refererroute") then refererRouteReq args
   else if eqStr op (toList "evalcall") then evalCallReq args
+  else if eqStr op (toList "adjoin") then adJoinReq args
   else if eqStr op (toList "paymentrefused") then oneArg (λ t → paymentAnswer (Payment.refused t)) args
   else if eqStr op (toList "blobbase") then oneArg (λ t → if Frames.blobBase t then toList "yes" else toList "no") args
   else if eqStr op (toList "blobdocument") then oneArg (λ t → if Frames.blobDocument t then toList "yes" else toList "no") args
@@ -482,6 +486,8 @@ dispatch op args =
   else if eqStr op (toList "clearsitedata") then csdReq args
   else if eqStr op (toList "challenge") then challengeReq args
   else if eqStr op (toList "corp") then corpReq args
+  else if eqStr op (toList "encquery") then encQueryReq args
+  else if eqStr op (toList "elemcookies") then elemCookiesReq args
   else if eqStr op (toList "inctx") then inCtxReq args
   else if eqStr op (toList "unpack") then oneArg (λ v → lines (Data.List.Base.map (λ r → Data.Product.Base.proj₁ r ++ usC ∷ Data.Product.Base.proj₂ r) (CookieJar.unpackSlot v))) args
   else if eqStr op (toList "pack") then oneArg (λ v → CookieJar.packSlot (packArgs (splitOn (is 31) v))) args
@@ -558,6 +564,9 @@ dispatch op args =
             else if eqStr t (toList "inert") then just (just destInert)
             else if eqStr t (toList "set") then just (just destImageSet)
             else if eqStr t (toList "mjs") then just (just destModuleWorker)
+            else if eqStr t (toList "cred") then just (just destCred)
+            else if eqStr t (toList "jsc") then just (just destScriptCred)
+            else if eqStr t (toList "cssc") then just (just destStyleCred)
             else nothing
     byMark : Maybe (Maybe Policy) → Maybe (Maybe Dest) → Str
     byMark (just x) (just d) = answerReply raw (rewriteUrlWith px (mark x d) base raw)
@@ -621,10 +630,23 @@ dispatch op args =
           else if eqStr m (toList "frame") then just destFrame
           else if eqStr m (toList "inert") then just destInert
           else if eqStr m (toList "set") then just destImageSet
-          else if eqStr m (toList "mjs") then just destModuleWorker else nothing
+          else if eqStr m (toList "mjs") then just destModuleWorker
+          else if eqStr m (toList "cred") then just destCred else if eqStr m (toList "jsc") then just destScriptCred
+          else if eqStr m (toList "cssc") then just destStyleCred else nothing
     opt : Str → Str → Maybe Str
     opt p v = if eqStr p (toList "1") then just v else nothing
   dispositionReq _ = errorReply "BadRequest"
+
+  -- adjoin <complete|missing> <owner> <page origin> → native/joined/denied/outside
+  adJoinReq : List Str → Str
+  adJoinReq (c ∷ o ∷ pg ∷ []) = out (toList (joinName (AdAuction.joinAnswer (eqStr c (toList "complete")) o pg)))
+    where
+    joinName : Maybe AdAuction.Join → String
+    joinName (just AdAuction.native) = "native"
+    joinName (just AdAuction.joined) = "joined"
+    joinName (just AdAuction.denied) = "denied"
+    joinName nothing = "outside"
+  adJoinReq _ = errorReply "BadRequest"
 
   paymentAnswer : Maybe Bool → Str
   paymentAnswer (just true)  = toList "yes"
@@ -1485,6 +1507,16 @@ dispatch op args =
   ... | _ | _ = errorReply "OutOfModel"
   corpReq _ = errorReply "BadRequest"
 
+  -- encquery <special|other> <query> → the query in latin1 (the model)
+  encQueryReq : List Str → Str
+  encQueryReq (sp ∷ q ∷ []) = out (Encoding.encodeQuery Encoding.latin1 (eqStr sp (toList "special")) q)
+  encQueryReq _ = errorReply "BadRequest"
+
+  -- elemcookies <cors|other> <cred|plain> <same|cross> → yes/no
+  elemCookiesReq : List Str → Str
+  elemCookiesReq (m ∷ c ∷ o ∷ []) = out (toList (if elementCookies (eqStr m (toList "cors")) (eqStr c (toList "cred")) (eqStr o (toList "same")) then "yes" else "no"))
+  elemCookiesReq _ = errorReply "BadRequest"
+
   -- storable <top> <cross|same> <Set-Cookie>: whether that context stores it,
   -- and its partition key ("-": none).
   storableReq : List Str → Str
@@ -1654,6 +1686,20 @@ dispatch op args =
 
   -- urldest <html|svg> <tag> <attr> <rel types, space-separated> <as|->
   urlDestReq : List Str → Str
+  urlDestReq (n ∷ t ∷ a ∷ rel ∷ as ∷ cr ∷ []) =
+    out (dname (Attrs.credDest (eqStr cr (toList "cred")) (Attrs.urlDest (if eqStr n (toList "svg") then Attrs.svgNs else Attrs.htmlNs) t a (relWords rel)
+                 (if eqStr as (toList "-") then nothing else just as))))
+    where
+    dname : Maybe Dest → Str
+    dname (just d) = toList (destName d)
+    dname nothing  = toList "-"
+    relWords : Str → List Str
+    relWords s = drop0 (splitOn (is 32) s)
+      where
+      drop0 : List Str → List Str
+      drop0 []        = []
+      drop0 ([] ∷ vs) = drop0 vs
+      drop0 (v ∷ vs)  = v ∷ drop0 vs
   urlDestReq (n ∷ t ∷ a ∷ rel ∷ as ∷ []) =
     out (dname (Attrs.urlDest (if eqStr n (toList "svg") then Attrs.svgNs else Attrs.htmlNs) t a (relWords rel)
                  (if eqStr as (toList "-") then nothing else just as)))

@@ -94,11 +94,16 @@ func TestSpecConformance_URLDest(t *testing.T) {
 		rel := rapid.SampledFrom(rels).Draw(rt, "rel")
 		as := rapid.SampledFrom(ases).Draw(rt, "as")
 		lrel := strings.ToLower(rel)
-		want, _, err := oracle.Ask("urldest", ns, tag, attr, lrel, strings.ToLower(as))
+		cred := rapid.Bool().Draw(rt, "use-credentials")
+		args := []string{ns, tag, attr, lrel, strings.ToLower(as)}
+		if cred {
+			args = append(args, "cred")
+		}
+		want, _, err := oracle.Ask("urldest", args...)
 		if err != nil {
 			rt.Fatalf("oracle: %v", err)
 		}
-		got := string(URLDest(ns == "svg", tag, attr, strings.Fields(lrel), strings.ToLower(as), as != "-"))
+		got := string(urlrewrite.CredDest(cred, URLDest(ns == "svg", tag, attr, strings.Fields(lrel), strings.ToLower(as), as != "-")))
 		if got == "" {
 			got = "-"
 		}

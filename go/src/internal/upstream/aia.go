@@ -22,7 +22,8 @@ import (
 // pool the upstream clients verify with, and tries the request once more.
 // An intermediate that itself chains to a system root admits exactly the
 // chains Chrome's AIA fetching admits. (Not done: PKCS#7 bundles, which
-// Chrome reads too; a chain missing more than one certificate.)
+// Chrome reads too.) A chain missing more than one certificate is completed
+// up its AIA, at most aiaHops fetches.
 
 type aiaState struct {
 	// One completion at a time: a page's parallel requests fail together
@@ -30,8 +31,8 @@ type aiaState struct {
 	// find it accepted.
 	completing sync.Mutex
 	mu         sync.Mutex
-	roots      *x509.CertPool  // system roots plus the intermediates accepted; nil: the system's
-	tried      map[string]bool // AIA URLs fetched (accepted or not)
+	roots      *x509.CertPool               // system roots plus the intermediates accepted; nil: the system's
+	tried      map[string]*x509.Certificate // AIA URLs fetched → what they served (nil: nothing usable)
 	fetch      func(string) ([]byte, error)
 	sysPool    func() (*x509.CertPool, error)
 }
@@ -39,7 +40,7 @@ type aiaState struct {
 func newAIAState() *aiaState {
 	client := &http.Client{Timeout: 10 * time.Second}
 	return &aiaState{
-		tried: map[string]bool{},
+		tried: map[string]*x509.Certificate{},
 		fetch: func(u string) ([]byte, error) {
 			resp, err := client.Get(u)
 			if err != nil {
@@ -83,43 +84,62 @@ func (a *aiaState) complete(err error) bool {
 			return true
 		}
 	}
-	for _, u := range leaf.IssuingCertificateURL {
-		a.mu.Lock()
-		seen := a.tried[u]
-		a.tried[u] = true
-		a.mu.Unlock()
-		if seen {
-			continue
-		}
-		raw, ferr := a.fetch(u)
-		if ferr != nil {
-			continue
-		}
-		issuer := parseIssuer(raw)
+	sys, serr := a.sysPool()
+	if serr != nil || sys == nil {
+		sys = x509.NewCertPool()
+	}
+	// Up the chain, as Chrome's path builder fetches: each certificate's
+	// issuer from its AIA, until the leaf verifies to a system root through
+	// what was fetched (Let's Encrypt's leaf → YR1 → Root YR cross-signed by
+	// ISRG Root X1 takes two fetches).
+	inter := x509.NewCertPool()
+	var fetched []*x509.Certificate
+	for cur, hop := leaf, 0; hop < aiaHops; hop++ {
+		issuer := a.issuerOf(cur)
 		if issuer == nil {
-			continue
+			return false
 		}
-		sys, serr := a.sysPool()
-		if serr != nil || sys == nil {
-			sys = x509.NewCertPool()
-		}
-		if _, verr := issuer.Verify(x509.VerifyOptions{Roots: sys, KeyUsages: anyUsage}); verr != nil {
-			continue
-		}
-		inter := x509.NewCertPool()
+		fetched = append(fetched, issuer)
 		inter.AddCert(issuer)
-		if _, verr := leaf.Verify(x509.VerifyOptions{Roots: sys, Intermediates: inter, KeyUsages: anyUsage}); verr != nil {
-			continue
+		if _, verr := leaf.Verify(x509.VerifyOptions{Roots: sys, Intermediates: inter, KeyUsages: anyUsage}); verr == nil {
+			a.mu.Lock()
+			if a.roots == nil {
+				a.roots = sys.Clone()
+			}
+			for _, c := range fetched {
+				a.roots.AddCert(c)
+			}
+			a.mu.Unlock()
+			return true
 		}
-		a.mu.Lock()
-		if a.roots == nil {
-			a.roots = sys.Clone()
-		}
-		a.roots.AddCert(issuer)
-		a.mu.Unlock()
-		return true
+		cur = issuer
 	}
 	return false
+}
+
+// aiaHops bounds the certificates fetched for one chain.
+const aiaHops = 4
+
+// issuerOf is the certificate one of c's CA Issuers URLs serves that signed
+// c; each URL is fetched once (its certificate kept).
+func (a *aiaState) issuerOf(c *x509.Certificate) *x509.Certificate {
+	for _, u := range c.IssuingCertificateURL {
+		a.mu.Lock()
+		got, seen := a.tried[u]
+		a.mu.Unlock()
+		if !seen {
+			if raw, ferr := a.fetch(u); ferr == nil {
+				got = parseIssuer(raw)
+			}
+			a.mu.Lock()
+			a.tried[u] = got
+			a.mu.Unlock()
+		}
+		if got != nil && c.CheckSignatureFrom(got) == nil {
+			return got
+		}
+	}
+	return nil
 }
 
 // parseIssuer reads a DER or PEM certificate (what CA Issuers URLs serve).

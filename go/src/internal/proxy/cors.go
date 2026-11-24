@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"errors"
+	"github.com/yovico/cyrano/internal/upstream"
 	"net/http"
 	"net/url"
 	"strings"
@@ -38,7 +39,15 @@ var errCORS = errors.New("cors check failed")
 // noteCORS records, before the runtime's headers are consumed, what the CORS
 // check of the response to req will need; nothing for a request that is
 // not a script's cross-origin request in cors mode.
+// KindHeader is the runtime's Crn-K: "xhr" on an XHR's request (its
+// page-set headers go first, as Chrome sends them). It never goes upstream.
+const KindHeader = "Crn-K"
+
 func noteCORS(req *http.Request, target *url.URL) {
+	if strings.EqualFold(req.Header.Get(KindHeader), "xhr") {
+		*req = *req.WithContext(context.WithValue(req.Context(), upstream.XHRKey{}, true))
+	}
+	req.Header.Del(KindHeader)
 	if !strings.EqualFold(req.Header.Get("Sec-Fetch-Mode"), "cors") {
 		return
 	}

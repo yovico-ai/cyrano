@@ -11,6 +11,7 @@ require (
 	github.com/refraction-networking/utls v1.8.2
 	github.com/tdewolff/parse/v2 v2.8.12
 	golang.org/x/net v0.53.0
+	golang.org/x/text v0.36.0
 	pgregory.net/rapid v1.2.0
 )
 
@@ -23,5 +24,4 @@ require (
 	github.com/tam7t/hpkp v0.0.0-20160821193359-2b70b4024ed5 // indirect
 	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
-	golang.org/x/text v0.36.0 // indirect
 )

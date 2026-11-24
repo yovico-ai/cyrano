@@ -14,6 +14,8 @@
 // called first: a document that may not read cookies (sandboxed) throws as
 // natively, and one without a browsing context (DOMParser's) reads "".
 
+import { SafeWeakMap } from "../native/intrinsics";
+import { sharedData } from "../native/shared";
 import { nO, ncall } from "../native/intrinsics";
 import { getPublicSuffix } from "tldts";
 import { inCtx, parseSetCookie, placedIn, selectCookies, cookieString, storableIn, storeCookie, type CookieCtx } from "../cookies/rfc";
@@ -62,9 +64,25 @@ export function cookieAccessor(doc: object): PropertyDescriptor | undefined {
 
 export function patchDocumentCookie(targetWindow: Window, baseUrl: () => URL, only?: "get" | "set"): void {
     const desc = cookieAccessor(targetWindow.document);
-    const nativeGet = desc?.get as ((this: unknown) => string) | undefined;
-    const nativeSet = desc?.set as ((this: unknown, v: string) => void) | undefined;
-    if (!nativeGet || !nativeSet) return;
+    if (!desc?.get || !desc.set) return;
+    // The browser's own accessor, as the first copy of the runtime found it
+    // (the top window's, before any page script; a native works on any
+    // realm's Document). Not the one on this realm's prototype: the runtime
+    // reaches an empty frame after the page may have wrapped its cookie
+    // accessor — Transcend's airgap on tandfonline.com wraps it and calls its
+    // latest "original", which then was the runtime's wrapper, which called
+    // airgap's: "Maximum call stack size exceeded".
+    // (kept per page tree, by its top window: every frame of the tree shares it)
+    let top: object = targetWindow;
+    try { top = (targetWindow.top as object | null) ?? targetWindow; } catch { top = targetWindow; }
+    const trees = sharedData("cookiePristine", () => new SafeWeakMap<object, { get: (this: unknown) => string; set: (this: unknown, v: string) => void }>());
+    let pristine = trees.get(top);
+    if (!pristine) {
+        pristine = { get: desc.get as (this: unknown) => string, set: desc.set as (this: unknown, v: string) => void };
+        trees.set(top, pristine);
+    }
+    const nativeGet = pristine.get;
+    const nativeSet = pristine.set;
     const access = (self: unknown): CookieAccess => ({ get: () => ncall(nativeGet, self), set: (v: string) => ncall(nativeSet, self, v) });
     const ours = (self: unknown): boolean => self === targetWindow.document;
     // Another window's document (this realm's accessor called on it — a
@@ -84,13 +102,13 @@ export function patchDocumentCookie(targetWindow: Window, baseUrl: () => URL, on
     const wrappedSet = (): unknown => cookieAccessor(targetWindow.document)?.set;
     wrapAccessor<string>(targetWindow.document, "cookie", {
         ...(only !== "set" ? {
-            get: (get: (this: unknown) => string, self: unknown) => {
+            get: (_get: (this: unknown) => string, self: unknown) => {
                 if (!ours(self)) {
                     const d = theirs(self);
                     if (d?.get && d.get !== wrappedGet()) return ncall(d.get as (this: unknown) => string, self);
-                    return ncall(get, self);
+                    return ncall(nativeGet, self);
                 }
-                ncall(get, self); // a document that may not read cookies throws here, as natively
+                ncall(nativeGet, self); // a document that may not read cookies throws here, as natively
                 snapshotFirst(targetWindow, baseUrl());
                 const legacy = absorbInbox(targetWindow, access(self));
                 const cx = cookieCtxOf(targetWindow);
@@ -98,11 +116,11 @@ export function patchDocumentCookie(targetWindow: Window, baseUrl: () => URL, on
             },
         } : {}),
         ...(only !== "get" ? {
-            set: (set: (this: unknown, v: string) => void, self: unknown, value: string) => {
+            set: (_set: (this: unknown, v: string) => void, self: unknown, value: string) => {
                 if (!ours(self)) {
                     const d = theirs(self);
                     if (d?.set && d.set !== wrappedSet()) { ncall(d.set as (this: unknown, v: string) => void, self, value); return; }
-                    ncall(set, self, value);
+                    ncall(nativeSet, self, value);
                     return;
                 }
                 ncall(nativeGet, self); // a document that may not write cookies throws here, as natively

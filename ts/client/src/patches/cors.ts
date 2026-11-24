@@ -29,6 +29,8 @@ import { SafeSet, SafeWeakMap, sIncludes } from "../native/intrinsics";
 
 export const INITIATOR = "Crn-I";
 export const CREDENTIALS = "Crn-C";
+/** The request's kind, "xhr" for an XHR (its header order: Go proxy KindHeader). */
+export const KIND = "Crn-K";
 
 const SAFELISTED = new SafeSet([
     "cache-control", "content-language", "content-length", "content-type", "expires", "last-modified", "pragma",

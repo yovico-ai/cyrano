@@ -35,7 +35,7 @@ func bootstrapScript(cfg *Config) string {
 	if cfg.bootstrapText != "" {
 		return cfg.bootstrapText
 	}
-	configJSON, err := json.Marshal(cfg.ClientPassthrough)
+	configJSON, err := asciiJSON(cfg.ClientPassthrough)
 	if err != nil {
 		// ClientPassthrough is a plain map; marshal can't fail in practice.
 		// Fall back to {} and keep going rather than blow up the response.
@@ -140,4 +140,28 @@ func hexDigit(b byte) byte {
 		return '0' + b
 	}
 	return 'a' + b - 10
+}
+
+// asciiJSON is json.Marshal with every non-ASCII character as \uXXXX: the
+// script it goes into may be served in a legacy encoding, where a character
+// that encoding lacks would become a character reference — not decoded in
+// a <script>.
+func asciiJSON(v any) ([]byte, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	var out []byte
+	for _, r := range string(b) {
+		switch {
+		case r < 0x80:
+			out = append(out, byte(r))
+		case r > 0xFFFF:
+			r -= 0x10000
+			out = append(out, []byte(fmt.Sprintf("\\u%04x\\u%04x", 0xD800+(r>>10), 0xDC00+(r&0x3FF)))...)
+		default:
+			out = append(out, []byte(fmt.Sprintf("\\u%04x", r))...)
+		}
+	}
+	return out, nil
 }

@@ -4,9 +4,10 @@
 // original URL. A request to another origin names the requesting origin
 // to the proxy (cors.ts).
 
+import { documentQueryEncoder, requery } from "../url/doc-query";
 import { nO, nR, ncall, sStarts } from "../native/intrinsics";
 import { wrapAccessor, wrapMethod } from "../native/surface";
-import { CREDENTIALS, INITIATOR, crossOriginXhr, namesContext, includesCredentials, initiatorValue, initiatorOfXhr, isCrossOrigin, type CorsContext } from "./cors";
+import { CREDENTIALS, INITIATOR, KIND, crossOriginXhr, namesContext, includesCredentials, initiatorValue, initiatorOfXhr, isCrossOrigin, type CorsContext } from "./cors";
 
 export function patchXmlHttpRequest(
     targetWindow: Window,
@@ -21,7 +22,10 @@ export function patchXmlHttpRequest(
     wrapMethod<(...a: unknown[]) => void>(proto, "open", (native, self, args) => {
         if (args.length < 2) return nR.apply(native, self, args) as void; // the native's own TypeError
         const next = args.slice();
-        next[1] = rewriteOne(String(args[1]));
+        const given = String(args[1]);
+        // (a legacy-encoded document's query in its encoding: spec/Encoding.agda)
+        const enc = documentQueryEncoder(targetWindow);
+        next[1] = enc ? requery(rewriteOne(given), given, enc) : rewriteOne(given);
         const done = nR.apply(native, self, next) as void;
         // Opened: note whether it goes to another origin (cors.ts).
         if (cors && baseUrl && typeof self === "object" && self !== null) {
@@ -38,6 +42,13 @@ export function patchXmlHttpRequest(
     const withCredentials = nO.getOwnPropertyDescriptor(proto, "withCredentials")?.get as ((this: unknown) => boolean) | undefined;
     wrapMethod<(...a: unknown[]) => void>(proto, "send", (native, self, args) => {
         const from = typeof self === "object" && self !== null ? initiatorOfXhr.get(self) : undefined;
+        // Tell the proxy it is an XHR: Chrome sends an XHR's page-set
+        // headers first (Go headerorder.ChromeDefault). Not from an opaque
+        // context: there the browser runs CORS, and the header would force
+        // a preflight.
+        if (cors && cors.opaque !== true) {
+            try { ncall(setHeader, self, KIND, "xhr"); } catch { /* not opened: the native send throws */ }
+        }
         if (from && from.href) {
             try {
                 ncall(setHeader, self, INITIATOR, from.href);

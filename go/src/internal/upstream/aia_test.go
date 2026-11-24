@@ -118,3 +118,51 @@ func TestAIA_CompletesAShortChain(t *testing.T) {
 type errFake struct{}
 
 func (errFake) Error() string { return "fake" }
+
+// Two certificates missing, as Let's Encrypt's Generation Y chains are
+// served: leaf → YR1 (its AIA) → Root YR, whose AIA copy is cross-signed by
+// a system root (ISRG Root X1). Both are fetched up the chain, and the leaf
+// verifies with the pool; Chromium completes it the same way.
+func TestAIA_CompletesTwoHops(t *testing.T) {
+	x1 := mkCert(t, caTmpl(1, "ISRG Root X1"), nil)
+	yrCross := mkCert(t, caTmpl(2, "Root YR"), x1)
+	var srvURL string
+	var yr1Raw []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/yr.crt":
+			_, _ = w.Write(yrCross.cert.Raw)
+		case "/yr1.crt":
+			_, _ = w.Write(yr1Raw)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	srvURL = srv.URL
+	yr1T := caTmpl(3, "YR1")
+	yr1T.IssuingCertificateURL = []string{srvURL + "/yr.crt"}
+	yr1 := mkCert(t, yr1T, yrCross)
+	yr1Raw = yr1.cert.Raw
+	leaf := mkCert(t, &x509.Certificate{
+		SerialNumber: big.NewInt(10), Subject: pkix.Name{CommonName: "site.example"}, DNSNames: []string{"site.example"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IssuingCertificateURL: []string{srvURL + "/yr1.crt"},
+	}, yr1)
+
+	roots := x509.NewCertPool()
+	roots.AddCert(x1.cert)
+	a := newAIAState()
+	a.sysPool = func() (*x509.CertPool, error) { return roots.Clone(), nil }
+	_, err := leaf.cert.Verify(x509.VerifyOptions{Roots: roots, DNSName: "site.example"})
+	if err == nil {
+		t.Fatal("the short chain verified without its intermediates")
+	}
+	if !a.complete(err) {
+		t.Fatal("the two-hop chain was not completed")
+	}
+	if _, err := leaf.cert.Verify(x509.VerifyOptions{Roots: a.pool(), DNSName: "site.example"}); err != nil {
+		t.Fatalf("the leaf does not verify with the completed pool: %v", err)
+	}
+}

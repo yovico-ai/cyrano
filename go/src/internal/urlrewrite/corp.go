@@ -22,9 +22,9 @@ func CORPBlocks(header string, has bool, embedder string, credentialed bool, ori
 	}
 	policy := ""
 	if has {
-		switch strings.Trim(header, " \\t") {
+		switch strings.Trim(header, " \t") {
 		case "same-origin", "same-site", "cross-origin":
-			policy = strings.Trim(header, " \\t")
+			policy = strings.Trim(header, " \t")
 		}
 	}
 	if policy == "" {
@@ -53,7 +53,7 @@ func CORPBlocks(header string, has bool, embedder string, credentialed bool, ori
 func EmbedderOf(coep, dip string) string {
 	tok := func(v string) string {
 		v = strings.TrimSpace(v)
-		if i := strings.IndexAny(v, ";, \\t"); i >= 0 {
+		if i := strings.IndexAny(v, ";, \t"); i >= 0 {
 			v = v[:i]
 		}
 		return v

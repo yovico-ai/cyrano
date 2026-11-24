@@ -72,6 +72,9 @@ type Config struct {
 	// OnMetaCSP is told the content of a <meta http-equiv=content-security-policy>
 	// as the page wrote it (its upgrade-insecure-requests, proxy.RecordMetaUIR).
 	OnMetaCSP func(content string)
+	// QueryEncoder: the document's encoding, when it is declared and not
+	// UTF-8 — an element URL's query is encoded in it (spec/Encoding.agda).
+	QueryEncoder urlrewrite.QueryEncoder
 
 	// baseSeen: a <base href> was met (only the first counts).
 	baseSeen bool

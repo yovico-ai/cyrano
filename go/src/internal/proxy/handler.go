@@ -362,7 +362,7 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		// import, a stylesheet's font): its context is the document behind
 		// that script, which the proxy does not know (orb.go).
 		if ref, err := url.Parse(req.Header.Get("Referer")); err == nil && urlrewrite.OnProxy(ref.String(), h.opts.ProxyCfg) {
-			if d := urlrewrite.TargetDest(ref.EscapedPath()); d == urlrewrite.DestScript || d == urlrewrite.DestStyle {
+			if d := urlrewrite.TargetDest(ref.EscapedPath()); d == urlrewrite.DestScript || d == urlrewrite.DestStyle || d == urlrewrite.DestScriptCred || d == urlrewrite.DestStyleCred {
 				*req = *req.WithContext(context.WithValue(req.Context(), subresourceRequesterKey{}, true))
 			}
 		}
