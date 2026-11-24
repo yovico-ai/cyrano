@@ -13,10 +13,10 @@
 // Cookies of the old wire form (__crn!…) still in the browser's jar are
 // read where memory holds nothing of their identity.
 
-import { SafeWeakMap, ncall, sStarts } from "../native/intrinsics";
+import { SafeWeakMap, ncall, sEnds, sStarts } from "../native/intrinsics";
 import { sharedData } from "../native/shared";
 import { ACK, absorb, ack, chanName, chanValue, live, packSlot, sameId, snapshot, unchan, write, INBOX, OUTBOX, type Change, type Known } from "./jar";
-import { jarCookies, wireName, type StoredCookie } from "./rfc";
+import { jarCookies, wireName, type CookieCtx, type StoredCookie } from "./rfc";
 
 interface Memory {
     known: Known[];
@@ -84,12 +84,22 @@ export interface CookieAccess {
 // The snapshot each document came with, until its first cookie access
 // (the document's URL is known by then: set_location follows install).
 const pendingSnapshots = new SafeWeakMap<object, { g: number; e: string[] }>();
+const contexts = new SafeWeakMap<object, CookieCtx>();
 
 /** The snapshot the document of `win` came with (its config's `ck`); the tree's memory made now (its channel hears other tabs from the start). */
-export function givenSnapshot(win: Window, ck: { g: number; e: string[] } | undefined): void {
+export function givenSnapshot(win: Window, ck: { g: number; e: string[]; x?: unknown; k?: unknown } | undefined): void {
     memory(win);
-    if (ck) pendingSnapshots.set(win, ck);
+    if (!ck) return;
+    pendingSnapshots.set(win, ck);
+    // The document's cookie context, as the proxy judged it (spec Cookies.CookieCtx).
+    if (typeof ck.k === "string") {
+        const cross = ck.x === true;
+        contexts.set(win, { top: cross && sEnds(ck.k, "^") ? ck.k.slice(0, -1) : ck.k, cross });
+    }
 }
+
+/** The document's cookie context; null when it was not told one (it lists all, as before). */
+export function cookieCtxOf(win: Window): CookieCtx | null { return contexts.get(win) ?? null; }
 
 /** This tree's outbox slots, rewritten from its pending writes. */
 function writeSlots(m: Memory, access: CookieAccess): void {
@@ -125,7 +135,7 @@ export function takeSnapshot(win: Window, url: URL, ck: { g: number; e: string[]
         const o = unchan(true, String(ck.e[i]), String(ck.e[i + 1]));
         if (o && o.applied !== null) entries.push({ change: o.change, n: o.n, applied: o.applied });
     }
-    snapshot(memory(win).known, url, ck.g, entries);
+    snapshot(memory(win).known, url, ck.g, entries, cookieCtxOf(win));
 }
 
 /**

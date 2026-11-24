@@ -10,7 +10,7 @@
 // its writer, applied by the server once).
 
 import { cookieDate } from "./date";
-import { cookieString, matches, parseScope, scope, type Priority, type SameSite, type SetCookie, type StoredCookie } from "./rfc";
+import { cookieString, inCtx, matches, parseScope, scope, type CookieCtx, type Priority, type SameSite, type SetCookie, type StoredCookie } from "./rfc";
 import { sStarts } from "../native/intrinsics";
 
 export type Expiry = { session: true } | { session: false; until: number };
@@ -22,7 +22,7 @@ export const OUTBOX = "__crn~o!";
 const CAP = 400 * 86400 * 1000;
 
 export const sameId = (a: StoredCookie, b: StoredCookie): boolean =>
-    a.name === b.name && a.domain === b.domain && a.path === b.path && a.hostOnly === b.hostOnly;
+    a.name === b.name && a.domain === b.domain && a.path === b.path && a.hostOnly === b.hostOnly && a.partitionKey === b.partitionKey;
 
 export const alive = (now: number, e: Expiry): boolean => e.session || now < e.until;
 
@@ -130,19 +130,20 @@ export function live(mem: readonly Known[], now: number): StoredCookie[] {
 }
 
 /** document.cookie at `url` (spec memCookies). */
-export function memCookies(mem: readonly Known[], now: number, url: URL): string {
-    const kept = live(mem, now).filter((c) => matches(true, url, c));
+export function memCookies(mem: readonly Known[], now: number, url: URL, ctx: CookieCtx | null = null): string {
+    const kept = live(mem, now).filter((c) => matches(true, url, c) && (ctx === null || inCtx(true, ctx, c)));
     const len = (c: StoredCookie): number => [...c.path].length;
     return cookieString(kept.map((c, i) => [c, i] as const).sort((a, b) => len(b[0]) - len(a[0]) || a[1] - b[1]).map(([c]) => c));
 }
 
 /** The snapshot a document comes with, of generation g, for its URL (spec snapshot). */
-export function snapshot(mem: Known[], url: URL, g: number, entries: { change: Change; n: number; applied: number }[]): void {
+export function snapshot(mem: Known[], url: URL, g: number, entries: { change: Change; n: number; applied: number }[], ctx: CookieCtx | null = null): void {
     for (let i = 0; i < mem.length; i++) {
         const k = mem[i]!;
         if (k.pending !== null || k.change.gone) continue;
         const c = k.change.cookie;
-        if (matches(true, url, c) && k.gen <= g && !entries.some((e) => sameId(e.change.cookie, c))) {
+        // (only what its context lists: the others the snapshot never held)
+        if (matches(true, url, c) && (ctx === null || inCtx(true, ctx, c)) && k.gen <= g && !entries.some((e) => sameId(e.change.cookie, c))) {
             mem[i] = { change: { cookie: c, gone: true, expiry: { session: true } }, gen: g, pending: null };
         }
     }

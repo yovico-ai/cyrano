@@ -150,6 +150,8 @@ func (h *Handler) upstreamCookies(req *http.Request, target *url.URL, sessionID 
 		*req = *req.WithContext(context.WithValue(req.Context(), noCredentialsKey{}, true))
 		return
 	}
+	cx := h.cookieCtx(req, target, sessionID)
+	*req = *req.WithContext(context.WithValue(req.Context(), cookieCtxKey{}, cx))
 	outbox, writers, legacy, legacyNames := browserPairs(strings.Join(req.Header.Values("Cookie"), "; "))
 	var cookies []urlrewrite.StoredCookie
 	created := map[string]uint64{} // scope → when made (ms): Lax-allowing-unsafe
@@ -219,7 +221,7 @@ func (h *Handler) upstreamCookies(req *http.Request, target *url.URL, sessionID 
 		if t, ok := created[c.Scope()]; ok && t <= nowMs {
 			age = nowMs - t
 		}
-		if urlrewrite.SameSiteAllows(c.SameSite, sameSiteReq, topSafeNav, topNav, age) {
+		if urlrewrite.InCtx(false, cx, c) && urlrewrite.SameSiteAllows(c.SameSite, sameSiteReq, topSafeNav, topNav, age) {
 			send = append(send, c)
 		}
 	}
@@ -335,6 +337,7 @@ func (h *Handler) routeSetCookies(resp *http.Response) {
 		}
 	} else {
 		document := false
+		cx := CookieCtxOf(resp.Request)
 		pend := pendingOf(resp.Request)
 		if pend != nil {
 			forBrowser = append(forBrowser, pend.inbox...)
@@ -364,9 +367,12 @@ func (h *Handler) routeSetCookies(resp *http.Response) {
 					continue
 				}
 				c, ok := urlrewrite.StoreCookie(false, target, sc)
-				if !ok {
+				// The context's: a cross-site one stores SameSite=None only,
+				// a Partitioned cookie under its key (spec storableIn).
+				if !ok || !urlrewrite.StorableIn(cx, sc) {
 					continue
 				}
+				c = urlrewrite.PlacedIn(cx, sc, c)
 				ch := cookiejar.Change{Cookie: c}
 				if e, alive := cookiejar.ExpiryOf(now, sc); alive {
 					ch.Expiry = e
@@ -374,7 +380,7 @@ func (h *Handler) routeSetCookies(resp *http.Response) {
 					ch.Gone = true
 				}
 				for _, n := range j.Put(false, now, cookieSite(c.Domain), ch) {
-					if cookiejar.InboxFor(document, requester, cookieSite(resp.Request.URL.Hostname()), cookieSite(n.Cookie.Domain)) {
+					if cookiejar.InboxFor(document, requester, cookieSite(resp.Request.URL.Hostname()), cookieSite(n.Cookie.Domain)) && urlrewrite.InCtx(true, cx, n.Cookie) {
 						forBrowser = append(forBrowser, inboxSetCookie(n, j.LastApplied(n.Cookie)))
 					}
 				}

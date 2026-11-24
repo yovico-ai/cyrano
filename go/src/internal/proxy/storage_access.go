@@ -202,3 +202,36 @@ func storageAccessActive(mode, dest, cred string, ctx frameContext, from, to, ta
 	}
 	return false
 }
+
+// The cookie context of a request (spec Cookies.CookieCtx; measured in
+// Chromium): its top-level site, and whether it is cross-site — a document
+// of the requesting document's chain, or the target, of another site than
+// the top-level one. A top-level navigation's is its target's own; a
+// request whose document is not known, the target's as top-level. Read
+// with the proxied Referer (before directFetchHeaders replaces it).
+func (h *Handler) cookieCtx(req *http.Request, target *url.URL, sessionID string) urlrewrite.CookieCtx {
+	targetSite := siteOf(target)
+	if strings.EqualFold(req.Header.Get("Sec-Fetch-Mode"), "navigate") && strings.EqualFold(req.Header.Get("Sec-Fetch-Dest"), "document") {
+		return urlrewrite.CookieCtx{Top: targetSite}
+	}
+	from := h.requestingDocument(req)
+	if from == nil {
+		return urlrewrite.CookieCtx{Top: targetSite}
+	}
+	ctx, ok := topSites.get(sessionID, pageKey(from))
+	if !ok {
+		ctx = frameContext{top: siteOf(from)}
+	}
+	return urlrewrite.CookieCtx{Top: ctx.top, Cross: ctx.cross || targetSite != ctx.top}
+}
+
+type cookieCtxKey struct{}
+
+// CookieCtxOf is the cookie context the proxy judged the request's (for a
+// document: the document's own); the target's as top-level when none.
+func CookieCtxOf(req *http.Request) urlrewrite.CookieCtx {
+	if x, ok := req.Context().Value(cookieCtxKey{}).(urlrewrite.CookieCtx); ok {
+		return x
+	}
+	return urlrewrite.CookieCtx{Top: siteOf(req.URL)}
+}

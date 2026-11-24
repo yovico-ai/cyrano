@@ -121,6 +121,8 @@
 --                                       → {"out":"a=1; b=2"}
 --   site    <from> <fromSite|-> <to> <toSite|->
 --                                       → {"out":"same-origin|same-site|cross-site"}
+--   storable <top> <cross|same> <Set-Cookie>   → {"out":"<partition key>|-|refused|malformed"}
+--   inctx <script|http> <top> <cross|same> <key|-> <n|l|t|u> → yes/no
 --   cookiestoreset <139|later> <ps yes|no> <url> <name> <value> <-|=domain> <-|=path> <n|l|t>
 --   cookiestoredelete <139|later> <ps yes|no> <url> <name> <-|=domain> <-|=path>
 --                                       → {"out":"!<error>"} / {"out":"<wire name>\n<wire value>"}
@@ -468,6 +470,8 @@ dispatch op args =
   else if eqStr op (toList "chan") then chanReq args
   else if eqStr op (toList "jar") then jarReq args
   else if eqStr op (toList "mem") then memReq args
+  else if eqStr op (toList "storable") then storableReq args
+  else if eqStr op (toList "inctx") then inCtxReq args
   else if eqStr op (toList "unpack") then oneArg (λ v → lines (Data.List.Base.map (λ r → Data.Product.Base.proj₁ r ++ usC ∷ Data.Product.Base.proj₂ r) (CookieJar.unpackSlot v))) args
   else if eqStr op (toList "pack") then oneArg (λ v → CookieJar.packSlot (packArgs (splitOn (is 31) v))) args
   else if eqStr op (toList "cookies") then cookiesReq args
@@ -1216,17 +1220,26 @@ dispatch op args =
     secs (just t) = just (CookieJar.put′ c (CookieJar.until t))
     secs nothing  = nothing
 
-  chanReq : List Str → Str
-  chanReq (io ∷ u ∷ str ∷ e ∷ k ∷ ap ∷ []) with baseOf u | parseSetCookie str | jarNat k
+  placed : Maybe Str → Stored → Stored
+  placed nothing  c = c
+  placed (just k) c = record c { sPartition = just k }
+
+  -- (a partition key: the cookie as a context of that key placed it)
+  chanWith : Maybe Str → Str → Str → Str → Str → Str → Str → Str
+  chanWith pk io u str e k ap with baseOf u | parseSetCookie str | jarNat k
   ... | just base | just sc | just kn with store false false base sc
   ...   | nothing = maybeOut nothing
-  ...   | just c with jarChangeOf c e
+  ...   | just c0 with jarChangeOf (placed pk c0) e
   ...     | nothing = errorReply "BadRequest"
   ...     | just ch = out (CookieJar.chanName inbox ch ++ fromℕ 10 ∷ CookieJar.chanValue ch kn (if inbox then jarNat ap else nothing))
     where
     inbox : Bool
     inbox = eqStr io (toList "in")
-  chanReq (io ∷ u ∷ str ∷ e ∷ k ∷ ap ∷ []) | _ | _ | _ = errorReply "BadRequest"
+  chanWith pk io u str e k ap | _ | _ | _ = errorReply "BadRequest"
+
+  chanReq : List Str → Str
+  chanReq (io ∷ u ∷ str ∷ e ∷ k ∷ ap ∷ []) = chanWith nothing io u str e k ap
+  chanReq (io ∷ u ∷ str ∷ e ∷ k ∷ ap ∷ pk ∷ []) = chanWith (just pk) io u str e k ap
   chanReq _ = errorReply "BadRequest"
 
   -- The jar's script.
@@ -1325,21 +1338,32 @@ dispatch op args =
     byWrite : Maybe (CookieJar.Change × ℕ × Maybe ℕ) → MemRun
     byWrite (just (ch , k , nothing)) = record r { mMem = CookieJar.write ch k (MemRun.mMem r) }
     byWrite _ = r
-    bySnap : Maybe Abs → Maybe ℕ → List Str → MemRun
-    bySnap (just u) (just g) rest = record r { mMem = CookieJar.snapshot u g (memSnapEntries rest) (MemRun.mMem r) }
-    bySnap _ _ _ = r
-    byRead : Maybe ℕ → Maybe Abs → MemRun
-    byRead (just t) (just u) = record r { mOut = (toList "R" ++ usC ∷ CookieJar.memCookies t u (MemRun.mMem r)) ∷ MemRun.mOut r }
-    byRead _ _ = r
+    bySnap : Maybe CookieCtx → Maybe Abs → Maybe ℕ → List Str → MemRun
+    bySnap x (just u) (just g) rest = record r { mMem = CookieJar.snapshot x u g (memSnapEntries rest) (MemRun.mMem r) }
+    bySnap _ _ _ _ = r
+    byRead : Maybe CookieCtx → Maybe ℕ → Maybe Abs → MemRun
+    byRead x (just t) (just u) = record r { mOut = (toList "R" ++ usC ∷ CookieJar.memCookies x t u (MemRun.mMem r)) ∷ MemRun.mOut r }
+    byRead _ _ _ = r
     byAck : Maybe ℕ → Maybe ℕ → MemRun
     byAck (just n) (just k) = record r { mMem = CookieJar.ack n k (MemRun.mMem r) }
     byAck _ _ = r
+    -- (snapx / readx: a context, top and cross|same, before the rest)
+    ctxArg : Str → Str → Maybe CookieCtx
+    ctxArg t c = just (mkCtx t (eqStr c (toList "cross")))
+    snapX : Str → Str → List Str → MemRun
+    snapX t c (u ∷ g ∷ es) = bySnap (ctxArg t c) (baseOf u) (jarNat g) es
+    snapX _ _ _ = r
+    readX : Str → Str → List Str → MemRun
+    readX t c (n ∷ u ∷ _) = byRead (ctxArg t c) (jarNat n) (baseOf u)
+    readX _ _ _ = r
     byCmd : List Str → MemRun
     byCmd (cmd ∷ a ∷ b ∷ rest) =
       if eqStr cmd (toList "absorb") then byAbsorb (CookieJar.unchan true a b)
       else if eqStr cmd (toList "write") then byWrite (CookieJar.unchan false a b)
-      else if eqStr cmd (toList "snap") then bySnap (baseOf a) (jarNat b) rest
-      else if eqStr cmd (toList "read") then byRead (jarNat a) (baseOf b)
+      else if eqStr cmd (toList "snap") then bySnap nothing (baseOf a) (jarNat b) rest
+      else if eqStr cmd (toList "snapx") then snapX a b rest
+      else if eqStr cmd (toList "read") then byRead nothing (jarNat a) (baseOf b)
+      else if eqStr cmd (toList "readx") then readX a b rest
       else if eqStr cmd (toList "ack") then byAck (jarNat a) (jarNat b)
       else r
     byCmd _ = r
@@ -1421,11 +1445,30 @@ dispatch op args =
   cookieStoreSetReq : List Str → Str
   cookieStoreSetReq (g ∷ ps ∷ u ∷ n ∷ v ∷ d ∷ p ∷ ss ∷ []) with baseOf u
   ... | nothing = errorReply "OutOfModel"
-  ... | just base = storeOut (cookieStoreSet (eqStr g (toList "later")) (eqStr ps (toList "yes")) base (mkStoreSet n v (optional d) (optional p) sso))
+  ... | just base = storeOut (cookieStoreSet (eqStr g (toList "later")) (eqStr ps (toList "yes")) base (mkStoreSet n v (optional d) (optional p) sso false))
     where
     sso : SameSite
     sso = if eqStr ss (toList "n") then ssNone else if eqStr ss (toList "l") then ssLax else ssStrict
   cookieStoreSetReq _ = errorReply "BadRequest"
+
+  -- storable <top> <cross|same> <Set-Cookie>: whether that context stores it,
+  -- and its partition key ("-": none).
+  storableReq : List Str → Str
+  storableReq (top ∷ x ∷ raw ∷ []) with parseSetCookie raw
+  ... | nothing = out (toList "malformed")
+  ... | just sc = out (if storableIn ctx sc then (if partitioned sc then partitionKey ctx else toList "-") else toList "refused")
+    where
+    ctx : CookieCtx
+    ctx = mkCtx top (eqStr x (toList "cross"))
+  storableReq _ = errorReply "BadRequest"
+
+  -- inctx <script|http> <top> <cross|same> <partition key|-> <n|l|t|u>
+  inCtxReq : List Str → Str
+  inCtxReq (k ∷ top ∷ x ∷ pk ∷ ss ∷ []) with CookieJar.ssOf′ ss
+  ... | nothing = errorReply "BadRequest"
+  ... | just sm = out (toList (if inCtx (eqStr k (toList "script")) (mkCtx top (eqStr x (toList "cross")))
+                    (mkStored true (toList "h") (toList "/") (toList "n") (toList "v") true false sm pMedium (if eqStr pk (toList "-") then nothing else just pk)) then "yes" else "no"))
+  inCtxReq _ = errorReply "BadRequest"
 
   cookieStoreDeleteReq : List Str → Str
   cookieStoreDeleteReq (g ∷ ps ∷ u ∷ n ∷ d ∷ p ∷ []) with baseOf u

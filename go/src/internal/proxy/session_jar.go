@@ -237,7 +237,10 @@ func (j *SessionJar) Cookies(sessionID string) []urlrewrite.StoredCookie {
 // (spec CookieJar.snapshot): the script-visible cookies shown there, as
 // inbox entries of the jar's generation, and that generation. The runtime
 // keeps them in memory; the channel keeps them current.
-func (j *SessionJar) Snapshot(sessionID, pageURL string) map[string]any {
+// Only what the document's context lists (spec Cookies.inCtx), and the
+// context itself ("x": cross-site, "k": its partition key) for the
+// runtime's own writes and reads.
+func (j *SessionJar) Snapshot(sessionID, pageURL string, cx urlrewrite.CookieCtx) map[string]any {
 	entries := []string{}
 	var gen uint64
 	if sessionID != "" {
@@ -246,7 +249,7 @@ func (j *SessionJar) Snapshot(sessionID, pageURL string) map[string]any {
 		gen = jar.Gen
 		now := unixNow()
 		for _, e := range jar.Entries {
-			if !e.Expiry.Alive(now) || e.Cookie.HTTPOnly || !urlrewrite.MatchesURL(true, pageURL, e.Cookie) {
+			if !e.Expiry.Alive(now) || e.Cookie.HTTPOnly || !urlrewrite.MatchesURL(true, pageURL, e.Cookie) || !urlrewrite.InCtx(true, cx, e.Cookie) {
 				continue
 			}
 			ch := cookiejar.Change{Cookie: e.Cookie, Expiry: e.Expiry}
@@ -255,7 +258,7 @@ func (j *SessionJar) Snapshot(sessionID, pageURL string) map[string]any {
 		}
 		j.mu.Unlock()
 	}
-	return map[string]any{"g": gen, "e": entries}
+	return map[string]any{"g": gen, "e": entries, "x": cx.Cross, "k": cx.Key()}
 }
 
 // KeepUndelivered keeps inbox entries a failed response could not carry.

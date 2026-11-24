@@ -106,6 +106,9 @@ func TestJarFlow_InboxOnlyForThePagesSite(t *testing.T) {
 		if dest != "" {
 			req.Header.Set("Sec-Fetch-Dest", dest)
 		}
+		if dest == "document" {
+			req.Header.Set("Sec-Fetch-Mode", "navigate") // as a browser sends it
+		}
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		n := 0

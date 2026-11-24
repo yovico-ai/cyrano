@@ -130,7 +130,7 @@ async function runSide(site, side) {
   const url = side === "proxied" ? proxied(site.url) : site.url;
   const name = new URL(site.url).host.replace(/^www\./, "") + "-" + side;
   const profile = process.env.PROFILE ? path.join(process.env.PROFILE, side) : fs.mkdtempSync(path.join(os.tmpdir(), "xdrive-profile-"));
-  const args = [`--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "--window-position=0,0", "--window-size=1500,950", "--password-store=basic"];
+  const args = [`--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "--window-position=0,0", "--window-size=1500,950", "--password-store=basic", "--mute-audio"];
   if (/^https:\/\/(localhost|127\.0\.0\.1)/.test(PROXY) && side === "proxied") args.push("--ignore-certificate-errors"); // the test instance's own certificate
   const chrome = spawn("google-chrome", [...args, "about:blank"], { env: { ...process.env, DISPLAY }, stdio: "ignore", detached: true });
   const res = { side, url, notes: [], ok: true };

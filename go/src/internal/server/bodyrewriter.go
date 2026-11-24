@@ -917,8 +917,12 @@ func documentCookies(cp map[string]any, external bool, jar *proxy.SessionJar, re
 		return
 	}
 	sid, _ := resp.Request.Context().Value(proxy.SessionContextKey{}).(string)
+	cx := proxy.CookieCtxOf(resp.Request)
 	if !external {
-		cp["ck"] = jar.Snapshot(sid, target.String())
+		cp["ck"] = jar.Snapshot(sid, target.String(), cx)
+	} else {
+		// The boot handler's snapshot, for this context (no cookie in the URL).
+		cp["cx"] = map[string]any{"t": cx.Top, "x": cx.Cross}
 	}
 	if cc := resp.Header.Get("Cache-Control"); !strings.Contains(strings.ToLower(cc), "no-store") && !strings.Contains(strings.ToLower(cc), "no-cache") {
 		if cc == "" {
@@ -976,9 +980,20 @@ func bootHandler(jar *proxy.SessionJar, sessName string) http.Handler {
 		}
 		// The document's cookies, from the session's jar (never in the URL).
 		delete(parsed, "ck")
+		cx := urlrewrite.CookieCtx{}
+		if m, ok := parsed["cx"].(map[string]any); ok {
+			cx.Top, _ = m["t"].(string)
+			cx.Cross, _ = m["x"].(bool)
+		}
+		delete(parsed, "cx")
+		if cx.Top == "" {
+			if u, err := url.Parse(r.URL.Query().Get("u")); err == nil {
+				cx.Top = urlrewrite.SchemefulSite(u.Scheme + "://" + u.Host + "/")
+			}
+		}
 		if jar != nil && sessName != "" {
 			if c, err := r.Cookie(sessName); err == nil {
-				parsed["ck"] = jar.Snapshot(c.Value, r.URL.Query().Get("u"))
+				parsed["ck"] = jar.Snapshot(c.Value, r.URL.Query().Get("u"), cx)
 			}
 		}
 		clean, _ := json.Marshal(parsed)

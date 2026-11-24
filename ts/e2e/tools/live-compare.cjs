@@ -174,8 +174,8 @@ async function visit(browser, url, viaProxy) {
   // refuse a headless browser even direct, so there is nothing to compare.
   const headed = process.env.HEADED === "1";
   const browser = await chromium.launch(headed
-    ? { channel: "chrome", headless: false, args: ["--disable-blink-features=AutomationControlled"] }
-    : {});
+    ? { channel: "chrome", headless: false, args: ["--disable-blink-features=AutomationControlled", "--mute-audio"] }
+    : { args: ["--mute-audio"] });
   for (const url of sites) {
     const [d, v] = [await visit(browser, url, false), await visit(browser, url, true)];
     // A challenge or bot refusal on either side: the comparison tells

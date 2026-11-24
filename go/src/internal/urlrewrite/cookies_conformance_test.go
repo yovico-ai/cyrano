@@ -133,3 +133,37 @@ func TestSpecConformance_SameSite(t *testing.T) {
 		}
 	}
 }
+
+// The context rules (spec Cookies storableIn, placedIn, inCtx).
+func TestSpecConformance_CookieCtx(t *testing.T) {
+	oracle := specoracle.Need(t)
+	rapid.Check(t, func(rt *rapid.T) {
+		top := rapid.SampledFrom([]string{"https://a.example", "http://b.example"}).Draw(rt, "top")
+		cross := rapid.Bool().Draw(rt, "cross")
+		x := CookieCtx{Top: top, Cross: cross}
+		s := "n=v" + strings.Join(rapid.SliceOfN(rapid.SampledFrom([]string{"; Secure", "; Partitioned", "; partitioned=x", "; SameSite=None", "; SameSite=Lax", "; SameSite=Strict", "; HttpOnly"}), 0, 4).Draw(rt, "attrs"), "")
+		want, _ := ask(rt, oracle, "storable", top, flag(cross, "cross", "same"), s)
+		sc, _ := ParseSetCookie(s)
+		got := "refused"
+		if StorableIn(x, sc) {
+			got = "-"
+			if c := PlacedIn(x, sc, StoredCookie{}); c.Partitioned {
+				got = c.PartitionKey
+			}
+		}
+		if got != want {
+			rt.Fatalf("storable(%v, %q) = %q, spec %q", x, s, got, want)
+		}
+		script := rapid.Bool().Draw(rt, "script")
+		pk := rapid.SampledFrom([]string{"-", "https://a.example", "https://a.example^", "http://b.example"}).Draw(rt, "pk")
+		ss := rapid.SampledFrom([]string{"n", "l", "t", "u"}).Draw(rt, "ss")
+		wantIn, _ := ask(rt, oracle, "inctx", flag(script, "script", "http"), top, flag(cross, "cross", "same"), pk, ss)
+		c := StoredCookie{SameSite: ss[0], Partitioned: pk != "-"}
+		if pk != "-" {
+			c.PartitionKey = pk
+		}
+		if gotIn := flag(InCtx(script, x, c), "yes", "no"); gotIn != wantIn {
+			rt.Fatalf("inctx(%v, %v, %+v) = %s, spec %s", script, x, c, gotIn, wantIn)
+		}
+	})
+}

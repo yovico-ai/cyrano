@@ -103,6 +103,7 @@ record SetCookie : Set where
     maxAge     : Maybe Str    -- "-"? DIGIT+, as written
     expires    : Maybe Str    -- as written (read by CookieDate.agda)
     priority   : Priority
+    partitioned : Bool        -- the Partitioned attribute (CHIPS)
 open SetCookie public
 
 -- name=value up to the first ";" — no "=" means a nameless cookie.
@@ -155,6 +156,7 @@ applyAttr av c with break (is 61) av
     else if eqStr n (toList "httponly") then record c { httpOnly = true }
     else if eqStr n (toList "samesite") then record c { sameSite = sameSiteOf v }
     else if eqStr n (toList "priority") then record c { priority = priorityOf v }
+    else if eqStr n (toList "partitioned") then record c { partitioned = true }
     else c
 
 applyAttrs : List Str → SetCookie → SetCookie
@@ -182,7 +184,7 @@ parseSetCookie s =
   fromParts (pair ∷ avs) with nameValue pair
   ... | n , v =
     if 4096 <ᵇ (octets n + octets v) then nothing
-    else just (applyAttrs avs (mkSet n v nothing nothing false false ssDefault nothing nothing pMedium))
+    else just (applyAttrs avs (mkSet n v nothing nothing false false ssDefault nothing nothing pMedium false))
 
 ------------------------------------------------------------------------
 -- §5.1.3, §5.1.4: domain-match, path-match, default-path.
@@ -229,6 +231,9 @@ record Stored : Set where
     sHttpOnly : Bool
     sSameSite : SameSite
     sPriority : Priority
+    -- A Partitioned cookie's partition: the key of the context that set it
+    -- (partitionKey); nothing: unpartitioned.
+    sPartition : Maybe Str
 open Stored public
 
 -- `api`: set by a script (document.cookie), not an HTTP response.
@@ -243,7 +248,7 @@ store api publicSuffix u c =
   else if prefixed "__secure-" (name c) ∧ not (secure c) then nothing
   else if prefixed "__host-" (name c) ∧ not (secure c ∧ hostOnly ∧ eqStr thePath (toList "/")) then nothing
   else if not domainOk then nothing
-  else just (mkStored hostOnly theDomain thePath (name c) (value c) (secure c) (httpOnly c) (sameSite c) (priority c))
+  else just (mkStored hostOnly theDomain thePath (name c) (value c) (secure c) (httpOnly c) (sameSite c) (priority c) nothing)
   where
   prefixed : Data.String.Base.String → Str → Bool
   prefixed p s = startsWith (toList p) (lower s)
@@ -311,6 +316,53 @@ sameSiteAllows ssLax     sameSiteReq topSafeNav topNav age = sameSiteReq ∨ top
 sameSiteAllows ssDefault sameSiteReq topSafeNav topNav age = sameSiteReq ∨ topSafeNav ∨ (topNav ∧ (age ≤ᵇ laxUnsafeWindow))
 
 ------------------------------------------------------------------------
+-- A context's cookies (Chromium, measured 2026-11-23 over https: a frame,
+-- a frame of a frame, a cross-site fetch, document.cookie, cookieStore;
+-- round H). A context — a document, or the request it makes — has a top-
+-- level site and is cross-site when a document of its chain or the URL
+-- itself is of another site than the top-level one (an a > b > a frame is).
+-- In a cross-site context only SameSite=None cookies are stored (by a
+-- response or a script) and listed to a script (an HTTP request's are
+-- judged by sameSiteAllows). A Partitioned cookie needs Secure; it is kept
+-- under the key of the context that set it, its top-level site and
+-- whether it was cross-site, and is sent and listed only in a context of
+-- that key — beside unpartitioned ones, a name possibly twice. Outside the
+-- model: the per-partition limits.
+
+record CookieCtx : Set where
+  constructor mkCtx
+  field
+    ctxTop   : Str     -- the top-level site, schemeful
+    ctxCross : Bool
+open CookieCtx public
+
+partitionKey : CookieCtx → Str
+partitionKey x = ctxTop x ++ (if ctxCross x then toList "^" else [])
+
+storableIn : CookieCtx → SetCookie → Bool
+storableIn x c = (not (partitioned c) ∨ secure c) ∧ (not (ctxCross x) ∨ none (sameSite c))
+  where
+  none : SameSite → Bool
+  none ssNone = true
+  none _      = false
+
+-- The cookie as the context stores it (its partition).
+placedIn : CookieCtx → SetCookie → Stored → Stored
+placedIn x sc c = record c { sPartition = if partitioned sc then just (partitionKey x) else nothing }
+
+-- Sent or listed there: an HTTP request (`script` false) by its partition;
+-- a script by its SameSite too.
+inCtx : Bool → CookieCtx → Stored → Bool
+inCtx script x c = byPart (sPartition c) ∧ (not script ∨ not (ctxCross x) ∨ none (sSameSite c))
+  where
+  none : SameSite → Bool
+  none ssNone = true
+  none _      = false
+  byPart : Maybe Str → Bool
+  byPart nothing  = true
+  byPart (just k) = eqStr k (partitionKey x)
+
+------------------------------------------------------------------------
 -- The wire form: how a script-visible cookie is kept in the browser's jar
 -- on the proxy origin.
 --
@@ -368,7 +420,7 @@ unwire n v = if startsWith wirePrefix n then fields (dropN 6 n) else nothing
   build : Bool → Str → Str → Str → Maybe Stored
   build ho d p nm with flagsOf v
   ... | nothing              = nothing
-  ... | just (sec , ss , val) = just (mkStored ho (pctDecode d) (pctDecode p) nm val sec false ss pMedium)
+  ... | just (sec , ss , val) = just (mkStored ho (pctDecode d) (pctDecode p) nm val sec false ss pMedium nothing)
 
   -- hd "!" domain "!" path "!" name
   fields : Str → Maybe Stored
@@ -484,6 +536,7 @@ record StoreSet : Set where
     oDomain      : Maybe Str
     oPath        : Maybe Str
     oSameSite    : SameSite
+    oPartitioned : Bool
 open StoreSet public
 
 private
@@ -525,7 +578,7 @@ cookieStoreSet later ps u o =
     longDomain (just d) = 1024 <ᵇ octets d
     longDomain nothing  = false
   ... | true  = rejected malformed
-  ... | false with store true ps u (mkSet n v (lowered (oDomain o)) (just p) true false (oSameSite o) nothing nothing pMedium)
+  ... | false with store true ps u (mkSet n v (lowered (oDomain o)) (just p) true false (oSameSite o) nothing nothing pMedium (oPartitioned o))
     where
     lowered : Maybe Str → Maybe Str
     lowered (just d) = just (lower d)
@@ -553,7 +606,7 @@ cookieStoreSet later ps u o =
 -- What delete removes: the cookie a set of that name, domain and path
 -- would write (its value is not part of its identity).
 cookieStoreDelete : Bool → Bool → Abs → Str → Maybe Str → Maybe Str → StoreResult
-cookieStoreDelete later ps u n d p = cookieStoreSet later ps u (mkStoreSet n (toList "x") d p ssStrict)
+cookieStoreDelete later ps u n d p = cookieStoreSet later ps u (mkStoreSet n (toList "x") d p ssStrict false)
 
 -- get / getAll.
 cookieStoreQuery : Abs → Maybe Str → Str → List Stored

@@ -5,7 +5,7 @@
 import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { cookiesFor, parseSetCookie, storeCookie, unwire, wireName, wireValue, type StoredCookie } from "../../src/cookies/rfc";
+import { cookiesFor, inCtx, parseSetCookie, placedIn, storableIn, storeCookie, unwire, wireName, wireValue, type SameSite, type StoredCookie } from "../../src/cookies/rfc";
 import { OracleClient, locateOracle, oracleRequired } from "./oracle-client";
 
 const located = locateOracle();
@@ -66,5 +66,20 @@ describe.skipIf(located.skip !== "")("cookies: spec conformance", () => {
             const want = await oracle.ask("cookies", [api ? "api" : "http", page, j]);
             expect(cookiesFor(api, new URL(page), j), `cookies for ${page} (api=${api}) from ${JSON.stringify(j)}`).toBe(want);
         }), { numRuns: 1500 });
+    });
+
+    it("a context's cookies (storableIn, placedIn, inCtx)", async () => {
+        const attrs = ["; Secure", "; Partitioned", "; partitioned=x", "; SameSite=None", "; SameSite=Lax", "; SameSite=Strict", "; HttpOnly"];
+        await fc.assert(fc.asyncProperty(fc.constantFrom("https://a.example", "http://b.example"), fc.boolean(), fc.array(fc.constantFrom(...attrs), { maxLength: 4 }),
+            fc.boolean(), fc.constantFrom("-", "https://a.example", "https://a.example^", "http://b.example"), fc.constantFrom("n", "l", "t", "u"),
+            async (top, cross, as, script, pk, ss) => {
+                const x = { top, cross };
+                const str = "n=v" + as.join("");
+                const sc = parseSetCookie(str)!;
+                const got = storableIn(x, sc) ? (placedIn(x, sc, { hostOnly: true, domain: "h", path: "/", name: "n", value: "v", secure: true, httpOnly: false, sameSite: "u", priority: "M" }).partitionKey ?? "-") : "refused";
+                expect(got, str).toBe(await oracle.ask("storable", [top, cross ? "cross" : "same", str]));
+                const c: StoredCookie = { hostOnly: true, domain: "h", path: "/", name: "n", value: "v", secure: true, httpOnly: false, sameSite: ss as SameSite, priority: "M", ...(pk === "-" ? {} : { partitionKey: pk }) };
+                expect(inCtx(script, x, c) ? "yes" : "no").toBe(await oracle.ask("inctx", [script ? "script" : "http", top, cross ? "cross" : "same", pk, ss]));
+            }), { numRuns: 500 });
     });
 });

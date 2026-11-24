@@ -159,7 +159,12 @@ func TestSpecConformance_Chan(t *testing.T) {
 			a := uint64(rapid.IntRange(0, 9).Draw(rt, "ap"))
 			apn, ap = &a, strconv.FormatUint(a, 10)
 		}
-		want, _, err := oracle.Ask("chan", map[bool]string{true: "in", false: "out"}[inbox], u, s, e, strconv.FormatUint(k, 10), ap)
+		pk := rapid.SampledFrom([]string{"-", "-", "https://a.example", "https://a.example^", "http://h%x!.y"}).Draw(rt, "partition")
+		args := []string{map[bool]string{true: "in", false: "out"}[inbox], u, s, e, strconv.FormatUint(k, 10), ap}
+		if pk != "-" {
+			args = append(args, pk)
+		}
+		want, _, err := oracle.Ask("chan", args...)
 		if err != nil {
 			rt.Fatalf("oracle: %v", err)
 		}
@@ -173,6 +178,9 @@ func TestSpecConformance_Chan(t *testing.T) {
 				rt.Fatalf("%q at %s: not stored here, spec %q", s, u, want)
 			}
 			return
+		}
+		if pk != "-" {
+			c.Partitioned, c.PartitionKey = true, pk
 		}
 		ch := Change{Cookie: c}
 		switch e {

@@ -43,7 +43,8 @@ type Numbered struct {
 
 // SameID: the RFC's identity — name, domain, path, host-only.
 func SameID(a, b urlrewrite.StoredCookie) bool {
-	return a.Name == b.Name && a.Domain == b.Domain && a.Path == b.Path && a.HostOnly == b.HostOnly
+	return a.Name == b.Name && a.Domain == b.Domain && a.Path == b.Path && a.HostOnly == b.HostOnly &&
+		a.Partitioned == b.Partitioned && a.PartitionKey == b.PartitionKey
 }
 
 // Cap is Chromium's longest cookie life: 400 days, in ms.
@@ -166,7 +167,7 @@ func Unchan(inbox bool, name, value string) (ch Change, n uint64, applied *uint6
 	if !has {
 		return
 	}
-	ho, d, pa, nm, sok := urlrewrite.ParseScope(sc)
+	ho, d, pa, nm, pt, pk, sok := urlrewrite.ParseScope(sc)
 	if !sok {
 		return
 	}
@@ -198,7 +199,7 @@ func Unchan(inbox bool, name, value string) (ch Change, n uint64, applied *uint6
 		return Change{}, 0, nil, false
 	}
 	c := urlrewrite.StoredCookie{HostOnly: ho, Domain: d, Path: pa, Name: nm, Value: val, Secure: value[0] == 's',
-		SameSite: value[1], Priority: value[2]}
+		SameSite: value[1], Priority: value[2], Partitioned: pt, PartitionKey: pk}
 	switch {
 	case e == "x":
 		ch = Change{Cookie: c, Gone: true}

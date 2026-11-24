@@ -16,9 +16,9 @@
 
 import { nO, ncall } from "../native/intrinsics";
 import { getPublicSuffix } from "tldts";
-import { parseSetCookie, selectCookies, cookieString, storeCookie } from "../cookies/rfc";
+import { inCtx, parseSetCookie, placedIn, selectCookies, cookieString, storableIn, storeCookie, type CookieCtx } from "../cookies/rfc";
 import { expiryOf, type Change } from "../cookies/jar";
-import { absorbInbox, liveCookies, snapshotFirst, writeCookie, type CookieAccess } from "../cookies/memory";
+import { absorbInbox, cookieCtxOf, liveCookies, snapshotFirst, writeCookie, type CookieAccess } from "../cookies/memory";
 import { wrapAccessor } from "../native/surface";
 
 /** d is itself a public suffix (ICANN and private registries, as Chromium). */
@@ -36,11 +36,15 @@ export function nowMicro(): number {
 }
 
 /** The cookie a write of `value` at `url` makes, or null (spec store, expiryOf). */
-export function cookieWrite(value: string, url: URL): Change | null {
+export function cookieWrite(value: string, url: URL, ctx: CookieCtx | null = null): Change | null {
     const sc = parseSetCookie(value);
     if (!sc) return null;
-    const c = storeCookie(true, sc.domain !== null && isPublicSuffix(sc.domain), url, sc);
-    if (!c) return null;
+    const c0 = storeCookie(true, sc.domain !== null && isPublicSuffix(sc.domain), url, sc);
+    if (!c0) return null;
+    // The document's context: a cross-site one stores SameSite=None only, a
+    // Partitioned cookie under its key (spec storableIn, placedIn).
+    if (ctx !== null && !storableIn(ctx, sc)) return null;
+    const c = ctx !== null ? placedIn(ctx, sc, c0) : c0;
     // Chromium's clock has microseconds: an expiry from Max-Age reads back
     // with them (cookieStore's expires: 1795476386877.137).
     const e = expiryOf(nowMicro(), sc);
@@ -89,7 +93,8 @@ export function patchDocumentCookie(targetWindow: Window, baseUrl: () => URL, on
                 ncall(get, self); // a document that may not read cookies throws here, as natively
                 snapshotFirst(targetWindow, baseUrl());
                 const legacy = absorbInbox(targetWindow, access(self));
-                return cookieString(selectCookies(true, baseUrl(), liveCookies(targetWindow, legacy)));
+                const cx = cookieCtxOf(targetWindow);
+                return cookieString(selectCookies(true, baseUrl(), liveCookies(targetWindow, legacy).filter((c) => cx === null || inCtx(true, cx, c))));
             },
         } : {}),
         ...(only !== "get" ? {
@@ -101,7 +106,7 @@ export function patchDocumentCookie(targetWindow: Window, baseUrl: () => URL, on
                     return;
                 }
                 ncall(nativeGet, self); // a document that may not write cookies throws here, as natively
-                const ch = cookieWrite(String(value), baseUrl());
+                const ch = cookieWrite(String(value), baseUrl(), cookieCtxOf(targetWindow));
                 if (ch === null) return;
                 snapshotFirst(targetWindow, baseUrl());
                 const legacy = absorbInbox(targetWindow, access(self));

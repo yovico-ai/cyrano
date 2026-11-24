@@ -75,7 +75,13 @@ changed (gone c)   = c
 -- The RFC's identity: name, domain, path, host-only.
 sameId : Stored → Stored → Bool
 sameId a b = eqStr (sName a) (sName b) ∧ eqStr (sDomain a) (sDomain b) ∧ eqStr (sPath a) (sPath b)
-             ∧ (if sHostOnly a then sHostOnly b else not (sHostOnly b))
+             ∧ (if sHostOnly a then sHostOnly b else not (sHostOnly b)) ∧ samePart (sPartition a) (sPartition b)
+  where
+  -- (and the partition: a Partitioned cookie of each context its own)
+  samePart : Maybe Str → Maybe Str → Bool
+  samePart nothing  nothing  = true
+  samePart (just x) (just y) = eqStr x y
+  samePart _        _        = false
 
 alive : ℕ → Expiry → Bool
 alive now session   = true
@@ -135,7 +141,15 @@ inboxPrefix  = toList "__crn~i!"
 outboxPrefix = toList "__crn~o!"
 
 scope : Stored → Str
-scope c = (if sHostOnly c then 'h' else 'd') ∷ bang ∷ esc (sDomain c) ++ bang ∷ esc (sPath c) ++ bang ∷ sName c
+scope c = part (sPartition c) ++ (if sHostOnly c then 'h' else 'd') ∷ bang ∷ esc (sDomain c) ++ bang ∷ esc (sPath c) ++ bang ∷ sName c
+  where
+  -- A Partitioned cookie's scope starts "p" and its partition key — beside
+  -- an unpartitioned one of the same name. (A page's outbox is shared by
+  -- its tree, of documents of other contexts: each write names its own.
+  -- A document is told its context in its config.)
+  part : Maybe Str → Str
+  part nothing  = []
+  part (just k) = 'p' ∷ esc k ++ bang ∷ []
 
 prioFlag : Priority → Char
 prioFlag pLow    = 'L'
@@ -169,7 +183,7 @@ dropPrefix []       s        = just s
 dropPrefix (_ ∷ _)  []       = nothing
 dropPrefix (p ∷ ps) (c ∷ cs) = if is (toℕ p) c then dropPrefix ps cs else nothing
 
--- (h|d) "!" domain "!" path "!" name
+-- ["p"] (h|d) "!" domain "!" path "!" name
 scopeOf : Str → Maybe (Bool × Str × Str × Str)
 scopeOf (hd ∷ b ∷ r) =
   if is 33 b ∧ (is 104 hd ∨ is 100 hd) then afterDomain (break (is 33) r) else nothing
@@ -185,6 +199,10 @@ scopeOf _ = nothing
 ssOf : Char → Maybe SameSite
 ssOf c = if is 110 c then just ssNone else if is 108 c then just ssLax else if is 116 c then just ssStrict
          else if is 117 c then just ssDefault else nothing
+
+ssOf′ : Str → Maybe SameSite
+ssOf′ (c ∷ []) = ssOf c
+ssOf′ _        = nothing
 
 prOf : Char → Maybe Priority
 prOf c = if is 76 c then just pLow else if is 77 c then just pMedium else if is 72 c then just pHigh else nothing
@@ -246,20 +264,25 @@ unchan inbox n v = build (dropPrefix (if inbox then inboxPrefix else outboxPrefi
   isNothing : Maybe ℕ → Bool
   isNothing nothing  = true
   isNothing (just _) = false
-  fromParts : Maybe (Bool × Str × Str × Str) → Maybe ChanValue → Maybe (Change × ℕ × Maybe ℕ)
-  fromParts (just (ho , d , p , nm)) (just cv) =
+  fromParts : Maybe Str → Maybe (Bool × Str × Str × Str) → Maybe ChanValue → Maybe (Change × ℕ × Maybe ℕ)
+  fromParts pt (just (ho , d , p , nm)) (just cv) =
     if (inbox ∧ isNothing (cvApplied cv)) ∨ (not inbox ∧ not (isNothing (cvApplied cv))) then nothing
     else just (chg (cvExpiry cv) , cvNumber cv , cvApplied cv)
     where
     c : Stored
-    c = mkStored ho d p nm (cvValue cv) (cvSecure cv) false (cvSameSite cv) (cvPriority cv)
+    c = mkStored ho d p nm (cvValue cv) (cvSecure cv) false (cvSameSite cv) (cvPriority cv) pt
     chg : Maybe Expiry → Change
     chg nothing  = gone c
     chg (just e) = put′ c e
-  fromParts _ _ = nothing
+  fromParts _ _ _ = nothing
   build : Maybe Str → Maybe (Change × ℕ × Maybe ℕ)
-  build nothing   = nothing
-  build (just sc) = fromParts (scopeOf sc) (valueOf v)
+  build nothing         = nothing
+  build (just [])       = nothing
+  build (just (x ∷ sc)) = if is 112 x then keyed (break (is 33) sc) else fromParts nothing (scopeOf (x ∷ sc)) (valueOf v)
+    where
+    keyed : Str × Str → Maybe (Change × ℕ × Maybe ℕ)
+    keyed (k , [])     = nothing
+    keyed (k , _ ∷ r)  = fromParts (just (pctDecode k)) (scopeOf r) (valueOf v)
 
 ------------------------------------------------------------------------
 -- The outbox, packed. A slot's value is records joined by "~", a record a
@@ -658,22 +681,29 @@ liveOf now []       = []
 liveOf now (mkKnown (put′ c e) _ _ ∷ ks) = if alive now e then c ∷ liveOf now ks else liveOf now ks
 liveOf now (mkKnown (gone _) _ _ ∷ ks)   = liveOf now ks
 
--- document.cookie at u.
-memCookies : ℕ → Abs → Mem → Str
-memCookies now u m = cookieString (byPathLength (keep true u (liveOf now m)))
+-- What a context lists of the tree's memory (Cookies.inCtx; nothing: any).
+shownIn : Maybe CookieCtx → Stored → Bool
+shownIn nothing  c = true
+shownIn (just x) c = inCtx true x c
+
+-- document.cookie at u, in its document's context (a tree's memory holds
+-- its documents' cookies, of other contexts too).
+memCookies : Maybe CookieCtx → ℕ → Abs → Mem → Str
+memCookies x now u m = cookieString (byPathLength (filterᵇ (shownIn x) (keep true u (liveOf now m))))
 
 -- The snapshot a document comes with, of generation g, for its URL u:
 -- its entries absorbed; a cookie known for u that it lacks and that no
 -- write of this runtime holds is gone as of g.
-snapshot : Abs → ℕ → List (Change × ℕ × ℕ) → Mem → Mem
-snapshot u g es m = absorbAll es (map stale m)
+-- (Only what its context lists: the others the snapshot never held.)
+snapshot : Maybe CookieCtx → Abs → ℕ → List (Change × ℕ × ℕ) → Mem → Mem
+snapshot x u g es m = absorbAll es (map stale m)
   where
   listed : Stored → List (Change × ℕ × ℕ) → Bool
   listed c []                 = false
   listed c ((ch , _ , _) ∷ r) = sameId (changed ch) c ∨ listed c r
   stale : Known → Known
   stale (mkKnown (put′ c e) k nothing) =
-    if matches true u c ∧ (k ≤ᵇ g) ∧ not (listed c es) then mkKnown (gone c) g nothing else mkKnown (put′ c e) k nothing
+    if matches true u c ∧ shownIn x c ∧ (k ≤ᵇ g) ∧ not (listed c es) then mkKnown (gone c) g nothing else mkKnown (put′ c e) k nothing
   stale k = k
   absorbAll : List (Change × ℕ × ℕ) → Mem → Mem
   absorbAll []                   m′ = m′

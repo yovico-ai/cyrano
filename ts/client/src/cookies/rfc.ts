@@ -18,6 +18,8 @@ export interface SetCookie {
     maxAge: string | null;  // "-"? DIGIT+, as written
     expires: string | null; // as written (read by cookies/date.ts)
     priority: Priority;
+    /** The Partitioned attribute (CHIPS). */
+    partitioned?: boolean;
 }
 
 /** Chromium's Priority attribute (spec Cookies.Priority): which cookies a full jar evicts first. */
@@ -33,6 +35,8 @@ export interface StoredCookie {
     httpOnly: boolean;
     sameSite: SameSite;
     priority: Priority;
+    /** A Partitioned cookie's partition: the key of the context that set it (spec sPartition). */
+    partitionKey?: string;
 }
 
 const trimWSP = (s: string): string => s.replace(/^[ \t]+|[ \t]+$/g, "");
@@ -73,6 +77,9 @@ export function parseSetCookie(s: string): SetCookie | null {
             case "path": c.path = sStarts(val, "/") ? val : null; break;
             case "secure": c.secure = true; break;
             case "httponly": c.httpOnly = true; break;
+            case "partitioned":
+                c.partitioned = true;
+                break;
             case "priority": {
                 const p = lowerASCII(val);
                 c.priority = p === "low" ? "L" : p === "high" ? "H" : "M";
@@ -178,13 +185,22 @@ function esc(s: string): string {
 const pctDecode = (s: string): string =>
     s.replace(/%([0-9A-Fa-f]{2})/g, (_, h: string) => String.fromCharCode(parseInt(h, 16)));
 
-/** The cookie's identity as the channel writes it (spec CookieJar.scope). */
+/** The cookie's identity as the channel writes it (spec CookieJar.scope): a partitioned one's starts "p" and its key. */
 export function scope(c: StoredCookie): string {
-    return `${c.hostOnly ? "h" : "d"}!${esc(c.domain)}!${esc(c.path)}!${c.name}`;
+    const s = `${c.hostOnly ? "h" : "d"}!${esc(c.domain)}!${esc(c.path)}!${c.name}`;
+    return c.partitionKey === undefined ? s : `p${esc(c.partitionKey)}!${s}`;
 }
 
 /** A scope read back. */
-export function parseScope(s: string): { hostOnly: boolean; domain: string; path: string; name: string } | null {
+export function parseScope(s0: string): { hostOnly: boolean; domain: string; path: string; name: string; partitionKey?: string } | null {
+    let s = s0;
+    let key: string | undefined;
+    if (sStarts(s, "p")) {
+        const i = s.indexOf("!");
+        if (i < 0) return null;
+        key = pctDecode(s.slice(1, i));
+        s = s.slice(i + 1);
+    }
     const f: string[] = [];
     let from = 0;
     for (let k = 0; k < 3; k++) {
@@ -195,8 +211,33 @@ export function parseScope(s: string): { hostOnly: boolean; domain: string; path
     }
     f.push(s.slice(from));
     if (f[0] !== "h" && f[0] !== "d") return null;
-    return { hostOnly: f[0] === "h", domain: pctDecode(f[1]!), path: pctDecode(f[2]!), name: f[3]! };
+    const out: { hostOnly: boolean; domain: string; path: string; name: string; partitionKey?: string } = { hostOnly: f[0] === "h", domain: pctDecode(f[1]!), path: pctDecode(f[2]!), name: f[3]! };
+    if (key !== undefined) out.partitionKey = key;
+    return out;
 }
+
+// ── a context's cookies (spec Cookies.CookieCtx; Chromium, measured) ────
+
+/** A document's (or request's) cookie context: its top-level site, and whether it is cross-site. */
+export interface CookieCtx { top: string; cross: boolean }
+
+export const partitionKey = (x: CookieCtx): string => (x.cross ? x.top + "^" : x.top);
+
+/** The context stores the cookie: a Partitioned one needs Secure; a cross-site context SameSite=None only. */
+export const storableIn = (x: CookieCtx, c: SetCookie): boolean =>
+    (!c.partitioned || c.secure) && (!x.cross || c.sameSite === "n");
+
+/** The cookie as the context stores it: its partition. */
+export function placedIn(x: CookieCtx, sc: SetCookie, c: StoredCookie): StoredCookie {
+    const out: StoredCookie = { ...c };
+    delete out.partitionKey;
+    if (sc.partitioned) out.partitionKey = partitionKey(x);
+    return out;
+}
+
+/** Sent (script false) or listed (true) in the context: by its partition, for a script by SameSite. */
+export const inCtx = (script: boolean, x: CookieCtx, c: StoredCookie): boolean =>
+    (c.partitionKey === undefined || c.partitionKey === partitionKey(x)) && (!script || !x.cross || c.sameSite === "n");
 
 export function wireName(c: StoredCookie): string {
     return `${WIRE_PREFIX}${c.hostOnly ? "h" : "d"}!${esc(c.domain)}!${esc(c.path)}!${c.name}`;

@@ -24,9 +24,9 @@
 // not kept; service workers' cookieStore.
 import { nO, nR, ncall } from "../native/intrinsics";
 import { wrapMethod } from "../native/surface";
-import { cookieStoreDelete, cookieStoreQuery, cookieStoreSet, itemSameSite, matches, type StoredCookie, type StoreErr } from "../cookies/rfc";
+import { cookieStoreDelete, cookieStoreQuery, cookieStoreSet, inCtx, itemSameSite, matches, partitionKey, type StoredCookie, type StoreErr } from "../cookies/rfc";
 import { sameId, type Change } from "../cookies/jar";
-import { absorbInbox, knownCookies, liveCookies, onCookieChange, snapshotFirst, writeCookie, type CookieAccess } from "../cookies/memory";
+import { absorbInbox, cookieCtxOf, knownCookies, liveCookies, onCookieChange, snapshotFirst, writeCookie, type CookieAccess } from "../cookies/memory";
 import { cookieAccessor, isPublicSuffix, nowMicro } from "./document-cookie";
 
 // Each refusal, made by the native on the proxy's own jar so that the
@@ -107,12 +107,13 @@ export function patchCookieStore(targetWindow: Window, baseUrl: () => URL): void
     const item = (c: StoredCookie): Item => {
         const k = knownCookies(targetWindow).find((x) => sameId(x.change.cookie, c));
         const e = k && !k.change.expiry.session ? k.change.expiry.until : null;
-        return { domain: c.hostOnly ? null : c.domain, expires: e, name: c.name, partitioned: false, path: c.path,
+        return { domain: c.hostOnly ? null : c.domain, expires: e, name: c.name, partitioned: c.partitionKey !== undefined, path: c.path,
             sameSite: itemSameSite(c.sameSite), secure: c.secure, value: c.value };
     };
     const query = (name: string | null): Promise<unknown> => {
         snapshotFirst(targetWindow, baseUrl());
-        const cs = liveCookies(targetWindow, absorbInbox(targetWindow, access()));
+        const cx = cookieCtxOf(targetWindow);
+        const cs = liveCookies(targetWindow, absorbInbox(targetWindow, access())).filter((c) => cx === null || inCtx(true, cx, c));
         return resolved(cookieStoreQuery(baseUrl(), name, cs).map(item));
     };
     // A document that may not use cookies (sandboxed): the native's own refusal.
@@ -149,7 +150,7 @@ export function patchCookieStore(targetWindow: Window, baseUrl: () => URL): void
     }
 
     wrapMethod<AnyFn>(CS.prototype, "set", (native, self, args) => {
-        let o: { name?: unknown; value?: unknown; domain?: unknown; path?: unknown; sameSite?: unknown; expires?: unknown };
+        let o: { name?: unknown; value?: unknown; domain?: unknown; path?: unknown; sameSite?: unknown; expires?: unknown; partitioned?: unknown };
         if (args.length >= 2 && (typeof args[0] !== "object" || args[0] === null)) o = { name: args[0], value: args[1] };
         else if (typeof args[0] === "object" && args[0] !== null) o = args[0] as typeof o;
         else return nR.apply(native, self, args); // the binding's own TypeError
@@ -165,6 +166,11 @@ export function patchCookieStore(targetWindow: Window, baseUrl: () => URL): void
                 name, value, domain, path, sameSite: ss === "none" ? "n" : ss === "lax" ? "l" : "t",
             });
             if ("error" in r) return refuse(self, r.error, name, value);
+            // The document's context (spec storableIn, placedIn): a cross-site
+            // one stores SameSite=None only; a partitioned cookie its key.
+            const cx = cookieCtxOf(targetWindow);
+            if (cx !== null && cx.cross && ss !== "none") return resolved(undefined);
+            if (cx !== null && Boolean(o.partitioned)) r.partitionKey = partitionKey(cx);
             const now = nowMicro();
             if (expires !== null && expires <= now) return write({ cookie: r, gone: true, expiry: { session: true } });
             return write({ cookie: r, gone: false,

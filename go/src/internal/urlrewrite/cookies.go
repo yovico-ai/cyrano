@@ -32,6 +32,7 @@ type SetCookie struct {
 	MaxAge      *string // "-"? DIGIT+, as written
 	Expires     *string // as written (read by CookieDate)
 	Priority    byte    // PriorityLow, PriorityMedium, PriorityHigh (Chromium's attribute)
+	Partitioned bool    // the Partitioned attribute (CHIPS)
 }
 
 // Chromium's Priority attribute (spec Cookies.Priority): which cookies a
@@ -110,6 +111,8 @@ func ParseSetCookie(s string) (SetCookie, bool) {
 			c.Secure = true
 		case "httponly":
 			c.HTTPOnly = true
+		case "partitioned":
+			c.Partitioned = true
 		case "priority":
 			switch lowerASCII(v) {
 			case "low":
@@ -144,6 +147,10 @@ type StoredCookie struct {
 	HTTPOnly     bool
 	SameSite     byte
 	Priority     byte
+	// A Partitioned cookie and its partition: the key of the context that
+	// set it (spec Cookies sPartition, partitionKey).
+	Partitioned  bool
+	PartitionKey string
 }
 
 func isIPHost(h string) bool { return strings.HasPrefix(h, "[") || endsInNumber(h) }
@@ -213,7 +220,7 @@ func storeCookie(api, publicSuffix bool, u absURL, c SetCookie) (StoredCookie, b
 		!domainOK:
 		return StoredCookie{}, false
 	}
-	return StoredCookie{hostOnly, domain, path, c.Name, c.Value, c.Secure, c.HTTPOnly, c.SameSite, c.Priority}, true
+	return StoredCookie{hostOnly, domain, path, c.Name, c.Value, c.Secure, c.HTTPOnly, c.SameSite, c.Priority, false, ""}, true
 }
 
 func (c StoredCookie) matches(api bool, u absURL) bool {
@@ -245,18 +252,70 @@ func (c StoredCookie) WireName() string {
 }
 
 // Scope is the cookie's identity as the channel writes it (spec
-// CookieJar.scope): (h|d) "!" esc(domain) "!" esc(path) "!" name.
+// CookieJar.scope): ["p" esc(partition key) "!"] (h|d) "!" esc(domain) "!"
+// esc(path) "!" name.
 func (c StoredCookie) Scope() string {
-	return strings.TrimPrefix(c.WireName(), wirePrefix)
+	s := strings.TrimPrefix(c.WireName(), wirePrefix)
+	if c.Partitioned {
+		s = "p" + encodeWith(fieldSet, []rune(c.PartitionKey)) + "!" + s
+	}
+	return s
 }
 
-// ParseScope reads a Scope back.
-func ParseScope(s string) (hostOnly bool, domain, path, name string, ok bool) {
+// ParseScope reads a Scope back; partitioned with its key.
+func ParseScope(s string) (hostOnly bool, domain, path, name string, partitioned bool, key string, ok bool) {
+	if rest, has := strings.CutPrefix(s, "p"); has {
+		k, r, cut := strings.Cut(rest, "!")
+		if !cut {
+			return
+		}
+		partitioned, key, s = true, pctDecode(k), r
+	}
 	f := strings.SplitN(s, "!", 4)
 	if len(f) != 4 || (f[0] != "h" && f[0] != "d") {
-		return false, "", "", "", false
+		return false, "", "", "", false, "", false
 	}
-	return f[0] == "h", pctDecode(f[1]), pctDecode(f[2]), f[3], true
+	return f[0] == "h", pctDecode(f[1]), pctDecode(f[2]), f[3], partitioned, key, true
+}
+
+// CookieCtx is a context's cookie context (spec Cookies.CookieCtx): its
+// top-level site, and whether it is cross-site — a document of its chain
+// or the URL itself of another site than the top-level one.
+type CookieCtx struct {
+	Top   string
+	Cross bool
+}
+
+// Key is the context's partition key (spec partitionKey).
+func (x CookieCtx) Key() string {
+	if x.Cross {
+		return x.Top + "^"
+	}
+	return x.Top
+}
+
+// StorableIn: the context stores the cookie (spec storableIn): a
+// Partitioned one needs Secure; a cross-site context only SameSite=None.
+func StorableIn(x CookieCtx, sc SetCookie) bool {
+	return (!sc.Partitioned || sc.Secure) && (!x.Cross || sc.SameSite == SameSiteNone)
+}
+
+// PlacedIn is the cookie as the context stores it: its partition (spec placedIn).
+func PlacedIn(x CookieCtx, sc SetCookie, c StoredCookie) StoredCookie {
+	c.Partitioned, c.PartitionKey = sc.Partitioned, ""
+	if sc.Partitioned {
+		c.PartitionKey = x.Key()
+	}
+	return c
+}
+
+// InCtx: the cookie is sent (script false) or listed (true) in the context
+// (spec inCtx): by its partition, and for a script by SameSite.
+func InCtx(script bool, x CookieCtx, c StoredCookie) bool {
+	if c.Partitioned && c.PartitionKey != x.Key() {
+		return false
+	}
+	return !script || !x.Cross || c.SameSite == SameSiteNone
 }
 
 // MatchesURL: c is sent to / shown at pageURL (spec Cookies.matches).

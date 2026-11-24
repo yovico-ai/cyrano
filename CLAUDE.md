@@ -258,6 +258,17 @@ and origin are the opener's (`popup-blank-vs-chromium`).
   that document's own window (Quantum Metric takes its natives from a
   frame: `cookie-cross-realm-vs-chromium`);
   an overwrite with another value is a new cookie (last in order).
+  A context's cookies as Chromium's (spec/Cookies.agda CookieCtx, measured;
+  `cookie-context-vs-chromium`): each request and document has a top-level
+  site and is cross-site when a document of its chain or its URL is of
+  another site (the frame store, `storage_access.go`); a cross-site context
+  stores SameSite=None cookies only (a response's or a script's) and lists
+  only those to script; a Partitioned cookie (Secure only) is kept under
+  its context's key and sent and listed only there (CHIPS). A document is
+  told its context in its snapshot (`ck.x`, `ck.k`); a page tree's memory
+  is shared, so its reads and snapshots filter by the document's context;
+  a partitioned channel scope starts `p<key>!` (a tree's outbox mixes
+  contexts). Outside the model: per-partition limits.
   Cookies of the old wire form (`__crn!`) are read until the jar holds
   their identity. cookieStore's change events are made from memory's
   changes, as Chromium's (one per write shown at the page's URL, even of
