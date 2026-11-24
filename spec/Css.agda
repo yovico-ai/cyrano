@@ -419,19 +419,45 @@ serializeString s = '"' ∷ esc s ++ '"' ∷ []
     else if is 34 c ∨ is 92 c then '\\' ∷ c ∷ esc cs
     else c ∷ esc cs
 
+-- A string quoted with q (" or '), as serializeString escapes it: q and \
+-- escaped, controls as hex escapes.
+serializeWith : Char → Str → Str
+serializeWith q s = q ∷ esc s ++ q ∷ []
+  where
+  esc : Str → Str
+  esc [] = []
+  esc (c ∷ cs) =
+    if is 0 c then replacement ∷ esc cs
+    else if within 1 31 c ∨ is 127 c then '\\' ∷ hexOf (toℕ c) ++ ' ' ∷ esc cs
+    else if is (toℕ q) c ∨ is 92 c then '\\' ∷ c ∷ esc cs
+    else c ∷ esc cs
+
+-- A URL a url token can hold as it is (§4.3.6: no whitespace, quote,
+-- parenthesis, backslash or non-printable).
+plainInUrl : Str → Bool
+plainInUrl [] = true
+plainInUrl (c ∷ cs) = not (isWhitespace c ∨ is 34 c ∨ is 39 c ∨ is 40 c ∨ is 41 c ∨ is 92 c ∨ within 0 8 c ∨ is 11 c ∨ within 14 31 c ∨ is 127 c) ∧ plainInUrl cs
+
 -- The rewritten CSS, given what containment makes of a URL (nothing: kept
--- as written) — an @import's marked as a stylesheet's.
+-- as written) — an @import's marked as a stylesheet's. Each URL keeps the
+-- page's form where it can (a custom property's value is its tokens as
+-- written, and the page reads it: lichess.org takes the URL out of
+-- url(…)): a url token stays unquoted when the new URL needs no quoting,
+-- a string keeps its quote.
 rewriteCss : (Maybe Dest → Str → Maybe Str) → Str → Str
 rewriteCss rw s = emit (tokenize s) (roles (tokenize s))
   where
+  quoteOf : Str → Char
+  quoteOf (c ∷ _) = if is 39 c then c else '"'
+  quoteOf []      = '"'
   asUrlTok : Maybe Dest → Tok → List Tok → List Role → Str
   asStrTok : Maybe Dest → Tok → List Tok → List Role → Str
   emit : List Tok → List Role → Str
   asUrlTok d t ts rs with rw d (value t)
-  ... | just u  = toList "url(" ++ serializeString u ++ ')' ∷ [] ++ emit ts rs
+  ... | just u  = toList "url(" ++ (if plainInUrl u then u else serializeString u) ++ ')' ∷ [] ++ emit ts rs
   ... | nothing = text t ++ emit ts rs
   asStrTok d t ts rs with rw d (value t)
-  ... | just u  = serializeString u ++ emit ts rs
+  ... | just u  = serializeWith (quoteOf (text t)) u ++ emit ts rs
   ... | nothing = text t ++ emit ts rs
   emit (t ∷ ts) (asUrl ∷ rs)        = asUrlTok nothing t ts rs
   emit (t ∷ ts) (importUrl ∷ rs)    = asUrlTok (just destStyle) t ts rs

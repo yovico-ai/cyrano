@@ -86,6 +86,21 @@ type expr struct {
 	// evalMethod: the expression is F.call or F.apply (R16), F at fStart:fEnd.
 	evalMethod   string
 	fStart, fEnd int
+	// win: the expression plainly is a window — frames, window, self, top,
+	// parent, globalThis, opener, or a member of one of those names but
+	// globalThis (R18); numLit: it is a number literal.
+	win, numLit bool
+}
+
+// winName: a name that plainly holds a window (R18).
+func winName(name string, member bool) bool {
+	switch name {
+	case "frames", "window", "self", "top", "parent", "opener":
+		return true
+	case "globalThis":
+		return !member
+	}
+	return false
 }
 
 // patItem is an identifier edited inside a possible pattern.
@@ -141,6 +156,7 @@ type parser struct {
 	seq   int
 
 	numKey  bool // the computed key just parsed is certainly a number (expr.num)
+	winNum  bool // … and its object plainly is a window (R18)
 	noIn    bool // `in` is not an operator here (a for statement's head)
 	forInit bool // … and a trailing `in` / `of` ends the expression unread
 	fn      fnState
@@ -383,7 +399,15 @@ func (p *parser) member(obj *expr, name string, static, computed, optional bool,
 			p.close(obj.end, ")")
 			return true
 		}
-		return false
+		if !(computed && p.winNum) {
+			return false
+		}
+	}
+	if p.winNum && !inChain && !written && p.o.WrapMemberExpression { // R18: a window's child frame by number
+		p.open(obj.start, "$rewriter.wrap_member_expression(")
+		p.replace(lb, 1, ",$__crn_key__=(")
+		p.replace(rb, 1, "))[$__crn_key__]")
+		return true
 	}
 	if !inChain && !written && !p.numKey && p.o.WrapMemberExpression && (p.o.DebugR5At == nil || p.o.DebugR5At(lb)) { // R5
 		p.open(obj.start, "$rewriter.wrap_member_expression(")
@@ -1353,7 +1377,7 @@ func (p *parser) lhs(calls bool) expr {
 				continue
 			}
 			applied := p.member(&e, name, true, false, optional, opPos, 0, 0, calls && p.calledNext())
-			e = expr{start: e.start, end: nameEnd, chain: e.chain || optional, wrapped: e.wrapped || applied}
+			e = expr{start: e.start, end: nameEnd, chain: e.chain || optional, wrapped: e.wrapped || applied, win: winName(name, true)}
 			if !optional && !e.chain {
 				if name == "eval" && objName {
 					e.evalRef = true
@@ -1422,8 +1446,9 @@ func (p *parser) index(obj expr, optional, calls bool) expr {
 		name, static = "#", true
 	}
 	p.numKey = key.num
+	p.winNum = obj.win && (key.num || key.numLit)
 	applied := p.member(&obj, name, static, true, optional, 0, lb, rb, calls && p.calledNext())
-	p.numKey = false
+	p.numKey, p.winNum = false, false
 	return expr{start: obj.start, end: end, chain: obj.chain || optional, wrapped: obj.wrapped || applied, evalKey: static && name == "eval" && !optional}
 }
 
@@ -1613,9 +1638,10 @@ func (p *parser) primary() expr {
 			}
 		}
 		end := p.tok.end
-		id := identCode(identName(p.text()))
+		nm := identName(p.text())
+		id := identCode(nm)
 		p.next()
-		return expr{start: start, end: end, lone: id}
+		return expr{start: start, end: end, lone: id, win: winName(nm, false)}
 
 	case tPrivate: // #x in obj
 		p.next()
@@ -1623,7 +1649,7 @@ func (p *parser) primary() expr {
 
 	case tNum:
 		p.next()
-		return expr{start: start, end: p.prevEnd, lit: litOther}
+		return expr{start: start, end: p.prevEnd, lit: litOther, numLit: true}
 
 	case tStr:
 		p.next()

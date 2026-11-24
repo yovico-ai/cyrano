@@ -69,6 +69,9 @@ type Config struct {
 	// OnReferrerPolicy is told the content of a <meta name="referrer"> and
 	// reports whether it is a policy (then the tag is given unsafe-url).
 	OnReferrerPolicy func(content string) bool
+	// OnMetaCSP is told the content of a <meta http-equiv=content-security-policy>
+	// as the page wrote it (its upgrade-insecure-requests, proxy.RecordMetaUIR).
+	OnMetaCSP func(content string)
 
 	// baseSeen: a <base href> was met (only the first counts).
 	baseSeen bool

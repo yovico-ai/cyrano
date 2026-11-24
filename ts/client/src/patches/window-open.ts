@@ -40,8 +40,17 @@ export function patchWindowOpen(targetWindow: Window, rewriteOne: (url: string) 
             giveRuntime(w, targetWindow, config, base);
             return crossOriginView(w, null, targetWindow);
         }
-        const w = nR.apply(native, self, [rewriteOne(String(args[0])), ...args.slice(1)]) as Window | null;
-        if (/^\s*about:/i.test(String(args[0]))) giveRuntime(w, targetWindow, config, base);
-        return crossOriginView(w, null, targetWindow);
+        const given = String(args[0]);
+        const w = nR.apply(native, self, [rewriteOne(given), ...args.slice(1)]) as Window | null;
+        if (/^\s*about:/i.test(given)) giveRuntime(w, targetWindow, config, base);
+        // On its way to that URL's origin: it is that origin's already (the
+        // popup is still on about:blank when open returns; judged so, it was
+        // handed out as same-origin, and its document stayed readable).
+        let pending: string | null = null;
+        try {
+            const u = new URL(given, base ? base().href : undefined);
+            if (u.protocol === "http:" || u.protocol === "https:") pending = u.origin;
+        } catch { pending = null; }
+        return crossOriginView(w, pending, targetWindow);
     });
 }

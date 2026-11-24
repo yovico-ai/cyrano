@@ -108,6 +108,18 @@ parsePolicy s = go [] (splitOn (is 59) s)
 parseHeader : Str → List (List Directive)
 parseHeader s = map parsePolicy (splitOn (is 44) s)
 
+-- A header (its policies) declares upgrade-insecure-requests
+-- (MixedContent.uirUpgrades): a directive of that name in any policy.
+declaresUIR : Str → Bool
+declaresUIR h = anyP (parseHeader h)
+  where
+  anyD : List Directive → Bool
+  anyD []             = false
+  anyD ((n , _) ∷ ds) = eqStr n (toList "upgrade-insecure-requests") ∨ anyD ds
+  anyP : List (List Directive) → Bool
+  anyP []       = false
+  anyP (p ∷ ps) = anyD p ∨ anyP ps
+
 ------------------------------------------------------------------------
 -- Translating.
 

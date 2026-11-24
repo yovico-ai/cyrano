@@ -65,5 +65,10 @@
   ["R14 a pattern's default value is not a source; an assignment inside a literal is", "f = ({a: {location: L} = w}) => L; ({a: {top: T} = w} = s); g({a: {location: L} = w});", "f = ({a: {location: L} = w}) => L; ({a: {top: T} = w} = s); g({a: {location: L} = $rewriter.wrap_pattern(w)});"],
   ["R15", "u = import.meta.resolve('./a.js');", "u = $rewriter.wrap_meta_resolve(import.meta)('./a.js');"],
   ["R15 as a value, tested, under new", "f = import.meta.resolve; import.meta.resolve ? 1 : 0; new import.meta.resolve(x);", "f = $rewriter.wrap_meta_resolve(import.meta); $rewriter.wrap_meta_resolve(import.meta) ? 1 : 0; new ($rewriter.wrap_meta_resolve(import.meta))(x);"],
-  ["R15 not as a target", "import.meta.resolve = g; import.meta.resolve ||= g; import.meta.resolve++;", "import.meta.resolve = g; import.meta.resolve ||= g; import.meta.resolve++;"]
+  ["R15 not as a target", "import.meta.resolve = g; import.meta.resolve ||= g; import.meta.resolve++;", "import.meta.resolve = g; import.meta.resolve ||= g; import.meta.resolve++;"],
+  ["R18 a window's frame by number","x = frames[0];","x = $rewriter.wrap_member_expression(frames,$__crn_key__=(0))[$__crn_key__];"],
+  ["R18 window, self, globalThis, opener","a = window[1]; b = self[0]; c = globalThis[2]; d = opener[0];","a = $rewriter.wrap_member_expression(window,$__crn_key__=(1))[$__crn_key__]; b = $rewriter.wrap_member_expression(self,$__crn_key__=(0))[$__crn_key__]; c = $rewriter.wrap_member_expression(globalThis,$__crn_key__=(2))[$__crn_key__]; d = $rewriter.wrap_member_expression(opener,$__crn_key__=(0))[$__crn_key__];"],
+  ["R18 a member that is a window","x = top.frames[0]; y = w.parent[1];","x = $rewriter.wrap_member_expression($rewriter.wrap_get_top_window(top).frames,$__crn_key__=(0))[$__crn_key__]; y = $rewriter.wrap_member_expression($rewriter.wrap_parent_window({obj:w}).parent,$__crn_key__=(1))[$__crn_key__];"],
+  ["R18 a key certainly a number","x = frames[i + 1];","x = $rewriter.wrap_member_expression(frames,$__crn_key__=(i + 1))[$__crn_key__];"],
+  ["R18 not other objects, not written, not in a chain, not parenthesized","a[0]; frames[0] = 1; frames?.[0]; (frames)[0]; frames[\"0\"]; globalThis.globalThis[0];","a[0]; frames[0] = 1; frames?.[0]; (frames)[0]; frames[\"0\"]; globalThis.globalThis[0];"]
 ]

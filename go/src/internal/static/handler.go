@@ -94,6 +94,12 @@ type Handler struct {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == h.RewriterJSPath:
+		// Every proxied document loads it, a sandboxed one too — whose
+		// origin is opaque, so to it this is a cross-origin resource, which
+		// a COEP of require-corp refuses without CORP (saguaro.com's Shopify
+		// frame: the bootstrap failed closed). Nothing reads it but a
+		// script element or importScripts.
+		w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
 		// By its content hash, for good; anything else, revalidated.
 		if v := bundleHash(); v != "" {
 			w.Header().Set("ETag", `"`+v+`"`)

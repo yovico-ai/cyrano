@@ -665,3 +665,16 @@ func XFrameOptionsAllows(lines []string, sameOrigin bool) bool {
 	}
 	return true
 }
+
+// DeclaresUIR: a CSP header's policies (or a meta's content) declare
+// upgrade-insecure-requests (spec Csp.declaresUIR).
+func DeclaresUIR(header string) bool {
+	for _, p := range parseCSPHeader(header) {
+		for _, d := range p {
+			if d.name == "upgrade-insecure-requests" {
+				return true
+			}
+		}
+	}
+	return false
+}

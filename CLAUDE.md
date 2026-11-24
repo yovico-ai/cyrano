@@ -171,7 +171,8 @@ leaves without a Referer (`window.open(url, "_self", "noreferrer")`: a
 bare path with a proxied Referer is the page's own, spec/Route.agda). Its
 place is kept in localStorage under a bare name no page's view lists.
 Limits: a page that makes `<body>` a shadow host itself (first: no
-toolbar there; later: its attachShadow throws); computed `cursor` reads
+toolbar there; later: its attachShadow throws); every body child goes to
+its one slot (manual assignment); computed `cursor` reads
 the toolbar's while the pointer is over it; an element beneath with a
 cursor of its own keeps it.
 
@@ -698,6 +699,62 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   --assets go/assets` (self-signed cert; Playwright `ignoreHTTPSErrors`).
   Header order is then Chrome's template, not the browser's own
   (`internal/headerorder` reads HTTP/1.x only).
+- **Windows of another origin** (`native/cross-origin.ts`): a child frame
+  by number (`frames[0]`, `window[1]`, `top.frames[0]`: R18) and a popup
+  opened on another origin's URL (judged by that URL while on about:blank)
+  are the cross-origin view (`cross-origin-index-vs-chromium`); a frame of
+  another origin navigating the top without a user gesture gets
+  Chromium's framebusting SecurityError (`framebusting-vs-chromium`);
+  `navigation.entries()` lists the page's own run of same-origin entries
+  only, `index` / `canGoBack` / `back()` by it
+  (`navigation-entries-vs-chromium`). Gap: a child frame by name
+  (`window.kid`).
+- **Start and end tags the rules leave alone go out as written** (byte for
+  byte: line breaks, attribute text and encoding, spelling). Rewritten
+  CSS keeps each URL's form where it can: a url token unquoted, a string in
+  its own quote (spec/Css.agda; a custom property's value is read as
+  written: lichess.org's pieces; `custom-property-url-vs-chromium`).
+- **The toolbar's slot** takes every body child in document order (manual
+  slot assignment, re-assigned at every insertion so a script measures
+  the box at once: oarsrowing.com's `<div slot=…>` bar;
+  `toolbar-slot-vs-chromium`).
+- **CORP / COEP** (spec/Corp.agda): the proxy runs the cross-origin
+  resource policy check for no-cors subresource requests by the page's
+  original origin and its recorded embedder policy (COEP /
+  Document-Isolation-Policy), failing a blocked response as ORB's
+  (`corp-coep-vs-chromium`). Gap: a frame's own COEP (nested documents).
+- **HTTP authentication** (spec/Auth.agda): a Basic challenge's realm is
+  named for the response's origin (the browser keeps credentials by origin
+  and realm: one site's were sent to another's same realm), Digest left as
+  sent; a challenge on a cross-origin no-cors subresource is not given to
+  the browser (Chromium shows none) (`http-auth-sites-vs-chromium`).
+- **Page-visible odds and ends, as Chromium**: postMessage's options form
+  (`{targetOrigin, transfer}`, "/" by default) judged as the string form
+  (`post-message-options-vs-chromium`); an opaque redirect
+  (`redirect: "manual"`) passes the runtime's CORS check (the proxy checked
+  the 3xx; `fetch-redirect-mode-vs-chromium`); `<a download>` to another
+  origin navigates (the runtime takes the attribute away for the click:
+  `download-link-vs-chromium`); Element Timing / LCP / long-animation-frame
+  script URLs and HashChangeEvent URLs unwrapped
+  (`timing-entry-urls-vs-chromium`); registerProtocolHandler judged by the
+  page's origin, handed the proxified URL with `%s` kept
+  (`protocol-handler-vs-chromium`).
+- **Clear-Site-Data** (spec/ClearSiteData.agda): the browser is never
+  given it (it would clear the proxy origin: every site and the session);
+  its "cookies" / "*" the proxy applies to the jar — the response's
+  registrable domain's cookies, its own new ones too (measured). Gap:
+  "storage", "cache", "executionContexts" are not applied
+  (`clear-site-data-vs-chromium`).
+- **The runtime is served with CORP: cross-origin** (`/rewriter.js`, the
+  boot and worker-init scripts): to a sandboxed document it is a
+  cross-origin resource, refused under COEP require-corp (saguaro.com's
+  Shopify frame failed closed; `coep-sandboxed-frame-vs-chromium`).
+- **Sinks given an object** (a String object, anything with toString)
+  convert it as the native does (ToString, once) and rewrite the text —
+  HTML (`sinkText`), CSS (`cssText`), `document.write` (numbers, null,
+  undefined as their text; a Symbol to the native, which throws); only a
+  real Trusted Types value stays one (`trustedLike`; rakuten.co.jp's
+  pixel; `sink-objects-vs-chromium`).
 - **Mixed content** is judged by the proxy as the browser would have
   (spec/MixedContent.agda; through the proxy every request is same-origin
   https to the browser): for an https page (its Crn-I, else its Referer)
@@ -706,8 +763,11 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   else but a top-level navigation (a-hospital.com's http share.js ran;
   `mixed-content-vs-chromium`) — an image a srcset offers (an img's or a
   picture source's, imagesrcset) is blocked, as Chromium (its URL marked
-  `!set` by both rewriters: Containment destImageSet). Gap: ws: from an
-  https page.
+  `!set` by both rewriters: Containment destImageSet). Before it, a page
+  that declared upgrade-insecure-requests (CSP header or meta, recorded per
+  page from the origin's policy) has its http: / ws: requests upgraded
+  (MixedContent.agda uirUpgrades: a top-level navigation only same-origin;
+  chinamuseum.org.cn's Baidu map). Gap: ws: from an https page.
 - **Secure contexts** (spec/SecureContext.agda, `native/secure-context.ts`;
   `secure-context-vs-chromium`): every proxied document is served over
   https, so an http: page was a secure context (cookieStore, crypto.subtle,

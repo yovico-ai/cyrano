@@ -81,6 +81,7 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 
 		switch tt {
 		case html.StartTagToken, html.SelfClosingTagToken:
+			raw := append([]byte(nil), z.Raw()...)
 			token := z.Token()
 			tag := token.Data
 			written := append([]html.Attribute(nil), token.Attr...)
@@ -104,6 +105,11 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 
 			if tt == html.StartTagToken && tag == "style" && cfg.RewriteInlineCSS != nil {
 				held = &heldTag{tt, tag, attrs}
+			} else if sameAttrs(attrs, written) {
+				// Nothing to change: the tag as written, byte for byte — its
+				// line breaks (script line numbers below it), its attributes'
+				// text and encoding (a legacy-encoded page's references).
+				emitRaw(raw)
 			} else {
 				emitTag(&emitted, tt, tag, attrs)
 			}
@@ -140,8 +146,8 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 			}
 
 		case html.EndTagToken:
+			emitRaw(z.Raw()) // as written (an end tag's attributes, spelling, spaces)
 			tn, _ := z.TagName()
-			fmt.Fprintf(&emitted, "</%s>", string(tn))
 			st.endTag(string(tn))
 			switch string(tn) {
 			case "script":
@@ -268,6 +274,9 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 	// (urlrewrite.RewriteCSP). The runtime is already in place above it.
 	if tag == "meta" {
 		if eq, ok := getAttr(attrs, "http-equiv"); ok && strings.EqualFold(strings.TrimSpace(eq), "content-security-policy") {
+			if v, ok := getAttr(attrs, "content"); ok && cfg.OnMetaCSP != nil {
+				cfg.OnMetaCSP(v)
+			}
 			if v, ok := getAttr(attrs, "content"); ok && cfg.Proxy.PublicURL != nil {
 				attrs = setAttr(attrs, "content", urlrewrite.RewriteMetaCSP(v, cfg.Proxy.PublicURL.Scheme+"://"+cfg.Proxy.PublicURL.Host))
 			}
@@ -666,4 +675,17 @@ func crossoriginValue(html bool, tag, rel, as string) (string, bool) {
 		return "", false
 	}
 	return "use-credentials", true
+}
+
+// sameAttrs: the rules left the attributes as the tokenizer read them.
+func sameAttrs(a, b []html.Attribute) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

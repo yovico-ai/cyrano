@@ -11,10 +11,11 @@ import { nR, nO } from "../native/intrinsics";
 import { wrapMethod, wrapConstructor } from "../native/surface";
 import { rewriteCssText } from "../css/rewriter";
 import { mayHoldUrl } from "./css-style-declaration";
+import { cssText } from "./dynamic-html";
 
 export function patchTypedOm(targetWindow: Window, rewriteOne: (url: string) => string): void {
     const g = targetWindow as unknown as Record<string, ({ prototype?: object } & Record<string, unknown>) | undefined>;
-    const css = (v: unknown): unknown => (typeof v === "string" && mayHoldUrl(v) ? rewriteCssText(v, rewriteOne) : v);
+    const css = (v0: unknown): unknown => { const v = cssText(v0); return typeof v === "string" && mayHoldUrl(v) ? rewriteCssText(v, rewriteOne) : v; };
     const M = g["StylePropertyMap"]?.prototype;
     if (M) {
         for (const name of ["set", "append"]) {
@@ -52,7 +53,7 @@ export function rewriteKeyframes(frames: unknown, css: (v: unknown) => unknown):
             const v = (f as Record<string, unknown>)[k];
             let w: unknown = v;
             if (!KEEP.has(k)) {
-                if (typeof v === "string") w = css(v);
+                if (typeof v === "string" || (typeof v === "object" && v !== null && !Array.isArray(v))) w = css(v);
                 else if (Array.isArray(v)) {
                     const arr = v.map(css);
                     if (arr.some((x, i) => x !== v[i])) w = arr;
@@ -78,7 +79,7 @@ export function rewriteKeyframes(frames: unknown, css: (v: unknown) => unknown):
 
 export function patchWebAnimations(targetWindow: Window, rewriteOne: (url: string) => string): void {
     const g = targetWindow as unknown as Record<string, ({ prototype?: object } & Record<string, unknown>) | undefined>;
-    const css = (v: unknown): unknown => (typeof v === "string" && mayHoldUrl(v) ? rewriteCssText(v, rewriteOne) : v);
+    const css = (v0: unknown): unknown => { const v = cssText(v0); return typeof v === "string" && mayHoldUrl(v) ? rewriteCssText(v, rewriteOne) : v; };
     const E = g["Element"]?.prototype;
     if (E && typeof (E as Record<string, unknown>)["animate"] === "function") {
         wrapMethod<(...a: unknown[]) => unknown>(E, "animate", (native, self, args) =>

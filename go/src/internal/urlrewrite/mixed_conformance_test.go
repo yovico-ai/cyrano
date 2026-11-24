@@ -39,3 +39,31 @@ func TestSpecConformance_MixedContent(t *testing.T) {
 		}
 	})
 }
+
+func TestSpecConformance_UpgradeInsecureRequests(t *testing.T) {
+	oracle := specoracle.Need(t)
+	ctxs := []string{"-", "https://site.example/p", "http://site.example/p", "http://site.example:80/q", "https://cdn.example/"}
+	targets := []string{"http://cdn.example/a.js", "https://cdn.example/a.js", "http://site.example/x", "http://site.example:8080/x", "ws://cdn.example/s", "wss://cdn.example/s", "HTTP://SITE.example/y"}
+	dests := []string{"-", "document", "DOCUMENT", "iframe", "image", "script", "empty", ""}
+	rapid.Check(t, func(rt *rapid.T) {
+		c := rapid.SampledFrom(ctxs).Draw(rt, "ctx")
+		tg := rapid.SampledFrom(targets).Draw(rt, "target")
+		d := rapid.SampledFrom(dests).Draw(rt, "dest")
+		want, _, err := oracle.Ask("uir", c, tg, d)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		var cu *url.URL
+		if c != "-" {
+			cu, _ = url.Parse(c)
+		}
+		tu, _ := url.Parse(tg)
+		got := "no"
+		if UIRUpgrades(cu, tu, d, d != "-") {
+			got = "yes"
+		}
+		if got != want {
+			rt.Fatalf("UIRUpgrades(%q, %q, %q) = %s, spec says %s", c, tg, d, got, want)
+		}
+	})
+}

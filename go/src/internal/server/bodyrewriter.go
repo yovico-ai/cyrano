@@ -213,6 +213,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				ExternalBootstrap: !urlrewrite.InlineScriptAllowed(originalPolicies(resp)),
 			}
 			cfg.OnReferrerPolicy = func(content string) bool { return proxy.RecordMetaPolicy(resp, target, content) }
+			cfg.OnMetaCSP = func(content string) { proxy.RecordMetaUIR(resp, target, content) }
 			if cfg.ExternalBootstrap {
 				cfg.ClientPassthrough["xb"] = true // documents this page writes need the same
 			}
@@ -948,6 +949,7 @@ func workerInitHandler(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig) htt
 		href, _ := json.Marshal(workerURL)
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin") // as the runtime bundle (static.Handler)
 		_, _ = w.Write([]byte("import " + string(src) + ";\n" +
 			"self.$rewriter=self.$rewriter_init_worker(" + string(cfg) + "," + string(href) + ");" +
 			"self.$__crn_key__=null;\n"))
@@ -1000,6 +1002,7 @@ func bootHandler(jar *proxy.SessionJar, sessName string) http.Handler {
 		href, _ := json.Marshal(r.URL.Query().Get("u"))
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin") // as the runtime bundle (static.Handler)
 		_, _ = w.Write([]byte(htmlrewrite.FailClosed + "window.$rewriter=window.$rewriter_init(window," + string(clean) + ").inject();" +
 			"$rewriter.set_location(" + string(href) + ");" +
 			`(function(s,p){p=s.previousElementSibling;if(p&&p.src&&p.tagName==="SCRIPT")p.remove();s.remove()})(document.currentScript);`))

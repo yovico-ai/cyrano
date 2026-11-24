@@ -26,6 +26,7 @@
 // Recursion safety: rewriteCssText is pure (no DOM callbacks), so calling
 // it inside the patched setter is recursion-free.
 
+import { cssText } from "./dynamic-html";
 import { SafeWeakMap, SafeWeakSet, nO, nOP, nR, ncall } from "../native/intrinsics";
 import { rewriteCssText } from "../css/rewriter";
 import { wrapAccessor, wrapMethod } from "../native/surface";
@@ -97,15 +98,15 @@ function patchSetProperty(
     rewriteOne: (url: string) => string,
 ): void {
     wrapMethod<(...a: unknown[]) => void>(proto, "setProperty", (native, self, args) => {
-        const [name, value] = args;
+        const name = args[0];
+        // (the value as the native reads it: a toString object's text, once)
+        const value = args.length > 1 ? cssText(args[1]) : args[1];
         if (typeof name === "string" && typeof value === "string") {
             // A known URL-bearing property, or a value with url()/@import
             // (unknown shorthands, future properties).
-            if (mayHoldUrl(value)) {
-                const next = args.slice();
-                next[1] = rewriteCssText(value, rewriteOne);
-                return nR.apply(native, self, next) as void;
-            }
+            const next = args.slice();
+            next[1] = mayHoldUrl(value) ? rewriteCssText(value, rewriteOne) : value;
+            return nR.apply(native, self, next) as void;
         }
         return nR.apply(native, self, args) as void;
     });
@@ -116,7 +117,7 @@ function patchCssTextSetter(
     rewriteOne: (url: string) => string,
 ): void {
     wrapAccessor<unknown>(proto, "cssText", {
-        set: (set, self, value) => ncall(set, self, typeof value === "string" ? rewriteCssText(value, rewriteOne) : value),
+        set: (set, self, value0) => { const value = cssText(value0); ncall(set, self, typeof value === "string" ? rewriteCssText(value, rewriteOne) : value); },
     });
 }
 
@@ -132,7 +133,7 @@ function patchNamedSetters(
         const d = nO.getOwnPropertyDescriptor(proto, key);
         if (!d?.set || !d.configurable) continue;
         wrapAccessor<unknown>(proto, key, {
-            set: (set, self, value) => ncall(set, self, typeof value === "string" && mayHoldUrl(value) ? rewriteCssText(value, rewriteOne) : value),
+            set: (set, self, value0) => { const value = cssText(value0); ncall(set, self, typeof value === "string" && mayHoldUrl(value) ? rewriteCssText(value, rewriteOne) : value); },
         });
     }
 }
@@ -177,7 +178,8 @@ function viewOf(decl: unknown, rewriteOne: (url: string) => string): unknown {
     let v = views.get(decl);
     if (!v) {
         v = new Proxy(decl, {
-            set: (target, p, value, receiver) => {
+            set: (target, p, value0, receiver) => {
+                let value = typeof p === "string" && p in target ? cssText(value0) : value0;
                 if (typeof p === "string" && typeof value === "string" && mayHoldUrl(value)) value = rewriteCssText(value, rewriteOne);
                 // Assignments land on the declaration itself (the engine's setter).
                 return nR.set(target, p, value, receiver === v ? target : receiver);
@@ -224,7 +226,7 @@ function patchStyleViews(targetWindow: Window, rewriteOne: (url: string) => stri
         wrapAccessor<unknown>(proto, "style", {
             get: (get, self) => viewOf(ncall(get, self), rewriteOne),
             ...(d.set ? { set: (set: (this: unknown, v: unknown) => void, self: unknown, value: unknown) =>
-                ncall(set, self, typeof value === "string" ? rewriteCssText(value, rewriteOne) : value) } : {}),
+                { const v = cssText(value); ncall(set, self, typeof v === "string" ? rewriteCssText(v, rewriteOne) : v); } } : {}),
         });
     }
 }

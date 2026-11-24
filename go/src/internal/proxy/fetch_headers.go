@@ -50,6 +50,85 @@ func (s *policyStore) get(session, page string) urlrewrite.Policy {
 	return urlrewrite.DefaultPolicy
 }
 
+// uirPages: the pages (per session) that declared upgrade-insecure-requests
+// (spec MixedContent.uirUpgrades), by a CSP header or a <meta http-equiv>.
+var uirPages struct {
+	mu sync.Mutex
+	m  map[string]bool
+}
+
+func setUIR(session, page string, on bool) {
+	uirPages.mu.Lock()
+	defer uirPages.mu.Unlock()
+	if uirPages.m == nil {
+		uirPages.m = map[string]bool{}
+	}
+	k := session + "\x00" + page
+	if !on {
+		delete(uirPages.m, k)
+		return
+	}
+	if len(uirPages.m) >= policyStoreMax {
+		for x := range uirPages.m {
+			delete(uirPages.m, x)
+			break
+		}
+	}
+	uirPages.m[k] = true
+}
+
+func pageUIR(session, page string) bool {
+	uirPages.mu.Lock()
+	defer uirPages.mu.Unlock()
+	return uirPages.m[session+"\x00"+page]
+}
+
+// pageEmbedders: each page's embedder policy (COEP / Document-Isolation-
+// Policy), per session — the CORP check of its no-cors requests (corp).
+var pageEmbedders struct {
+	mu sync.Mutex
+	m  map[string]string
+}
+
+func setEmbedder(session, page, e string) {
+	pageEmbedders.mu.Lock()
+	defer pageEmbedders.mu.Unlock()
+	if pageEmbedders.m == nil {
+		pageEmbedders.m = map[string]string{}
+	}
+	k := session + "\x00" + page
+	if e == "" {
+		delete(pageEmbedders.m, k)
+		return
+	}
+	if len(pageEmbedders.m) >= policyStoreMax {
+		for x := range pageEmbedders.m {
+			delete(pageEmbedders.m, x)
+			break
+		}
+	}
+	pageEmbedders.m[k] = e
+}
+
+func pageEmbedder(session, page string) string {
+	pageEmbedders.mu.Lock()
+	defer pageEmbedders.mu.Unlock()
+	return pageEmbedders.m[session+"\x00"+page]
+}
+
+// RecordMetaUIR notes a page's <meta http-equiv="content-security-policy">
+// declaring upgrade-insecure-requests.
+func RecordMetaUIR(resp *http.Response, target *url.URL, content string) {
+	if !urlrewrite.DeclaresUIR(content) {
+		return
+	}
+	var req *http.Request
+	if resp != nil {
+		req = resp.Request
+	}
+	setUIR(sessionIn(req), pageKey(target), true)
+}
+
 // pagePolicies holds every session's pages. A page's policy is what its
 // server sent that session: two users' responses for one URL differ (signed
 // in or not, an experiment), and one must not set the other's Referer.

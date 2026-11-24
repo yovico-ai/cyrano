@@ -38,8 +38,8 @@ func TestUrlAbsoluteDoubleQuoted(t *testing.T) {
 
 func TestUrlAbsoluteSingleQuoted(t *testing.T) {
 	got := rewrite(t, `.x { background: url('https://cdn.example.com/a.png'); }`)
-	// Rewritten URLs are written url("…") (spec/Css.agda serializeString).
-	if !strings.Contains(got, `url("http://localhost:9081/cyrano/https/cdn.example.com/a.png")`) {
+	// Its own quote kept (spec/Css.agda serializeWith).
+	if !strings.Contains(got, `url('http://localhost:9081/cyrano/https/cdn.example.com/a.png')`) {
 		t.Errorf("single-quote rewrite missing: %s", got)
 	}
 }
@@ -49,10 +49,14 @@ func TestUrlAbsoluteUnquoted(t *testing.T) {
 	if !strings.Contains(got, "localhost:9081/cyrano/https/cdn.example.com/a.png") {
 		t.Errorf("unquoted url not rewritten: %s", got)
 	}
-	// Written as a string (spec/Css.agda): a proxified URL may hold ( or a
-	// space, which an unquoted url token cannot.
-	if !strings.Contains(got, `url("http://localhost:9081/cyrano/https/cdn.example.com/a.png")`) {
-		t.Errorf("rewrite not written url(\"…\"): %s", got)
+	// Unquoted as written when the proxified URL can be (spec/Css.agda
+	// plainInUrl: a custom property's value is read back as written).
+	if !strings.Contains(got, `url(http://localhost:9081/cyrano/https/cdn.example.com/a.png)`) {
+		t.Errorf("rewrite not written url(…): %s", got)
+	}
+	// One that holds what a url token cannot (a space): quoted.
+	if got := rewrite(t, `.x { background: url(/a%20b.png); }`); !strings.Contains(got, `url(http://`) {
+		t.Errorf("%s", got)
 	}
 }
 
@@ -79,7 +83,7 @@ func TestImportUrlForm(t *testing.T) {
 
 func TestImportSingleQuote(t *testing.T) {
 	got := rewrite(t, `@import 'https://x.example.com/y.css';`)
-	if !strings.Contains(got, `"http://localhost:9081/cyrano/https!css/x.example.com/y.css"`) {
+	if !strings.Contains(got, `'http://localhost:9081/cyrano/https!css/x.example.com/y.css'`) {
 		t.Errorf("@import single-quote rewrite missing: %s", got)
 	}
 }

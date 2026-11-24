@@ -143,3 +143,22 @@ func TestSpecConformance_XFrameOptions(t *testing.T) {
 		}
 	})
 }
+
+func TestSpecConformance_DeclaresUIR(t *testing.T) {
+	oracle := specoracle.Need(t)
+	parts := []string{"upgrade-insecure-requests", "Upgrade-Insecure-Requests", "upgrade-insecure-requests x", "default-src 'self'", ";", ",", " ", "upgrade-insecure-requestsx", "é upgrade-insecure-requests"}
+	rapid.Check(t, func(rt *rapid.T) {
+		h := strings.Join(rapid.SliceOfN(rapid.SampledFrom(parts), 0, 5).Draw(rt, "parts"), "")
+		want, _, err := oracle.Ask("uirdeclared", h)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		got := "no"
+		if DeclaresUIR(h) {
+			got = "yes"
+		}
+		if got != want {
+			rt.Fatalf("DeclaresUIR(%q) = %s, spec %s", h, got, want)
+		}
+	})
+}

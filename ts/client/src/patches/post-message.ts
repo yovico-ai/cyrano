@@ -36,9 +36,24 @@ export function patchPostMessage(
         // script URL as its page, so the stack cannot tell them apart).
         const bare = receiver === undefined || receiver === null;
         const sender = marked ?? (bare ? targetWindow : (callingWindow(targetWindow, runtimeUrl, nameOf, unwrap) ?? targetWindow));
-        const d = delivery(self, args[1], originalOrigin(sender, unwrap), proxyOrigin, unwrap);
+        // postMessage(message, options): a WindowPostMessageOptions (also
+        // undefined / null, as WebIDL's overload resolution takes them), its
+        // targetOrigin ("/" by default) judged as the string form's — given
+        // as is, the browser compared the page's origin with the proxy's and
+        // dropped it (round I). Its members read once, in the native's order.
+        let opts: { targetOrigin: unknown; transfer?: unknown } | null = null;
+        if (args.length >= 1 && (args[1] === undefined || args[1] === null || typeof args[1] === "object" || typeof args[1] === "function")) {
+            const o = args[1] as { targetOrigin?: unknown; transfer?: unknown } | null | undefined;
+            const t = o == null ? undefined : o.targetOrigin;
+            const tr = o == null ? undefined : o.transfer;
+            opts = { targetOrigin: t === undefined ? "/" : String(t) };
+            if (tr !== undefined) opts.transfer = tr;
+        }
+        const d = delivery(self, opts ? opts.targetOrigin : args[1], originalOrigin(sender, unwrap), proxyOrigin, unwrap);
         if (d.kind === "drop") return;
-        const next = d.kind === "send" ? [args[0], d.origin, ...args.slice(2)] : args;
+        const next = opts
+            ? [args[0], d.kind === "send" ? { ...opts, targetOrigin: d.origin } : opts]
+            : d.kind === "send" ? [args[0], d.origin, ...args.slice(2)] : args;
         if (sender === self || sender === targetWindow && self === targetWindow) {
             // From a function of the sender's own realm (target-origin.ts callInRealmOf).
             const sent = callInRealmOf(sender, nativeFn, self, next);

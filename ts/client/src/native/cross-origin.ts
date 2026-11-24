@@ -19,7 +19,11 @@
 //
 // The runtime's own code works with the real windows (`realWindow`).
 //
-// Known gaps: `window[0]` / `frames[0]` give the real child window;
+// A child frame by number (`frames[0]`, `window[1]`, `top.frames[0]`) goes
+// through the JS rules (R18: a constant or numeric key on an object that
+// plainly is a window); a popup is judged by the URL it was opened on.
+// Known gaps: a child frame by name (`window.kid`) and by a number on an
+// object that is not plainly a window (`w[0]`) give the real child window;
 // document.domain relaxation is not modelled.
 
 import { SafeWeakMap, SafeWeakSet, nO, ncall, aIncludes } from "./intrinsics";
@@ -277,7 +281,22 @@ function makeLocationView(t: Window, v: Viewer): object {
         const dest = childFrameDest(t, v.win);
         return dest && v.navigate.withMark ? v.navigate.withMark(url, null, dest) : v.navigate(url);
     };
-    const replace = (url: unknown): void => t.location.replace(to(String(url)));
+    // Chromium's framebusting rule: a frame navigates the top-level window
+    // of another origin only after a user gesture (round I: an ad frame's
+    // top.location = … went through; directly a SecurityError).
+    const busting = (url: string, how: "set" | "replace"): void => {
+        let top = false, active = true;
+        try { top = t.top === t && v.win !== t; } catch { top = false; }
+        if (!top) return;
+        try { active = Boolean((v.win.navigator as unknown as { userActivation?: { hasBeenActive?: boolean } }).userActivation?.hasBeenActive ?? true); } catch { active = true; }
+        if (active) return;
+        const DE = (v.win as unknown as { DOMException: typeof DOMException }).DOMException;
+        let abs = url;
+        try { abs = v.unwrap(to(url)); } catch { /* as given */ }
+        const why = `The current window does not have permission to navigate the target frame to '${abs}'.`;
+        throw new DE(how === "set" ? `Failed to set a named property 'href' on 'Location': ${why}` : `Failed to execute 'replace' on 'Location': ${why}`, "SecurityError");
+    };
+    const replace = (url: unknown): void => { busting(String(url), "replace"); t.location.replace(to(String(url))); };
     return new Proxy({}, {
         get: (_o, p) => {
             if (p === "replace") return replace;
@@ -286,6 +305,7 @@ function makeLocationView(t: Window, v: Viewer): object {
         },
         set: (_o, p, value) => {
             if (p !== "href") throw securityError(v);
+            busting(String(value), "set");
             t.location.href = to(String(value));
             return true;
         },

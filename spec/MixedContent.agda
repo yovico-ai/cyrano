@@ -21,6 +21,14 @@
 --   * anything else is blocked: a network error, nothing sent.
 -- Checked against Chromium through the real server (mixed-content-vs-
 -- chromium). Known gap: a ws: WebSocket from an https page is not judged.
+--
+-- Before it, a document that declared upgrade-insecure-requests (a CSP
+-- header or <meta http-equiv>; CSP3 "Upgrade Insecure Requests" §4.1) has
+-- an http: or ws: request upgraded to https / wss — every subresource and a
+-- frame's navigation, a top-level navigation only to the document's own
+-- origin (uirUpgrades). The browser never sees such a request as http:
+-- through the proxy (chinamuseum.org.cn's http Baidu map script was
+-- blocked as mixed content, which directly is upgraded and runs).
 ------------------------------------------------------------------------
 
 module MixedContent where
@@ -32,7 +40,7 @@ open import Data.String.Base using (String; toList)
 
 open import Scheme
 open import Url
-open import Referrer using (trustworthy)
+open import Referrer using (trustworthy; sameOriginOf)
 
 data Verdict : Set where
   allowed upgraded blocked : Verdict
@@ -65,3 +73,17 @@ mixed (just ctx) target dest imageSet =
     else if is′ d "image" ∧ imageSet then blocked
     else if is′ d "image" ∨ is′ d "audio" ∨ is′ d "video" then upgraded
     else blocked
+
+-- uir: the requesting document declared upgrade-insecure-requests.
+uirUpgrades : Bool → Maybe Abs → Abs → Maybe Str → Bool
+uirUpgrades false _ _ _ = false
+uirUpgrades true ctx target dest = insecure (scheme target) ∧ byDest dest ctx
+  where
+  insecure : Scheme → Bool
+  insecure http = true
+  insecure ws   = true
+  insecure _    = false
+  byDest : Maybe Str → Maybe Abs → Bool
+  byDest (just d) (just c) = if eqStr (map lowerAscii d) (toList "document") then sameOriginOf c target else true
+  byDest (just d) nothing  = not (eqStr (map lowerAscii d) (toList "document"))
+  byDest nothing  _        = true

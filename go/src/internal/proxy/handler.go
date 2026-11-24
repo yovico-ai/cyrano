@@ -200,6 +200,29 @@ func (h *Handler) serveTarget(w http.ResponseWriter, r *http.Request, target *ur
 	// Mixed content, as the browser would have judged it (spec/MixedContent.agda):
 	// through the proxy every request is same-origin https, so its own checks
 	// never fire (a-hospital.com's http share.js ran on its https page).
+	// A document that declared upgrade-insecure-requests has its http:
+	// requests upgraded first (spec MixedContent.uirUpgrades): directly
+	// the browser would have; through the proxy it saw an https URL.
+	session := ""
+	if h.opts.SessionCookieName != "" {
+		if c, err := r.Cookie(h.opts.SessionCookieName); err == nil {
+			session = c.Value // (the director puts it in the context, after this)
+		}
+	}
+	if ctx := h.mixedContext(r); ctx != nil && pageUIR(session, pageKey(ctx)) {
+		dest, has := "", false
+		if v := r.Header.Values("Sec-Fetch-Dest"); len(v) > 0 {
+			dest, has = v[0], true
+		}
+		if urlrewrite.UIRUpgrades(ctx, target, dest, has) {
+			up := *target
+			up.Scheme = map[string]string{"http": "https", "ws": "wss"}[strings.ToLower(target.Scheme)]
+			if up.Port() == "80" {
+				up.Host = up.Hostname()
+			}
+			target = &up
+		}
+	}
 	switch h.mixedContent(r, target) {
 	case urlrewrite.MixedBlocked:
 		h.opts.Logger.Debug("mixed content blocked", "target", target.String())
@@ -371,8 +394,10 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 // the browser into the original origin's security policies, then hand off
 // to the BodyRewriter (if configured) for content transformation.
 func (h *Handler) modifyResponse(resp *http.Response) error {
-	// A cross-origin request the origin does not allow fails, as natively (cors.go).
-	if corsFails(resp) || scriptCORSFails(resp) {
+	// A cross-origin request the origin does not allow fails, as natively
+	// (cors.go); so does a no-cors one its CORP (or the embedder's COEP)
+	// refuses (spec/Corp.agda).
+	if corsFails(resp) || scriptCORSFails(resp) || corpFails(resp) {
 		// The browser stores a refused response's cookies (before the check).
 		h.failedCookies(resp, false)
 		_ = resp.Body.Close()
@@ -426,6 +451,33 @@ func (h *Handler) translateResponse(resp *http.Response) error {
 	if t := proxyTargetOf(resp); t != nil {
 		judgeFraming(resp, t)
 	}
+	// HTTP authentication (spec/Auth.agda): each site's challenges its own —
+	// the browser keeps credentials by origin and realm, and every proxied
+	// site is the proxy's origin — and none shown for a cross-origin no-cors
+	// subresource, as Chromium shows none.
+	if resp.StatusCode == http.StatusUnauthorized && resp.Request != nil && resp.Request.URL != nil && len(resp.Header.Values("WWW-Authenticate")) > 0 {
+		req := resp.Request
+		nav := strings.EqualFold(req.Header.Get("Sec-Fetch-Mode"), "navigate")
+		cors := strings.EqualFold(req.Header.Get("Sec-Fetch-Mode"), "cors")
+		targetOrigin := strings.ToLower(req.URL.Scheme + "://" + req.URL.Host)
+		same := true
+		if page, ok := req.Context().Value(requesterKey{}).(string); ok && page != "" {
+			if u, err := url.Parse(page); err == nil {
+				same = strings.ToLower(u.Scheme+"://"+u.Host) == targetOrigin
+			}
+		}
+		lines := resp.Header.Values("WWW-Authenticate")
+		resp.Header.Del("WWW-Authenticate")
+		if urlrewrite.AuthPromptable(nav, same, cors) {
+			for _, l := range lines {
+				resp.Header.Add("WWW-Authenticate", urlrewrite.RewriteChallenge(targetOrigin, l))
+			}
+		}
+	}
+	// The page's upgrade-insecure-requests, as the origin's policy has it
+	// (a plain-HTTP proxy drops the directive from what the browser gets).
+	// (Recorded once the response has its session: below.)
+	declaresUIR := urlrewrite.DeclaresUIR(strings.Join(resp.Header.Values("Content-Security-Policy"), ","))
 	for _, name := range []string{"Content-Security-Policy", "Content-Security-Policy-Report-Only"} {
 		vals := resp.Header.Values(name)
 		if len(vals) == 0 {
@@ -467,6 +519,11 @@ func (h *Handler) translateResponse(resp *http.Response) error {
 	}
 	if resp.Request != nil && resp.Request.URL != nil {
 		recordPagePolicy(resp, resp.Request.URL)
+		if dest := strings.ToLower(resp.Request.Header.Get("Sec-Fetch-Dest")); setsPolicy(dest) || (dest == "" && strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/html")) {
+			setUIR(sessionIn(resp.Request), pageKey(resp.Request.URL), declaresUIR)
+			setEmbedder(sessionIn(resp.Request), pageKey(resp.Request.URL),
+				urlrewrite.EmbedderOf(resp.Header.Get("Cross-Origin-Embedder-Policy"), resp.Header.Get("Document-Isolation-Policy")))
+		}
 		noDictionaryRegistration(resp)
 		sid, _ := resp.Request.Context().Value(SessionContextKey{}).(string)
 		recordAcceptCH(resp, resp.Request.URL, sid)
@@ -675,22 +732,50 @@ func proxyTargetOf(resp *http.Response) *url.URL {
 	return resp.Request.URL
 }
 
+// mixedContext is the document r comes from: the runtime's Crn-I, else the
+// document its Referer names.
+func (h *Handler) mixedContext(r *http.Request) *url.URL {
+	if v := r.Header.Get(InitiatorHeader); v != "" {
+		if u, err := url.Parse(v); err == nil && u.IsAbs() {
+			return u
+		}
+	}
+	return h.originalReferrer(r.Header.Get("Referer"))
+}
+
 // mixedContent judges r as the browser's mixed content checks would have:
 // its context is the runtime's Crn-I (the requesting document of a fetch
 // or XHR), else the document its Referer names.
 func (h *Handler) mixedContent(r *http.Request, target *url.URL) urlrewrite.MixedVerdict {
-	var ctx *url.URL
-	if v := r.Header.Get(InitiatorHeader); v != "" {
-		if u, err := url.Parse(v); err == nil && u.IsAbs() {
-			ctx = u
-		}
-	}
-	if ctx == nil {
-		ctx = h.originalReferrer(r.Header.Get("Referer"))
-	}
+	ctx := h.mixedContext(r)
 	dest, has := "", false
 	if v := r.Header.Values("Sec-Fetch-Dest"); len(v) > 0 {
 		dest, has = v[0], true
 	}
 	return urlrewrite.MixedContent(ctx, target, dest, has, urlrewrite.TargetDest(r.URL.EscapedPath()) == urlrewrite.DestImageSet)
+}
+
+// corpFails: the response to a no-cors subresource request is blocked by
+// the cross-origin resource policy check (spec/Corp.agda), judged by the
+// requesting page's original origin and embedder policy.
+func corpFails(resp *http.Response) bool {
+	req := resp.Request
+	if req == nil || req.URL == nil || !strings.EqualFold(req.Header.Get("Sec-Fetch-Mode"), "no-cors") {
+		return false
+	}
+	switch strings.ToLower(req.Header.Get("Sec-Fetch-Dest")) {
+	case "document", "iframe", "frame", "object", "embed", "fencedframe":
+		return false
+	}
+	page, ok := req.Context().Value(requesterKey{}).(string)
+	if !ok || page == "" {
+		return false
+	}
+	h, has := resp.Header.Get("Cross-Origin-Resource-Policy"), len(resp.Header.Values("Cross-Origin-Resource-Policy")) > 0
+	emb := pageEmbedder(sessionIn(req), page)
+	if !has && emb == "" {
+		return false
+	}
+	none, _ := req.Context().Value(noCredentialsKey{}).(bool)
+	return urlrewrite.CORPBlocks(h, has, emb, !none, page, req.URL.String())
 }

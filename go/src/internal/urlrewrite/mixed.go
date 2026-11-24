@@ -46,3 +46,23 @@ func MixedContent(ctx, target *url.URL, dest string, has, imageSet bool) MixedVe
 	}
 	return MixedBlocked
 }
+
+// UIRUpgrades: a document that declared upgrade-insecure-requests has this
+// request upgraded to https / wss before the mixed-content check (spec
+// MixedContent.uirUpgrades): an http: or ws: target, a top-level
+// navigation only to the document's own origin.
+func UIRUpgrades(ctx, target *url.URL, dest string, has bool) bool {
+	if s := strings.ToLower(target.Scheme); s != "http" && s != "ws" {
+		return false
+	}
+	if !has || !strings.EqualFold(dest, "document") {
+		return true
+	}
+	if ctx == nil {
+		return false
+	}
+	// (parsed as the spec parses them: a default port is no port)
+	c, cres := parseRef(nil, preprocess(ctx.String()))
+	t, tres := parseRef(nil, preprocess(target.String()))
+	return cres == parsedURL && tres == parsedURL && sameOriginURL(c, t)
+}

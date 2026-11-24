@@ -26,11 +26,13 @@
 //
 // Known limit: a page that makes <body> a shadow host itself (rare). If it
 // does so first, that document has no toolbar; if later, its attachShadow
-// throws where directly it would not. Body children carrying a `slot`
-// attribute stay visible (a slot of that name is added) but are drawn after
-// the others.
+// throws where directly it would not. Every child of <body> is assigned to
+// the one slot, in document order, whatever `slot` attribute it carries
+// (manual slot assignment: oarsrowing.com's `<div slot=…>` top bar was laid
+// out after the others).
 
 import { SafeWeakMap, SafeWeakSet, nO, ncall } from "../native/intrinsics";
+import { onInserted } from "../patches/dynamic-iframe";
 
 // The box: the grip, "<<", the home button, ">>" (spec region).
 export const TOOLBAR = { width: 96, height: 22, grip: 20, jump: 24 } as const;
@@ -124,7 +126,6 @@ export function installToolbar(targetWindow: Window, home: string): void {
     // The natives, as they are before any patch or page script.
     const attachShadow = E["attachShadow"] as Fn | undefined;
     const setAttribute = E["setAttribute"] as Fn;
-    const getAttribute = E["getAttribute"] as Fn;
     const appendChild = N["appendChild"] as Fn;
     const createElement = D["createElement"] as Fn;
     const createElementNS = D["createElementNS"] as Fn;
@@ -141,6 +142,7 @@ export function installToolbar(targetWindow: Window, home: string): void {
     const firstChildOf = nO.getOwnPropertyDescriptor(N, "firstChild")?.get;
     const nextSiblingOf = nO.getOwnPropertyDescriptor(N, "nextSibling")?.get;
     const nodeTypeOf = nO.getOwnPropertyDescriptor(N, "nodeType")?.get;
+    const assign = (g["HTMLSlotElement"]?.prototype as Record<string, unknown> | undefined)?.["assign"] as Fn | undefined;
     const stopNow = (g["Event"]?.prototype as Record<string, unknown> | undefined)?.["stopImmediatePropagation"] as Fn | undefined;
     const preventDefault = (g["Event"]?.prototype as Record<string, unknown> | undefined)?.["preventDefault"] as Fn | undefined;
     // The home button leaves without a Referer, as a user typing the
@@ -172,7 +174,7 @@ export function installToolbar(targetWindow: Window, home: string): void {
 
     // ── the element, inside a closed shadow root on <body> ─────────────
     const hosts = new SafeWeakSet<object>();
-    const slots = new SafeWeakMap<object, { root: ShadowRoot; names: Record<string, true> }>();
+    const slots = new SafeWeakMap<object, Element>();
     const svg = (cls: string, d: string): Element => {
         const s = ncall(createElementNS as never, doc, SVG, "svg") as Element;
         ncall(setAttribute as never, s, "viewBox", "0 0 16 16");
@@ -182,20 +184,17 @@ export function installToolbar(targetWindow: Window, home: string): void {
         ncall(appendChild as never, s, p);
         return s;
     };
-    const namedSlot = (body: object, name: string): void => {
-        const st = slots.get(body);
-        if (!st || name === "" || st.names[name]) return;
-        st.names[name] = true;
-        const s = ncall(createElement as never, doc, "slot") as Element;
-        ncall(setAttribute as never, s, "name", name);
-        ncall(appendChild as never, st.root, s);
-    };
-    const slotNames = (body: Node): void => {
+    // Every child of the body (elements and text: the slottables), in
+    // document order, to the one slot.
+    const assignAll = (body: Node): void => {
+        const slot = slots.get(body);
+        if (!slot || !assign) return;
+        const kids: Node[] = [];
         for (let c = ncall(firstChildOf, body) as Node | null; c; c = ncall(nextSiblingOf, c) as Node | null) {
-            if (ncall(nodeTypeOf, c) !== 1) continue;
-            const name = ncall(getAttribute as never, c, "slot") as string | null;
-            if (name) namedSlot(body, name);
+            const t = ncall(nodeTypeOf, c);
+            if (t === 1 || t === 3) kids[kids.length] = c;
         }
+        try { ncall(assign as never, slot, ...kids); } catch { /* as it was */ }
     };
     const attach = (): void => {
         const body = ncall(bodyOf, doc) as HTMLElement | null;
@@ -203,12 +202,13 @@ export function installToolbar(targetWindow: Window, home: string): void {
         hosts.add(body);
         let root: ShadowRoot;
         try {
-            root = ncall(attachShadow as never, body, { mode: "closed" }) as ShadowRoot;
+            root = ncall(attachShadow as never, body, assign ? { mode: "closed", slotAssignment: "manual" } : { mode: "closed" }) as ShadowRoot;
         } catch {
             return; // the page's own shadow host (or a <frameset>): no toolbar here
         }
         ncall(adopt as never, root, [sheet]);
-        ncall(appendChild as never, root, ncall(createElement as never, doc, "slot"));
+        const slot = ncall(createElement as never, doc, "slot") as Element;
+        ncall(appendChild as never, root, slot);
         const tb = ncall(createElement as never, doc, "div") as Element;
         ncall(setAttribute as never, tb, "id", "crn-tb");
         ncall(setAttribute as never, tb, "aria-hidden", "true");
@@ -218,19 +218,13 @@ export function installToolbar(targetWindow: Window, home: string): void {
         ncall(appendChild as never, tb, svg("h", "M8 1.5 1 8h2v6h4v-4h2v4h4V8h2z"));
         ncall(appendChild as never, tb, svg("r", "M3 3l5 5-5 5-1.4-1.4L5.2 8 1.6 4.4zM8 3l5 5-5 5-1.4-1.4L10.2 8 6.6 4.4z"));
         ncall(appendChild as never, root, tb);
-        slots.set(body, { root, names: {} });
-        slotNames(body);
-        watchNode((records) => {
-                for (const r of records) {
-                    if (r.type === "attributes") { const n = ncall(getAttribute as never, r.target, "slot") as string | null; if (n) namedSlot(body, n); continue; }
-                    for (let i = 0; i < r.addedNodes.length; i++) {
-                        const c = r.addedNodes[i]!;
-                        if (ncall(nodeTypeOf, c) !== 1) continue;
-                        const n = ncall(getAttribute as never, c, "slot") as string | null;
-                        if (n) namedSlot(body, n);
-                    }
-                }
-        }, body, { childList: true, attributes: true, attributeFilter: ["slot"], subtree: false });
+        slots.set(body, slot);
+        assignAll(body);
+        // The parser's insertions (a microtask checkpoint comes before
+        // each of its scripts), and script's, at once (a script that
+        // inserts and measures sees the box).
+        watchNode(() => { assignAll(body); }, body, { childList: true, subtree: false });
+        if (assign) onInserted(targetWindow, () => { if (ncall(bodyOf, doc) === body) assignAll(body); });
     };
     // <body> arrives after the runtime (which runs in <head>), and a page
     // may replace it.

@@ -357,8 +357,8 @@ func TestE2E_SVGPresentationURLAttr(t *testing.T) {
 	if status != 200 {
 		t.Fatalf("status %d", status)
 	}
-	// (The CSS rewriter writes the URL quoted: spec/Css.agda rewriteCss.)
-	want := `clip-path="url(&#34;` + gotoURL(proxy, up.URL+"/p") + `#c&#34;)"`
+	// (An unquoted url token stays unquoted: spec/Css.agda rewriteCss.)
+	want := `clip-path="url(` + gotoURL(proxy, up.URL+"/p") + `#c)"`
 	if !strings.Contains(body, want) {
 		t.Errorf("clip-path not rewritten to the proxied page:\nwant %s\n%.600s", want, body)
 	}
@@ -759,7 +759,7 @@ func TestE2E_SVGDocumentRewritten(t *testing.T) {
 		t.Log(body)
 	}
 	for _, want := range []string{
-		`url(` + `"` + gotoURL(proxy, "https://static.example/fonts/impact.ttf") + `"`, // the CSS rewriter quotes (spec/Css.agda)
+		`url(` + `'` + gotoURL(proxy, "https://static.example/fonts/impact.ttf") + `'`, // in its own quote (spec/Css.agda)
 		`l:href="` + gotoURL(proxy, "https://static.example/i.png") + `"`,
 		`href="` + gotoURL(proxy, "https://static.example/p?a=1&b=2") + `"`,
 		`<script xmlns="http://www.w3.org/2000/svg" href="/rewriter.js`,

@@ -51,6 +51,8 @@ import { patchNavigation } from "./navigation";
 import { patchReferrerPolicy, type RewriteOne } from "./referrer-policy";
 import { patchSendBeacon } from "./beacon";
 import { patchWindowOpen } from "./window-open";
+import { patchDownloadLinks } from "./download";
+import { patchProtocolHandlers } from "./protocol-handler";
 import { patchServiceWorker } from "./service-worker";
 import { patchDocumentCookie } from "./document-cookie";
 import { patchCookieStore } from "./cookie-store";
@@ -162,6 +164,8 @@ export function installPatches(
     step("patchNavigation", () => patchNavigation(targetWindow, rewriteOne, unwrapOne, setBaseUrl, config.identity ? undefined : new URL(config.apiBaseURL).origin));
     step("patchSendBeacon", () => patchSendBeacon(targetWindow, rewriteOne));
     step("patchWindowOpen", () => patchWindowOpen(targetWindow, rewriteOne, config, getCurrentBaseUrl));
+    step("patchProtocolHandlers", () => patchProtocolHandlers(targetWindow, rewriteOne, getCurrentBaseUrl));
+    step("patchDownloadLinks", () => patchDownloadLinks(targetWindow, unwrapOne, () => getCurrentBaseUrl().origin));
     // (Not with the page on its own origins — config.identity: the
     // browser itself keeps the origins apart.)
     const flattened = !config.identity;
@@ -235,6 +239,19 @@ function patchPerformanceEntryNames(
     if (!PE?.prototype) return;
     const nativeName = nO.getOwnPropertyDescriptor(PE.prototype, "name")?.get as ((this: unknown) => string) | undefined;
     wrapAccessor<string>(PE.prototype, "name", { get: (get, self) => unwrapOne(ncall(get, self)) });
+    // The other entries that name a URL (round I: RUM / web-vitals report
+    // the LCP element's): Element Timing, LCP, a long animation frame's
+    // scripts (their source and what invoked them).
+    for (const [iface, keys] of [["PerformanceElementTiming", ["url"]], ["LargestContentfulPaint", ["url"]], ["PerformanceScriptTiming", ["sourceURL", "invoker"]],
+        // (and a hashchange's URLs, the document's before and after: round K)
+        ["HashChangeEvent", ["oldURL", "newURL"]]] as const) {
+        const proto = g[iface]?.prototype;
+        if (!proto) continue;
+        for (const k of keys) {
+            if (!nO.getOwnPropertyDescriptor(proto, k)?.get) continue;
+            wrapAccessor<string>(proto, k, { get: (get, self) => { const v = ncall(get, self); return typeof v === "string" && v !== "" ? unwrapOne(v) : v; } });
+        }
+    }
     // The runtime's own requests (its script, on the proxy's origin but not
     // a proxied URL) are not the page's: no timing entry of theirs is shown.
     if (nativeName) {

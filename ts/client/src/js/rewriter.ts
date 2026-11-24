@@ -422,6 +422,10 @@ function memberHelper(name: string, called: boolean, o: JsRewriteOptions): strin
  *      (a write stays as written: `obj[k] = function(){}` is named by V8
  *      from its target, and `window[k] = url` is caught by the runtime's
  *      navigation net)
+ *  R18 X[n], n a number literal or certainly a number, X plainly a window
+ *      (frames, window, self, top, parent, globalThis, opener, or Y.<one of
+ *      those but globalThis>), not in an optional chain, not written: R5's
+ *      form — the browser gives the real child frame, the runtime its view
  *  R6  eval(a, …) called directly (also (eval)(a))  →  eval($rewriter.wrap_eval_arg(eval,a), …)
  *  R16 F.call(t, a, …) / F.apply(t, arr), F the name eval or X.eval (X a name
  *      or this)  →  F.call(t, $rewriter.wrap_eval_arg(F,a), …) / F.apply(t, $rewriter.wrap_eval_args(F,arr))
@@ -793,6 +797,18 @@ class Splicer {
             this.wrapped.add(m);
             return;
         }
+        // R18: a window's child frame by number (frames[0], top.frames[1]):
+        // the browser hands out the real child; the runtime its view.
+        if (computed && !inChain && !written && this.o.wrapMemberExpression && plainWindow(obj) && (isNumberLiteral(prop) || certainlyNumber(prop))) {
+            const lb = skipTrivia(this.src, obj.end);
+            const rb = m.end - 1;
+            if (this.src[lb] !== "[" || this.src[rb] !== "]") return;
+            this.open(obj.start, "$rewriter.wrap_member_expression(");
+            this.replace(lb, 1, ",$__crn_key__=(");
+            this.replace(rb, 1, "))[$__crn_key__]");
+            this.wrapped.add(m);
+            return;
+        }
         if (name === undefined && !inChain && !written && !certainlyNumber(m["property"] as N) && this.o.wrapMemberExpression) { // R5
             const lb = skipTrivia(this.src, obj.end);
             const rb = m.end - 1;
@@ -858,6 +874,20 @@ function skipTrivia(src: string, i: number): number {
         }
     }
 }
+
+const WIN_NAMES = new Set(["frames", "window", "self", "top", "parent", "opener"]);
+
+/** R18: the expression plainly is a window — one of those names (or globalThis), or a member of one but globalThis. */
+function plainWindow(e: N): boolean {
+    if (e.type === "Identifier") return WIN_NAMES.has(e["name"] as string) || e["name"] === "globalThis";
+    if (e.type === "MemberExpression" && !e["computed"] && !e["optional"]) {
+        const p = e["property"] as N;
+        return p.type === "Identifier" && WIN_NAMES.has(p["name"] as string);
+    }
+    return false;
+}
+
+const isNumberLiteral = (e: N): boolean => e.type === "Literal" && (typeof e["value"] === "number" || typeof e["value"] === "bigint");
 
 /**
  * Whether an expression's value is certainly a number (or a BigInt): it

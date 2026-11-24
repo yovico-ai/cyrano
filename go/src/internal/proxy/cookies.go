@@ -305,6 +305,12 @@ func browserSetCookie(c urlrewrite.StoredCookie, sc urlrewrite.SetCookie, httpOn
 // A cookie that changes between HttpOnly and script-visible moves between
 // the two stores. On first contact the proxy's session cookie is issued.
 func (h *Handler) routeSetCookies(resp *http.Response) {
+	// The browser would apply Clear-Site-Data to the proxy origin — every
+	// proxied site and the session (spec/ClearSiteData.agda): never given
+	// it; the page reads the origin's value (Crn-H). Its "cookies" the jar
+	// applies below.
+	csd := strings.Join(resp.Header.Values("Clear-Site-Data"), ",")
+	resp.Header.Del("Clear-Site-Data")
 	if none, _ := resp.Request.Context().Value(noCredentialsKey{}).(bool); none {
 		resp.Header.Del("Set-Cookie")
 		return
@@ -360,6 +366,7 @@ func (h *Handler) routeSetCookies(resp *http.Response) {
 			document = true
 		}
 		var stored []urlrewrite.StoredCookie
+		clear := urlrewrite.ClearsCookies(urlrewrite.Trustworthy(resp.Request.URL), csd)
 		jar.With(sessionID, func(j *cookiejar.Jar) {
 			for _, raw := range resp.Header.Values("Set-Cookie") {
 				sc, ok := urlrewrite.ParseSetCookie(raw)
@@ -385,6 +392,22 @@ func (h *Handler) routeSetCookies(resp *http.Response) {
 					}
 				}
 				stored = append(stored, c)
+			}
+			// Clear-Site-Data's "cookies": the site's cookies go, this
+			// response's own too (Chromium, measured; spec/ClearSiteData.agda),
+			// the requesting page told as of any other change.
+			if clear {
+				site := cookieSite(resp.Request.URL.Hostname())
+				for _, e := range append([]cookiejar.Entry(nil), j.Entries...) {
+					if cookieSite(e.Cookie.Domain) != site || !e.Expiry.Alive(now) {
+						continue
+					}
+					for _, n := range j.Put(false, now, site, cookiejar.Change{Cookie: e.Cookie, Gone: true}) {
+						if cookiejar.InboxFor(document, requester, site, cookieSite(n.Cookie.Domain)) && urlrewrite.InCtx(true, cx, n.Cookie) {
+							forBrowser = append(forBrowser, inboxSetCookie(n, j.LastApplied(n.Cookie)))
+						}
+					}
+				}
 			}
 		})
 		// A cookie of the old wire form whose identity the jar now holds

@@ -167,3 +167,15 @@ func TestSpecConformance_CookieCtx(t *testing.T) {
 		}
 	})
 }
+
+func TestSpecConformance_ClearSiteData(t *testing.T) {
+	oracle := specoracle.Need(t)
+	rapid.Check(t, func(rt *rapid.T) {
+		tw := rapid.Bool().Draw(rt, "trustworthy")
+		v := strings.Join(rapid.SliceOfN(rapid.SampledFrom([]string{`"cookies"`, ` "cookies" `, "\t\"*\"", `cookies`, `"storage"`, `"cache"`, `"Cookies"`, `""`, `"`, ``, ` `, `"cookies`, `x"cookies"`}), 0, 4).Draw(rt, "items"), ",")
+		want, _ := ask(rt, oracle, "clearsitedata", flag(tw, "yes", "no"), v)
+		if got := flag(ClearsCookies(tw, v), "yes", "no"); got != want {
+			rt.Fatalf("ClearsCookies(%v, %q) = %s, spec %s", tw, v, got, want)
+		}
+	})
+}

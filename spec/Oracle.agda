@@ -121,6 +121,11 @@
 --                                       → {"out":"a=1; b=2"}
 --   site    <from> <fromSite|-> <to> <toSite|->
 --                                       → {"out":"same-origin|same-site|cross-site"}
+--   uirdeclared <CSP header>             → yes/no
+--   uir <context|-> <target> <dest|->   → yes/no: an upgrade-insecure-requests document upgrades it
+--   corp <CORP|-> <none|require-corp|credentialless> <yes|no> <origin> <site|-> <target> <site|-> → block/allow
+--   challenge <site> <WWW-Authenticate line> → {"out":"<the line the browser gets>"}
+--   clearsitedata <yes|no> <value>      → yes/no: it clears the response's site's cookies
 --   storable <top> <cross|same> <Set-Cookie>   → {"out":"<partition key>|-|refused|malformed"}
 --   inctx <script|http> <top> <cross|same> <key|-> <n|l|t|u> → yes/no
 --   cookiestoreset <139|later> <ps yes|no> <url> <name> <value> <-|=domain> <-|=path> <n|l|t>
@@ -224,6 +229,9 @@ import FetchLater
 import WorkerSource
 import DataUrl
 import Speculation
+import ClearSiteData
+import Auth
+import Corp
 import XmlDoc
 import MixedContent
 import Frames
@@ -471,6 +479,9 @@ dispatch op args =
   else if eqStr op (toList "jar") then jarReq args
   else if eqStr op (toList "mem") then memReq args
   else if eqStr op (toList "storable") then storableReq args
+  else if eqStr op (toList "clearsitedata") then csdReq args
+  else if eqStr op (toList "challenge") then challengeReq args
+  else if eqStr op (toList "corp") then corpReq args
   else if eqStr op (toList "inctx") then inCtxReq args
   else if eqStr op (toList "unpack") then oneArg (λ v → lines (Data.List.Base.map (λ r → Data.Product.Base.proj₁ r ++ usC ∷ Data.Product.Base.proj₂ r) (CookieJar.unpackSlot v))) args
   else if eqStr op (toList "pack") then oneArg (λ v → CookieJar.packSlot (packArgs (splitOn (is 31) v))) args
@@ -500,6 +511,8 @@ dispatch op args =
   else if eqStr op (toList "specrules") then specRulesReq args
   else if eqStr op (toList "xmlrw") then xmlRwReq args
   else if eqStr op (toList "mixed") then mixedReq args
+  else if eqStr op (toList "uir") then uirReq args
+  else if eqStr op (toList "uirdeclared") then uirDeclReq args
   else if eqStr op (toList "linkpreloads") then linkPreloadsReq args
   else if eqStr op (toList "htmltags") then htmlTagsReq args
   else if eqStr op (toList "htmlspans") then htmlSpansReq args
@@ -1451,6 +1464,27 @@ dispatch op args =
     sso = if eqStr ss (toList "n") then ssNone else if eqStr ss (toList "l") then ssLax else ssStrict
   cookieStoreSetReq _ = errorReply "BadRequest"
 
+  -- clearsitedata <trustworthy yes|no> <value> → whether it clears cookies
+  csdReq : List Str → Str
+  csdReq (tw ∷ v ∷ []) = out (toList (if ClearSiteData.clearsCookies (eqStr tw (toList "yes")) v then "yes" else "no"))
+  csdReq _ = errorReply "BadRequest"
+
+  challengeReq : List Str → Str
+  challengeReq (site ∷ line ∷ []) = out (Auth.rewriteChallenge site line)
+  challengeReq _ = errorReply "BadRequest"
+
+  -- corp <header|-> <none|require-corp|credentialless> <cred yes|no> <origin> <originSite|-> <target> <targetSite|->
+  corpReq : List Str → Str
+  corpReq (h ∷ e ∷ c ∷ o ∷ os ∷ t ∷ ts ∷ []) with baseOf o | baseOf t
+  ... | just ou | just tu = out (toList (if Corp.corpBlocks (dashOpt h) emb (eqStr c (toList "yes")) ou (dashOpt os) tu (dashOpt ts) then "block" else "allow"))
+    where
+    dashOpt : Str → Maybe Str
+    dashOpt x = if eqStr x (toList "-") then nothing else just x
+    emb : Corp.Embedder
+    emb = if eqStr e (toList "require-corp") then Corp.requireCorp else if eqStr e (toList "credentialless") then Corp.credentialless else Corp.unsafeNone
+  ... | _ | _ = errorReply "OutOfModel"
+  corpReq _ = errorReply "BadRequest"
+
   -- storable <top> <cross|same> <Set-Cookie>: whether that context stores it,
   -- and its partition key ("-": none).
   storableReq : List Str → Str
@@ -1726,6 +1760,17 @@ dispatch op args =
   mixedReq (c ∷ t ∷ d ∷ []) = mixedWith c t d false
   mixedReq (c ∷ t ∷ d ∷ s ∷ []) = mixedWith c t d (eqStr s (toList "set"))
   mixedReq _ = errorReply "BadRequest"
+
+  -- uir <context|-> <target> <dest|-> → yes/no (the document declared it)
+  uirReq : List Str → Str
+  uirReq (c ∷ t ∷ d ∷ []) with baseOf t
+  ... | nothing = errorReply "OutOfModel"
+  ... | just tgt = out (toList (if MixedContent.uirUpgrades true (baseOf c) tgt (if eqStr d (toList "-") then nothing else just d) then "yes" else "no"))
+  uirReq _ = errorReply "BadRequest"
+
+  uirDeclReq : List Str → Str
+  uirDeclReq (h ∷ []) = out (toList (if Csp.declaresUIR h then "yes" else "no"))
+  uirDeclReq _ = errorReply "BadRequest"
 
 
   specRulesReq : List Str → Str

@@ -27,6 +27,7 @@
 // through rewriteCssText. The rewriter is pure (no DOM callbacks) so there
 // is no recursion concern.
 
+import { cssText } from "./dynamic-html";
 import { SafeWeakSet, nO, nOP, nR, ncall } from "../native/intrinsics";
 import { rewriteCssText } from "../css/rewriter";
 import { wrapMethod } from "../native/surface";
@@ -170,9 +171,10 @@ function patchInsertRuleOn(
     for (const [key, at] of [["insertRule", 0], ["replace", 0], ["replaceSync", 0], ["addRule", 1]] as const) {
         if (!ncall(nOP.hasOwnProperty, proto, key)) continue;
         wrapMethod<(...a: unknown[]) => unknown>(proto, key, (native, self, args) => {
-            if (typeof args[at] !== "string") return nR.apply(native, self, args);
+            const text = args.length > at ? cssText(args[at]) : args[at];
+            if (typeof text !== "string") return nR.apply(native, self, args);
             const next = args.slice();
-            next[at] = rewriteCssText(args[at] as string, rewriteOne);
+            next[at] = rewriteCssText(text, rewriteOne);
             return nR.apply(native, self, next);
         });
     }

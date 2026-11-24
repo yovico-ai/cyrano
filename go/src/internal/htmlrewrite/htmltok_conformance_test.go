@@ -186,7 +186,7 @@ func TestForeignContentIsMarkup(t *testing.T) {
 		// </foreignObject> while an HTML element is open is ignored (it stops
 		// at no special element of its name): the <style> after it is HTML's,
 		// raw text.
-		{`<svg><foreignObject><b>x</foreignObject><style><img src="/f.png"></style></svg>`, `<svg><foreignobject><b>x</foreignobject><style><img src="/f.png"></style></svg>`},
+		{`<svg><foreignObject><b>x</foreignObject><style><img src="/f.png"></style></svg>`, `<svg><foreignObject><b>x</foreignObject><style><img src="/f.png"></style></svg>`},
 	} {
 		var out bytes.Buffer
 		if err := Rewrite(&out, strings.NewReader(c.in), cfg); err != nil {

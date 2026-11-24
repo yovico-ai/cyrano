@@ -185,9 +185,12 @@ export function patchDynamicIframeAppend(
         let result: T;
         try { result = run(); } finally { depth--; }
         if (depth === 0) injectAll(frames);
+        // Every insertion, nested too (a script inserted by appendChild runs
+        // inside it, and inserts and measures in turn).
+        inserted(targetWindow);
         return result;
     };
-    frameInjectors.set(targetWindow, (root) => injectAll(framesIn(root)));
+    frameInjectors.set(targetWindow, (root) => { injectAll(framesIn(root)); inserted(targetWindow); });
 
     for (const key of ["appendChild", "insertBefore", "replaceChild"] as const) {
         wrapMethod<(...a: unknown[]) => Node>(proto, key, (native, self, args) => {
@@ -229,6 +232,21 @@ export function patchDynamicIframeAppend(
 }
 
 const frameInjectors = new SafeWeakMap<object, (root: unknown) => void>();
+
+// Who is told, synchronously, that page code inserted nodes in a window
+// (the toolbar: its slot's assignment, before the page measures).
+const insertedListeners = new SafeWeakMap<object, (() => void)[]>();
+
+export function onInserted(win: object, fn: () => void): void {
+    const l = insertedListeners.get(win);
+    if (l) l[l.length] = fn; else insertedListeners.set(win, [fn]);
+}
+
+function inserted(win: object): void {
+    const l = insertedListeners.get(win);
+    if (!l) return;
+    for (let i = 0; i < l.length; i++) { try { l[i]!(); } catch { /* the page's call must not fail for it */ } }
+}
 
 /**
  * Gives the runtime to the empty frames in `root`, which markup was just

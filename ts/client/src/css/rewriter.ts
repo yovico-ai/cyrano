@@ -272,16 +272,29 @@ function roles(toks: Tok[]): Role[] {
 }
 
 /** CSSOM "serialize a string". */
-function serializeString(s: string): string {
-    let out = '"';
+function serializeString(s: string): string { return serializeWith('"', s); }
+
+/** A url token can hold s as it is (spec plainInUrl). */
+function plainInUrl(s: string): boolean {
+    for (const c of s) {
+        const n = c.codePointAt(0)!;
+        if (c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\f" || c === '"' || c === "'" || c === "(" || c === ")" || c === "\\" ||
+            n <= 8 || n === 11 || (n >= 14 && n <= 31) || n === 127) return false;
+    }
+    return true;
+}
+
+/** s quoted with q (spec serializeWith). */
+function serializeWith(q: string, s: string): string {
+    let out = q;
     for (const c of s) {
         const n = c.codePointAt(0)!;
         if (n === 0) out += REPLACEMENT;
         else if ((n >= 1 && n <= 31) || n === 127) out += "\\" + n.toString(16) + " ";
-        else if (c === '"' || c === "\\") out += "\\" + c;
+        else if (c === q || c === "\\") out += "\\" + c;
         else out += c;
     }
-    return out + '"';
+    return out + q;
 }
 
 /** The URLs a stylesheet names, in order (spec cssUrls). */
@@ -311,7 +324,8 @@ export function rewriteCssText(src: string, rewriteOne: RewriteOne): string {
         const imported = r === "importUrl" || r === "importString";
         const u = imported && rewriteOne.withMark ? rewriteOne.withMark(t.value, null, "css") : rewriteOne(t.value);
         if (u === t.value) { out += t.text; continue; }
-        out += r === "url" || r === "importUrl" ? `url(${serializeString(u)})` : serializeString(u);
+        // Each URL in the page's form where it can be (spec rewriteCss).
+        out += r === "url" || r === "importUrl" ? `url(${plainInUrl(u) ? u : serializeString(u)})` : serializeWith(t.text[0] === "'" ? "'" : '"', u);
     }
     return out;
 }

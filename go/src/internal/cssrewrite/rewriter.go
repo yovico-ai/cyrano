@@ -472,23 +472,38 @@ func roles(toks []tok) []role {
 }
 
 // serializeString is CSSOM "serialize a string".
-func serializeString(s string) string {
+func serializeString(s string) string { return serializeWith('"', s) }
+
+// plainInURL: a url token can hold s as it is (spec plainInUrl).
+func plainInURL(s string) bool {
+	for _, c := range s {
+		switch {
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f', c == '"', c == '\'', c == '(', c == ')', c == '\\',
+			c <= 8, c == 11, c >= 14 && c <= 31, c == 127:
+			return false
+		}
+	}
+	return true
+}
+
+// serializeWith quotes s with q (spec serializeWith).
+func serializeWith(q byte, s string) string {
 	var b strings.Builder
-	b.WriteByte('"')
+	b.WriteByte(q)
 	for _, c := range s {
 		switch {
 		case c == 0:
 			b.WriteRune('�')
 		case c >= 1 && c <= 31 || c == 127:
 			b.WriteString("\\" + strconv.FormatInt(int64(c), 16) + " ")
-		case c == '"' || c == '\\':
+		case c == rune(q) || c == '\\':
 			b.WriteByte('\\')
 			b.WriteRune(c)
 		default:
 			b.WriteRune(c)
 		}
 	}
-	b.WriteByte('"')
+	b.WriteByte(q)
 	return b.String()
 }
 
@@ -573,10 +588,20 @@ func RewriteTextDest(s string, rewrite func(string, urlrewrite.Dest) string) str
 			b.WriteString(t.text)
 			continue
 		}
+		// Each URL in the page's form where it can be (spec rewriteCss): a
+		// url token unquoted, a string in its own quote.
 		if rs[i] == asURL || rs[i] == importURL {
-			b.WriteString("url(" + serializeString(u) + ")")
+			if plainInURL(u) {
+				b.WriteString("url(" + u + ")")
+			} else {
+				b.WriteString("url(" + serializeString(u) + ")")
+			}
 		} else {
-			b.WriteString(serializeString(u))
+			q := byte('"')
+			if strings.HasPrefix(t.text, "'") {
+				q = '\''
+			}
+			b.WriteString(serializeWith(q, u))
 		}
 	}
 	return b.String()

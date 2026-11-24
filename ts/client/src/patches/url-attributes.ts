@@ -13,9 +13,10 @@
 // getAttribute and srcset return the text as the page *wrote* it (relative
 // URLs relative) — that needs the original text kept, a separate step.
 
+import { cssText } from "./dynamic-html";
 import { rewriteFor, type RewriteOne } from "./referrer-policy";
 import { rewriteCssText } from "../css/rewriter";
-import { nO, nR, ncall, aIncludes, sStarts } from "../native/intrinsics";
+import { nO, nOP, nR, ncall, aIncludes, sStarts } from "../native/intrinsics";
 import { isTrustedValue, trusted } from "../native/trusted";
 import { rewriteSrcsetAttribute } from "./srcset";
 import { URL_BEARING_ELEMENTS, isSrcsetAttr, kindOf, rewriteByKind, rewriteUrlList } from "./url-attribute-map";
@@ -145,10 +146,18 @@ export function patchAudioConstructor(targetWindow: Window, rewriteOne: (url: st
  * (IMDb's fonts escaped the proxy). Its url()s are proxified; a buffer
  * source is left alone. A FontFace does not show its source to script.
  */
+const isBuffer = (v: unknown): boolean => {
+    if (typeof v !== "object" || v === null) return false;
+    const tag = ncall(nOP.toString, v) as string;
+    return tag === "[object ArrayBuffer]" || tag === "[object SharedArrayBuffer]" || tag === "[object DataView]" || /Array\]$/.test(tag);
+};
+
 export function patchFontFaceConstructor(targetWindow: Window, rewriteOne: (url: string) => string): void {
     wrapConstructor<typeof FontFace>(targetWindow, "FontFace", (Native, args, newTarget) => {
         const next = args.slice();
-        if (typeof next[1] === "string") next[1] = rewriteCssText(next[1], rewriteOne);
+        // A CSS src value — a string, or anything but a buffer as its text.
+        const src = next.length > 1 && !isBuffer(next[1]) ? cssText(next[1]) : next[1];
+        if (typeof src === "string") next[1] = rewriteCssText(src, rewriteOne);
         return nR.construct(Native, next, newTarget as typeof FontFace);
     });
 }

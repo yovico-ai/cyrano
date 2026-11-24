@@ -142,12 +142,16 @@ function isNativeMethod(target: WriteCapable, name: "write" | "writeln"): boolea
     return typeof target[name] === "function" && !replaced.get(target)?.has(name);
 }
 
+/** Every argument as write reads it (a DOMString: null "null", undefined "undefined"); false when one is a Symbol (the native throws). */
 function allStrings(args: unknown[]): boolean {
     for (const a of args) {
-        if (sinkText(a) === null) return false;
+        if (typeof a === "symbol") return false;
     }
     return true;
 }
+
+/** An argument's text, as the native's ToString makes it. */
+const writeText = (a: unknown): string => sinkText(a) ?? String(a);
 
 /**
  * What `obj.write` / `obj.writeln` (and `obj["write"]`) go through in
@@ -173,7 +177,7 @@ export function wrapDocumentWrite(
         const make = (name: "write" | "writeln") => (...args: unknown[]): unknown => {
             const native = target[name] as (...a: unknown[]) => unknown;
             if (!allStrings(args)) return napply(native, target, args);
-            const joined = args.map((a) => sinkText(a) ?? "").join("") + (name === "writeln" ? "\n" : "");
+            const joined = args.map(writeText).join("") + (name === "writeln" ? "\n" : "");
             const rewrite = (html: string): string => {
                 const ctx = writeContext(target);
                 const r = rewriteHtmlString(html, rewriteOne, proxyOrigin, undefined, ctx);
@@ -241,7 +245,7 @@ export function patchDocumentWrite(
     for (const key of ["write", "writeln"]) {
         wrapMethod<(...a: unknown[]) => unknown>(holder, key, (native, self, args) => {
             if (!isDocumentLike(self) || !allStrings(args)) return nR.apply(native, self, args);
-            const joined = args.map((a) => sinkText(a) ?? "").join("") + (key === "writeln" ? "\n" : "");
+            const joined = args.map(writeText).join("") + (key === "writeln" ? "\n" : "");
             // Markup for the document's parser, where it stands.
             const rewrite = (html: string): string =>
                 maybeInjectBootstrap(self, html, rewriteHtmlString(html, rewriteOne, proxyOrigin, bootstrap, writeContext(self)), bootstrap);

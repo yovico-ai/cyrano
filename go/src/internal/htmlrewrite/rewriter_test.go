@@ -682,3 +682,15 @@ func TestRewrite_RelativeBaseOnce(t *testing.T) {
 		}
 	}
 }
+
+// A start tag the rules leave alone goes out as written, byte for byte: its
+// line breaks (equip2adapt.com: the line numbers of inline scripts below
+// one shifted), its attributes' references and bytes (a legacy-encoded
+// page's &copy; and windows-1251 text came back as UTF-8), its spelling.
+func TestRewrite_UnchangedTagAsWritten(t *testing.T) {
+	in := "<div\n  class=\"a\"\n  title='&copy; \xef\xee'\n  data-x=&amp;>x</div><svg><foreignObject X=1></foreignObject></svg>"
+	got := rewrite(t, in)
+	if got != in {
+		t.Errorf("got  %q\nwant %q", got, in)
+	}
+}

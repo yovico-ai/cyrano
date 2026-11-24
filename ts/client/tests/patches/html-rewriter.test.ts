@@ -245,7 +245,7 @@ describe("rewriteHtmlString — the document's own tags stay", () => {
 describe("rewriteHtmlString — style attributes, edited where they stand", () => {
     it("rewrites url() in a style attribute and names it style", () => {
         const got = rewriteHtmlString('<div style="background:url(/a.png)">x</div>', tag);
-        expect(got).toBe('<div style="background:url(&quot;/a.png?proxified=1&quot;)" crn-o="{&quot;style&quot;:&quot;background:url(/a.png)&quot;}">x</div>');
+        expect(got).toBe('<div style="background:url(/a.png?proxified=1)" crn-o="{&quot;style&quot;:&quot;background:url(/a.png)&quot;}">x</div>');
     });
     it("leaves other attributes, quoted text and raw text alone", () => {
         const html = `<p title="style=x" data-style='y' STYLE=color:red class=a>style="z"</p><script>var s = '<b style=q>';</script>`;

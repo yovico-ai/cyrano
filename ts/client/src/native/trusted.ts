@@ -81,7 +81,10 @@ export function trusted(realm: object, kind: Kind, text: string): unknown {
  * string where it gave a string (the sink then judges it as natively).
  */
 export function trustedLike(realm: object, kind: Kind, given: unknown, text: string): unknown {
-    return typeof given === "string" || given === null || given === undefined ? text : trusted(realm, kind, text);
+    // Only a Trusted value stays one: a plain object's text is a string, as
+    // the native's ToString makes it (under enforcement the default policy
+    // then judges it, as natively).
+    return isTrustedValue(given) ? trusted(realm, kind, text) : text;
 }
 
 /** True when `v` is a Trusted Types value (TrustedHTML, TrustedScript, TrustedScriptURL). */

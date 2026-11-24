@@ -12,6 +12,10 @@
 // The page is https on cyrano.test (in /etc/hosts; the dev CA, trusted by the
 // proxy through SSL_CERT_FILE), the assets http on another port of it — a
 // host that is not loopback — which also answers TLS (an upgrade goes there).
+// A page that declares upgrade-insecure-requests (a CSP header, or a
+// <meta http-equiv>) has every http request upgraded to https first, as the
+// browser does directly (chinamuseum.org.cn's http Baidu map script was
+// blocked proxied; spec/MixedContent.agda uirUpgrades).
 // Runs the server binary (go/assets/cyrano); needs it, the dev CA and
 // Playwright's Chromium; `make browser-check`.
 
@@ -72,9 +76,10 @@ describe.skipIf(!wanted)("mixed content, in Chromium, through the proxy", () => 
         });
         await new Promise<void>((r) => assets.listen(0, "127.0.0.1", () => r()));
         const a = `http://${host}:${(assets.address() as { port: number }).port}`;
-        page = createHttps(tls, (_req, res) => {
-            res.writeHead(200, { "content-type": "text/html" });
-            res.end(`<!doctype html><body><img src="${a}/img.gif"><img srcset="${a}/set.gif 1x">` +
+        page = createHttps(tls, (req, res) => {
+            const uir = req.url === "/uir";
+            res.writeHead(200, { "content-type": "text/html", ...(uir ? { "content-security-policy": "upgrade-insecure-requests" } : {}) });
+            res.end(`<!doctype html>${req.url === "/meta" ? '<meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">' : ""}<body><img src="${a}/img.gif"><img srcset="${a}/set.gif 1x">` +
                 `<picture><source srcset="${a}/pic.gif"><img src="${a}/picimg.gif"></picture><picture><img src="${a}/onlyimg.gif"></picture>` +
                 `<script src="${a}/js.js"></script><link rel=stylesheet href="${a}/css.css">` +
                 `<iframe src="${a}/frame.html"></iframe><audio src="${a}/audio.wav" preload=auto></audio>` +
@@ -121,4 +126,14 @@ describe.skipIf(!wanted)("mixed content, in Chromium, through the proxy", () => 
         expect(direct).toEqual(["https audio", "https img", "https onlyimg"]);
         expect(proxied).toEqual(direct);
     }, 90_000);
+
+    for (const kind of ["uir", "meta"]) {
+        it(`upgrade-insecure-requests (${kind === "uir" ? "header" : "meta"}): every asset over https, as directly`, async () => {
+            const direct = await run(`${pageOrigin}/${kind}`);
+            const proxied = await run(`${proxyOrigin}/cyrano/https/${pageOrigin.slice(8)}/${kind}`);
+            expect(direct).toContain("https js");
+            expect(direct.some((x) => x.startsWith("http "))).toBe(false);
+            expect(proxied).toEqual(direct);
+        }, 90_000);
+    }
 });

@@ -73,7 +73,18 @@ export function sinkText(v: unknown): string | null {
     if (typeof v === "object" && v !== null && /^\[object Trusted(HTML|Script|ScriptURL)\]$/.test(ncall(nOP.toString, v))) {
         return String(v);
     }
+    // Anything else the native takes as a DOMString: ToString, once, here
+    // (a String object, anything with a toString: round J — given as is,
+    // its markup or CSS went unrewritten). A Symbol, null and undefined go
+    // to the native as they are (it throws, or reads them its own way).
+    if (typeof v === "object" && v !== null || typeof v === "function" || typeof v === "number" || typeof v === "boolean" || typeof v === "bigint") return String(v);
     return null;
+}
+
+/** A CSS sink's value as its native reads it (a DOMString): the string to rewrite, or the value as given (a Symbol, null, undefined). */
+export function cssText(v: unknown): unknown {
+    if (typeof v === "string" || typeof v === "symbol" || v === null || v === undefined) return v;
+    return String(v);
 }
 
 /** The Trusted Types sink an attribute is, if any: what kind of value it takes under enforcement. */

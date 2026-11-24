@@ -86,6 +86,8 @@ export function patchFetch(
     baseUrl: () => URL,
     cors?: CorsContext,
 ): void {
+    // Response#type, the browser's own (read before the runtime wraps it).
+    const nativeType = (w0 => { try { return nO.getOwnPropertyDescriptor((w0 as unknown as { Response?: { prototype: object } }).Response?.prototype ?? {}, "type")?.get as ((this: unknown) => string) | undefined; } catch { return undefined; } })(targetWindow);
     const w = targetWindow as unknown as {
         Request?: typeof Request; Response?: typeof Response; Promise?: PromiseConstructor; TypeError?: TypeErrorConstructor;
     };
@@ -160,6 +162,7 @@ export function patchFetch(
         const mode = init?.mode ?? (viaRequest ? input.mode : "cors");
         const credentials = init?.credentials ?? (viaRequest ? input.credentials : "same-origin");
         const credentialed = credentials === "include";
+        const redirect = init?.redirect ?? (viaRequest ? input.redirect : "follow");
         // The browser refuses this before any request: let it, on the original URL.
         if (cross && mode === "same-origin") return nR.apply(native, self, args) as Promise<Response>;
 
@@ -194,9 +197,22 @@ export function patchFetch(
         } catch {
             sent = plain();
         }
+        // no-cors with a redirect not followed, to another origin: natively
+        // a network error once the redirect comes; through the proxy it is
+        // same-origin, an opaque redirect.
+        if (cross && mode === "no-cors" && redirect !== "follow") {
+            const TE = (w as unknown as { TypeError: typeof TypeError }).TypeError;
+            return nR.apply(then, sent, [(resp: Response) => {
+                if (resp.type === "opaqueredirect") throw new TE("Failed to fetch");
+                return resp;
+            }]) as Promise<Response>;
+        }
         const views = headerViewsOf(targetWindow);
         if (!cross || mode !== "cors" || !views || !headersOf) return sent;
         return nR.apply(then, sent, [(resp: Response) => {
+            // An opaque redirect (redirect: "manual") shows no headers: the
+            // proxy checked the redirect itself (round I: Chromium gives it).
+            if (nativeType && ncall(nativeType, resp) === "opaqueredirect") return resp;
             const h = ncall(headersOf, resp);
             if (!corsAllows(views.original(h, "access-control-allow-origin"), views.original(h, "access-control-allow-credentials"), own, credentialed)) {
                 throw new TypeErr("Failed to fetch");

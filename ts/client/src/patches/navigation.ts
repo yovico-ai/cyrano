@@ -66,6 +66,70 @@ export function patchNavigation(
     }
     const Nav = g["Navigation"]?.prototype;
     if (!Nav) return;
+    // The entries a page sees: the contiguous run around the current one of
+    // its own original origin (HTML "get session history entries"): every
+    // proxied entry is same-origin to the browser, which listed the sites
+    // before it too, their URLs and queries (round I).
+    const natEntries = (Nav as Record<string, unknown>)["entries"] as ((this: unknown) => unknown[]) | undefined;
+    const natCurrent = getter(Nav, "currentEntry");
+    const HE = g["NavigationHistoryEntry"]?.prototype;
+    const natUrl = getter(HE, "url"), natIndex = getter(HE, "index");
+    const natTraverse = (Nav as Record<string, unknown>)["traverseTo"] as ((this: unknown, key: string, o?: unknown) => unknown) | undefined;
+    const originOf = (e: unknown): string | null => {
+        try { const u = natUrl ? ncall(natUrl, e) : null; return typeof u === "string" ? new URL(unwrapOne(u)).origin : null; } catch { return null; }
+    };
+    /** The run [from, to) of the native list, and the current entry's place in it. */
+    const run = (self: unknown): { list: unknown[]; from: number; to: number; at: number } | null => {
+        if (!natEntries || !natCurrent) return null;
+        const list = nR.apply(natEntries, self, []) as unknown[];
+        const cur = ncall(natCurrent, self);
+        let at = -1;
+        for (let i = 0; i < list.length; i++) if (list[i] === cur) { at = i; break; }
+        if (at < 0) return { list, from: 0, to: list.length, at };
+        const o = originOf(list[at]);
+        let from = at, to = at + 1;
+        while (from > 0 && originOf(list[from - 1]) === o) from--;
+        while (to < list.length && originOf(list[to]) === o) to++;
+        return { list, from, to, at };
+    };
+    if (natEntries) {
+        wrapMethod<(...a: unknown[]) => unknown>(Nav, "entries", (native, self, args) => {
+            const r = run(self);
+            if (!r || r.at < 0) return nR.apply(native, self, args);
+            return r.list.slice(r.from, r.to);
+        });
+    }
+    if (HE && natIndex) {
+        wrapAccessor<number>(HE, "index", {
+            get: (native, self) => {
+                const i = ncall(native, self) as number;
+                if (i < 0) return i;
+                const nav = (targetWindow as unknown as { navigation?: unknown }).navigation;
+                const r = nav ? run(nav) : null;
+                if (!r || r.at < 0) return i;
+                return i >= r.from && i < r.to ? i - r.from : -1;
+            },
+        });
+    }
+    for (const [k, beyond] of [["canGoBack", (r: { from: number; at: number }) => r.at > r.from], ["canGoForward", (r: { to: number; at: number }) => r.at < r.to - 1]] as const) {
+        if (!getter(Nav, k)) continue;
+        wrapAccessor<boolean>(Nav, k, {
+            get: (native, self) => {
+                const r = run(self);
+                return r && r.at >= 0 ? beyond(r as never) : (ncall(native, self) as boolean);
+            },
+        });
+    }
+    // back() / forward() past the run fail as natively when there is no
+    // entry (InvalidStateError, the native's own: a key no entry has).
+    for (const [k, beyond] of [["back", (r: { from: number; at: number }) => r.at > r.from], ["forward", (r: { to: number; at: number }) => r.at < r.to - 1]] as const) {
+        if (typeof (Nav as Record<string, unknown>)[k] !== "function") continue;
+        wrapMethod<(...a: unknown[]) => unknown>(Nav, k, (native, self, args) => {
+            const r = run(self);
+            if (r && r.at >= 0 && !beyond(r as never) && natTraverse) return nR.apply(natTraverse, self, ["crn\u241fnone", ...args]);
+            return nR.apply(native, self, args);
+        });
+    }
     wrapMethod<(...a: unknown[]) => unknown>(Nav, "navigate", (native, self, args) => {
         const next = args.slice();
         if (next.length > 0 && next[0] !== undefined) next[0] = rewriteOne(String(next[0]));
