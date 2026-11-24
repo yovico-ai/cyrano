@@ -6,6 +6,8 @@
 // stay narrow. Adding a new wrapper means: write the module, import it here,
 // expose it on the returned RewriterApi.
 
+import { hideSecureContext } from "../native/secure-context";
+import { trustworthy } from "../cookies/rfc";
 import { nO, nR, sStarts } from "../native/intrinsics";
 import { blobScriptFor, dataScriptFor } from "../patches/blob-document";
 import { crossOriginView } from "../native/cross-origin";
@@ -156,6 +158,7 @@ export function createRewriterApi(
     // any <head> element so inline scripts that reference $rewriter can run.
     const buildBootstrap = (): string => buildBootstrapHtml(config, baseUrlState.get().href);
 
+    let secureJudged = false;
     return honourOptionalChains({
         config,
 
@@ -176,6 +179,12 @@ export function createRewriterApi(
                 if (frag && typeof href === "string" && href.indexOf("#") < 0) full = href + frag;
             } catch { /* no location */ }
             baseUrlState.setFromHref(full);
+            // A document of an origin that is not trustworthy (an http:
+            // page) is no secure context, as directly (spec/SecureContext.agda).
+            if (!secureJudged) {
+                secureJudged = true;
+                try { if (!trustworthy(new URL(full))) hideSecureContext(targetWindow); } catch { /* judged by the URL alone */ }
+            }
         },
 
         // ── Location proxy ─────────────────────────────────────────────────

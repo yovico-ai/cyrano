@@ -667,6 +667,14 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   picture source's, imagesrcset) is blocked, as Chromium (its URL marked
   `!set` by both rewriters: Containment destImageSet). Gap: ws: from an
   https page.
+- **Secure contexts** (spec/SecureContext.agda, `native/secure-context.ts`;
+  `secure-context-vs-chromium`): every proxied document is served over
+  https, so an http: page was a secure context (cookieStore, crypto.subtle,
+  serviceWorker, WebGPU…). A document whose original URL is not
+  trustworthy has Chromium's secure-only surface taken away at its first
+  set_location (a measured table, checked against Chromium so a new
+  version shows) and reads isSecureContext false. Gaps: workers; a frame
+  judged by its own URL only.
 - **HTTPS-Upgrades** as Chrome's (`proxy/https_upgrades.go`,
   spec/Upgrades.agda; `make chrome-check` — real Chrome, as Playwright's
   Chromium has the feature off): a main-frame http navigation to a unique
