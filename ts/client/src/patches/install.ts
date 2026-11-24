@@ -24,6 +24,8 @@ import { patchEmbeddedContext } from "./embedded";
 import { patchFedCM } from "./fedcm";
 import { patchPaymentRequest } from "./payment-request";
 import { patchAdAuction } from "./ad-auction";
+import { patchErrorEvents } from "./error-events";
+import { patchTimers } from "./timers";
 import { installToolbar } from "../ui/toolbar";
 import { patchSelectors } from "./selectors";
 import { patchStorageNames, patchWebStorage, storagePrefix } from "./storage";
@@ -46,6 +48,8 @@ import { patchUrlAttributes, patchAnchorUrlReflection, patchAudioConstructor, pa
 import { patchDynamicHtml } from "./dynamic-html";
 import { patchCssRules } from "./css-rules";
 import { patchCssStyleDeclaration } from "./css-style-declaration";
+import { patchCssomRead } from "./cssom-read";
+import { unwrapUrlsInText } from "../url/error-text";
 import { patchFunctionConstructor } from "./function-ctor";
 import { patchDynamicIframeAppend } from "./dynamic-iframe";
 import { patchHistory } from "./history";
@@ -161,7 +165,11 @@ export function installPatches(
     step("patchReferrerPolicy", () => patchReferrerPolicy(targetWindow, rewriteOne));
     step("patchFontFaceConstructor", () => patchFontFaceConstructor(targetWindow, rewriteOne));
     step("patchCssRules", () => patchCssRules(targetWindow, rewriteOne));
-    step("patchCssStyleDeclaration", () => patchCssStyleDeclaration(targetWindow, rewriteOne));
+    // What CSSOM reads names the page's URLs (patches/cssom-read.ts).
+    const proxyOrigin = new URL(config.apiBaseURL).origin;
+    const cssBack = (t: string): string => (t.indexOf(proxyOrigin + "/cyrano/") < 0 ? t : unwrapUrlsInText(t, proxyOrigin, unwrapOne));
+    step("patchCssStyleDeclaration", () => patchCssStyleDeclaration(targetWindow, rewriteOne, cssBack));
+    step("patchCssomRead", () => patchCssomRead(targetWindow, unwrapOne, cssBack, () => getCurrentBaseUrl().origin));
     step("patchFunctionConstructor", () => patchFunctionConstructor(targetWindow));
     step("patchDynamicIframeAppend", () => patchDynamicIframeAppend(targetWindow, config, () => getCurrentBaseUrl().href, rewriteOne));
     step("patchHistory", () => patchHistory(targetWindow, rewriteOne, setBaseUrl, unwrapOne, getCurrentBaseUrl));
@@ -190,6 +198,10 @@ export function installPatches(
     step("patchPaymentRequest", () => patchPaymentRequest(targetWindow));
     // Protected Audience joins and auctions would have the browser fetch outside the proxy (patches/ad-auction.ts).
     step("patchAdAuction", () => patchAdAuction(targetWindow, () => getCurrentBaseUrl().origin));
+    // Code handed to setTimeout / setInterval as a string is rewritten (patches/timers.ts).
+    step("patchTimers", () => patchTimers(targetWindow));
+    // Error events muted and named as directly (patches/error-events.ts).
+    step("patchErrorEvents", () => patchErrorEvents(targetWindow, new URL(config.apiBaseURL).origin, unwrapOne, () => getCurrentBaseUrl().origin));
     // What a frame of another origin's page is denied (patches/embedded.ts).
     if (flattened) step("patchEmbeddedContext", () => patchEmbeddedContext(targetWindow, () => getCurrentBaseUrl().origin));
     // Storage of every kind is this origin's alone (patches/storage.ts).
@@ -233,7 +245,7 @@ export function crnbSizes(desc: string): { encoded: number; decoded: number } | 
     return m ? { encoded: Number(m[1]), decoded: Number(m[2]) } : null;
 }
 
-function patchPerformanceEntryNames(
+export function patchPerformanceEntryNames(
     targetWindow: Window,
     unwrapOne: (url: string) => string,
     rewriteOne: (url: string) => string,

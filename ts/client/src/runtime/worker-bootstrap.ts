@@ -17,13 +17,15 @@
 // importScripts patching are worker-specific.
 
 import { isLocationObject } from "../native/brand";
-import { nR } from "../native/intrinsics";
+import { nO, nR } from "../native/intrinsics";
 import { patchReflection } from "../native/hidden-globals";
 import { patchStorageNames } from "../patches/storage";
 import { patchCacheUrls } from "../patches/cache-urls";
 import { honourOptionalChains } from "./optional";
 import type { ClientConfig } from "../config";
 import { unwrapErrorMessage, unwrapRejection } from "../url/error-text";
+import { patchPerformanceEntryNames } from "../patches/install";
+import { patchTimers } from "../patches/timers";
 import { isUrlLikeSpecifier, rewriteUrl, unwrapProxiedUrl } from "../url/containment";
 import { metaResolver } from "../wrappers/meta-resolve";
 import { WorkerWrappedLocation } from "../wrappers/worker-location";
@@ -194,13 +196,39 @@ function patchWorkerScope(
     const realm = scope as unknown as Window;
     installToStringMask(scope as unknown as typeof globalThis);
     try { patchReflection(scope as object); } catch { /* stays native */ }
-    patchErrorStacks(realm, config.apiBaseURL + config.source, unwrapOne);
+    // A worker's own script has its preamble as its first line.
+    // (A data: worker's preamble is its own URL's: it is left.)
+    let own: { file: string; shown: string } | undefined;
+    try {
+        const h = String((scope as unknown as { location?: { href?: string } }).location?.href ?? "");
+        if (/^(https?|blob):/i.test(h)) own = { file: h, shown: baseUrl.href };
+    } catch { own = undefined; }
+    patchErrorStacks(realm, config.apiBaseURL + config.source, unwrapOne, own);
     // A worker made of a blob: or data: URL sends no Referer: its requests
     // name its origin to the proxy (patches/cors.ts).
     let unreferred = false;
     try { unreferred = /^(blob|data):/i.test(String((scope as unknown as { location?: { href?: string } }).location?.href)); } catch { /* no location */ }
     let opaque = false;
     try { opaque = String((scope as unknown as { origin?: unknown }).origin) === "null"; } catch { /* not opaque */ }
+    // self.origin is the worker's own origin, as natively: its original
+    // URL's (a blob:'s inner one, "null" for a data: worker), not the
+    // proxy's (round H). Read after `opaque` above, which asks the native.
+    // Its resource timing names the page's URLs, the runtime's own entries
+    // hidden, as in a window (round H).
+    {
+        let own: string | null = null;
+        try { own = baseUrl.origin; } catch { own = null; }
+        for (let h: object | null = scope as object; h && own !== null; h = nO.getPrototypeOf(h) as object | null) {
+            const d = nO.getOwnPropertyDescriptor(h, "origin");
+            if (!d) continue;
+            if (d.get) { const shown = own; wrapAccessor<string>(h, "origin", { get: () => shown }); }
+            break;
+        }
+    }
+    try {
+        patchPerformanceEntryNames(realm, unwrapOne, rewriteOne, new URL(config.apiBaseURL).origin,
+            config.identity ? config.apiBaseURL + config.source : undefined);
+    } catch { /* stays native */ }
     const cors = config.identity ? undefined
         : { origin: () => baseUrl.origin, href: () => baseUrl.href, always: unreferred, proxy: new URL(config.apiBaseURL).origin, opaque };
     patchFetch(realm, rewriteOne, unwrapOne, () => baseUrl, cors);
@@ -219,6 +247,7 @@ function patchWorkerScope(
     // decoder workers ran without it and fetched their origins).
     patchWorker(realm, rewriteOne, patchBlobWorkerSource(realm, config, () => baseUrl));
     patchFunctionConstructor(realm);
+    patchTimers(scope as object);
     // importScripts is classic-worker-only and synchronous.
     if (typeof scope.importScripts === "function") {
         const proxy = new URL(config.apiBaseURL).origin;

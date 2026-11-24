@@ -33,7 +33,8 @@ import { readBlob } from "./blob-worker-source";
 import { rewriteSrcdoc } from "./html-rewriter";
 import type { RewriteOne } from "./referrer-policy";
 import { scriptKindOf, type ScriptKind } from "./script-kind";
-import { rewriteDataScript } from "../url/data-url";
+import { readDataUrl, rewritable, rewriteDataScript } from "../url/data-url";
+import { internalsOf } from "../native/internals";
 
 const done = new SafeMap<string, string>(); // "doc|css " + the page's blob URL → the rewritten one's
 
@@ -44,6 +45,30 @@ export function htmlDocumentType(type: string): boolean {
     let t = semi < 0 ? type : type.slice(0, semi);
     t = t.replace(/^[ \t]+|[ \t]+$/g, "").replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
     return t === "text/html";
+}
+
+/** spec/Frames.agda dataDocument: a data: URL of a document a frame is given (text/html, its body rewritable). */
+export function dataDocument(raw: string): boolean {
+    const d = readDataUrl(raw);
+    return d !== null && rewritable(d) && htmlDocumentType(d.head);
+}
+
+/**
+ * The URL a frame is given for a data: URL of a document (round I: its
+ * images and fetches went to their origins): a data: URL of the document
+ * rewritten as a srcdoc is — its base its own URL (nothing relative
+ * resolves against it, as directly), the runtime first, told the data: URL
+ * as its location — or null to give it as it is.
+ */
+export function dataDocumentFor(win: Window, url: string, rewriteOne: RewriteOne, proxyOrigin: string, bootstrap: boolean): string | null {
+    const key = "datadoc " + (bootstrap ? "+" : "-") + url;
+    const hit = done.get(key);
+    if (hit) return hit;
+    if (!dataDocument(url)) return null;
+    const at = bootstrap ? internalsOf(win)?.bootstrapHtmlAt : undefined;
+    const now = rewriteDataScript(url, (text) => rewriteSrcdoc(text, underBlobBase(rewriteOne, url), proxyOrigin, at ? () => at(url) : undefined));
+    if (now !== null) done.set(key, now);
+    return now;
 }
 
 /** Whether a reference names its scheme (spec/Frames.agda blobBase: only those resolve against a blob: base). */
@@ -174,6 +199,11 @@ export function blobValue(win: Window | null | undefined, tag: string, attr: str
     if (!win) return null;
     const t = tag.toLowerCase(), a = attr.toLowerCase();
     if (a === "src" && t === "script" && (scriptType === "classic" || scriptType === "module") && /^[\x00-\x20]*data:/i.test(value)) return dataScriptFor(value, rewriteOne);
+    // A frame's data: document (an iframe's or frame's src, an object's
+    // data, an embed's src).
+    if (/^[\x00-\x20]*data:/i.test(value) && ((a === "src" && (t === "iframe" || t === "frame" || t === "embed")) || (a === "data" && t === "object"))) {
+        return dataDocumentFor(win, value.replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, ""), rewriteOne, proxyOrigin, bootstrap !== undefined);
+    }
     if (!/^[\x00-\x20]*blob:/i.test(value)) return null;
     const url = value.replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, "");
     if (a === "src" && (t === "iframe" || t === "frame")) return blobDocumentFor(win, url, rewriteOne, proxyOrigin, bootstrap);

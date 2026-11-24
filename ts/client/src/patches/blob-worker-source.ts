@@ -43,6 +43,12 @@ import { workerRuns } from "./script-kind";
 
 export type WorkerScriptFor = (url: string, module: boolean) => string | undefined;
 
+/**
+ * A worker's private blob: URL (its rewritten script) → the page's URL it
+ * was made for: the URL the page's Worker error events name (error-events.ts).
+ */
+export const pageBlobOf = new SafeMap<string, string>();
+
 export function patchBlobWorkerSource(
     targetWindow: Window,
     config: ClientConfig,
@@ -88,8 +94,10 @@ export function patchBlobWorkerSource(
             // A blob: URL the page made carries the proxy's origin: the worker
             // is told the page's, as directly (blob:<page origin>/<uuid>).
             let own: string;
+            let held = url;
             try {
                 own = new URL(url, getCurrentBaseUrl()).href;
+                held = own;
                 const proxyOrigin = new URL(config.apiBaseURL).origin;
                 if (sStarts(own, "blob:" + proxyOrigin + "/")) own = "blob:" + getCurrentBaseUrl().origin + own.slice(5 + proxyOrigin.length);
             } catch { own = getCurrentBaseUrl().href; }
@@ -97,6 +105,7 @@ export function patchBlobWorkerSource(
             // absolute one, as a blob's base resolves nothing relative): they
             // went to their origins.
             const opts = defaultJsRewriteOptions();
+            opts.globalScript = true; // its preamble gives the worker the runtime
             if (module) {
                 opts.baseUrl = own;
                 opts.proxify = specifierProxifier(Object.assign((u: string): string => rewriteUrl(u, getCurrentBaseUrl(), config), {
@@ -106,6 +115,7 @@ export function patchBlobWorkerSource(
             const body = buildWorkerPreamble(config, own, module) + rewriteJsSource(src.source, opts);
             priv = nR.apply(nativeCreate, URLs, [new NativeBlob([body], { type: module ? src.type : "text/javascript" })]) as string;
             privateUrl.set(key, priv);
+            pageBlobOf.set(priv, held);
         }
         return priv;
     };

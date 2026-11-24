@@ -226,7 +226,9 @@ export function urlDestOf(el: Element, attr: string): Dest | null {
         const tag = svg ? el.localName : el.localName.toLowerCase();
         // crossorigin as the page wrote it (the runtime gives every one
         // use-credentials): use-credentials marks the URL (spec Attrs.credDest).
-        const co = svg ? null : (originalAttr(el, "crossorigin")?.value ?? heldAttr(el, "crossorigin"));
+        // (an original of null: the page wrote none, whatever the element holds)
+        const orig = svg ? undefined : originalAttr(el, "crossorigin");
+        const co = svg ? null : orig !== undefined ? orig.value : heldAttr(el, "crossorigin");
         const cred = co !== null && lowerA(co.trim()) === "use-credentials";
         if (tag !== "script" && tag !== "link" && tag !== "iframe" && tag !== "frame" && tag !== "embed" && tag !== "object" && tag !== "img" && tag !== "source") return credDest(cred, null);
         const as = heldAttr(el, "as");

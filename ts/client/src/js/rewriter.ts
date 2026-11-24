@@ -49,6 +49,12 @@ export interface JsRewriteOptions {
      * a sandbox's with object claims every name the window has.
      */
     functionBody?: boolean;
+    /**
+     * The code runs as a script of a global that holds the runtime (a blob:
+     * worker the runtime made, whose preamble set it up): no eval preamble,
+     * which would shift every column of its first line.
+     */
+    globalScript?: boolean;
     /** With `proxify`: import/export specifiers and literal import() are proxified in place. */
     wrapStaticImport: boolean;
     /** With `baseUrl`: import.meta.url becomes that URL as a string literal. */
@@ -245,7 +251,7 @@ function rewriteJsSourceUncached(src: string, opts: JsRewriteOptions): string {
 
     // The preamble goes wherever the code references our runtime — freshly
     // rewritten or already rewritten by the server.
-    if (sIncludes(result, "$rewriter.") || sIncludes(result, "$__crn_key__")) {
+    if (opts.globalScript !== true && (sIncludes(result, "$rewriter.") || sIncludes(result, "$__crn_key__"))) {
         return withEvalPreamble(result, opts.functionBody === true);
     }
     return result;

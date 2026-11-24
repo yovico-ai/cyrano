@@ -40,6 +40,7 @@ export function init(
             const internals: Internals = {
                 api,
                 bootstrapHtml: () => buildBootstrapHtml(config, (api.get_base_url() ?? new URL(targetWindow.location.href)).href),
+                bootstrapHtmlAt: (href: string) => buildBootstrapHtml(config, href),
             };
             installPatches(
                 targetWindow,

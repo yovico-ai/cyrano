@@ -293,3 +293,18 @@ func isToken(v string) bool {
 	}
 	return true
 }
+
+// DataDocument is spec Frames.dataDocument: a data: URL of a document a
+// frame is given — a text/html type (before any ";", spaces and tabs
+// around it, any case), its body rewritable.
+func DataDocument(raw string) bool {
+	d, ok := ReadDataURL(raw)
+	if !ok || !d.Rewritable() {
+		return false
+	}
+	head := d.Head
+	if i := strings.IndexByte(head, ';'); i >= 0 {
+		head = head[:i]
+	}
+	return strings.EqualFold(strings.Trim(head, " \t"), "text/html")
+}

@@ -47,3 +47,29 @@ func TestSpecConformance_DataURL(t *testing.T) {
 		}
 	})
 }
+
+func TestSpecConformance_DataDocument(t *testing.T) {
+	oracle := specoracle.Need(t)
+	schemes := []string{"data:", "DATA:", " data:", "dat:"}
+	heads := []string{"", "text/html", "TEXT/HTML", " text/html ", "text/html;charset=utf-8", "text/html;base64", "text/html ; charset=latin1",
+		"text/htmlx", "text/plain", "image/svg+xml", "application/xhtml+xml", "text/\thtml", ";base64"}
+	bodies := []string{"", "<p>a", "PHA+YQ==", "%3Cp%3E", "é", "%FF", "#f", "<img src=x>"}
+	rapid.Check(t, func(rt *rapid.T) {
+		u := rapid.SampledFrom(schemes).Draw(rt, "scheme") + rapid.SampledFrom(heads).Draw(rt, "head")
+		if rapid.IntRange(0, 5).Draw(rt, "comma") > 0 {
+			u += ","
+		}
+		u += rapid.SampledFrom(bodies).Draw(rt, "body")
+		want, _, err := oracle.Ask("datadoc", u)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		got := "no"
+		if DataDocument(u) {
+			got = "yes"
+		}
+		if got != want {
+			rt.Fatalf("DataDocument(%q) = %s, spec %s", u, got, want)
+		}
+	})
+}

@@ -29,6 +29,7 @@ open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.String.Base using (toList)
 
 open import Messaging using (take)
+import DataUrl
 open import Url using (Str; eqStr; eqLower; parse; url; originText; scheme; auth; hostPort; Parsed)
 
 data FrameOrigin : Set where
@@ -204,3 +205,18 @@ blobBase s = start (dropC0 s)
   start : Str → Bool
   start [] = false
   start (c ∷ cs) = alpha c ∧ rest cs
+
+-- A frame given a data: URL of a document (an iframe's or frame's src, an
+-- object's data, an embed's src: round I, its images and fetches went to
+-- their origins) has the document rewritten as a srcdoc is, the runtime
+-- first, and is given a data: URL of the rewritten text (DataUrl.wrapped):
+-- an opaque origin still. A document type as for a blob document (text/html),
+-- its body rewritable (DataUrl.rewritable); anything else is given as is.
+-- Its base is its own URL, against which nothing relative resolves: such
+-- references stay as written, as directly. (Known: the frame reads the
+-- rewritten data: URL as its location, as a blob document's.)
+dataDocument : Str → Bool
+dataDocument s with DataUrl.read s
+... | just d  = blobDocument (DataUrl.head d) ∧ DataUrl.rewritable d
+... | nothing = false
+

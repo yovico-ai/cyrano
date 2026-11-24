@@ -216,6 +216,13 @@ and origin are the opener's (`popup-blank-vs-chromium`).
   `<meta http-equiv=content-security-policy>` reads its rewritten
   `content`; CSS attribute selectors match the rewritten values;
   `crossOrigin` reads the forced value.
+  CSSOM reads back (`patches/cssom-read.ts`, `css-style-declaration.ts`):
+  `StyleSheet#href`, an `@import`'s href, rule `cssText`, declarations
+  (`style`, `getComputedStyle`: views whose reads unwrap) name the page's
+  URLs — exact for computed values, a relative URL the page wrote reads
+  back absolute; a sheet of another origin fetched without CORS (an
+  `@import` of another origin in any sheet) throws Chromium's
+  SecurityError on `cssRules` & co (`cssom-read-vs-chromium`).
 - **localStorage, each site its own quota** (spec/LocalStore.agda,
   `patches/local-store.ts`, local-store-vs-chromium): every proxied site
   shares the proxy origin's one localStorage (Chromium: 5 242 880 UTF-16
@@ -317,7 +324,13 @@ and origin are the opener's (`popup-blank-vs-chromium`).
   settling as the native's, a microtask later, its rejection's message put
   right — so unhandledrejection fires as directly; a DOMException is made
   again, its message being unsettable — `url/error-text.ts`,
-  `error-message-urls-vs-chromium`). R13: an outermost `with` whose body
+  `error-message-urls-vs-chromium`). Window error events as directly
+  (spec/ErrorEvents.agda, `patches/error-events.ts`): a classic script of
+  another origin fetched without CORS (as the page wrote it) is muted —
+  "Script error.", "", 0, 0, null — for listeners and `window.onerror`;
+  others name the script's original URL, line and column from the error's
+  stack (the Error stand-in had V8 report the throw site)
+  (`error-events-vs-chromium`; gap: an `onerror` attribute handler). R13: an outermost `with` whose body
   reaches the runtime declares the holder `_crn$g` in a block of its own,
   so no strict function in it compiles "return this" (the Facebook SDK's
   `var globalThis = this; with (this)`: kosho.or.jp). Open: stack-trace columns are the
@@ -445,7 +458,13 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   (crumblcookies.com's MapLibre; `module-worker-vs-chromium`). A worker reads its own URL,
   fragment included (a served worker's from its own location, unwrapped;
   a blob: worker's the page's blob URL with the page's origin; Turbopack's
-  `#params=` on thangs.com: `worker-location-vs-chromium`).
+  `#params=` on thangs.com: `worker-location-vs-chromium`). Its `self.origin`
+  is its original URL's ("null" for a data: worker), and its resource
+  timing names the page's URLs, the runtime's own entries hidden; its
+  errors read its own script's lines as directly (the preamble is its first
+  line: spec/Stack.agda workerLine, in its stacks and the page's Worker
+  error events, which name the page's URL; a blob: worker's rewritten copy
+  gets no eval preamble, `globalScript`) (`worker-origin-vs-chromium`).
   `WebSocket#url` reads the page's URL made ws(s) as the browser makes it
   (toutiao.com: `websocket-url-vs-chromium`). `WebSocketStream` is wrapped as WebSocket
   is (it connected from the browser straight to the origin). A message an
@@ -466,8 +485,11 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   a refused compile is not retried. A fetch preload keeps its
   crossorigin (Attrs.agda crossoriginValue: Spotify fetched its JSON twice).
   Trusted Types gaps: a page's *default* policy is handed the rewritten
-  text; `setTimeout(string)` and `javascript:` URLs are not sinks the
-  runtime handles.
+  text (eval's and a string timer's); `javascript:` URLs are not sinks the
+  runtime handles. Code given to `setTimeout` / `setInterval` as a string
+  (or an object: converted once) is rewritten as global code, windows and
+  workers (`patches/timers.ts`); `Function` converts each argument once,
+  as natively, an object body rewritten too (`string-code-vs-chromium`).
   Kasada (Costco, 2026-11-20) passes through the proxy: its fingerprint
   read the runtime's `new Function` stand-in as eval origin and V8's own
   message for `class extends Function.prototype.toString` (now padded to
@@ -557,7 +579,12 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   the page reads back its own URL; the frame's location reads the
   rewritten blob's. A blob stylesheet a link is given is rewritten too,
   against the document's base (Chromium's); a blob document's references
-  without a scheme fail as directly (blobBase).
+  without a scheme fail as directly (blobBase). A frame given a data: URL of a
+  document (iframe/frame src, object data, embed src; markup the server
+  sends or the runtime's setters) gets it rewritten as a srcdoc is, in a
+  data: URL again, its runtime told the original data: URL
+  (spec/Frames.agda dataDocument; `data-frame-vs-chromium`); an SVG one
+  is not rewritten yet.
 - **Turnstile on a page's main thread** (techcrunch.com, 2026-11-20):
   direct, its frame is another process; proxied, every frame shares the
   page's thread, so what its interpreter costs the page feels. It froze

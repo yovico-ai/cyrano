@@ -7,6 +7,7 @@ import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { readDataUrl, rewritable, wrapped } from "../../src/url/data-url";
+import { dataDocument } from "../../src/patches/blob-document";
 import { OracleClient, locateOracle, oracleRequired } from "./oracle-client";
 
 const located = locateOracle();
@@ -30,6 +31,15 @@ describe.skipIf(located.skip !== "")("data: URLs: spec conformance", () => {
     let oracle: OracleClient;
     beforeAll(() => { oracle = new OracleClient(located.path); });
     afterAll(() => oracle?.close());
+
+    it("dataDocument is Frames.dataDocument", async () => {
+        const head = fc.constantFrom("", "text/html", "TEXT/HTML", " text/html ", "text/html;charset=utf-8", "text/html;base64", "text/htmlx", "text/plain", "image/svg+xml", ";base64");
+        const body = fc.constantFrom("", "<p>a", "PHA+YQ==", "%3Cp%3E", "é", "%FF", "#f");
+        await fc.assert(fc.asyncProperty(fc.constantFrom("data:", "DATA:", " data:", "dat:"), head, fc.boolean(), body, async (sc, h, comma, b) => {
+            const u = sc + h + (comma ? "," : "") + b;
+            expect(dataDocument(u) ? "yes" : "no").toBe(await oracle.ask("datadoc", [u]));
+        }), { numRuns: 300 });
+    });
 
     it("readDataUrl, rewritable and wrapped are the spec's", async () => {
         await fc.assert(fc.asyncProperty(dataUrls, async (u) => {

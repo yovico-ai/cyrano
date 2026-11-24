@@ -47,6 +47,8 @@ export interface Internals {
     pendingSender?: Window | undefined;
     /** The runtime bootstrap as HTML, for documents this window creates from markup. */
     bootstrapHtml?: () => string;
+    /** The bootstrap for a document whose location is `href` (a frame's data: document). */
+    bootstrapHtmlAt?: (href: string) => string;
     /** What this window's runtime holds for every copy in its tree (native/shared.ts). */
     data?: Record<string, unknown>;
 }

@@ -242,6 +242,7 @@ import H1
 import Eval
 import Payment
 import AdAuction
+import ErrorEvents
 import LocalStore
 import Route
 import Features
@@ -438,6 +439,8 @@ dispatch op args =
   else if eqStr op (toList "refererroute") then refererRouteReq args
   else if eqStr op (toList "evalcall") then evalCallReq args
   else if eqStr op (toList "adjoin") then adJoinReq args
+  else if eqStr op (toList "datadoc") then oneArg (λ u → toList (if Frames.dataDocument u then "yes" else "no")) args
+  else if eqStr op (toList "errmuted") then errMutedReq args
   else if eqStr op (toList "paymentrefused") then oneArg (λ t → paymentAnswer (Payment.refused t)) args
   else if eqStr op (toList "blobbase") then oneArg (λ t → if Frames.blobBase t then toList "yes" else toList "no") args
   else if eqStr op (toList "blobdocument") then oneArg (λ t → if Frames.blobDocument t then toList "yes" else toList "no") args
@@ -642,6 +645,11 @@ dispatch op args =
     opt : Str → Str → Maybe Str
     opt p v = if eqStr p (toList "1") then just v else nothing
   dispositionReq _ = errorReply "BadRequest"
+
+  -- errmuted <same|cross> <cors|nocors> <module|classic> → yes/no
+  errMutedReq : List Str → Str
+  errMutedReq (a ∷ b ∷ c ∷ []) = out (toList (if ErrorEvents.muted (eqStr a (toList "same")) (eqStr b (toList "cors")) (eqStr c (toList "module")) then "yes" else "no"))
+  errMutedReq _ = errorReply "BadRequest"
 
   -- adjoin <complete|missing> <owner> <page origin> → native/joined/denied/outside
   adJoinReq : List Str → Str

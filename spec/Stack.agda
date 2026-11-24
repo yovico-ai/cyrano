@@ -163,3 +163,12 @@ untag tag origin s = go (suc (length s)) s
   ... | just rest@(d ∷ _) = (if is 58 d then rep else origin) ++ go f rest
   ... | just []           = origin
   ... | nothing           = c ∷ go f cs
+
+-- A line of a worker's own script as the page reads it (in its errors'
+-- stacks and the error events its Worker gets): the preamble the server
+-- (or, for a blob: worker, the runtime) puts before it is its first line,
+-- taken away (round H: every line read one more than directly). Checked in
+-- Chromium: worker-errors-vs-chromium.
+workerLine : ℕ → ℕ
+workerLine (suc (suc n)) = suc n
+workerLine n             = n

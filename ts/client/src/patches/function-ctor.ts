@@ -30,11 +30,20 @@ export function patchFunctionConstructor(targetWindow: Window): void {
     const NativeFunction = g.Function;
     if (!NativeFunction || maskedRealms.has(NativeFunction)) return;
     maskedRealms.add(NativeFunction);
-    const make = (args: unknown[], newTarget?: unknown): unknown => {
-        let body = args.length ? args[args.length - 1] : undefined;
+    const make = (args0: unknown[], newTarget?: unknown): unknown => {
+        const given = args0.length ? args0[args0.length - 1] : undefined;
         // A TrustedScript body (Trusted Types) is rewritten like a string, and stays trusted.
-        const wasTrusted = isTrustedValue(body);
-        if (wasTrusted) body = String(body);
+        const wasTrusted = isTrustedValue(given);
+        // Every argument converted once, in order, as the native does
+        // (ToString: an object's toString, a Symbol's TypeError): an object
+        // body was left unrewritten (round J), and converting again in the
+        // native would call the page's toString twice.
+        const args: unknown[] = [];
+        for (let i = 0; i < args0.length; i++) {
+            const a = args0[i];
+            args.push(typeof a === "string" || (i === args0.length - 1 && wasTrusted) ? a : `${a as string}`);
+        }
+        const body = wasTrusted ? String(given) : args.length ? args[args.length - 1] : undefined;
         if (typeof body !== "string") return nR.construct(NativeFunction, args, (newTarget ?? NativeFunction) as FunctionConstructor);
         const twin = nR.construct(NativeFunction, args) as object; // the page's own source; throws as natively
         const rewritten = args.slice();

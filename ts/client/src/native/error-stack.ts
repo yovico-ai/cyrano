@@ -189,10 +189,18 @@ export function tagFunctionBody(targetWindow: object, body: string): string {
 }
 const tagOf = new SafeMap<string, string>();
 
+/** spec/Stack.agda workerLine: a line of a served worker's own script, its preamble taken away. */
+export function workerLine(n: number): number { return n > 1 ? n - 1 : n; }
+
 export function patchErrorStacks(
     targetWindow: Window,
     runtimeUrl: string,
     unwrapOne: (url: string) => string,
+    // A worker's own script as the browser runs it, and its URL as the page
+    // knows it: its preamble (the server's, or the runtime's for a blob:
+    // worker) is its first line, so its frames read one line up, under the
+    // page's URL (spec/Stack.agda workerLine).
+    own?: { file: string; shown: string },
 ): void {
     const g = targetWindow as unknown as Record<string, unknown>;
     const Intrinsic = g["Error"] as ErrorConstructor & { prepareStackTrace?: unknown };
@@ -243,12 +251,21 @@ export function patchErrorStacks(
                 },
             });
         }
-        const original = unwrapOne(file);
-        if (original === file) return site;
+        const shift = own !== undefined && file === own.file ? 1 : 0;
+        const original = shift ? own!.shown : unwrapOne(file);
+        if (original === file && !shift) return site;
         return new Proxy(site, {
             get(t, k) {
                 if (k === "getFileName" || k === "getScriptNameOrSourceURL") return () => original;
-                if (k === "toString") return () => t.toString().split(file).join(original);
+                if (shift && k === "getLineNumber") return () => { const n = t.getLineNumber?.(); return typeof n === "number" ? workerLine(n) : n; };
+                if (k === "toString") {
+                    return () => {
+                        let text = t.toString();
+                        const n = shift ? t.getLineNumber?.() : null;
+                        if (typeof n === "number") text = text.split(file + ":" + n + ":").join(file + ":" + workerLine(n) + ":");
+                        return text.split(file).join(original);
+                    };
+                }
                 const v = nR.get(t, k, t) as unknown;
                 return typeof v === "function" ? nbind((v as (...a: unknown[]) => unknown), t) : v;
             },

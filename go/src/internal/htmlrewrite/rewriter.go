@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 
 	"github.com/yovico/cyrano/internal/urlrewrite"
@@ -252,6 +253,11 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 		if dest == urlrewrite.DestFrame && tag == "iframe" && !svg {
 			sandbox, has := getAttr(attrs, "sandbox")
 			dest = urlrewrite.FrameDest(sandbox, has)
+		}
+		// A frame given a data: URL of a document: the document rewritten
+		// as a srcdoc is, in a data: URL again (spec Frames.dataDocument).
+		if (dest == urlrewrite.DestFrame || dest == urlrewrite.DestInert) && urlrewrite.DataDocument(raw) {
+			return rewriteDataDocument(raw, cfg, dest == urlrewrite.DestInert)
 		}
 		base := cfg.BaseURL
 		if tag == "base" && !svg {
@@ -694,4 +700,39 @@ func sameAttrs(a, b []html.Attribute) bool {
 		}
 	}
 	return true
+}
+
+// rewriteDataDocument is a frame's data: URL of a document with the
+// document rewritten as a srcdoc is (spec Frames.dataDocument): its base its
+// own URL (nothing relative resolves against it: such references stay as
+// written, as directly), the runtime first — told the data: URL as its
+// location, loaded from the proxy's origin (a data: document resolves no
+// path) — but for an inert frame (sandboxed without scripts).
+func rewriteDataDocument(raw string, cfg *Config, inert bool) string {
+	own, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return raw
+	}
+	return urlrewrite.RewriteDataScript(raw, func(text string) string {
+		sub := *cfg
+		sub.BaseURL = own
+		sub.baseSeen = false
+		sub.InjectBootstrap = cfg.InjectBootstrap && !inert
+		if cfg.Proxy.PublicURL != nil && strings.HasPrefix(cfg.RewriterJSPath, "/") {
+			sub.RewriterJSPath = cfg.Proxy.PublicURL.Scheme + "://" + cfg.Proxy.PublicURL.Host + cfg.RewriterJSPath
+		}
+		if _, has := sub.ClientPassthrough["referrer"]; has {
+			sub.ClientPassthrough = make(map[string]any, len(cfg.ClientPassthrough))
+			for k, v := range cfg.ClientPassthrough {
+				if k != "referrer" {
+					sub.ClientPassthrough[k] = v
+				}
+			}
+		}
+		var doc bytes.Buffer
+		if err := Rewrite(&doc, strings.NewReader(text), sub); err != nil {
+			return text
+		}
+		return doc.String()
+	})
 }
