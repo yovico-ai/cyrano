@@ -3,6 +3,13 @@
 
 export interface ClientConfig {
     /**
+     * The WebRTC relay (Go internal/turn; spec/WebRtc.agda): the ICE servers
+     * every peer connection is given in place of the page's — absent when
+     * the server runs none (then a peer connection gathers nothing at all:
+     * relay only, no relay).
+     */
+    rtc?: { urls: string[]; username: string; credential: string };
+    /**
      * The single user-facing public origin for the proxy: a full URL like
      * "http://localhost:9081" or "https://proxy.example.com". This is *the*
      * canonical origin the browser sees, before any load balancer or TLS-

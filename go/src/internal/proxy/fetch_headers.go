@@ -259,16 +259,29 @@ func (h *Handler) directFetchHeaders(req *http.Request, target *url.URL, request
 	// the only cross-site ones a proxied page makes. Its Origin is "null"
 	// and nothing is same-site with it (spec/Referrer.agda
 	// originHeaderOpaque, secFetchSiteOpaque); its Referer is its page's.
-	init := page
+	// A script's own requests (a module's imports) are its document's:
+	// Origin and Sec-Fetch-Site by the document's origin, not the script's
+	// (round I: import() sent the proxy's origin). The Referer stays the
+	// script's, as directly.
+	init, initOrigin := page, from.Scheme+"://"+from.Host
+	if doc := h.scriptDocument(req, referer, from, target); doc != "" {
+		if u, err := url.Parse(doc); err == nil {
+			init, initOrigin = pageKey(u), u.Scheme+"://"+u.Host
+		}
+	}
 	if strings.EqualFold(req.Header.Get("Sec-Fetch-Site"), "cross-site") {
 		init = "null"
 	}
-	if v, ok := urlrewrite.OriginHeader(mode, safe, policy, init, to, strings.ToLower(req.Header.Get("Sec-Fetch-Dest"))); ok && (browserSent || scripted) {
+	// A CORS-mode request (the browser's own Sec-Fetch-Mode) is judged by
+	// the spec whatever the browser sent the proxy: a media element's,
+	// same-origin to the browser, came with no Origin, and its cross-origin
+	// target got none (round I: <video crossorigin>).
+	if v, ok := urlrewrite.OriginHeader(mode, safe, policy, init, to, strings.ToLower(req.Header.Get("Sec-Fetch-Dest"))); ok && (browserSent || scripted || mode == "cors") {
 		req.Header.Set("Origin", v)
 	} else if browserSent && !ok {
 		req.Header.Del("Origin")
 	} else if browserSent && urlrewrite.OnProxy(req.Header.Get("Origin"), h.opts.ProxyCfg) {
-		req.Header.Set("Origin", from.Scheme+"://"+from.Host)
+		req.Header.Set("Origin", initOrigin)
 	}
 
 	// "none" (a user-initiated navigation) has no initiator to compare.
@@ -277,6 +290,72 @@ func (h *Handler) directFetchHeaders(req *http.Request, target *url.URL, request
 			req.Header.Set("Sec-Fetch-Site", site)
 		}
 	}
+}
+
+// scriptDocs: the document each script or stylesheet was loaded for (per
+// session; the last load wins — two pages of the session loading one
+// script share it): one requested from a document is that document's, one
+// requested from a script or sheet (an import) that one's document's.
+var scriptDocs struct {
+	mu sync.Mutex
+	m  map[string]string
+}
+
+const scriptDocsMax = 16384
+
+func scriptDocGet(session, script string) string {
+	scriptDocs.mu.Lock()
+	defer scriptDocs.mu.Unlock()
+	return scriptDocs.m[session+"\x00"+script]
+}
+
+func scriptDocSet(session, script, doc string) {
+	scriptDocs.mu.Lock()
+	defer scriptDocs.mu.Unlock()
+	if scriptDocs.m == nil {
+		scriptDocs.m = make(map[string]string)
+	}
+	if len(scriptDocs.m) >= scriptDocsMax {
+		for k := range scriptDocs.m {
+			delete(scriptDocs.m, k)
+			break
+		}
+	}
+	scriptDocs.m[session+"\x00"+script] = doc
+}
+
+// scriptish: a URL mark of a script's or stylesheet's (spec Containment
+// destScript, destStyle and kin): its own requests (imports, fonts) are
+// its document's.
+func scriptish(d urlrewrite.Dest) bool {
+	return d == urlrewrite.DestScript || d == urlrewrite.DestScriptCred || d == urlrewrite.DestModuleWorker ||
+		d == urlrewrite.DestStyle || d == urlrewrite.DestStyleCred
+}
+
+// scriptDocument notes the document a script request is made for, and is
+// the document behind a request whose Referer is a script ("" when the
+// Referer is a document, or the script's document is not known).
+func (h *Handler) scriptDocument(req *http.Request, referer string, from, target *url.URL) string {
+	if from == nil {
+		return ""
+	}
+	session := sessionIn(req)
+	refScript := false
+	if u, err := url.Parse(referer); err == nil {
+		refScript = scriptish(urlrewrite.TargetDest(u.EscapedPath()))
+	}
+	doc := pageKey(from)
+	if refScript {
+		doc = scriptDocGet(session, pageKey(from))
+	}
+	mark, _ := req.Context().Value(destContextKey{}).(urlrewrite.Dest)
+	if dest := strings.ToLower(req.Header.Get("Sec-Fetch-Dest")); doc != "" && (scriptish(mark) || dest == "script" || dest == "style") {
+		scriptDocSet(session, pageKey(target), doc)
+	}
+	if !refScript {
+		return ""
+	}
+	return doc
 }
 
 // recordPagePolicy notes the Referrer-Policy of a response that sets one

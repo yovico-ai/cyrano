@@ -22,6 +22,8 @@
 // navigation: with the proxy's, each internal link looked external and was
 // sent through /url?q=, nested deeper each time.
 
+import { blobNavigationFor } from "./blob-document";
+import type { RewriteOne } from "./referrer-policy";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 import { nO, nR, ncall } from "../native/intrinsics";
 
@@ -150,7 +152,9 @@ export function patchNavigation(
         ncall(listen as never, navigation, "navigate", (e: Event) => {
             try {
                 if (!ncall(cancelable, e) || (net.hash && ncall(net.hash, e)) || (net.download && ncall(net.download, e) != null)) return;
-                const to = netDestination(String(ncall(url, ncall(destination, e))), proxyOrigin, rewriteOne);
+                const dest = String(ncall(url, ncall(destination, e)));
+                // A blob: HTML document the page built: its rewritten copy.
+                const to = netDestination(dest, proxyOrigin, rewriteOne) ?? blobNavigationFor(targetWindow, dest, rewriteOne as RewriteOne, proxyOrigin);
                 if (to === null) return;
                 ncall(prevent, e);
                 ncall(stop, e);

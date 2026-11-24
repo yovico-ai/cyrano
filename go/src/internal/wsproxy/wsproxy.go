@@ -12,6 +12,7 @@
 package wsproxy
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"github.com/yovico/cyrano/internal/dnscache"
@@ -38,6 +39,11 @@ type Options struct {
 	// Without it no cookie is sent — never the browser's header as it
 	// came, which holds every proxied site's cookies and the proxy's own.
 	Cookies func(in *http.Request, target *url.URL, pageOrigin string) string
+	// SetCookies takes the handshake response's Set-Cookie lines and gives
+	// the ones the browser gets in their place (proxy.Handler
+	// WebSocketSetCookies). Without it they are dropped: for the proxy
+	// origin's browser jar they mean nothing.
+	SetCookies func(in *http.Request, target *url.URL, pageOrigin string, set []string) []string
 }
 
 // Handler upgrades incoming WebSocket requests and proxies them.
@@ -147,11 +153,42 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The upstream's handshake response: its Set-Cookie go to the session
+	// jar (the browser gets the page's inbox entries instead), the rest as
+	// sent; what follows the head is relayed from the same reader.
+	upBuf := bufio.NewReader(upstream)
+	if h.opts.HandshakeRead > 0 {
+		_ = upstream.SetReadDeadline(time.Now().Add(h.opts.HandshakeRead))
+	}
+	resp, err := http.ReadResponse(upBuf, upgradeReq)
+	_ = upstream.SetReadDeadline(time.Time{})
+	if err != nil {
+		h.opts.Logger.Warn("wsproxy: read upgrade response failed", "target", target.String(), "err", err)
+		writeErrorResponse(clientConn, http.StatusBadGateway, "upstream handshake")
+		return
+	}
+	set := resp.Header.Values("Set-Cookie")
+	resp.Header.Del("Set-Cookie")
+	if h.opts.SetCookies != nil && len(set) > 0 {
+		_, pageOrigin, _ := urlrewrite.SplitWSOrigin(target.RawQuery)
+		for _, v := range h.opts.SetCookies(r, target, pageOrigin, set) {
+			resp.Header.Add("Set-Cookie", v)
+		}
+	}
+	if err := writeResponseHead(clientConn, resp); err != nil {
+		return
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		// Refused: its body (if any) follows, then the connection ends.
+		_, _ = io.Copy(clientConn, upBuf)
+		return
+	}
+
 	// Bidirectional copy. Each direction in its own goroutine; we exit
 	// when either direction closes (CloseRead/CloseWrite would be nicer
 	// but Conn doesn't expose them portably; close-on-defer is enough).
 	errc := make(chan error, 2)
-	go pipe(clientConn, upstream, errc)
+	go pipe(clientConn, upBuf, errc)
 	go pipe(upstream, clientConn, errc)
 	<-errc
 	h.opts.Logger.Debug("wsproxy: closed",
@@ -256,4 +293,29 @@ func writeErrorResponse(c net.Conn, status int, msg string) {
 			"Connection: close\r\n"+
 			"\r\n%s",
 		status, http.StatusText(status), len(body), body)
+}
+
+// writeResponseHead writes resp's status line and headers as received (its
+// body, if any, is relayed after it from the same reader).
+func writeResponseHead(w io.Writer, resp *http.Response) error {
+	var b strings.Builder
+	b.WriteString(resp.Proto)
+	if b.Len() == 0 {
+		b.WriteString("HTTP/1.1")
+	}
+	b.WriteString(" ")
+	b.WriteString(resp.Status)
+	b.WriteString("\r\n")
+	// (ReadResponse moves Transfer-Encoding out of the header.)
+	if len(resp.TransferEncoding) > 0 && resp.Header.Get("Transfer-Encoding") == "" {
+		b.WriteString("Transfer-Encoding: " + strings.Join(resp.TransferEncoding, ", ") + "\r\n")
+	}
+	for k, vs := range resp.Header {
+		for _, v := range vs {
+			b.WriteString(k + ": " + v + "\r\n")
+		}
+	}
+	b.WriteString("\r\n")
+	_, err := io.WriteString(w, b.String())
+	return err
 }

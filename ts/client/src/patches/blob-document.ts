@@ -92,6 +92,22 @@ function underBlobBase(rw: RewriteOne, blobUrl: string): RewriteOne {
     return out;
 }
 
+/** The blob: URLs of documents the runtime made (rewritten copies): never rewritten again. */
+const made = new SafeMap<string, true>();
+export function madeBlobDocument(url: string): boolean { return made.has(url); }
+
+/**
+ * Where a navigation to `url` (location, a link, a form, window.open) goes
+ * instead: a blob: URL of an HTML document the page built, rewritten as a
+ * frame's is (spec/Frames.agda blobDocument; round J: it loaded unrewritten,
+ * no runtime) — null to leave it.
+ */
+export function blobNavigationFor(win: Window, url: string, rewriteOne: RewriteOne, proxyOrigin: string): string | null {
+    if (!sStarts(url.toLowerCase(), "blob:") || made.has(url)) return null;
+    const to = blobDocumentFor(win, url, rewriteOne, proxyOrigin, internalsOf(win)?.bootstrapHtml);
+    return to !== null && to !== url ? to : null;
+}
+
 function remake(win: Window, key: string, text: string, type: string): string | null {
     try {
         const B = (win as unknown as { Blob: typeof Blob }).Blob;
@@ -100,6 +116,7 @@ function remake(win: Window, key: string, text: string, type: string): string | 
         if (!create) return null;
         const out = ncall(create, U, new B([text], { type })) as string;
         done.set(key, out);
+        made.set(out, true);
         return out;
     } catch {
         return null;
@@ -206,7 +223,9 @@ export function blobValue(win: Window | null | undefined, tag: string, attr: str
     }
     if (!/^[\x00-\x20]*blob:/i.test(value)) return null;
     const url = value.replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, "");
-    if (a === "src" && (t === "iframe" || t === "frame")) return blobDocumentFor(win, url, rewriteOne, proxyOrigin, bootstrap);
+    if ((a === "src" && (t === "iframe" || t === "frame" || t === "embed")) || (a === "data" && t === "object")) {
+        return made.has(url) ? null : blobDocumentFor(win, url, rewriteOne, proxyOrigin, bootstrap);
+    }
     if (a === "href" && t === "link" && relStylesheet(rel)) return blobStylesheetFor(win, url, rewriteOne);
     if (a === "src" && t === "script" && (scriptType === "classic" || scriptType === "module")) return blobScriptFor(win, url, rewriteOne, scriptType === "module");
     return null;

@@ -157,6 +157,11 @@ inertFrame markInert marked recorded = markInert ∨ (not marked ∧ recorded)
 -- type: Html.agda's script kinds) or to import(): rewritten as JavaScript;
 -- a module's specifiers resolve against the page's blob URL, which its
 -- import.meta.url stays (jelivestock.com: a Wix module imported direct).
+-- The same wherever a blob: URL of a document the page built becomes a
+-- document: an object's data, an embed's src, and navigations — location,
+-- a link, a form, window.open (the navigation net sends them to the
+-- rewritten copy; the runtime never rewrites a copy it made). Round J:
+-- they loaded unrewritten, with no runtime.
 blobDocument : Str → Bool
 blobDocument ty = eqLower (essence ty) (toList "text/html")
   where

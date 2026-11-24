@@ -144,11 +144,20 @@ func (s *Server) Handler() http.Handler {
 		// the conn and pipes raw frames after rewriting the handshake.
 		if wsproxy.IsWSUpgrade(r) {
 			secret := vhost.SecretCookieName
+			// The jar's side of a handshake response's cookies (as for any
+			// response: proxy.Handler routeSetCookies).
+			cookieRouter := proxy.New(proxy.Options{
+				Logger:            s.Logger.With("component", "proxy"),
+				ProxyCfg:          s.proxyEndpoints(vhost),
+				CookieJar:         jar,
+				SessionCookieName: secret,
+			})
 			wsHandler := wsproxy.New(wsproxy.Options{
 				Logger: s.Logger.With("component", "wsproxy"),
 				Cookies: func(in *http.Request, target *url.URL, pageOrigin string) string {
 					return proxy.WebSocketCookies(in, target, pageOrigin, jar, secret)
 				},
+				SetCookies: cookieRouter.WebSocketSetCookies,
 			})
 			wsHandler.ServeHTTP(w, r)
 			return

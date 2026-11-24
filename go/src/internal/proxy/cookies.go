@@ -486,6 +486,18 @@ func WebSocketCookies(req *http.Request, target *url.URL, pageOrigin string, jar
 	cookies := urlrewrite.JarCookies(strings.Join(req.Header.Values("Cookie"), "; "))
 	if jar != nil && sessionCookieName != "" {
 		if c, err := req.Cookie(sessionCookieName); err == nil {
+			// A script's writes the upgrade request carries first, as on an
+			// HTTP request (round K: a cookie written just before the socket
+			// was missing from its handshake). Applying them twice is nothing
+			// (Jar.ApplyOutbox): the next HTTP request acks them.
+			if outbox, _, _, _ := browserPairs(strings.Join(req.Header.Values("Cookie"), "; ")); len(outbox) > 0 {
+				now := unixNow()
+				jar.With(c.Value, func(j *cookiejar.Jar) {
+					for _, o := range outbox {
+						j.ApplyOutbox(now, cookieSite(o.Cookie.Domain), o.Change, o.N)
+					}
+				})
+			}
 			cookies = append(cookies, jar.Cookies(c.Value)...)
 		}
 	}
@@ -509,4 +521,39 @@ func WebSocketCookies(req *http.Request, target *url.URL, pageOrigin string, jar
 		return ""
 	}
 	return urlrewrite.CookieString(send)
+}
+
+// WebSocketSetCookies stores the Set-Cookie lines of a WebSocket handshake
+// response (from target's http(s) equivalent, the socket opened by a page
+// of pageOrigin) in the session's jar, as any response's, and gives the
+// Set-Cookie lines the browser gets on the 101 in their place: the page's
+// inbox entries (round K: an upgrade's cookies were dropped — load
+// balancers' affinity cookies, chat sessions).
+func (h *Handler) WebSocketSetCookies(in *http.Request, target *url.URL, pageOrigin string, set []string) []string {
+	if len(set) == 0 || h.opts.CookieJar == nil {
+		return nil
+	}
+	c, err := in.Cookie(h.opts.SessionCookieName)
+	if err != nil || c.Value == "" {
+		return nil // a socket a proxied page opens has a session
+	}
+	httpTarget := *target
+	switch strings.ToLower(target.Scheme) {
+	case "wss":
+		httpTarget.Scheme = "https"
+	case "ws":
+		httpTarget.Scheme = "http"
+	}
+	req := in.Clone(in.Context())
+	req.URL = &httpTarget
+	ctx := contextWithSession(req, c.Value)
+	if pageOrigin != "" {
+		ctx = context.WithValue(ctx, requesterKey{}, pageOrigin+"/")
+	}
+	req = req.WithContext(ctx)
+	cx := h.cookieCtx(req, &httpTarget, c.Value)
+	req = req.WithContext(context.WithValue(req.Context(), cookieCtxKey{}, cx))
+	resp := &http.Response{Header: http.Header{"Set-Cookie": append([]string(nil), set...)}, Request: req}
+	h.routeSetCookies(resp)
+	return resp.Header.Values("Set-Cookie")
 }

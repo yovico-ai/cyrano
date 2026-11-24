@@ -23,7 +23,7 @@ import { URL_BEARING_ELEMENTS, isSrcsetAttr, kindOf, rewriteByKind, rewriteUrlLi
 import { elementBlobValue } from "./blob-document";
 import { bootstrapOf } from "./dynamic-html";
 import { wrapConstructor, wrapAccessor } from "../native/surface";
-import { heldAttr, originalAttr, recordAttr } from "../native/originals";
+import { heldAttr, originalAttr, recordAttr, noteAttr } from "../native/originals";
 
 type ProtoLike = { prototype: object };
 
@@ -103,6 +103,7 @@ export function patchUrlAttributes(
                     const rw = rewriteFor(self as Element, rewriteOne, attribute);
                     const now = elementBlobValue(self as Element, attribute, s, rw, "", bootstrapOf(self))
                         ?? rewriteByKind(kindOf(self as Element, attribute), s, rw, rewriteSrcsetAttribute);
+                    noteAttr(self as Element, attribute, now, s); // (an attributeChangedCallback runs in the set)
                     // A TrustedScriptURL (script.src under Trusted Types) stays trusted.
                     ncall(set, self, isTrustedValue(value) ? trusted(targetWindow, "ScriptURL", now) : now);
                     recordAttr(self as Element, attribute, now, s);

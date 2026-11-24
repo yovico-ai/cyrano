@@ -8,14 +8,18 @@ package main
 import (
 	"flag"
 	"log/slog"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/yovico/cyrano/internal/config"
 	"github.com/yovico/cyrano/internal/server"
+	"github.com/yovico/cyrano/internal/turn"
 )
 
 func main() {
@@ -62,6 +66,22 @@ func main() {
 		}
 	}
 
+	// The WebRTC relay (internal/turn; spec/WebRtc.agda): CYRANO_TURN_PORT
+	// (default 3478, 0 none), CYRANO_TURN_IP (default the public URL's
+	// host). A relay that cannot start leaves peer connections with no
+	// servers at all (relay only): they gather nothing, never going direct.
+	if port := envIntOr("CYRANO_TURN_PORT", 3478); port > 0 {
+		ip := os.Getenv("CYRANO_TURN_IP")
+		if ip == "" {
+			ip = relayIPOf(os.Getenv("CYRANO_PUBLIC_URL"))
+		}
+		if r, err := turn.Start(turn.Options{Port: port, IP: ip, Logger: logger}); err != nil {
+			logger.Warn("turn relay not started: WebRTC gathers nothing", "port", port, "ip", ip, "err", err)
+		} else {
+			server.Relay = r
+		}
+	}
+
 	s := server.New(cfg, root, logger)
 	s.Prettify = *prettify
 	if err := s.ListenAndServe(); err != nil {
@@ -81,4 +101,36 @@ func parseLogLevel(s string) slog.Level {
 	default:
 		return slog.LevelInfo
 	}
+}
+
+func envIntOr(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+// relayIPOf is the relay's address for a public URL: its host's (an IP as
+// it is, localhost as 127.0.0.1, a name resolved to its first IPv4).
+func relayIPOf(public string) string {
+	host := "localhost"
+	if u, err := url.Parse(public); err == nil && u.Hostname() != "" {
+		host = u.Hostname()
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.String()
+	}
+	if strings.EqualFold(host, "localhost") {
+		return "127.0.0.1"
+	}
+	if ips, err := net.LookupIP(host); err == nil {
+		for _, ip := range ips {
+			if v4 := ip.To4(); v4 != nil {
+				return v4.String()
+			}
+		}
+	}
+	return ""
 }

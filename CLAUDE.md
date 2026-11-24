@@ -99,7 +99,10 @@ env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
 - Stdlib `net/http/httputil.ReverseProxy` with Director + ModifyResponse.
 - Stdlib `http.Hijacker` + raw TCP for WebSocket — no third-party WS lib.
   The handshake carries the target's cookies only (`proxy.WebSocketCookies`):
-  until 2026-11-22 it forwarded every proxied site's and the session cookie.
+  until 2026-11-22 it forwarded every proxied site's and the session cookie. It
+  applies the script's writes the upgrade request carries first, and the
+  `101`'s Set-Cookie go to the jar as any response's, the page told
+  (`proxy.Handler.WebSocketSetCookies`; `websocket-cookies-vs-chromium`).
 - Stdlib `log/slog` for structured logging.
 
 ## What a response is rewritten as
@@ -148,8 +151,9 @@ Access-Control-Allow-Origin it carries, and is not a redirect (adform's 301
 has an HTML body; the browser follows it); a cors-mode one (crossorigin, a
 module) gets the CORS check by the page's origin, as for anonymous
 (`proxy/orb.go` scriptCORSFails; snowball-io.io, `script-mode-vs-chromium`):
-"null" for a sandboxed document, not judged when the Referer is itself a
-script (a module's import: the page behind it is unknown). A sandboxed
+"null" for a sandboxed document; when the Referer is itself a script or
+stylesheet (a module's import, a sheet's font) by the document it was
+loaded for (`scriptDocs`), not judged where that is not known. A sandboxed
 document's browser runs CORS itself, use-credentials (the runtimes'
 crossorigin): a response the anonymous check allows from "null" is told to
 it as `null` + credentials (`opaqueElementCORS`). A typeless response stays
@@ -216,6 +220,12 @@ and origin are the opener's (`popup-blank-vs-chromium`).
   `<meta http-equiv=content-security-policy>` reads its rewritten
   `content`; CSS attribute selectors match the rewritten values;
   `crossOrigin` reads the forced value.
+  What an attribute held before reads as the page wrote it: a
+  MutationRecord's `oldValue`, a customized built-in's
+  `attributeChangedCallback` values (`patches/attr-history.ts`; a short
+  history per element, noted before the native set — the callback runs in
+  it; `attr-history-vs-chromium`). The drag data store a drop handler
+  reads names the page's URLs (`patches/drag-data.ts`; `drag-data-vs-chromium`).
   CSSOM reads back (`patches/cssom-read.ts`, `css-style-declaration.ts`):
   `StyleSheet#href`, an `@import`'s href, rule `cssText`, declarations
   (`style`, `getComputedStyle`: views whose reads unwrap) name the page's
@@ -362,7 +372,13 @@ and origin are the opener's (`popup-blank-vs-chromium`).
   unsafe-url; the proxy applies the policy (`proxy/fetch_headers.go`).
   Origin as Chromium sends it (spec/Referrer.agda originHeader), on a
   same-origin CORS request for a script, style, font or image too (jetblue's
-  CDN refused its own modules without it; `origin-same-origin-cors-vs-chromium`).
+  CDN refused its own modules without it; `origin-same-origin-cors-vs-chromium`),
+  and on every CORS-mode request by its mode (a `<video crossorigin>`'s,
+  sent the proxy without one: `media-origin-vs-chromium`). A script's own
+  requests (a module's imports, static or import()) are its document's:
+  the proxy notes the document each script was loaded for, through a
+  module graph (`scriptDocs`), and gives Origin and Sec-Fetch-Site by it,
+  the Referer staying the script's (`module-import-origin-vs-chromium`).
 - **Request fingerprint** (checked against tls.peet.ws in real Chrome: TLS
   JA4, HTTP/2 settings and header order equal a direct Chrome's). Header
   order is the browser's own, recorded off its HTTP/1.x connection
@@ -579,7 +595,9 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   the page reads back its own URL; the frame's location reads the
   rewritten blob's. A blob stylesheet a link is given is rewritten too,
   against the document's base (Chromium's); a blob document's references
-  without a scheme fail as directly (blobBase). A frame given a data: URL of a
+  without a scheme fail as directly (blobBase). So does an object's
+  data, an embed's src, and a navigation to one (location, links, forms:
+  the navigation net; window.open) — `blob-navigation-vs-chromium`. A frame given a data: URL of a
   document (iframe/frame src, object data, embed src; markup the server
   sends or the runtime's setters) gets it rewritten as a srcdoc is, in a
   data: URL again, its runtime told the original data: URL
@@ -901,6 +919,16 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   `CYRANO_DEBUG_JS_OFF` (rules), `CYRANO_DEBUG_NO_JS=<url re>`,
   `CYRANO_DEBUG_R5="[!]<url re> <lo> <hi> …; …"` (R5 by offset), and
   V8 coverage / pause-on-caught-exceptions over CDP, direct vs proxied.
+- **WebRTC is relayed** (spec/WebRtc.agda; Go `internal/turn` on pion/turn,
+  `CYRANO_TURN_PORT` default 3478 UDP+TCP, `CYRANO_TURN_IP` default the
+  public URL's host; TS `patches/webrtc.ts`): every peer connection uses
+  only cyrano's TURN relay — the page's configuration goes to the native
+  first (its errors, its normalization), then the relay in its place,
+  `iceTransportPolicy: "relay"`; getConfiguration reads the page's back.
+  Each document gets short-lived credentials (config `rtc`; never in a
+  URL). The relay sends to public peers and its own address only. No
+  relay running: nothing gathered, never direct. Inherent: relay
+  candidates only (`webrtc-relay-vs-chromium`).
 - **Browser-level requests** the page cannot intercept escape the proxy
   (FedCM `navigator.credentials.get`, seen on theguardian.com). FedCM is
   refused (`patches/fedcm.ts`), and so is a PaymentRequest for a URL-based

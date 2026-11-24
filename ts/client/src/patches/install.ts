@@ -26,6 +26,9 @@ import { patchPaymentRequest } from "./payment-request";
 import { patchAdAuction } from "./ad-auction";
 import { patchErrorEvents } from "./error-events";
 import { patchTimers } from "./timers";
+import { patchAttrHistory } from "./attr-history";
+import { patchDragData } from "./drag-data";
+import { patchWebRtc } from "./webrtc";
 import { installToolbar } from "../ui/toolbar";
 import { patchSelectors } from "./selectors";
 import { patchStorageNames, patchWebStorage, storagePrefix } from "./storage";
@@ -170,6 +173,12 @@ export function installPatches(
     const cssBack = (t: string): string => (t.indexOf(proxyOrigin + "/cyrano/") < 0 ? t : unwrapUrlsInText(t, proxyOrigin, unwrapOne));
     step("patchCssStyleDeclaration", () => patchCssStyleDeclaration(targetWindow, rewriteOne, cssBack));
     step("patchCssomRead", () => patchCssomRead(targetWindow, unwrapOne, cssBack, () => getCurrentBaseUrl().origin));
+    // What attributes held before reads as the page wrote it (patches/attr-history.ts).
+    step("patchAttrHistory", () => patchAttrHistory(targetWindow, cssBack));
+    // The drag data store reads the page's URLs (patches/drag-data.ts).
+    step("patchDragData", () => patchDragData(targetWindow, cssBack));
+    // WebRTC through cyrano's relay only (patches/webrtc.ts).
+    step("patchWebRtc", () => patchWebRtc(targetWindow, config.rtc));
     step("patchFunctionConstructor", () => patchFunctionConstructor(targetWindow));
     step("patchDynamicIframeAppend", () => patchDynamicIframeAppend(targetWindow, config, () => getCurrentBaseUrl().href, rewriteOne));
     step("patchHistory", () => patchHistory(targetWindow, rewriteOne, setBaseUrl, unwrapOne, getCurrentBaseUrl));

@@ -649,3 +649,11 @@ elementCookies cors credentialed sameOrigin = not cors ∨ credentialed ∨ same
 markedCookies : Bool → Bool → Bool → Bool → Bool
 markedCookies true  _    _            _          = false
 markedCookies false cors credentialed sameOrigin = elementCookies cors credentialed sameOrigin
+
+-- A WebSocket handshake is a request as any other for the jar (TS: none;
+-- Go: proxy.WebSocketCookies, Handler.WebSocketSetCookies): the script's
+-- writes it carries are applied before its cookies are chosen, and its
+-- 101's Set-Cookie are stored, the page told as for any response (round K:
+-- a cookie written just before the socket was missing from the handshake;
+-- an upgrade's cookies were dropped). Checked in Chromium:
+-- websocket-cookies-vs-chromium.

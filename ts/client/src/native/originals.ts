@@ -111,6 +111,40 @@ export function recordAttr(el: Element, name: string, now: string | null, was: s
     if (!m) attrStore.set(el, (m = new SafeMap()));
     m.set(key, { now, was });
     recorded.any = true;
+    noteAttr(el, key, now, was);
+}
+
+/**
+ * Notes that `el` holds (or is about to hold) `now` for `name` where the
+ * page wrote `was` — for what reads past values (a MutationRecord's
+ * oldValue, an attributeChangedCallback's, which the browser calls during
+ * the native set): a few past pairs are kept.
+ */
+export function noteAttr(el: Element, name: string, now: string | null, was: string | null): void {
+    const key = lower(name);
+    if (now !== null && now !== was) {
+        let h = attrHistory.get(el);
+        if (!h) attrHistory.set(el, (h = new SafeMap()));
+        let pairs = h.get(key);
+        if (!pairs) h.set(key, (pairs = new SafeMap()));
+        pairs.delete(now);
+        pairs.set(now, was);
+        if (pairs.size > HISTORY) { for (const k of pairs.keys()) { pairs.delete(k); break; } }
+    }
+}
+
+const HISTORY = 8;
+const attrHistory = new SafeWeakMap<object, SafeMap<string, SafeMap<string, string | null>>>();
+/** What the page wrote where `el`'s `name` held `held` (now or before), or undefined when not known. */
+export function writtenFormOf(el: unknown, name: string, held: string): string | null | undefined {
+    if (typeof el !== "object" || el === null) return undefined;
+    // A parsed element's originals not taken yet (the parser upgrades a
+    // custom element before the microtask that takes them).
+    if (nat && (el as Node).nodeType === 1) {
+        try { if (ncall(nat.getAttribute, el as Element, ORIGINALS_ATTR) !== null) consume(el); } catch { /* as it is */ }
+    }
+    const pairs = attrHistory.get(el)?.get(lower(name));
+    return pairs && pairs.has(held) ? pairs.get(held)! : undefined;
 }
 
 export function forgetAttr(el: Element, name: string): void {

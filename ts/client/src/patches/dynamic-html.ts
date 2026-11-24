@@ -58,7 +58,7 @@ import { isReferrerPolicy } from "../url/containment";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 import { injectFramesIn } from "./dynamic-iframe";
 import { rewriteImportMapText } from "../url/import-map";
-import { consume, heldAttr, originalAttr, recordAttr, recordText, recordTextNode, textAsWritten } from "../native/originals";
+import { consume, heldAttr, originalAttr, recordAttr, noteAttr, recordText, recordTextNode, textAsWritten } from "../native/originals";
 import { trustedLike, trustedPolicyName } from "../native/trusted";
 
 /**
@@ -195,6 +195,7 @@ export function patchDynamicHtml(
         const given = typeof args[2] === "string" ? args[2] : String(args[2]);
         const v = attributeValue(self as Element, name, given, rewriteOne, proxyOrigin);
         if (v === null || v === given) return nR.apply(native, self, args) as void;
+        noteAttr(self as Element, qname, v, given);
         nR.apply(native, self, [args[0], qname, v]);
         recordAttr(self as Element, qname, v, given);
         return;
@@ -216,6 +217,7 @@ export function patchDynamicHtml(
             return;
         }
         const kind = sinkKind(self as Element, args[0]);
+        noteAttr(self as Element, args[0], v, given); // (an attributeChangedCallback runs in the set)
         nR.apply(native, self, [args[0], kind ? trustedLike(targetWindow, kind, args[1], v) : v]);
         recordAttr(self as Element, args[0], v, given);
         // Its referrer policy changed: its URLs carry the new one.

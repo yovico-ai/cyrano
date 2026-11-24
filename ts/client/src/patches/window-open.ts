@@ -12,6 +12,8 @@
 // went to their origins; its document.cookie was the browser's raw jar).
 
 import { nR } from "../native/intrinsics";
+import { blobNavigationFor } from "./blob-document";
+import type { RewriteOne } from "./referrer-policy";
 import { crossOriginView } from "../native/cross-origin";
 import { wrapMethod } from "../native/surface";
 import { decodeSource, mapSources } from "../url/features";
@@ -41,7 +43,9 @@ export function patchWindowOpen(targetWindow: Window, rewriteOne: (url: string) 
             return crossOriginView(w, null, targetWindow);
         }
         const given = String(args[0]);
-        const w = nR.apply(native, self, [rewriteOne(given), ...args.slice(1)]) as Window | null;
+        // A blob: HTML document the page built opens as its rewritten copy.
+        const blobDoc = config ? blobNavigationFor(targetWindow, given, rewriteOne as RewriteOne, new URL(config.apiBaseURL).origin) : null;
+        const w = nR.apply(native, self, [blobDoc ?? rewriteOne(given), ...args.slice(1)]) as Window | null;
         if (/^\s*about:/i.test(given)) giveRuntime(w, targetWindow, config, base);
         // On its way to that URL's origin: it is that origin's already (the
         // popup is still on about:blank when open returns; judged so, it was

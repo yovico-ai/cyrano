@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/yovico/cyrano/internal/turn"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/charset"
 	"golang.org/x/text/encoding"
@@ -22,6 +23,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
@@ -951,7 +953,32 @@ func pageConfig(base map[string]any, resp *http.Response) map[string]any {
 // A document so given is revalidated, never reused from the HTTP cache:
 // what it came with would be stale (the origin's Cache-Control stays
 // readable, Crn-H).
+// Relay is cyrano's WebRTC relay (internal/turn), when it runs: every
+// document is given credentials of its own for it (spec/WebRtc.agda).
+var Relay *turn.Server
+
+// relayTTL: how long a document's relay credentials last.
+const relayTTL = 12 * time.Hour
+
+// relayConfig puts the relay's servers and a document's credentials in its
+// runtime's config ("rtc").
+func relayConfig(cp map[string]any) {
+	if Relay == nil {
+		return
+	}
+	urls, user, cred, err := Relay.Credentials(relayTTL)
+	if err != nil {
+		return
+	}
+	cp["rtc"] = map[string]any{"urls": urls, "username": user, "credential": cred}
+}
+
 func documentCookies(cp map[string]any, external bool, jar *proxy.SessionJar, resp *http.Response, target *url.URL) {
+	// The relay's credentials, as the cookies: never in a URL (an external
+	// bootstrap's boot handler adds them).
+	if !external {
+		relayConfig(cp)
+	}
 	if jar == nil || resp.Request == nil {
 		return
 	}
@@ -1018,8 +1045,11 @@ func bootHandler(jar *proxy.SessionJar, sessName string) http.Handler {
 			http.Error(w, "bad config", http.StatusBadRequest)
 			return
 		}
-		// The document's cookies, from the session's jar (never in the URL).
+		// The document's cookies, from the session's jar (never in the URL),
+		// and its relay credentials.
 		delete(parsed, "ck")
+		delete(parsed, "rtc")
+		relayConfig(parsed)
 		cx := urlrewrite.CookieCtx{}
 		if m, ok := parsed["cx"].(map[string]any); ok {
 			cx.Top, _ = m["t"].(string)
