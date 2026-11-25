@@ -79,6 +79,18 @@ type Options struct {
 
 type destContextKey struct{}
 
+type markContextKey struct{}
+
+// RequestMark is the mark of the response's request's proxified URL (its
+// policy, what it is for): a document's own form of its URLs.
+func RequestMark(resp *http.Response) urlrewrite.Mark {
+	if resp == nil || resp.Request == nil {
+		return urlrewrite.Mark{}
+	}
+	m, _ := resp.Request.Context().Value(markContextKey{}).(urlrewrite.Mark)
+	return m
+}
+
 // RequestDest is what the response's request was marked for in its
 // proxified URL (spec/Containment.agda Dest), or "".
 func RequestDest(resp *http.Response) urlrewrite.Dest {
@@ -313,6 +325,7 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		// the body rewriter rewrites the response as that (RequestDest).
 		if requestMark.Dest != "" {
 			*req = *req.WithContext(context.WithValue(req.Context(), destContextKey{}, requestMark.Dest))
+			*req = *req.WithContext(context.WithValue(req.Context(), markContextKey{}, requestMark))
 			if requestMark.Integrity != "" {
 				*req = *req.WithContext(context.WithValue(req.Context(), integrityKey{}, requestMark.Integrity))
 			}

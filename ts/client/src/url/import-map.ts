@@ -196,3 +196,67 @@ export function rewriteImportMapText(text: string, rewriteOne: (url: string) => 
     }
     return out;
 }
+
+/**
+ * rewriteImportMapText with each scope written again after itself, its
+ * prefix as `twin` gives it (spec rewriteImportMapT): a scope covering the
+ * document applies to its inline modules, whose referrer is the document's
+ * URL in its own proxified form. `twin` gives the marked form (or "") for none.
+ */
+export function rewriteImportMapTwin(text: string, rewriteOne: (url: string) => string, twin: (url: string) => string): string {
+    const toks = tokenize(text);
+    if (!toks) return text;
+    const rs = roles(toks);
+    if (!rs) return text;
+    const isP = (t: Tok, c: string): boolean => t.kind === "punct" && t.text === c;
+    const one = (i: number): string => {
+        const t = toks[i]!;
+        switch (rs[i]) {
+            case "specifier": {
+                if (!isUrlLikeSpecifier(t.value)) return t.text;
+                const u = rewriteOne(t.value);
+                return u === t.value ? t.text : stringify(u);
+            }
+            case "prefix": {
+                const u = rewriteOne(t.value);
+                return u === t.value ? t.text : stringify(u);
+            }
+            case "emptyObj": return "{}";
+            case "drop": return "";
+            default: return t.text;
+        }
+    };
+    const span = (i: number): number => {
+        let j = i + 1, d = 0, started = false;
+        for (; j < toks.length; j++) {
+            const t = toks[j]!;
+            if (!started) {
+                if (isP(t, ":") || t.kind === "ws") continue;
+                if (isP(t, "{") || isP(t, "[")) { started = true; d = 1; continue; }
+                return j + 1;
+            }
+            if (isP(t, "{") || isP(t, "[")) d++;
+            else if (isP(t, "}") || isP(t, "]")) d--;
+            if (d === 0) return j + 1;
+        }
+        return j;
+    };
+    let out = "";
+    for (let i = 0; i < toks.length; i++) {
+        if (rs[i] !== "prefix") { out += one(i); continue; }
+        const k = twin(toks[i]!.value);
+        if (k === "" || k === rewriteOne(toks[i]!.value)) { out += one(i); continue; }
+        const end = span(i);
+        out += one(i);
+        let v = "", started = false;
+        for (let j = i + 1; j < end; j++) {
+            out += one(j);
+            if (!started && (isP(toks[j]!, ":") || toks[j]!.kind === "ws")) continue;
+            started = true;
+            v += one(j);
+        }
+        out += ", " + stringify(k) + ": " + v;
+        i = end - 1;
+    }
+    return out;
+}

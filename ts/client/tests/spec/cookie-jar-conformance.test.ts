@@ -8,7 +8,7 @@
 import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { absorb, ack, chanName, chanValue, memCookies, packSlot, snapshot, unchan, unpackSlot, write, type Change, type Known } from "../../src/cookies/jar";
+import { absorb, ack, memEvict, chanName, chanValue, memCookies, packSlot, snapshot, unchan, unpackSlot, write, type Change, type Known } from "../../src/cookies/jar";
 import { parseSetCookie, scope, storeCookie } from "../../src/cookies/rfc";
 import { OracleClient, locateOracle, oracleRequired } from "./oracle-client";
 
@@ -117,5 +117,27 @@ describe.skipIf(located.skip !== "")("the cookie jar's runtime half: the spec", 
                 k.change.gone ? "" : k.change.cookie.value].join(US));
             expect([...reads, ...known].join("\n"), lines.join("\n").replace(/\u001f/g, " | ")).toBe(want);
         }), { numRuns: 600 });
+    });
+
+    // Chromium's site limit in memory, at once (spec memEvict; the site: the cookie's domain here).
+    it("a site's limit in memory as the spec", async () => {
+        await fc.assert(fc.asyncProperty(fc.array(fc.tuple(fc.constantFrom("", "; Secure", "; Priority=Low", "; Priority=High", "; Secure; Priority=High"), fc.nat(3)), { minLength: 181, maxLength: 230 }),
+            async (attrs) => {
+                const lines: string[] = [];
+                const mem: Known[] = [];
+                const now = 1795000000000;
+                attrs.forEach(([a, vv], i) => {
+                    const ch = change("https://a.example/", `k${i % 205}=${vv}${a}`, "1795000900000");
+                    if (!ch) return;
+                    lines.push(["writel", chanName(false, ch), chanValue(ch, i, null), String(now)].join(US));
+                    write(mem, ch, i);
+                    memEvict(mem, (c) => c.domain, now, ch.cookie.domain);
+                });
+                const want = await oracle.ask("mem", [lines.join("\n")]);
+                const known = mem.map((k) => ["K", scope(k.change.cookie), (k.change.cookie.secure ? "s" : "i") + k.change.cookie.sameSite + k.change.cookie.priority,
+                    k.change.gone ? "x" : k.change.expiry.session ? "" : String(k.change.expiry.until), String(k.gen), k.pending === null ? "-" : String(k.pending),
+                    k.change.gone ? "" : k.change.cookie.value].join(US));
+                expect(known.join("\n")).toBe(want);
+            }), { numRuns: 30 });
     });
 });

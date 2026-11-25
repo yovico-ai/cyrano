@@ -163,7 +163,7 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 		case html.TextToken:
 			switch {
 			case inImportMap:
-				emitRaw(urlrewrite.RewriteImportMap(append([]byte(nil), z.Text()...), cfg.BaseURL, cfg.Proxy))
+				emitRaw(rewriteImportMapFor(append([]byte(nil), z.Text()...), cfg))
 			case foreignText && (inScript && cfg.RewriteInlineJS != nil || inStyle && cfg.RewriteInlineCSS != nil):
 				// An SVG <script> / <style>: its text is ordinary markup
 				// text, character references decoded — the script is the
@@ -764,4 +764,17 @@ func rewriteDataDocument(raw string, cfg *Config, inert bool) string {
 		}
 		return doc.String()
 	})
+}
+
+// rewriteImportMapFor: an import map of the document, its scope prefixes
+// also in the document's own form (spec ImportMap.rewriteImportMapT), so a
+// scope covering the document applies to its inline modules.
+func rewriteImportMapFor(src []byte, cfg Config) []byte {
+	rw := func(u string) string { return urlrewrite.RewriteDest(u, cfg.BaseURL, cfg.Proxy, urlrewrite.DestScript) }
+	doc := urlrewrite.Mark{Policy: cfg.DocMark.Policy}
+	if cfg.DocMark.Dest == urlrewrite.DestFrame || cfg.DocMark.Dest == urlrewrite.DestInert {
+		doc.Dest = cfg.DocMark.Dest
+	}
+	twin := func(u string) string { return urlrewrite.RewriteMarked(u, cfg.BaseURL, cfg.Proxy, doc) }
+	return []byte(urlrewrite.RewriteImportMapTwin(string(src), rw, twin))
 }

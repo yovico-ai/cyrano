@@ -17,6 +17,10 @@ import (
 
 // Config holds everything the rewriter needs for one document.
 type Config struct {
+	// DocMark is the mark of the document's own proxified URL (its policy,
+	// !frame / !inert): its import map's scopes are written in that form too.
+	DocMark urlrewrite.Mark
+
 	// BaseURL is the page's *original* URL — relative URLs in the body
 	// resolve against this, not against the proxy URL. Set by the proxy
 	// handler from the decoded ?goto= param.

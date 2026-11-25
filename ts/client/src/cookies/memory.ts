@@ -13,9 +13,10 @@
 // Cookies of the old wire form (__crn!…) still in the browser's jar are
 // read where memory holds nothing of their identity.
 
+import { getDomain } from "tldts";
 import { SafeWeakMap, ncall, sEnds, sStarts } from "../native/intrinsics";
 import { sharedData } from "../native/shared";
-import { ACK, absorb, ack, chanName, chanValue, live, packSlot, sameId, snapshot, unchan, write, INBOX, OUTBOX, type Change, type Known } from "./jar";
+import { ACK, absorb, ack, chanName, chanValue, live, memEvict, packSlot, sameId, snapshot, unchan, write, INBOX, OUTBOX, type Change, type Known } from "./jar";
 import { jarCookies, wireName, type CookieCtx, type StoredCookie } from "./rfc";
 
 interface Memory {
@@ -62,6 +63,13 @@ function memory(win: Window): Memory {
 }
 
 const now = (): number => Date.now();
+
+/** A cookie's site for its limit: the registrable domain, private registries too (Chromium's effective domain; Go cookieSite). */
+function cookieSite(c: { domain: string }): string {
+    const d = c.domain.toLowerCase().replace(/\.$/, "");
+    if (/^[0-9.]+$/.test(d) || d.indexOf(":") >= 0 || d.indexOf("[") >= 0) return d;
+    return getDomain(d, { allowPrivateDomains: true }) ?? d;
+}
 
 /** Pairs of the browser's jar, as document.cookie lists it. */
 function pairs(jar: string): [string, string][] {
@@ -182,6 +190,8 @@ export function writeCookie(win: Window, access: CookieAccess, ch: Change, legac
     const m = memory(win);
     const id = Date.now() * 1000 + (m.seq++ % 1000);
     write(m.known, ch, id);
+    // Chromium's site limit, at once (spec CookieJar memEvict; the server's jar applies it to what it holds).
+    if (!ch.gone) { try { memEvict(m.known, cookieSite, now(), cookieSite(ch.cookie)); } catch { /* as it is */ } }
     notify(m, ch); // every write is a change event, even of the same value (Chromium)
     const name = chanName(false, ch), value = chanValue(ch, id, null);
     m.pending = m.pending.filter((p) => p[0] !== name);

@@ -193,6 +193,11 @@ export function frameDest(sandbox: string | null): Dest {
     return allows() ? "frame" : "inert";
 }
 
+/** A proxified URL's referrer policy and destination marks (spec targetMark), or null when it is none. */
+export function targetMarkOf(href: string): { policy: string | null; dest: Dest | null } | null {
+    try { const t = cyranoTarget(new URL(href).pathname); return t ? { policy: t.policy, dest: t.dest } : null; } catch { return null; }
+}
+
 /** What a proxified URL's request was marked for (spec targetDest), or null. */
 export function targetDest(href: string): Dest | null {
     try { return cyranoTarget(new URL(href).pathname)?.dest ?? null; } catch { return null; }

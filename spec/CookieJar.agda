@@ -691,6 +691,32 @@ absorb ch g a (k ∷ ks) =
   takes (just p) = p ≤ᵇ a
   takes nothing  = kGen k <ᵇ g
 
+-- A script's write, as Chromium's jar takes it at once: past 180 live
+-- cookies of the written cookie's site, the site's purge (purgeSite: the
+-- priority-aware LRU with secure protection) over memory, least recent
+-- first in memory's order — what memory knows of access. (Chromium kept
+-- 169 of 200 writes, the first 31 gone, until a reload proxied: round H.)
+-- Memory holds the script-visible cookies only, so a site's HttpOnly ones
+-- are not counted until the server's inbox says what it evicted; the
+-- total limit is the server's alone. `siteOf` gives a cookie's
+-- registrable domain (the public-suffix list is outside the model).
+memEvict : (Stored → Str) → ℕ → Str → Mem → Mem
+memEvict siteOf now site m =
+  if domainMax <ᵇ length siteEntries then dropOut (proj₂ (purgeSite (length siteEntries ∸ domainKeep) siteEntries)) m else m
+  where
+  liveOfSite : ℕ → Mem → List Entry
+  liveOfSite i [] = []
+  liveOfSite i (mkKnown (put′ c e) _ _ ∷ ks) =
+    if alive now e ∧ eqStr (siteOf c) site then mkEntry c e site i i i ∷ liveOfSite (suc i) ks else liveOfSite (suc i) ks
+  liveOfSite i (_ ∷ ks) = liveOfSite (suc i) ks
+  siteEntries : List Entry
+  siteEntries = liveOfSite 0 m
+  isOut : List Entry → Known → Bool
+  isOut [] k = false
+  isOut (x ∷ xs) k = sameId (eCookie x) (changed (kChange k)) ∨ isOut xs k
+  dropOut : List Entry → Mem → Mem
+  dropOut out m′ = filterᵇ (λ k → not (isOut out k)) m′
+
 -- A script's own write, numbered p.
 write : Change → ℕ → Mem → Mem
 write ch p []       = mkKnown ch 0 (just p) ∷ []

@@ -187,3 +187,45 @@ export function ack(mem: Known[], a: number, g: number): void {
         if (k.pending !== null && k.pending <= a) mem[i] = { ...k, pending: null, gen: Math.max(k.gen, g) };
     }
 }
+
+// ── A site's limit in memory (spec CookieJar memEvict, purgeSite) ───────
+const DOMAIN_MAX = 180, DOMAIN_KEEP = 150;
+const QUOTA: Record<Priority, number> = { L: 30, M: 50, H: 70 };
+const ROUNDS: Array<[Priority, boolean]> = [["L", true], ["L", false], ["M", true], ["H", true], ["M", false], ["H", false]];
+
+/** spec purgeRound over `es` (least recent first): the kept, the removed. */
+function purgeRound(prio: Priority, protect: boolean, goal: number, es: StoredCookie[]): [StoredCookie[], StoredCookie[]] {
+    const ofPrio = (c: StoredCookie): boolean => c.priority === prio;
+    const total = es.filter(ofPrio).length;
+    if (total <= QUOTA[prio]) return [es, []];
+    const secureN = es.filter((c) => ofPrio(c) && c.secure).length;
+    let possible = protect ? total - Math.max(secureN, QUOTA[prio]) : total - QUOTA[prio];
+    let g = goal;
+    const keep: StoredCookie[] = [], out: StoredCookie[] = [];
+    for (const c of es) {
+        if (possible > 0 && g > 0 && ofPrio(c) && (!protect || !c.secure)) { out.push(c); possible--; g--; } else keep.push(c);
+    }
+    return [keep, out];
+}
+
+/** spec purgeSite: what the site's purge removes, `goal` at most. */
+function purgeSite(goal: number, es: StoredCookie[]): StoredCookie[] {
+    let rest = es, g = goal;
+    const out: StoredCookie[] = [];
+    for (const [p, s] of ROUNDS) {
+        if (g <= 0) break;
+        const [keep, o] = purgeRound(p, s, g, rest);
+        out.push(...o); g -= o.length; rest = keep;
+    }
+    return out;
+}
+
+/** spec memEvict: after a write of a cookie of `site` at `now`, the site's limit applied to memory. */
+export function memEvict(mem: Known[], siteOf: (c: StoredCookie) => string, now: number, site: string): StoredCookie[] {
+    const es: StoredCookie[] = [];
+    for (const k of mem) if (!k.change.gone && alive(now, k.change.expiry) && siteOf(k.change.cookie) === site) es.push(k.change.cookie);
+    if (es.length <= DOMAIN_MAX) return [];
+    const out = purgeSite(es.length - DOMAIN_KEEP, es);
+    for (let i = mem.length - 1; i >= 0; i--) if (out.some((c) => sameId(c, mem[i]!.change.cookie))) mem.splice(i, 1);
+    return out;
+}

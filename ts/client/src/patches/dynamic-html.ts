@@ -54,10 +54,10 @@ import { isRefreshEquiv, rewriteRefresh } from "../url/refresh";
 import { rewriteAllow } from "../url/allow";
 import { crossoriginValue } from "../url/crossorigin";
 import { scriptKindOf } from "./script-kind";
-import { isReferrerPolicy } from "../url/containment";
+import { isReferrerPolicy, targetMarkOf } from "../url/containment";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 import { injectFramesIn } from "./dynamic-iframe";
-import { rewriteImportMapText } from "../url/import-map";
+import { rewriteImportMapText, rewriteImportMapTwin } from "../url/import-map";
 import { consume, heldAttr, originalAttr, recordAttr, noteAttr, recordText, recordTextNode, textAsWritten } from "../native/originals";
 import { trustedLike, trustedPolicyName } from "../native/trusted";
 
@@ -404,7 +404,7 @@ export function rawText(el: Element, text: string, rewriteOne: (url: string) => 
     if (tag === "STYLE") return rewriteCssText(text, rewriteOne);
     if (tag !== "SCRIPT") return null;
     const kind = scriptKindOf(el);
-    if (kind === "importmap") return rewriteImportMap(text, asScript(rewriteOne));
+    if (kind === "importmap") return rewriteImportMap(text, rewriteOne, docHrefOf(el));
     if (kind !== "classic" && kind !== "module") return text;
     // As the server's: static import/export specifiers and literal import()
     // are proxified against the script's base URL, which import.meta.url
@@ -427,8 +427,20 @@ export function rawText(el: Element, text: string, rewriteOne: (url: string) => 
  * proxified, bare specifiers as written, and "integrity" dropped (its
  * hashes are of the original modules). Mirrors Go urlrewrite.RewriteImportMap.
  */
-export function rewriteImportMap(text: string, rewriteOne: (url: string) => string): string {
-    return rewriteImportMapText(text, rewriteOne);
+export function rewriteImportMap(text: string, rewriteOne: (url: string) => string, docHref?: string): string {
+    // its scope prefixes in the document's own form too (spec ImportMap.rewriteImportMapT)
+    const withMark = (rewriteOne as RewriteOne).withMark;
+    const scriptRw = asScript(rewriteOne);
+    if (!withMark || !docHref) return rewriteImportMapText(text, scriptRw);
+    const m = targetMarkOf(docHref);
+    if (!m) return rewriteImportMapText(text, scriptRw);
+    const d = m.dest === "frame" || m.dest === "inert" ? m.dest : null;
+    return rewriteImportMapTwin(text, scriptRw, (u) => withMark(u, m.policy, d));
+}
+
+/** A document's own proxified URL (the native location, which runtime code reads). */
+export function docHrefOf(el: Element): string | undefined {
+    try { return el.ownerDocument?.defaultView?.location.href; } catch { return undefined; }
 }
 
 /**

@@ -314,6 +314,30 @@ func TestSpecConformance_ImportMap(t *testing.T) {
 		if got := string(RewriteImportMap([]byte(text), baseURL, proxyConfig(rt, proxy))); got != want {
 			rt.Fatalf("RewriteImportMap(%q) on %s = %q, spec says %q", text, base, got, want)
 		}
+		// scope prefixes twice, in the document's form too (spec rewriteImportMapT)
+		if rapid.Bool().Draw(rt, "scoped") {
+			text = `{"scopes":{` + rapid.SampledFrom([]string{`"/"`, `"/s/"`, `"https://cdn.example/"`, `"./"`}).Draw(rt, "sk") + rapid.SampledFrom([]string{":", " : "}).Draw(rt, "c") +
+				rapid.SampledFrom([]string{`{"a":"/a.js"}`, `{ "a" : "./a.js" , "b":"bare"}`, `"x"`, `[1]`, `{}`}).Draw(rt, "sv") + rapid.SampledFrom([]string{"", ` ,"/t/":{}`}).Draw(rt, "more") + `}}`
+		}
+		pol := rapid.SampledFrom([]string{"-", "-", "origin", "no-referrer"}).Draw(rt, "dpol")
+		dd := rapid.SampledFrom([]string{"-", "-", "frame", "inert"}).Draw(rt, "ddest")
+		want2, _, err := oracle.Ask("importmap", proxy, base, pol, dd, text)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		doc := Mark{}
+		if pol != "-" {
+			doc.Policy = Policy(pol)
+		}
+		if dd != "-" {
+			doc.Dest = Dest(dd)
+		}
+		cfg := proxyConfig(rt, proxy)
+		got2 := RewriteImportMapTwin(text, func(u string) string { return RewriteDest(u, baseURL, cfg, DestScript) },
+			func(u string) string { return RewriteMarked(u, baseURL, cfg, doc) })
+		if got2 != want2 {
+			rt.Fatalf("RewriteImportMapTwin(%q, %+v) on %s = %q, spec says %q", text, doc, base, got2, want2)
+		}
 		s := rapid.SampledFrom([]string{"react", "/x", "./x", "../x", "https://a/", "foo:bar", "http:", "x/y", " https://a/", "a:", "1a:b", "data:,x"}).Draw(rt, "spec")
 		ul, _, _ := oracle.Ask("urllike", s)
 		if got := IsURLLikeSpecifier(s); got != (ul == "yes") {

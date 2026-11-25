@@ -426,3 +426,76 @@ rewriteImportMap rw s with tokenize s
   emit (t ∷ ts′) (drop ∷ rs′)        = emit ts′ rs′
   emit (t ∷ ts′) []                  = text t ++ emit ts′ []
   emit [] _ = []
+
+------------------------------------------------------------------------
+-- A scope prefix twice (rewriteImportMapT). The prefix is proxified as a
+-- module URL, marked !js, and covers the modules under it; a document's
+-- own inline modules have the document's URL as their referrer, whose
+-- proxified form carries the document's mark (none, a policy, !frame),
+-- not !js — so `"scopes": {"/": …}` never applied to them (round I). Each
+-- scope is written again after itself, its prefix in the document's form
+-- (`twin`: nothing when that is the same text), its value as rewritten.
+
+-- The tokens of the value after a key (up to the end of its object or
+-- array, or the one string or literal), and the tokens after it; with
+-- their roles. `colon`: the ':' and spaces before it are taken first.
+spanValue : ℕ → List Tok → List Role → (List Tok × List Role) × (List Tok × List Role)
+spanValue fuel ts rs = go fuel 0 false ts rs
+  where
+  depthOf : Tok → ℕ → ℕ
+  depthOf t d = if isP '{' t ∨ isP '[' t then suc d else if isP '}' t ∨ isP ']' t then d ∸ 1 else d
+  opens : Tok → Bool
+  opens t = isP '{' t ∨ isP '[' t
+  -- started: the value's first token has been taken
+  go : ℕ → ℕ → Bool → List Tok → List Role → (List Tok × List Role) × (List Tok × List Role)
+  go zero _ _ ts′ rs′ = ([] , []) , (ts′ , rs′)
+  go (suc n) d started (t ∷ ts′) (r ∷ rs′) =
+    if not started ∧ (isP ':' t ∨ isWS t) then cons t r (go n d false ts′ rs′)
+    else if not started then
+      (if opens t then cons t r (go n 1 true ts′ rs′) else (t ∷ [] , r ∷ []) , (ts′ , rs′))
+    else (if depthOf t d ≡ᵇ 0 then (t ∷ [] , r ∷ []) , (ts′ , rs′) else cons t r (go n (depthOf t d) true ts′ rs′))
+    where
+    open Data.Nat.Base using (_≡ᵇ_)
+    import Data.Nat.Base
+    cons : Tok → Role → (List Tok × List Role) × (List Tok × List Role) → (List Tok × List Role) × (List Tok × List Role)
+    cons x y ((a , b) , rest) = ((x ∷ a) , (y ∷ b)) , rest
+  go (suc n) _ _ ts′ rs′ = ([] , []) , (ts′ , rs′)
+
+rewriteImportMapT : (Str → Maybe Str) → (Str → Maybe Str) → Str → Str
+rewriteImportMapT rw twin s with tokenize s
+... | nothing = s
+... | just ts with roles ts
+...   | nothing = s
+...   | just rs = emit (length ts) ts rs
+  where
+  replaced : (Str → Maybe Str) → Tok → Str
+  replaced f t with f (Tok.value t)
+  ... | just u  = stringify u
+  ... | nothing = text t
+
+  one : Tok → Role → Str
+  one t keep        = text t
+  one t asSpecifier = if urlLike (Tok.value t) then replaced rw t else text t
+  one t asPrefix    = replaced rw t
+  one t emptyObj    = toList "{}"
+  one t drop        = []
+
+  plain : List Tok → List Role → Str
+  plain (t ∷ ts′) (r ∷ rs′) = one t r ++ plain ts′ rs′
+  plain (t ∷ ts′) []        = text t ++ plain ts′ []
+  plain [] _ = []
+
+  -- The value's text from its tokens (the ':' and spaces before it dropped).
+  valueText : List Tok → List Role → Str
+  valueText (t ∷ ts′) (r ∷ rs′) = if isP ':' t ∨ isWS t then valueText ts′ rs′ else plain (t ∷ ts′) (r ∷ rs′)
+  valueText _ _ = []
+
+  emit : ℕ → List Tok → List Role → Str
+  emit zero ts′ rs′ = plain ts′ rs′
+  emit (suc n) (t ∷ ts′) (asPrefix ∷ rs′) with twin (Tok.value t) | spanValue (length ts′) ts′ rs′
+  ... | nothing | _ = replaced rw t ++ emit n ts′ rs′
+  ... | just k  | ((vt , vr) , (rt , rr)) =
+    replaced rw t ++ plain vt vr ++ toList ", " ++ stringify k ++ toList ": " ++ valueText vt vr ++ emit n rt rr
+  emit (suc n) (t ∷ ts′) (r ∷ rs′) = one t r ++ emit n ts′ rs′
+  emit (suc n) (t ∷ ts′) [] = text t ++ emit n ts′ []
+  emit (suc n) [] _ = []

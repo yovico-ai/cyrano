@@ -274,7 +274,9 @@ and origin are the opener's (`popup-blank-vs-chromium`;
   `cookie-jar-vs-chromium`): every cookie of a session, script-visible
   ones too, is in the server's jar under Chromium's limits per registrable
   domain (180 purged to 150 by priority-aware LRU with secure protection,
-  3300 in all — `cookie-evict-vs-chromium`), kept on disk
+  3300 in all — `cookie-evict-vs-chromium`; a script's writes evicted in
+  the page's memory at once, by the same purge in memory's order: spec
+  memEvict, `cookie-limit-vs-chromium`; its HttpOnly ones not counted there), kept on disk
   (`CYRANO_COOKIE_DIR`, default the user cache dir). The browser's jar
   carries the session cookie (persistent: 400 days), a browser-session
   marker (a session cookie; a request without it ends the jar's session
@@ -504,7 +506,11 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   document.cookie (spec/Cookies.agda cookieStoreSet; `patches/cookie-store.ts`:
   Google's ad tag stores __gads/__gpi/__eoi with it, every write was refused);
   its refusals are the native's own, and change events still list the
-  wire cookies. `import.meta.resolve` is the runtime's (R15: it resolved against
+  wire cookies. An import map's scopes are written twice, the prefix as a module URL
+  (`!js`) and in the document's own proxified form — a scope covering the
+  document applies to its inline modules (spec/ImportMap.agda
+  rewriteImportMapT; `import-map-scope-vs-chromium`).
+  `import.meta.resolve` is the runtime's (R15: it resolved against
   the proxied module URL; IKEA's Vite preloads). import() in code made at
   run time (new Function, eval) resolves against the script that made it,
   found from the stack when the source names `import` (`js/made-code.ts`;

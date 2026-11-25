@@ -435,3 +435,96 @@ func RewriteImportMapText(text string, rewrite func(string) string) string {
 	}
 	return b.String()
 }
+
+// RewriteImportMapTwin is RewriteImportMapText with each scope written a
+// second time after itself, its prefix as twin gives it (spec
+// rewriteImportMapT): a prefix is proxified as a module URL (marked !js),
+// and a document's own inline modules have the document's URL, of another
+// mark, as their referrer — `"scopes": {"/": …}` never applied to them.
+// twin returns "" (or the marked form) for no second scope.
+func RewriteImportMapTwin(text string, rewrite, twin func(string) string) string {
+	toks, ok := jsonTokens(text)
+	if !ok {
+		return text
+	}
+	rs, ok := importMapRoles(toks)
+	if !ok {
+		return text
+	}
+	isP := func(t jsonTok, c string) bool { return t.kind == jPunct && t.text == c }
+	one := func(i int) string {
+		t := toks[i]
+		switch rs[i] {
+		case rSpecifier:
+			if !IsURLLikeSpecifier(t.value) {
+				return t.text
+			}
+			if u := rewrite(t.value); u != t.value {
+				return jsonStringify(u)
+			}
+		case rPrefix:
+			if u := rewrite(t.value); u != t.value {
+				return jsonStringify(u)
+			}
+		case rEmptyObj:
+			return "{}"
+		case rDrop:
+			return ""
+		}
+		return t.text
+	}
+	// spec spanValue: the value after the key at i (with the ':' and
+	// spaces before it): the index after it.
+	span := func(i int) int {
+		j, d, started := i+1, 0, false
+		for ; j < len(toks); j++ {
+			t := toks[j]
+			if !started {
+				if isP(t, ":") || t.kind == jWS {
+					continue
+				}
+				if isP(t, "{") || isP(t, "[") {
+					started, d = true, 1
+					continue
+				}
+				return j + 1
+			}
+			if isP(t, "{") || isP(t, "[") {
+				d++
+			} else if isP(t, "}") || isP(t, "]") {
+				d--
+			}
+			if d == 0 {
+				return j + 1
+			}
+		}
+		return j
+	}
+	var b strings.Builder
+	for i := 0; i < len(toks); i++ {
+		if rs[i] != rPrefix {
+			b.WriteString(one(i))
+			continue
+		}
+		k := twin(toks[i].value)
+		if k == "" || k == rewrite(toks[i].value) {
+			b.WriteString(one(i))
+			continue
+		}
+		end := span(i)
+		b.WriteString(one(i))
+		var v strings.Builder
+		started := false
+		for j := i + 1; j < end; j++ {
+			b.WriteString(one(j))
+			if !started && (isP(toks[j], ":") || toks[j].kind == jWS) {
+				continue
+			}
+			started = true
+			v.WriteString(one(j))
+		}
+		b.WriteString(", " + jsonStringify(k) + ": " + v.String())
+		i = end - 1
+	}
+	return b.String()
+}

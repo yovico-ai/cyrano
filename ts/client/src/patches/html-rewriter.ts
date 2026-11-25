@@ -16,7 +16,7 @@
 import { sriHonored, sriMark } from "../url/sri";
 import { type RewriteOne } from "./referrer-policy";
 import { scriptKind } from "./script-kind";
-import { asScript, rewriteImportMap } from "./dynamic-html";
+import { rewriteImportMap } from "./dynamic-html";
 import { SafeSet, nO, ncall, aIncludes, sStarts } from "../native/intrinsics";
 import { trusted, trustedPolicyName } from "../native/trusted";
 import { rewriteCssText } from "../css/rewriter";
@@ -357,7 +357,11 @@ export function rewriteHtmlString(
                 }
                 out = rewriteJsSource(text, opts);
             }
-            else if (kind === "importmap" && t.ns === "html") out = rewriteImportMap(text, asScript(rw));
+            else if (kind === "importmap" && t.ns === "html") {
+                let href: string | undefined;
+                try { href = (globalThis as unknown as Window).location.href; } catch { href = undefined; }
+                out = rewriteImportMap(text, rw, href);
+            }
             else continue;
         }
         edits[edits.length] = [t.to, next.from, t.ns === "svg" ? escapedText(out) : out];

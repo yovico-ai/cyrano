@@ -1615,6 +1615,11 @@ dispatch op args =
     byWrite : Maybe (CookieJar.Change × ℕ × Maybe ℕ) → MemRun
     byWrite (just (ch , k , nothing)) = record r { mMem = CookieJar.write ch k (MemRun.mMem r) }
     byWrite _ = r
+    -- writel <name> <value> <now ms>: a write, then the site limit (the site: the cookie's domain)
+    byWriteL : Maybe (CookieJar.Change × ℕ × Maybe ℕ) → Maybe ℕ → MemRun
+    byWriteL (just (ch , k , nothing)) (just t) =
+      record r { mMem = CookieJar.memEvict sDomain t (sDomain (CookieJar.changed ch)) (CookieJar.write ch k (MemRun.mMem r)) }
+    byWriteL _ _ = r
     bySnap : Maybe CookieCtx → Maybe Abs → Maybe ℕ → List Str → MemRun
     bySnap x (just u) (just g) rest = record r { mMem = CookieJar.snapshot x u g (memSnapEntries rest) (MemRun.mMem r) }
     bySnap _ _ _ _ = r
@@ -1633,10 +1638,14 @@ dispatch op args =
     readX : Str → Str → List Str → MemRun
     readX t c (n ∷ u ∷ _) = byRead (ctxArg t c) (msNow n) (baseOf u)
     readX _ _ _ = r
+    nowOf : List Str → Maybe ℕ
+    nowOf (t ∷ _) = msNow t
+    nowOf [] = nothing
     byCmd : List Str → MemRun
     byCmd (cmd ∷ a ∷ b ∷ rest) =
       if eqStr cmd (toList "absorb") then byAbsorb (CookieJar.unchan true a b)
       else if eqStr cmd (toList "write") then byWrite (CookieJar.unchan false a b)
+      else if eqStr cmd (toList "writel") then byWriteL (CookieJar.unchan false a b) (nowOf rest)
       else if eqStr cmd (toList "snap") then bySnap nothing (baseOf a) (jarNat b) rest
       else if eqStr cmd (toList "snapx") then snapX a b rest
       else if eqStr cmd (toList "read") then byRead nothing (msNow a) (baseOf b)
@@ -1886,6 +1895,11 @@ dispatch op args =
   ... | nothing  = errorReply "OutOfModel"
   docBaseReq _ = errorReply "BadRequest"
 
+  docDst : Str → Maybe (Maybe Dest)
+  docDst t = if eqStr t (toList "-") then just nothing
+             else if eqStr t (toList "frame") then just (just destFrame)
+             else if eqStr t (toList "inert") then just (just destInert) else nothing
+
   importMapReq : List Str → Str
   importMapReq (p ∷ b ∷ text ∷ []) with proxyOf p | baseOf b
   ... | just px | just base = out (ImportMap.rewriteImportMap rw text)
@@ -1897,7 +1911,21 @@ dispatch op args =
     ... | _        = nothing
   ... | nothing | _ = errorReply "BadProxy"
   ... | just _  | nothing = errorReply "BadBase"
+  -- importmap … <document's policy|-> <document's dest frame|inert|-> <text>: scope prefixes twice (rewriteImportMapT)
+  importMapReq (p ∷ b ∷ pt ∷ dt ∷ text ∷ []) with proxyOf p | baseOf b | markPol pt | docDst dt
+  ... | just px | just base | just x | just d = out (ImportMap.rewriteImportMapT rw twin text)
+    where
+    rw : Str → Maybe Str
+    rw u with rewriteUrlWith px (mark nothing (just destScript)) base u
+    ... | emit _ v = just v
+    ... | _        = nothing
+    twin : Str → Maybe Str
+    twin u with rewriteUrlWith px (mark x d) base u | rw u
+    ... | emit _ v | just w = if eqStr v w then nothing else just v
+    ... | _ | _ = nothing
+  ... | _ | _ | _ | _ = errorReply "BadRequest"
   importMapReq _ = errorReply "BadRequest"
+
 
   jsonObjectReq : List Str → Str
   jsonObjectReq (t ∷ []) = yesNo (isObj (ImportMap.tokenize t))
