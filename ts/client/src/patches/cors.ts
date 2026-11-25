@@ -24,13 +24,21 @@ import { SafeSet, SafeWeakMap, sIncludes } from "../native/intrinsics";
 // credentials mode in `Crn-C` ("include" or "omit"); the proxy consumes
 // both (Go: proxy/fetch_headers.go, proxy/storage_access.go).
 //
-// Not done: preflights (a request that natively needs one is sent without),
-// opaque responses of "no-cors" requests, an XHR failing the CORS check.
+// The proxy sends a CORS preflight where one is needed (the page's header
+// names in Crn-A); a no-cors response of another origin reads as opaque
+// (fetch.ts, responseType). Not done: an XHR failing the CORS check.
 
 export const INITIATOR = "Crn-I";
 export const CREDENTIALS = "Crn-C";
 /** The request's kind, "xhr" for an XHR (its header order: Go proxy KindHeader). */
 export const KIND = "Crn-K";
+/**
+ * The names of the headers the page set on a cross-origin request, ","
+ * joined ("!" too for an XHR with upload listeners): the proxy decides
+ * from them whether it needs a CORS preflight (Go proxy/preflight.go,
+ * spec/Preflight.agda) — the browser's own headers must not count.
+ */
+export const AUTHORS = "Crn-A";
 
 const SAFELISTED = new SafeSet([
     "cache-control", "content-language", "content-length", "content-type", "expires", "last-modified", "pragma",
@@ -38,6 +46,11 @@ const SAFELISTED = new SafeSet([
 
 /** Tells whether a response header (lowercase name) is shown to the script. */
 export type Exposed = (name: string) => boolean;
+
+/** The response type a script sees (spec/Fetch.agda responseType): cors / opaque to another origin by mode, else basic. */
+export function responseType(mode: string, cross: boolean): "basic" | "cors" | "opaque" {
+    return !cross ? "basic" : mode === "cors" ? "cors" : mode === "no-cors" ? "opaque" : "basic";
+}
 
 /** Whether a request with this credentials mode carries credentials (spec/Fetch.agda includesCredentials). */
 export function includesCredentials(mode: string, sameOrigin: boolean): boolean {

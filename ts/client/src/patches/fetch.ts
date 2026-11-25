@@ -16,13 +16,16 @@
 // must pass the CORS check, shows only its exposed headers and has type
 // "cors".
 
-import { SafeWeakMap, nO, nOP, nR, ncall, sStarts } from "../native/intrinsics";
+import { SafeWeakMap, SafeWeakSet, nO, nOP, nR, ncall, sStarts } from "../native/intrinsics";
 import { patchFetchLater } from "./fetch-later";
 import { wrapAccessor, wrapConstructor, wrapMethod } from "../native/surface";
-import { CREDENTIALS, INITIATOR, namesContext, includesCredentials, initiatorValue, corsAllows, exposedBy, isCrossOrigin, type CorsContext, type Exposed } from "./cors";
+import { AUTHORS, CREDENTIALS, INITIATOR, responseType, namesContext, includesCredentials, initiatorValue, corsAllows, exposedBy, isCrossOrigin, type CorsContext, type Exposed } from "./cors";
 import { headerViewsOf } from "./response-headers";
 import { type RewriteOne } from "./referrer-policy";
 import { isReferrerPolicy } from "../url/containment";
+
+/** Responses that are, natively, opaque (no-cors to another origin): every realm's. */
+export const opaqueResponses = new SafeWeakSet<object>();
 
 const isRequest = (x: unknown): x is Request =>
     typeof x === "object" && x !== null && ncall(nOP.toString, x) === "[object Request]";
@@ -120,7 +123,43 @@ export function patchFetch(
     /** Responses that passed the CORS check → what they expose. */
     const corsResponses = new SafeWeakMap<object, Exposed>();
 
+    /**
+     * A no-cors request to another origin: natively its response is opaque
+     * (Fetch "opaque filtered response"; spec/Fetch.agda responseType) —
+     * through the proxy it is same-origin, a basic response whose status,
+     * headers and body the page read. Judged from the arguments as the
+     * request below is; not from an opaque context (the browser does CORS
+     * there itself) nor for a redirect not followed (handled below).
+     */
+    const opaqueWanted = (args: unknown[]): boolean => {
+        try {
+            const input = args[0];
+            if (typeof input === "symbol" || cors === undefined || cors.opaque === true) return false;
+            const viaRequest = isRequest(input);
+            const init = (typeof args[1] === "object" && args[1] !== null ? args[1] : undefined) as RequestInit | undefined;
+            const mode = init?.mode ?? (viaRequest ? (input as Request).mode : "cors");
+            const redirect = init?.redirect ?? (viaRequest ? (input as Request).redirect : "follow");
+            if (redirect !== "follow") return false;
+            const original = viaRequest ? (nativeUrl ? unwrapOne(ncall(nativeUrl, input)) : (input as Request).url) : String(input);
+            const own = cors.origin();
+            const cross = isCrossOrigin(original, baseUrl(), own) && !(cors.proxy && sStarts(original, cors.proxy + "/"));
+            return responseType(String(mode), cross) === "opaque";
+        } catch { return false; }
+    };
+    const markOpaque = (resp: Response): Response => {
+        if (typeof resp === "object" && resp !== null && !(nativeType && ncall(nativeType, resp) === "opaqueredirect")) {
+            opaqueResponses.add(resp);
+            const views = headerViewsOf(targetWindow);
+            if (views && headersOf) views.expose(ncall(headersOf, resp), () => false); // an opaque response shows no header
+        }
+        return resp;
+    };
     const nativeFetch = wrapMethod<typeof fetch>(targetWindow, "fetch", (native, self, args) => {
+        const opaque = opaqueWanted(args);
+        const sent = fetchImpl(native, self, args);
+        return opaque && sent && typeof (sent as { then?: unknown }).then === "function" ? nR.apply(then, sent, [markOpaque]) as Promise<Response> : sent;
+    });
+    function fetchImpl(native: typeof fetch, self: unknown, args: unknown[]): Promise<Response> {
         const [input, ...rest] = args;
         // (a Symbol: the native's own rejection — String() would take it)
         if (typeof input === "symbol") return nR.apply(native, self, args) as Promise<Response>;
@@ -191,6 +230,10 @@ export function patchFetch(
                 sent = plain();
             } else {
                 const mark = (h: Headers): Headers => {
+                    // the page's own header names, before the runtime's (preflights: cors.ts AUTHORS)
+                    const names: string[] = [];
+                    if (nativeHeadersForEach) ncall(nativeHeadersForEach, h, (_v: string, k: string) => { names[names.length] = k; });
+                    h.set(AUTHORS, names.join(","));
                     h.set(INITIATOR, from);
                     h.set(CREDENTIALS, includesCredentials(credentials, !cross) ? "include" : "omit");
                     return h;
@@ -235,7 +278,7 @@ export function patchFetch(
             corsResponses.set(resp, allow);
             return resp;
         }]) as Promise<Response>;
-    });
+    }
 
     // fetchLater: its quota per original origin, and deferred here where
     // the native refuses for the proxy's reasons (fetch-later.ts).
@@ -244,14 +287,31 @@ export function patchFetch(
 
     const R = w.Response?.prototype;
     if (R) {
+        const isOpaque = (self: unknown): boolean => typeof self === "object" && self !== null && opaqueResponses.has(self);
         wrapAccessor<string>(R, "type", {
             get: (get, self) => {
                 const t = ncall(get, self);
+                if (isOpaque(self)) return "opaque";
                 return t === "basic" && typeof self === "object" && self !== null && corsResponses.has(self) ? "cors" : t;
             },
         });
+        // An opaque response, as Chromium's (measured: opaque-response-vs-chromium):
+        // status 0, no status text, not ok, no URL, not redirected, no body
+        // (never used), its readers those of an empty body, each time.
+        const opaqueValue: Record<string, unknown> = { status: 0, statusText: "", ok: false, redirected: false, body: null, bodyUsed: false };
+        for (const key of nO.keys(opaqueValue)) {
+            if (!nO.getOwnPropertyDescriptor(R, key)?.get) continue;
+            wrapAccessor<unknown>(R, key, { get: (get, self) => (isOpaque(self) ? opaqueValue[key] : ncall(get, self)) });
+        }
+        const NativeResponse = w.Response!;
+        for (const key of ["text", "json", "arrayBuffer", "blob", "formData", "bytes"]) {
+            if (typeof (R as unknown as Record<string, unknown>)[key] !== "function") continue;
+            wrapMethod<(...a: unknown[]) => unknown>(R, key, (native, self, args) =>
+                nR.apply(native, isOpaque(self) ? nR.construct(NativeResponse, [null]) : self, args));
+        }
         wrapMethod<(...a: unknown[]) => Response>(R, "clone", (native, self, args) => {
             const copy = nR.apply(native, self, args) as Response;
+            if (isOpaque(self)) markOpaque(copy);
             const allow = typeof self === "object" && self !== null ? corsResponses.get(self) : undefined;
             if (allow && headersOf) {
                 corsResponses.set(copy, allow);
@@ -287,7 +347,7 @@ export function patchFetch(
     }
     for (const Ctor of [w.Request, w.Response]) {
         if (!Ctor?.prototype) continue;
-        wrapAccessor<string>(Ctor.prototype, "url", { get: (get, self) => unwrapOne(ncall(get, self)) });
+        wrapAccessor<string>(Ctor.prototype, "url", { get: (get, self) => (typeof self === "object" && self !== null && opaqueResponses.has(self) ? "" : unwrapOne(ncall(get, self))) });
     }
     // A Request's referrer reads the original (about:client and "" as they are).
     if (NativeRequest?.prototype && nO.getOwnPropertyDescriptor(NativeRequest.prototype, "referrer")) {

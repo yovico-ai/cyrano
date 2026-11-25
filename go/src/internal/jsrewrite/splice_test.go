@@ -24,6 +24,9 @@ func TestSplice_SharedCases(t *testing.T) {
 	for _, c := range cases {
 		rule, src, want := c[0], c[1], c[2]
 		opts := DefaultOptions()
+		if strings.HasPrefix(rule, "worklet") { // a worklet's module
+			opts = WorkletOptions()
+		}
 		opts.JSURL = strings.HasPrefix(rule, "jsUrl") // a javascript: URL's code
 		edits, ok := jsEdits([]byte(src), &opts)
 		if !ok {

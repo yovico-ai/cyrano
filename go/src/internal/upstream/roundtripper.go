@@ -507,10 +507,15 @@ func copyHeaders(out fhttp.Header, req *http.Request) {
 	// synthesize them from the UA when the incoming request didn't carry any.
 	// Only for a potentially trustworthy target: to an http name a direct
 	// browser sends no client hints at all (spec/Metadata.agda).
-	if trustworthy {
+	// (Not on a CORS preflight, which Chrome sends without them: measured.)
+	if noHints, _ := req.Context().Value(NoClientHintsKey{}).(bool); trustworthy && !noHints {
 		ensureClientHints(out, req.Header.Get("User-Agent"))
 	}
 }
+
+// NoClientHintsKey marks a request the proxy makes that Chrome sends with
+// no client hints (a CORS preflight: proxy/preflight.go).
+type NoClientHintsKey struct{}
 
 // countedBody is a request body that counts what was read of it.
 type countedBody struct {

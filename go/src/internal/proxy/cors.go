@@ -23,7 +23,7 @@ import (
 // code exactly what a CORS failure is: fetch rejects with a TypeError, an
 // XHR reports status 0 and an error event.
 //
-// Not done: preflights (a request that natively needs one is sent without).
+// A request that natively needs a preflight gets one first (preflight.go).
 
 type corsKey struct{}
 
@@ -48,6 +48,8 @@ func noteCORS(req *http.Request, target *url.URL) {
 		*req = *req.WithContext(context.WithValue(req.Context(), upstream.XHRKey{}, true))
 	}
 	req.Header.Del(KindHeader)
+	authors, hasAuthors := req.Header[AuthorHeader] // consumed here whatever the request (preflight.go)
+	req.Header.Del(AuthorHeader)
 	if !strings.EqualFold(req.Header.Get("Sec-Fetch-Mode"), "cors") {
 		return
 	}
@@ -56,7 +58,13 @@ func noteCORS(req *http.Request, target *url.URL) {
 		return
 	}
 	cred := strings.EqualFold(req.Header.Get(CredentialsHeader), "include")
-	*req = *req.WithContext(context.WithValue(req.Context(), corsKey{}, corsRequest{origin: origin, credentialed: cred}))
+	c := corsRequest{origin: origin, credentialed: cred}
+	*req = *req.WithContext(context.WithValue(req.Context(), corsKey{}, c))
+	if hasAuthors {
+		notePreflight(req, c, strings.Join(authors, ","))
+	} else {
+		notePreflight(req, c, "")
+	}
 }
 
 // corsFails reports whether the response fails the CORS check of the

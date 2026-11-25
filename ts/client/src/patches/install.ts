@@ -8,6 +8,10 @@
 //
 // A window is patched once: runtime/bootstrap.ts checks before calling.
 
+import { patchOldFileSystem } from "./old-filesystem";
+import { patchCanvasTaint } from "./canvas-taint";
+import { patchSvgHref } from "./svg-href";
+import { patchWorklets } from "./worklet";
 import type { Dest } from "../url/containment";
 import { SafeSet, nO, nOP, nR, ncall, sStarts } from "../native/intrinsics";
 import { initTrusted } from "../native/trusted";
@@ -161,6 +165,7 @@ export function installPatches(
     step("patchWebSocket", () => patchWebSocket(targetWindow, rewriteOne, unwrapOne, () => getCurrentBaseUrl().origin));
     step("patchEventSource", () => patchEventSource(targetWindow, rewriteOne, unwrapOne));
     step("patchWorker", () => patchWorker(targetWindow, rewriteOne, patchBlobWorkerSource(targetWindow, config, getCurrentBaseUrl), config, getCurrentBaseUrl));
+    step("patchWorklets", () => patchWorklets(targetWindow, config, getCurrentBaseUrl));
     step("patchServiceWorker", () => patchServiceWorker(targetWindow, getCurrentBaseUrl));
     // Dynamic-HTML patches must come BEFORE the per-class property-setter
     // patches: dynamic-html captures Element.prototype.setAttribute as the
@@ -173,6 +178,7 @@ export function installPatches(
     step("patchAudioConstructor", () => patchAudioConstructor(targetWindow, rewriteOne));
     step("patchReferrerPolicy", () => patchReferrerPolicy(targetWindow, rewriteOne));
     step("patchFontFaceConstructor", () => patchFontFaceConstructor(targetWindow, rewriteOne));
+    step("patchCanvasTaint", () => patchCanvasTaint(targetWindow, unwrapOne, () => opaqueOrigin ? "null" : getCurrentBaseUrl().origin, getCurrentBaseUrl));
     step("patchCssRules", () => patchCssRules(targetWindow, rewriteOne));
     // What CSSOM reads names the page's URLs (patches/cssom-read.ts).
     const proxyOrigin = new URL(config.apiBaseURL).origin;
@@ -231,6 +237,7 @@ export function installPatches(
     const prefix = storagePrefix(targetWindow, () => getCurrentBaseUrl().origin);
     step("patchWebStorage", () => patchWebStorage(targetWindow, prefix, unwrapOne));
     step("patchStorageNames", () => patchStorageNames(targetWindow, prefix));
+    step("patchOldFileSystem", () => patchOldFileSystem(targetWindow, () => prefix().slice(4, -1), () => getCurrentBaseUrl().origin));
     step("patchCacheUrls", () => patchCacheUrls(targetWindow, rewriteOne));
     step("patchTypedOm", () => patchTypedOm(targetWindow, rewriteOne));
     step("patchWebAnimations", () => patchWebAnimations(targetWindow, rewriteOne));
@@ -254,6 +261,7 @@ export function installPatches(
         const inject = (): void => injectIntoIframe(el as HTMLIFrameElement, targetWindow, config, getCurrentBaseUrl().href);
         ncall(nativeListen, el, "load", inject);
     }));
+    step("patchSvgHref", () => patchSvgHref(targetWindow, unwrapOne)); // after read-back: it uses the runtime's getAttribute
 }
 
 /**
@@ -273,7 +281,7 @@ export function crnbSizes(desc: string): { encoded: number; decoded: number } | 
 export function patchPerformanceEntryNames(
     targetWindow: Window,
     unwrapOne: (url: string) => string,
-    rewriteOne: (url: string) => string,
+    _rewriteOne: (url: string) => string, // (entries are found by their unwrapped names)
     proxyOrigin: string,
     identityRuntimeUrl?: string,
 ): void {
@@ -403,14 +411,30 @@ export function patchPerformanceEntryNames(
             return json;
         });
     }
-    // The page asks for an entry by the URL it knows.
-    const perf = g["Performance"]?.prototype;
-    if (perf && "getEntriesByName" in perf) {
-        wrapMethod<(...a: unknown[]) => unknown[]>(perf, "getEntriesByName", (native, self, args) => {
-            const found = nR.apply(native, self, args) as unknown[];
-            if (found.length || typeof args[0] !== "string") return found;
-            const proxied = rewriteOne(args[0]);
-            return proxied === args[0] ? found : (nR.apply(native, self, [proxied, ...args.slice(1)]) as unknown[]);
+    // The page asks for an entry by the URL it knows: of the entries (of
+    // the type asked), those whose name — read unwrapped, as above — is
+    // that string, in the native's order. Performance's and a
+    // PerformanceObserver callback's list alike (the latter found nothing:
+    // round K's built-in survey; a marked URL — a script's `!js` — was
+    // missed by the former's retry with the proxified URL).
+    for (const name of ["Performance", "PerformanceObserverEntryList"]) {
+        const proto = g[name]?.prototype as Record<string, unknown> | undefined;
+        if (!proto || !("getEntriesByName" in proto)) continue;
+        const all = proto["getEntries"] as ((this: unknown) => unknown[]) | undefined;
+        const byType = proto["getEntriesByType"] as ((this: unknown, t: string) => unknown[]) | undefined;
+        if (!all || !byType) continue;
+        wrapMethod<(...a: unknown[]) => unknown[]>(proto, "getEntriesByName", (native, self, args) => {
+            if (args.length === 0 || typeof args[0] === "symbol" || typeof args[1] === "symbol") return nR.apply(native, self, args) as unknown[];
+            const want = String(args[0]); // the native's conversions, once
+            const type = args.length > 1 && args[1] !== undefined ? String(args[1]) : null;
+            const found = nR.apply(native, self, type === null ? [want] : [want, type]) as unknown[];
+            if (found.length) return found;
+            const list = type === null ? ncall(all, self) : ncall(byType, self, type);
+            const out: unknown[] = [];
+            for (let i = 0; i < list.length; i++) {
+                if ((list[i] as { name?: unknown }).name === want) out[out.length] = list[i];
+            }
+            return out;
         });
     }
 }

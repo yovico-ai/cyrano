@@ -124,7 +124,7 @@ describe.skipIf(!wanted)("postMessage in Chromium", () => {
         expect(r).toEqual({
             childDocument: "THROWS SecurityError", childLocationHref: "THROWS SecurityError", childFoo: "THROWS SecurityError",
             childPostMessage: "function", childLength: "number", contentDocument: "null", sourceIsContentWindow: true,
-            parentDocument: 'THROWS SecurityError: Blocked a frame with origin "https://child.example" from accessing a cross-origin frame.',
+            parentDocument: 'THROWS SecurityError: Failed to read a named property \'document\' from \'Window\': Blocked a frame with origin "https://child.example" from accessing a cross-origin frame.', // Blink's words (measured)
             parentIsTop: "true", frameElement: "null", parentLocation: "THROWS SecurityError",
         });
     }, 60_000);

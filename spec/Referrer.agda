@@ -190,7 +190,8 @@ referrer p ref target = decide p
 -- cross-origin CORS (or a WebSocket) carries the initiator's origin; so
 -- does a same-origin CORS one for a script, style, font or image (Chromium,
 -- measured: a module or crossorigin script, a crossorigin stylesheet or
--- image, an @font-face font — not fetch(), XHR, audio; jetblue's CDN
+-- image, an @font-face font, a worklet's module and its imports
+-- (worklet-vs-chromium) — not fetch(), XHR, audio; jetblue's CDN
 -- answers 403 without it); any other request does only when its method is
 -- neither GET nor HEAD, and then the policy may turn it into "null".
 
@@ -203,6 +204,7 @@ originHeader m safeMethod p init target dest = byMode m
   carries : Maybe Str → Bool
   carries nothing  = false
   carries (just d) = eqStr d (toList "script") ∨ eqStr d (toList "style") ∨ eqStr d (toList "font") ∨ eqStr d (toList "image")
+                     ∨ eqStr d (toList "audioworklet") ∨ eqStr d (toList "paintworklet")
 
   o : Str
   o = originOf init

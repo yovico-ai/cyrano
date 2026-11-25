@@ -7,6 +7,8 @@
 //     replaceSync(text), addRule(selector, style, index?)
 //   - CSSGroupingRule.prototype.insertRule(rule, index?)  (covers @media,
 //     @supports, etc. — they expose the same insertRule on CSSGroupingRule)
+//   - CSSStyleRule.prototype.insertRule(rule, index?)  (nested rules)
+//   - CSSKeyframesRule.prototype.appendRule(rule)  (a keyframe)
 //
 // Surfaces deliberately NOT patched (yet):
 //   - el.style.backgroundImage = "url(...)" — would require patching every
@@ -54,7 +56,13 @@ export function patchCssRules(
     const own = g["CSSStyleSheet"] !== undefined;
     const sheet = own ? holderOf(g["CSSStyleSheet"]?.prototype, "insertRule") : findInsertRulePrototype("style");
     const grouping = own ? holderOf(g["CSSGroupingRule"]?.prototype, "insertRule") : findGroupingRuleInsertRulePrototype();
-    for (const proto of [sheet, grouping]) {
+    // A style rule's own child rules (CSS nesting): Chromium's CSSStyleRule
+    // has an insertRule of its own, not CSSGroupingRule's.
+    const styleRule = own ? holderOf(g["CSSStyleRule"]?.prototype, "insertRule") : null;
+    // A keyframe a script adds (CSSKeyframesRule.appendRule: round J, its
+    // image loaded from the origin).
+    const keyframes = own ? holderOf(g["CSSKeyframesRule"]?.prototype, "appendRule") : null;
+    for (const proto of [sheet, grouping, styleRule, keyframes]) {
         if (proto && !done.has(proto)) {
             done.add(proto);
             patchInsertRuleOn(proto, rewriteOne);
@@ -163,12 +171,12 @@ function patchInsertRuleOn(
     proto: object | null,
     rewriteOne: (url: string) => string,
 ): void {
-    if (!proto || !ncall(nOP.hasOwnProperty, proto, "insertRule")) return;
+    if (!proto || (!ncall(nOP.hasOwnProperty, proto, "insertRule") && !ncall(nOP.hasOwnProperty, proto, "appendRule"))) return;
     // insertRule(rule), and a sheet's replace(text) / replaceSync(text):
     // the CSS text is the first argument. addRule(selector, style): the
     // declarations, the second. (Constructed sheets — Google Pay's button
     // on Bloomberg set its background image so, straight to gstatic.)
-    for (const [key, at] of [["insertRule", 0], ["replace", 0], ["replaceSync", 0], ["addRule", 1]] as const) {
+    for (const [key, at] of [["insertRule", 0], ["replace", 0], ["replaceSync", 0], ["addRule", 1], ["appendRule", 0]] as const) {
         if (!ncall(nOP.hasOwnProperty, proto, key)) continue;
         wrapMethod<(...a: unknown[]) => unknown>(proto, key, (native, self, args) => {
             const text = args.length > at ? cssText(args[at]) : args[at];

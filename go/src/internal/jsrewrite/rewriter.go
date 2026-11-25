@@ -330,3 +330,16 @@ func rewriteImportSpecifiersFallback(src []byte, opts Options) []byte {
 func isIdentChar(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '$'
 }
+
+// WorkletOptions: the rules for a worklet's module (spec/Disposition.agda
+// workletDest), which runs where there is no runtime: only those that need
+// none — static import / export specifiers (R8, with BaseURL and
+// ProxifyURL), import.meta.url (R9), debugger statements (R12). A rule
+// calling $rewriter would throw there (ReferenceError), and what the
+// others guard is not in a worklet global (location, top, parent,
+// document.write, postMessage, Worker; import() is refused), and code made
+// with eval or Function there can name no module. Limit:
+// import.meta.resolve (R15 is the runtime's) gives the proxified URL.
+func WorkletOptions() Options {
+	return Options{WrapStaticImport: true, WrapImportMetaUrl: true, StripDebugger: true}
+}

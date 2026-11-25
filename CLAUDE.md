@@ -200,7 +200,8 @@ popup opened on about:blank (`window.open("")`, `"about:blank"`: the
 OAuth / payment pattern) gets its opener's runtime as an empty frame its
 creator's (`patches/window-open.ts`, `injectIntoWindow`): what is written
 into it and where the opener sends it go through the proxy, its cookies
-and origin are the opener's (`popup-blank-vs-chromium`).
+and origin are the opener's (`popup-blank-vs-chromium`;
+`document.open(url, name, features)` is the window's open).
 
 ## Known gaps
 
@@ -253,7 +254,11 @@ and origin are the opener's (`popup-blank-vs-chromium`).
   the middle of another tab's burst of writes is not given the rest of its
   events by Chromium (a tab heard only the first of several). Web Locks names and the Origin Private File System are per
   partition too (spec/Storage.agda lockName, opfsDir: the page's root is
-  its key's directory of the real one, named ""; `web-locks-vs-chromium`).
+  its key's directory of the real one, named ""; `web-locks-vs-chromium`), and
+  so are the old FileSystem API's (webkitRequestFileSystem, its resolved
+  URLs: spec/Storage.agda fsPath; paths, names, filesystem: URLs read as the
+  page's, ".." never above its root, workers too: `old-filesystem-vs-chromium`;
+  not the *Sync API).
   sessionStorage stays native (prefixed; a native refusal names the page's
   key). The native store is only a cache: its own refusals (a frame's
   Storage gone) never reach the page.
@@ -381,7 +386,7 @@ and origin are the opener's (`popup-blank-vs-chromium`).
   `targetPolicy`; unwrap ignores it — proved). The browser is always told
   unsafe-url; the proxy applies the policy (`proxy/fetch_headers.go`).
   Origin as Chromium sends it (spec/Referrer.agda originHeader), on a
-  same-origin CORS request for a script, style, font or image too (jetblue's
+  same-origin CORS request for a script, style, font, image or worklet module too (jetblue's
   CDN refused its own modules without it; `origin-same-origin-cors-vs-chromium`),
   and on every CORS-mode request by its mode (a `<video crossorigin>`'s,
   sent the proxy without one: `media-origin-vs-chromium`). A script's own
@@ -437,7 +442,8 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   `Sec-Fetch-Storage-Access` for third-party frames
   (`proxy/storage_access.go`, spec/Storage.agda: by the chain of sites);
   no Sec-Fetch-* / client hints to an http name, as direct
-  (spec/Metadata.agda, `upstream.copyHeaders`); original body sizes in performance entries
+  (spec/Metadata.agda, `upstream.copyHeaders`); original body sizes in performance entries,
+  found by the page's URL (`getEntriesByName`, an observer's list too)
   (Server-Timing metric `crnb`); read-back of script text through
   ancestors' `textContent`, text nodes and `XMLSerializer`;
   `Notification.permission` in a third-party frame (`patches/embedded.ts`).
@@ -457,7 +463,19 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   bounced back). The runtime's Crn-I / Crn-C on a fetch init are handed to
   the native as pairs: a Headers is read by its iterator, which hides them
   (until 2026-11-20 they were never sent from fetch(url[, init])).
-  CORS gaps: no preflight, no opaque responses. A sandboxed (opaque-origin)
+  CORS preflights are the proxy's (spec/Preflight.agda, `proxy/preflight.go`;
+  the runtime names the page's own header names in `Crn-A`, "!" for an XHR
+  with upload listeners): a cross-origin request that needs one gets
+  Chrome's OPTIONS first — its headers and order, no cookies or client
+  hints — and is never sent when it fails; passed ones cached per session
+  by Max-Age (`preflight-vs-chromium`, plain and TLS). A blob: worker's
+  requests name the origin inside its URL (they had no Origin, no preflight). A refusal the origin
+  answered (CORS, ORB, preflight) is a network error the browser does not
+  resend (over HTTP/1.1 Chrome retried a reused connection closed with
+  nothing received: the origin got it twice). A no-cors fetch of another
+  origin reads as Chromium's opaque response (spec/Fetch.agda responseType;
+  status 0, no URL, headers or body: `opaque-response-vs-chromium`). Gap:
+  such a response put in the Cache API comes back from it not opaque. A sandboxed (opaque-origin)
   document is cross-origin to the proxy, so the browser runs CORS there
   itself: the runtime adds no Crn-I/Crn-C (they forced preflights), and
   the proxy sends Origin "null", cross-site, as direct (spec/Fetch.agda
@@ -492,7 +510,20 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   asked for same-origin, as a classic one) and gets the module preamble; a
   module it imports gets none (asked for as a worker's, marked `!js`); a
   blob module worker's static imports are proxified against its own URL
-  (crumblcookies.com's MapLibre; `module-worker-vs-chromium`). A worker reads its own URL,
+  (crumblcookies.com's MapLibre; `module-worker-vs-chromium`). A worklet's
+  module (`addModule` on any worklet, `sharedStorage.createWorklet`) is
+  proxified unmarked by the runtime (`patches/worklet.ts`; a blob: / data:
+  one rewritten into a private URL); the server knows it and its imports
+  by Sec-Fetch-Dest and gives them only the rules that need no runtime —
+  static specifiers, import.meta.url, R12 (spec/Disposition.agda
+  workletDest, `asWorklet`; Go `jsrewrite.WorkletOptions`, TS
+  `workletJsRewriteOptions`): an absolute URL loaded from its origin, and a
+  module reached through the proxy threw on `$rewriter` (none in a worklet
+  global). Its imports are its document's (Origin even same-origin, as
+  measured: `worklet-vs-chromium`). Gaps: a blob: module's imports carry
+  no Referer, so the proxy cannot tell their document (Origin and
+  Sec-Fetch-Site the target's own; blob: module workers too);
+  import.meta.resolve gives the proxified URL. A worker reads its own URL,
   fragment included (a served worker's from its own location, unwrapped;
   a blob: worker's the page's blob URL with the page's origin; Turbopack's
   `#params=` on thangs.com: `worker-location-vs-chromium`). Its `self.origin`
@@ -601,7 +632,8 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   own Request goes to fetch as is (a rebuilt one has a stream body HTTP/1.1
   cannot send), judged by the URL it holds, not its `url` (YouTube's
   blocker bait: a data: Request subclass naming its player API); minified `@import"…"` (both runtimes); CSS handed to a constructed sheet
-  (replace, replaceSync, addRule: Google Pay's button on Bloomberg); `fetchLater`,
+  (replace, replaceSync, addRule: Google Pay's button on Bloomberg; a style rule's nested
+  insertRule, a keyframes rule's appendRule); `fetchLater`,
   `new Audio(url)`; the CORS check is enforced by the proxy for scripts'
   cross-origin requests (`proxy/cors.go`: the connection is broken, a
   network error to page code); script URLs resolve against `<base href>`;
@@ -736,7 +768,7 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   <style> by any route (a fragment's text: Marketo forms; append/prepend
   /replaceChildren/after strings; its text node's data, nodeValue,
   textContent, append/insert/delete/replaceData — goober's CSS-in-JS on
-  bearsaver.com) is rewritten, each text node keeping its
+  bearsaver.com; insertAdjacentText) is rewritten, each text node keeping its
   original for read-back; event handler attributes (`on` + a–z, any
   element: spec/Attrs.agda handler) are JS-rewritten as function bodies in
   both runtimes (birdies.com, guns.com; `event-handlers-vs-chromium`);
@@ -800,6 +832,18 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   --assets go/assets` (self-signed cert; Playwright `ignoreHTTPSErrors`).
   Header order is then Chrome's template, not the browser's own
   (`internal/headerorder` reads HTTP/1.x only).
+- **Canvas origin-clean** (spec/Canvas.agda imageClean,
+  `patches/canvas-taint.ts`; `canvas-taint-vs-chromium`): through the proxy
+  no image is cross-origin to the browser, so no canvas tainted. The
+  runtime keeps the flag (one registry per page tree): an image, SVG image
+  or video of another origin than the page's, asked without CORS, drawn —
+  or its pattern assigned, its ImageBitmap, a tainted canvas drawn — taints;
+  width / height set cleans; getImageData, toDataURL, toBlob,
+  convertToBlob, WebGL uploads and VideoFrame
+  throw Chromium's SecurityError; such media given to Web Audio's
+  createMediaElementSource plays silence into the graph (a private zero
+  gain after it). Limits: redirects not followed; a bitmap sent to a worker
+  arrives clean.
 - **Windows of another origin** (`native/cross-origin.ts`): a child frame
   by number (`frames[0]`, `window[1]`, `top.frames[0]`: R18) and a popup
   opened on another origin's URL (judged by that URL while on about:blank)
@@ -814,7 +858,9 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   Window.prototype per child name, hidden from reflection, kept in step at
   insertions, frame loads and name changes (`patchNamedFrames`;
   `named-frames-vs-chromium`). Limit: a child that renames itself shows by
-  its new name at the next of those.
+  its new name at the next of those. A frame on its way to another origin
+  is its initial about:blank until that navigation commits — the view
+  forwards to it (readable, writable; still the one object after).
 - **Start and end tags the rules leave alone go out as written** (byte for
   byte: line breaks, attribute text and encoding, spelling). Rewritten
   CSS keeps each URL's form where it can: a url token unquoted, a string in
@@ -994,9 +1040,11 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   around it (`patches/browser-windows.ts`; `webtransport-vs-chromium`). A
   Document Picture-in-Picture window gets the opener's runtime before the
   page has it (`picture-in-picture-vs-chromium`, headed).
-- **Not wrapped yet**: `AsyncFunction`/`GeneratorFunction` constructors;
-  an SVG element's `href.baseVal` (SVGAnimatedString; setAttribute /
-  setAttributeNS are rewritten). URL-bearing attributes are one table in
+- **Not wrapped yet**: `AsyncFunction`/`GeneratorFunction` constructors.
+  An SVG element's `href.baseVal` writes and reads through the runtime's
+  setAttribute(NS) / getAttribute(NS) as Chromium reflects it (href, or
+  xlink:href when only that is there: `patches/svg-href.ts`;
+  `svg-href-vs-chromium`). URL-bearing attributes are one table in
   both runtimes (spec/Attrs.agda, checked against what Chromium fetches):
   `ping` / `attributionsrc` are URL lists (and window.open's
   attributionsrc features: spec/Features.agda); `currentSrc` (img, media)

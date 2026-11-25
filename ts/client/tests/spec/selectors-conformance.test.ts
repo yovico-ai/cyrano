@@ -20,7 +20,7 @@ const PROXY = "http://p.example:9081";
 const BASE = "https://site.example/dir/page";
 
 const names = ["src", "SRC", "href", "data", "xlink:href", "id", "action", "ping", "title", "srcset", "imageSrcset"];
-const ops = ["=", "^=", "*=", "$=", "~="];
+const ops = ["=", "^=", "*=", "$=", "~=", "|="];
 const values = ["https://cdn.example/a.js", "/a.js", "a.js", "//cdn.example/a", "https", "http:", "HTTPS://", "#x", "data:x", "", "https://h.example/p?q=\"1\"",
     "\\2f a", "x\\\"y", "https://h.example/\\6e ew", "javascript:x", "//", "//h", "http://h.example/a b", "./media_", "a.png 1x", "a.png,b.png"];
 const quote = ["\"", "'", ""];

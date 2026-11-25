@@ -19,7 +19,7 @@ func TestMain(m *testing.M) {
 
 func TestSpecConformance_Disposition(t *testing.T) {
 	oracle := specoracle.Need(t)
-	dests := []string{"script", "Script", "style", "worker", "sharedworker", "serviceworker", "audioworklet", "paintworklet", "document",
+	dests := []string{"script", "Script", "style", "worker", "sharedworker", "serviceworker", "audioworklet", "paintworklet", "sharedstorageworklet", "AudioWorklet", "document",
 		"iframe", "frame", "embed", "object", "empty", "image", "font", "manifest", "track", "video", "report", ""}
 	cts := []string{"text/javascript", "text/plain", "TEXT/HTML; charset=utf-8", " text/html ", "application/xhtml+xml", "text/css",
 		"text/css;x", "application/javascript", "application/x-javascript", "text/jscript", "application/json", "image/png",
@@ -29,7 +29,7 @@ func TestSpecConformance_Disposition(t *testing.T) {
 		"a/+xml", "/x+xml", "a/b+xm", "a b/c+xml", "text/xml,text/html", "text/html,image/svg+xml", "application/xhtml+xml; q=1",
 		"application/atom+xml", "APPLICATION/RSS+XML", "text/foo+xml", "text/foo+XML", "text/x/y+xml", "text/+xml", "text/{a}+xml", "text/a=b+xml"}
 	rapid.Check(t, func(rt *rapid.T) {
-		mark := rapid.SampledFrom([]string{"-", "-", "js", "css", "frame"}).Draw(rt, "mark")
+		mark := rapid.SampledFrom([]string{"-", "-", "js", "css", "frame", "mjs"}).Draw(rt, "mark")
 		has := rapid.Bool().Draw(rt, "has")
 		sfd := rapid.SampledFrom(dests).Draw(rt, "sfd")
 		hasCT := rapid.Bool().Draw(rt, "hasCT")

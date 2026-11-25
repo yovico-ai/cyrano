@@ -263,10 +263,23 @@ export function patchDocumentWrite(
             return nR.apply(native, self, args);
         });
     }
-    // open() starts a new parser (its three-argument form is window.open).
+    // open() starts a new parser. Its three-argument form is window.open of
+    // the document's window (HTML), which the native ran itself: the URL
+    // opened unproxied, a popup without the runtime (round K). It goes to
+    // that window's open — the runtime's; no window, the native's own
+    // InvalidAccessError.
+    const defaultView = nO.getOwnPropertyDescriptor(holder, "defaultView")?.get
+        ?? nO.getOwnPropertyDescriptor((targetWindow as unknown as { Document: { prototype: object } }).Document.prototype, "defaultView")?.get;
     if (ncall(nOP.hasOwnProperty, holder, "open")) {
         wrapMethod<(...a: unknown[]) => unknown>(holder, "open", (native, self, args) => {
-            if (args.length < 3 && typeof self === "object" && self !== null) plaintext.delete(self);
+            if (args.length >= 3) {
+                let view: unknown = null;
+                try { view = defaultView ? ncall(defaultView as (this: unknown) => unknown, self) : null; } catch { view = null; }
+                const open = view ? (view as { open?: unknown }).open : undefined;
+                if (typeof open === "function") return nR.apply(open as (...a: unknown[]) => unknown, view, args.slice(0, 3));
+                return nR.apply(native, self, args);
+            }
+            if (typeof self === "object" && self !== null) plaintext.delete(self);
             return nR.apply(native, self, args);
         });
     }

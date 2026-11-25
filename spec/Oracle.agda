@@ -249,6 +249,8 @@ import Features
 import Messaging
 import Selectors
 import JsUrl
+import Canvas
+import Preflight
 open import Html using (ScriptKind; scriptClassic; scriptModule; scriptImportMap; scriptSpeculation; scriptData; scriptKind; documentBase; BaseURL; baseOf′; aboutBlank; beyond)
 
 ------------------------------------------------------------------------
@@ -395,6 +397,16 @@ dispatch op args =
   else if eqStr op (toList "rewritemark") then rewriteMarkReq args
   else if eqStr op (toList "disposition") then dispositionReq args
   else if eqStr op (toList "judgeddest") then judgedDestReq args
+  -- needspreflight <method> <force 0|1> [<name> <value>]…: "yes" / "no";
+  -- preflightheaders [<name> <value>]…; maxage <0|1 present> <value>;
+  -- preflightok <status> <0|1> <ACAO> <0|1> <ACAC> <cred 0|1> <origin>
+  -- <method> <unsafe names, ","-joined> <ACAM lines, U+001E-joined> <ACAH lines, same>
+  -- responsetype <cors|no-cors|same-origin|navigate> <cross 0|1>: basic, cors or opaque
+  else if eqStr op (toList "responsetype") then twoArgs (λ m c → toList (typeName (Fetch.responseType (fetchModeOf m) (eqStr c (toList "1"))))) args
+  else if eqStr op (toList "needspreflight") then needsPreflightReq args
+  else if eqStr op (toList "preflightheaders") then out (Preflight.requestHeaders (pairs args))
+  else if eqStr op (toList "maxage") then maxAgeReq args
+  else if eqStr op (toList "preflightok") then preflightOkReq args
   else if eqStr op (toList "sniffhtml") then sniffHtmlReq args
   else if eqStr op (toList "sniff") then sniffReq args
   else if eqStr op (toList "setspolicy") then setsPolicyReq args
@@ -442,6 +454,8 @@ dispatch op args =
   else if eqStr op (toList "adjoin") then adJoinReq args
   -- The stand-in for the JS rules: code naming 'x' becomes J(…), any other stays.
   else if eqStr op (toList "jsurl") then oneArg (λ u → JsUrl.rewriteUrl (λ c → if Url.any (Url.is 120) c then toList "J(" Data.List.Base.++ c Data.List.Base.++ toList ")" else c) u) args
+  -- imageclean <0|1 crossorigin> <document origin> <url>: "yes" or "no".
+  else if eqStr op (toList "imageclean") then threeArgs (λ c d u → toList (if Canvas.imageClean (eqStr c (toList "1")) d u then "yes" else "no")) args
   else if eqStr op (toList "datadockind") then oneArg (λ u → toList (dataDocName (Frames.dataDocKind u))) args
   else if eqStr op (toList "datadoc") then oneArg (λ u → toList (if Frames.dataDocument u then "yes" else "no")) args
   else if eqStr op (toList "errmuted") then errMutedReq args
@@ -449,6 +463,9 @@ dispatch op args =
   else if eqStr op (toList "blobbase") then oneArg (λ t → if Frames.blobBase t then toList "yes" else toList "no") args
   else if eqStr op (toList "blobdocument") then oneArg (λ t → if Frames.blobDocument t then toList "yes" else toList "no") args
   else if eqStr op (toList "opfsdir") then oneArg (λ k → Storage.opfsDir k) args
+  -- fspath <key> <entry's page path> <given path>; fsshown <key> <real path>
+  else if eqStr op (toList "fspath") then threeArgs (λ k a g → Storage.fsPath k a g) args
+  else if eqStr op (toList "fsshown") then twoArgs (λ k r → Storage.shownPath k r) args
   else if eqStr op (toList "lockname") then twoArgs (λ k n → lockOut (Storage.lockName k n)) args
   else if eqStr op (toList "storename") then twoArgs (λ k n → Storage.stored k n) args
   else if eqStr op (toList "storeshown") then storeShownReq args
@@ -693,6 +710,41 @@ dispatch op args =
   ... | just d  = out (toList "just " ++ d)
   ... | nothing = out (toList "nothing")
   judgedDestReq _ = errorReply "BadRequest"
+
+  fetchModeOf : Str → Fetch.ReqMode
+  fetchModeOf m = if eqStr m (toList "cors") then Fetch.modeCors else if eqStr m (toList "no-cors") then Fetch.modeNoCors
+             else if eqStr m (toList "same-origin") then Fetch.modeSameOrigin else Fetch.modeNavigate
+  typeName : Fetch.RespType → String
+  typeName Fetch.basicT = "basic"
+  typeName Fetch.corsT = "cors"
+  typeName Fetch.opaqueT = "opaque"
+
+  pairs : List Str → List (Str × Str)
+  pairs (n ∷ v ∷ rest) = (n , v) ∷ pairs rest
+  pairs _ = []
+
+  needsPreflightReq : List Str → Str
+  needsPreflightReq (m ∷ f ∷ rest) = out (toList (if Preflight.needsPreflight m (eqStr f (toList "1")) (pairs rest) then "yes" else "no"))
+  needsPreflightReq _ = errorReply "BadRequest"
+
+  maxAgeReq : List Str → Str
+  maxAgeReq (p ∷ v ∷ []) = out (toList (showNat (Preflight.maxAge (if eqStr p (toList "1") then just v else nothing))))
+  maxAgeReq _ = errorReply "BadRequest"
+
+  preflightOkReq : List Str → Str
+  preflightOkReq (st ∷ aop ∷ ao ∷ acp ∷ ac ∷ cr ∷ org ∷ m ∷ un ∷ am ∷ ah ∷ []) =
+    out (toList (if Preflight.preflightOk (Preflight.digitsValue st) (opt aop ao) (opt acp ac) (lines am) (lines ah) org (eqStr cr (toList "1")) m (names un) then "yes" else "no"))
+    where
+    -- one field line, as Fetch's "get" gives it
+    opt : Str → Str → Maybe Str
+    opt p v = if eqStr p (toList "1") then Fetch.combine (v ∷ []) else nothing
+    lines : Str → List Str
+    lines [] = []
+    lines s = Url.splitOn (Url.is 30) s
+    names : Str → List Str
+    names [] = []
+    names s = Url.splitOn (Url.is 44) s
+  preflightOkReq _ = errorReply "BadRequest"
 
   -- crossorigin <html 0|1> <tag> <rel> <as>
   crossoriginReq : List Str → Str

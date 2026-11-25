@@ -102,7 +102,7 @@ describe("fetch(request): the page's own Request goes to the native as is", () =
         expect(fetchMock.mock.calls[0]![0]).toBe(req);
     });
 
-    it("with a CORS context: the same object, only Crn-I / Crn-C set on it", async () => {
+    it("with a CORS context: the same object, only Crn-I / Crn-C / Crn-A set on it", async () => {
         const { win, held, fetchMock } = setup(sameOriginCors);
         const req = new win.Request("https://page.example/upload", { method: "POST", body: "payload", headers: { "x-page": "1" } });
         await win.fetch(req as unknown as Request);
@@ -112,7 +112,10 @@ describe("fetch(request): the page's own Request goes to the native as is", () =
         expect(held(sent)).toBe("https://page.example/upload?proxified=1");
         expect(req.method).toBe("POST");
         expect(req.body).toBe("payload");
-        expect([...req.headers.keys()].map((k) => k.toLowerCase()).sort()).toEqual(["crn-c", "crn-i", "x-page"]);
+        expect([...req.headers.keys()].map((k) => k.toLowerCase()).sort()).toEqual(["crn-a", "crn-c", "crn-i", "x-page"]);
+        // the page's own header names (preflights; a body's Content-Type, when
+        // the DOM adds one, is listed too — the proxy checks it either way)
+        expect(req.headers.get("Crn-A")!.split(",")).toContain("x-page");
         expect(req.headers.get("Crn-I")).toBe("https://page.example/app/");
         expect(req.headers.get("Crn-C")).toBe("include");
     });

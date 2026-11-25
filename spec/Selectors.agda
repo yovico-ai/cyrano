@@ -79,14 +79,20 @@ dropWS s = proj₂ (spanC jsWS s)
 ------------------------------------------------------------------------
 -- [ name op value flag? ]
 
+-- incl (~=), dash (|=): on a URL attribute — one token, never whitespace —
+-- ~= is =, and |= is = or a prefix and "-": both widened as = is
+-- (contexture.org's widget looks images up with img[src~="<url>"]); a ~=
+-- value with whitespace matches nothing natively and is left alone.
 data Op : Set where
-  eq pre sub suf : Op
+  eq pre sub suf incl dash : Op
 
 opText : Op → Str
 opText eq  = toList "="
 opText pre = toList "^="
 opText sub = toList "*="
 opText suf = toList "$="
+opText incl = toList "~="
+opText dash = toList "|="
 
 record AttrSel : Set where
   constructor attrSel
@@ -145,6 +151,8 @@ parseAttr ('[' ∷ s₀) with dropWS s₀
   afterName n ('^' ∷ '=' ∷ r) = value n pre (dropWS r)
   afterName n ('*' ∷ '=' ∷ r) = value n sub (dropWS r)
   afterName n ('$' ∷ '=' ∷ r) = value n suf (dropWS r)
+  afterName n ('~' ∷ '=' ∷ r) = value n incl (dropWS r)
+  afterName n ('|' ∷ '=' ∷ r) = value n dash (dropWS r)
   afterName n _ = nothing
 parseAttr _ = nothing
 
@@ -296,6 +304,10 @@ widenAttribute rw proxyBase whole with parseAttr whole
   ...   | just tail with subAlts scs rest
   ...     | just more = just (withMarks tail ++ more)
   ...     | nothing = nothing
+  asEq : Str
+  asEq with rw v
+  ... | nothing = whole
+  ... | just p = if eqStr p v then whole else wrap (withMarks p)
   byOp : Op → Str
   partAlts : Str
   partAlts with hostAfterSlashes v
@@ -315,9 +327,9 @@ widenAttribute rw proxyBase whole with parseAttr whole
     plain with rw v
     ... | nothing = whole
     ... | just p = if eqStr p v then whole else wrap (withMarks p)
-  byOp eq with rw v
-  ... | nothing = whole
-  ... | just p = if eqStr p v then whole else wrap (withMarks p)
+  byOp eq = asEq
+  byOp incl = if Url.any jsWS v then whole else asEq
+  byOp dash = asEq
 
 ------------------------------------------------------------------------
 -- The whole selector: brackets found as the runtime finds them — a string

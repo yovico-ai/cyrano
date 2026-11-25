@@ -47,6 +47,18 @@ onload = () => {
     own: String(Window.prototype.hasOwnProperty("kid")), inWin: String("kid" in window) };
   const late = document.createElement("iframe"); late.name = "late"; late.src = "${b}/child"; document.body.append(late);
   out.late = t(() => late.contentWindow === window.late);
+  // still its initial about:blank: readable and writable until the navigation commits
+  const w = late.contentWindow;
+  out.lateDoc = t(() => w.document.URL); out.lateLoc = t(() => w.location.href);
+  out.lateWrite = t(() => { w.crnProbe = 7; return w.crnProbe; }); out.lateSelf = t(() => w.window === w && w.self === w);
+  out.lateFn = t(() => w.setTimeout === w.setTimeout && typeof w.setTimeout); out.lateIn = t(() => "document" in w);
+  late.addEventListener("load", () => { out.lateAfter = t(() => w.document); out.lateKept = t(() => w === late.contentWindow && w === window.late); });
+  // the refusals in Blink's words (crazygames.com: the bare message)
+  const m = (f) => { try { f(); return "ok"; } catch (e) { return e.name + ": " + e.message; } };
+  const k = frames[0];
+  out.msgs = [m(() => k.document), m(() => k[Symbol.iterator]), m(() => { k.foo = 1; }), m(() => "foo" in k), m(() => Object.getOwnPropertyDescriptor(k, "foo")),
+    m(() => Object.defineProperty(k, "foo", { value: 1 })), m(() => { delete k.foo; }), m(() => k.location.href), m(() => { k.location.foo = 1; }),
+    m(() => { const d = Object.getOwnPropertyDescriptor(k.location, "href"); return [typeof d.get, typeof d.set, d.enumerable, d.configurable].join(); }), m(() => k.alert())].join(" | ");
   window.kid = 5; out.assigned = String(kid) + "/" + String(window.hasOwnProperty("kid"));
 };
 </script>`);
@@ -88,8 +100,9 @@ onload = () => {
     it("is the cross-origin view, as directly", async () => {
         const direct = await run(false);
         const proxied = await run(true);
-        expect(direct).toEqual({ kidDoc: "SecurityError", kidWin: "SecurityError", ownDoc: "child", type: "object", same: "true", ownSame: "true", missing: "undefined",
-            listed: "false", described: "undefined", own: "false", inWin: "true", late: "true", assigned: "5/true" });
+        expect(direct).toMatchObject({ kidDoc: "SecurityError", kidWin: "SecurityError", ownDoc: "child", type: "object", same: "true", ownSame: "true", missing: "undefined",
+            listed: "false", described: "undefined", own: "false", inWin: "true", late: "true", assigned: "5/true",
+            lateDoc: "about:blank", lateLoc: "about:blank", lateWrite: "7", lateSelf: "true", lateFn: "function", lateIn: "true", lateAfter: "SecurityError", lateKept: "true" });
         expect(proxied).toEqual(direct);
     }, 60_000);
 });

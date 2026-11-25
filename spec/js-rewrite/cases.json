@@ -79,5 +79,7 @@
   ["jsUrl not void, a literal that is no string, nor a last statement of another kind", "void(0); x = 1; if (a) 'x'", "void(0); x = 1; if (a) 'x'"],
   ["jsUrl not void, a literal that is no string, nor a last statement of another kind", "false", "false"],
   ["jsUrl parenthesized and templates are wrapped", "(false)", "(typeof $rewriter!==\"undefined\"?$rewriter:parent.$rewriter).js_url_result(this,((false)))"],
-  ["jsUrl parenthesized and templates are wrapped", "`t${a}`", "(typeof $rewriter!==\"undefined\"?$rewriter:parent.$rewriter).js_url_result(this,(`t${a}`))"]
+  ["jsUrl parenthesized and templates are wrapped", "`t${a}`", "(typeof $rewriter!==\"undefined\"?$rewriter:parent.$rewriter).js_url_result(this,(`t${a}`))"],
+  ["worklet no rule that calls the runtime: a worklet global has none (spec/Disposition.agda workletDest)", "o[k]; location.href; x = top.y; parent.postMessage(m, '*'); document.write(h); eval(s); new Worker(u); u = import.meta.resolve('./a.js'); ({ location: l } = w);", "o[k]; location.href; x = top.y; parent.postMessage(m, '*'); document.write(h); eval(s); new Worker(u); u = import.meta.resolve('./a.js'); ({ location: l } = w);"],
+  ["worklet debugger statements still go (R12)", "debugger; o[k];", "; o[k];"]
 ]

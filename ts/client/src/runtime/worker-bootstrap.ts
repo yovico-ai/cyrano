@@ -16,6 +16,7 @@
 // (WorkerLocation has no assign/replace/reload) and the fetch/XHR/
 // importScripts patching are worker-specific.
 
+import { patchOldFileSystem } from "../patches/old-filesystem";
 import { isLocationObject } from "../native/brand";
 import { nO, nR } from "../native/intrinsics";
 import { patchReflection } from "../native/hidden-globals";
@@ -242,6 +243,7 @@ function patchWorkerScope(
     // (patches/storage.ts). A worker does not know its top document: its
     // names are its origin's, unpartitioned.
     try { patchStorageNames(scope as object, () => "crn\u001f" + baseUrl.origin + "\u001f"); } catch { /* stays native */ }
+    try { patchOldFileSystem(scope as object, () => baseUrl.origin, () => baseUrl.origin); } catch { /* stays native */ }
     try { patchCacheUrls(scope as object, rewriteOne); } catch { /* stays native */ }
     patchEventSource(realm, rewriteOne, unwrapOne);
     // A worker made inside this one (nested dedicated workers): its URL is

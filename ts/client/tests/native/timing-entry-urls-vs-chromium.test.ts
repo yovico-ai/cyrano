@@ -3,7 +3,9 @@
 // Timing entries that name a URL, in real Chromium, direct and through the
 // real proxy (round I: PerformanceElementTiming.url and the LCP entry's url
 // were the proxified URLs; RUM libraries report them; round K: a
-// hashchange's oldURL / newURL too). Read as directly.
+// hashchange's oldURL / newURL too; an entry looked up by the page's URL,
+// getEntriesByName — a PerformanceObserver's list found none, a marked
+// script's URL none either). Read as directly.
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -33,18 +35,31 @@ describe.skipIf(!wanted)("timing entry URLs, in Chromium, through the proxy", ()
     beforeAll(async () => {
         upstream = createServer((req, res) => {
             const u = new URL(req.url ?? "/", "http://x");
+            if (u.pathname === "/s.js") {
+                res.writeHead(200, { "content-type": "text/javascript" });
+                return res.end("window.sjs = 1;");
+            }
             if (u.pathname === "/big.svg") {
                 res.writeHead(200, { "content-type": "image/svg+xml", "timing-allow-origin": "*" });
                 return res.end('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="red"/></svg>');
             }
             res.writeHead(200, { "content-type": "text/html" });
-            return res.end(`<!doctype html><img src="/big.svg" elementtiming="hero"><div elementtiming="bg" style="width:300px;height:200px;background:url(/big.svg?b)"></div><script>
+            return res.end(`<!doctype html><img src="/big.svg" elementtiming="hero"><div elementtiming="bg" style="width:300px;height:200px;background:url(/big.svg?b)"></div><script src="/s.js"></script><script>
                 window.out = new Promise((done) => {
                     const got = {};
                     new PerformanceObserver((l) => { for (const e of l.getEntries()) got[e.identifier] = new URL(e.url).pathname + new URL(e.url).search; }).observe({ type: "element", buffered: true });
                     new PerformanceObserver((l) => { for (const e of l.getEntries()) got.lcp = e.url ? new URL(e.url).pathname + new URL(e.url).search : ""; }).observe({ type: "largest-contentful-paint", buffered: true });
                     addEventListener("hashchange", (e) => { got.hc = [new URL(e.oldURL).pathname + new URL(e.oldURL).hash, new URL(e.newURL).pathname + new URL(e.newURL).hash]; });
                     setTimeout(() => { location.hash = "#two"; }, 300);
+                    // entries looked up by the page's URL (round K: an observer's list found none)
+                    new PerformanceObserver((l) => { const n = l.getEntriesByName(location.origin + "/big.svg").length; if (n) got.obs = n; }).observe({ type: "resource", buffered: true });
+                    performance.mark("m");
+                    setTimeout(() => {
+                        got.js = performance.getEntriesByName(location.origin + "/s.js").length;
+                        got.jsTyped = performance.getEntriesByName(location.origin + "/s.js", "resource").length;
+                        got.jsOther = performance.getEntriesByName(location.origin + "/s.js", "mark").length;
+                        got.mark = performance.getEntriesByName("m").length;
+                    }, 1000);
                     setTimeout(() => done(got), 1500);
                 });
             </script>`);
@@ -82,7 +97,7 @@ describe.skipIf(!wanted)("timing entry URLs, in Chromium, through the proxy", ()
     it("names the page's URLs, as directly", async () => {
         const direct = await run(`${self}/page.html`);
         const proxied = await run(`${proxyOrigin}/cyrano/http/${self.slice(7)}/page.html`);
-        expect(direct).toMatchObject({ hero: "/big.svg", bg: "/big.svg?b", hc: ["/page.html", "/page.html#two"] });
+        expect(direct).toMatchObject({ hero: "/big.svg", bg: "/big.svg?b", hc: ["/page.html", "/page.html#two"], obs: 1, js: 1, jsTyped: 1, jsOther: 0, mark: 1 });
         expect(proxied).toEqual(direct);
     }, 60_000);
 });

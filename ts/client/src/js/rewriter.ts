@@ -95,6 +95,25 @@ export function defaultJsRewriteOptions(): JsRewriteOptions {
     };
 }
 
+/**
+ * The rules for a worklet's module (spec/Disposition.agda workletDest; Go
+ * jsrewrite.WorkletOptions): it runs where there is no runtime, so only
+ * those that need none — static import / export specifiers (with baseUrl
+ * and proxify), import.meta.url, debugger statements. A rule calling
+ * $rewriter would throw there; what the others guard is not in a worklet
+ * global. Limit: import.meta.resolve gives the proxified URL.
+ */
+export function workletJsRewriteOptions(): JsRewriteOptions {
+    const o = defaultJsRewriteOptions();
+    for (const k of Object.keys(o) as Array<keyof JsRewriteOptions>) {
+        if (typeof o[k] === "boolean") (o as unknown as Record<string, boolean>)[k] = false;
+    }
+    o.wrapStaticImport = true;
+    o.wrapImportMetaUrl = true;
+    o.stripDebugger = true;
+    return o;
+}
+
 /** Cheap check: input that already calls into our runtime should not be re-wrapped. */
 function alreadyRewritten(src: string): boolean {
     return sIncludes(src, "$rewriter.wrap_") || sIncludes(src, "$rewriter_init(");

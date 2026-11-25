@@ -13,6 +13,7 @@
 // (cors.ts): fetch marks such a response's Headers, an XHR opened to
 // another origin is judged by its own Access-Control-Expose-Headers.
 
+import { opaqueResponses } from "./fetch";
 import { SafeMap, SafeWeakMap, nO, nR, ncall } from "../native/intrinsics";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 import { crossOriginXhr, exposedBy, type Exposed } from "./cors";
@@ -87,13 +88,13 @@ export function patchResponseHeaders(targetWindow: Window, opaque = false): void
             // The runtime's own request headers on a Request the page holds
             // (cors.ts) are not the page's to see either.
             let marked = false;
-            try { marked = ncall(nativeGet, self, "crn-i") !== null || ncall(nativeGet, self, "crn-c") !== null; } catch { marked = false; }
+            try { marked = ncall(nativeGet, self, "crn-i") !== null || ncall(nativeGet, self, "crn-c") !== null || ncall(nativeGet, self, "crn-a") !== null; } catch { marked = false; }
             if (!orig && !allow && !marked) return null;
             const hit = cache.get(self as object);
             if (hit && hit.raw === raw && hit.allow === allow && !marked) return hit.shown;
             let pairs: Array<[string, string]> = [];
             ncall(nativeForEach, self, (value: string, name: string) => {
-                if (name !== CARRIER && name !== "crn-i" && name !== "crn-c" && !(orig && name in orig)) pairs.push([name, value]);
+                if (name !== CARRIER && name !== "crn-i" && name !== "crn-c" && name !== "crn-a" && !(orig && name in orig)) pairs.push([name, value]);
             });
             if (orig) for (const name of nO.keys(orig)) for (const v of orig[name] ?? []) pairs.push([name, v]);
             if (allow) pairs = pairs.filter(([name]) => allow(name.toLowerCase()));
@@ -129,6 +130,7 @@ export function patchResponseHeaders(targetWindow: Window, opaque = false): void
         wrapAccessor<string>(R, "statusText", {
             get: (get, self) => {
                 const v = ncall(get, self) as string;
+                if (typeof self === "object" && self !== null && opaqueResponses.has(self)) return ""; // an opaque response (fetch.ts)
                 let raw: string | null = null;
                 try { raw = ncall(nGet, ncall(nHeaders, self) as object, CARRIER) as string | null; } catch { raw = null; }
                 return phraseOf(raw) ?? v;

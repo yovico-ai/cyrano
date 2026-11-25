@@ -6,7 +6,10 @@
 // `<style id="_goober">` made with " ", then `sheet.data = sheet.data + css`
 // — and the image in that CSS loaded from its origin. Every route
 // (data, nodeValue, textContent, appendData, insertData, replaceData,
-// deleteData) must load through the proxy and read back as written.
+// deleteData; the element's insertAdjacentText; a nested rule a style
+// rule's insertRule adds — round K's built-in survey; a keyframe
+// appendRule adds — round J)
+// must load through the proxy and read back as written.
 //
 // Needs the built bundle and Playwright's Chromium; `make browser-check`.
 
@@ -39,6 +42,12 @@ t = sheet("e"); t.insertData(0, css("insert")); el("insert"); out.insert = t.dat
 t = sheet("f"); t.data = css("old"); t.replaceData(1, 3, "rep"); el("repld"); out.replace = t.data;
 t = sheet("g"); t.data = css("deleteme") + css("kept"); t.deleteData(0, css("deleteme").length); el("kept"); out.delete = t.data + "|" + document.getElementById("g").textContent;
 try { sheet("h").insertData(5, "x"); out.range = "no error"; } catch (e) { out.range = e.name; }
+let s = sheet("i").parentNode; s.insertAdjacentText("beforeend", css("adjend")); el("adjend"); out.adjend = s.textContent;
+s = sheet("j").parentNode; s.insertAdjacentText("AfterBegin", css("adjbegin")); el("adjbegin"); out.adjbegin = s.textContent;
+s = sheet("k").parentNode; const b = document.createElement("b"); s.appendChild(b); b.insertAdjacentText("afterend", css("adjafter")); el("adjafter"); out.adjafter = s.textContent;
+try { sheet("l").parentNode.insertAdjacentText("nowhere", "x"); out.adjbad = "no error"; } catch (e) { out.adjbad = e.name; }
+s = sheet("m").parentNode; s.textContent = ".nested { color: red }"; const r = s.sheet.cssRules[0]; r.insertRule("& { background-image: url(http://cdn.example/nested.gif) }", 0); el("nested"); out.nested = r.cssText;
+s = sheet("n").parentNode; s.textContent = "@keyframes kf { from { color: red } to { color: blue } } .kf { animation: kf 100s -50s paused }"; const k = s.sheet.cssRules[0]; k.appendRule("50% { background-image: url(http://cdn.example/kf.gif) }"); el("kf"); out.keyframe = k.cssText;
 window.out = out;
 `;
 
@@ -92,7 +101,7 @@ describe.skipIf(!wanted)("a <style>'s text set through its text node, in Chromiu
     it("loads through the proxy and reads back as written", async () => {
         const direct = await run("/direct");
         const proxied = await run("/cyrano/https/site.example/page");
-        expect(direct.fetched.map((u) => u.replace("http://cdn.example/", ""))).toEqual(["append.gif", "data.gif", "insert.gif", "kept.gif", "nodevalue.gif", "textcontent.gif"]);
+        expect(direct.fetched.map((u) => u.replace("http://cdn.example/", ""))).toEqual(["adjafter.gif", "adjbegin.gif", "adjend.gif", "append.gif", "data.gif", "insert.gif", "kept.gif", "kf.gif", "nested.gif", "nodevalue.gif", "textcontent.gif"]);
         expect(proxied.out).toEqual(direct.out);
         expect(proxied.fetched).toEqual(direct.fetched.map((u) => u.replace("http://cdn.example/", `${origin}/cyrano/http/cdn.example/`)));
     });

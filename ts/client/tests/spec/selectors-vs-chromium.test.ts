@@ -28,7 +28,7 @@ type Browser = { newPage(): Promise<Page>; close(): Promise<void> };
 
 const PROXY = "http://p.example:9081";
 const BASE = "https://site.example/dir/page";
-const URLS = ["https://cdn.example/lib/a.js", "https://cdn.example/lib/a.js?v=2#f", "http://h.example/x/y", "https://site.example/dir/b.css", "/root/c.js", "rel/d.js", "../up.js"];
+const URLS = ["https://cdn.example/lib/a.js", "https://cdn.example/lib/a-b.js", "https://cdn.example/lib/a.js?v=2#f", "http://h.example/x/y", "https://site.example/dir/b.css", "/root/c.js", "rel/d.js", "../up.js"];
 
 describe.skipIf(!wanted || located.skip !== "")("Selectors on URL attributes: the spec is Chromium", () => {
     let oracle: OracleClient;
@@ -46,7 +46,7 @@ describe.skipIf(!wanted || located.skip !== "")("Selectors on URL attributes: th
     });
 
     it("the widened selector matches the proxied element as the page's matches the page's", async () => {
-        const kase = fc.tuple(fc.constantFrom(...URLS), fc.constantFrom("=", "^=", "*=", "$="), fc.nat(40), fc.constantFrom(...URLS), fc.boolean(), fc.constantFrom("img", "a", "script", "link", "source"))
+        const kase = fc.tuple(fc.constantFrom(...URLS), fc.constantFrom("=", "^=", "*=", "$=", "~=", "|="), fc.nat(40), fc.constantFrom(...URLS), fc.boolean(), fc.constantFrom("img", "a", "script", "link", "source"))
             .map(([o0, op0, cut, other, related, tag]) => {
                 // A source's srcset holds one candidate, "URL 1x": only = and ^= are widened there.
                 const o = o0;
@@ -56,7 +56,8 @@ describe.skipIf(!wanted || located.skip !== "")("Selectors on URL attributes: th
                 const afterHost = abs ? o.indexOf("/", o.indexOf("//") + 2) : 0;
                 let v = other;
                 if (related) {
-                    if (op === "=") v = o;
+                    if (op === "=" || op === "~=") v = o;
+                    else if (op === "|=") v = o.indexOf("-") > afterHost ? o.slice(0, o.lastIndexOf("-")) : o;
                     else if (op === "^=") v = o.slice(0, Math.min(o.length, afterHost + 1 + cut));
                     else if (op === "*=" && abs) v = o.slice(o.indexOf("//"), Math.min(o.length, afterHost + 1 + cut));
                     else if (op === "$=") v = o.slice(Math.max(0, o.length - 1 - cut));

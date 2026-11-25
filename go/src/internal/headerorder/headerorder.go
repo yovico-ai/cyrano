@@ -424,3 +424,9 @@ func insertAll(list, extra []string) []string {
 	}
 	return list
 }
+
+// WithOrder is ctx with an explicit order for the request made under it
+// (a request the proxy makes itself: a CORS preflight, proxy/preflight.go).
+func WithOrder(ctx context.Context, order []string) context.Context {
+	return context.WithValue(ctx, orderKey{}, order)
+}

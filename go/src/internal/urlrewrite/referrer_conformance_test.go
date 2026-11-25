@@ -73,7 +73,7 @@ func TestSpecConformance_OriginHeader(t *testing.T) {
 		if safe {
 			sm = "safe"
 		}
-		dest := rapid.SampledFrom([]string{"", "script", "style", "font", "image", "empty", "audio", "worker", "document"}).Draw(rt, "dest")
+		dest := rapid.SampledFrom([]string{"", "script", "style", "font", "image", "empty", "audio", "worker", "document", "audioworklet", "paintworklet", "sharedstorageworklet"}).Draw(rt, "dest")
 		args := []string{mode, sm, p, from, to}
 		if dest != "" {
 			args = append(args, dest)

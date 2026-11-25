@@ -97,6 +97,20 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 		return func(src []byte) []byte { return jsrewrite.Rewrite(src, opts) }
 	}
 
+	// A worklet's module (spec/Disposition.agda workletDest): only the rules
+	// that need no runtime — its static specifiers proxified unmarked (the
+	// modules they name are asked for as the worklet's too, and judged so),
+	// import.meta.url its own URL.
+	rewriteWorkletFor := func(scriptURL *url.URL) func([]byte) []byte {
+		opts := jsrewrite.WorkletOptions()
+		opts.Logger = jsOpts.Logger
+		opts.BaseURL = scriptURL
+		opts.ProxifyURL = func(rawURL string, base *url.URL) string {
+			return urlrewrite.RewriteDest(rawURL, base, proxyCfg, "")
+		}
+		return func(src []byte) []byte { return jsrewrite.Rewrite(src, opts) }
+	}
+
 	// A javascript: URL's code (spec/JsUrl.agda): global code, its
 	// completion value handed to the runtime.
 	rewriteJSURL := func(code string) string {
@@ -150,7 +164,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 		// reply by position); if the page then runs them — eval, new
 		// Function, a script's text, a blob worker — the runtime rewrites
 		// them there.
-		switch kindOf(resp) {
+		switch kind := kindOf(resp); kind {
 		case kindAsIs:
 		case kindCSS:
 			body, err := readDecompressedBody(resp)
@@ -296,7 +310,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				"target", target.String(), "in", len(body), "out", len(rewritten))
 			replaceBody(resp, rewritten)
 
-		case kindJS:
+		case kindJS, kindWorklet:
 			// Challenge and bot-detection scripts (Cloudflare's orchestrate,
 			// jsd and Turnstile, Akamai's sensor) are rewritten like any
 			// other: their self-checks see their original source.
@@ -311,7 +325,11 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			if proxy.OrbBlocks(resp, body) {
 				return proxy.ErrOrbBlocked
 			}
-			rewritten := rewriteJSFor(target)(body)
+			rewrite := rewriteJSFor(target)
+			if kind == kindWorklet {
+				rewrite = rewriteWorkletFor(target)
+			}
+			rewritten := rewrite(body)
 			if prettify {
 				rewritten = jsrewrite.Prettify(rewritten)
 			}
@@ -368,10 +386,13 @@ const (
 	kindCSS
 	kindHTML
 	kindXML
+	// A worklet's module (spec/Disposition.agda workletDest): JavaScript
+	// for a scope with no runtime, given only the rules that need none.
+	kindWorklet
 )
 
 func (k bodyKind) String() string {
-	return [...]string{"none", "js", "css", "html", "xml"}[k]
+	return [...]string{"none", "js", "css", "html", "xml", "worklet"}[k]
 }
 
 // isXMLType: a document Chromium renders as an XML document (spec
@@ -426,6 +447,9 @@ func xmlMagicBytes(b []byte) bool {
 }
 
 func responseKind(mark urlrewrite.Dest, sfd string, has bool, ct string, hasCT bool, sniff func() sniffResult) bodyKind {
+	if has && workletDest(sfd) {
+		return kindWorklet
+	}
 	switch mark {
 	case urlrewrite.DestScript, urlrewrite.DestModuleWorker, urlrewrite.DestScriptCred:
 		return kindJS
@@ -449,7 +473,7 @@ func responseKind(mark urlrewrite.Dest, sfd string, has bool, ct string, hasCT b
 		return kindAsIs
 	}
 	switch strings.ToLower(sfd) {
-	case "script", "worker", "sharedworker", "serviceworker", "audioworklet", "paintworklet":
+	case "script", "worker", "sharedworker", "serviceworker":
 		return kindJS
 	case "style":
 		return kindCSS
@@ -479,6 +503,16 @@ func responseKind(mark urlrewrite.Dest, sfd string, has bool, ct string, hasCT b
 		}
 	}
 	return kindAsIs
+}
+
+// workletDest: a worklet's module or one it imports (spec/Disposition.agda
+// workletDest) — its code runs where there is no runtime.
+func workletDest(sfd string) bool {
+	switch strings.ToLower(sfd) {
+	case "audioworklet", "paintworklet", "sharedstorageworklet":
+		return true
+	}
+	return false
 }
 
 // takenMime is the MIME type Chromium takes from a Content-Type value

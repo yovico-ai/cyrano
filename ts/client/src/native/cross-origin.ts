@@ -27,7 +27,7 @@
 // document.domain relaxation is not modelled.
 
 import { stacked } from "./stacked";
-import { SafeWeakMap, SafeWeakSet, nO, ncall, aIncludes } from "./intrinsics";
+import { SafeWeakMap, SafeWeakSet, nO, nR, nbind, ncall, aIncludes } from "./intrinsics";
 import { internalsOf } from "./internals";
 import { heldAttr } from "./originals";
 import { frameDest, type Dest } from "../url/containment";
@@ -151,9 +151,20 @@ export function crossOriginView<T>(target: T, pendingOrigin: string | null = nul
     return view as T;
 }
 
-function securityError(v: Viewer): Error {
+/**
+ * Blink's SecurityError for a cross-origin access (measured): a read of
+ * property p (a call, a descriptor) "Failed to read a named property 'p'
+ * from 'Window': …", a write "Failed to set a named property 'p' on
+ * 'Window': …", `in` / define / delete the bare message. A symbol reads as
+ * "[Symbol.iterator]".
+ */
+function securityError(v: Viewer, op?: "read" | "set", p?: PropertyKey, iface = "Window"): Error {
     const DE = (v.win as unknown as { DOMException: typeof DOMException }).DOMException;
-    return stacked(new DE(`Blocked a frame with origin "${v.origin()}" from accessing a cross-origin frame.`, "SecurityError"));
+    const base = `Blocked a frame with origin "${v.origin()}" from accessing a cross-origin frame.`;
+    const name = typeof p === "symbol" ? `[${p.description ?? ""}]` : String(p);
+    const msg = op === "read" ? `Failed to read a named property '${name}' from '${iface}': ${base}`
+        : op === "set" ? `Failed to set a named property '${name}' on '${iface}': ${base}` : base;
+    return stacked(new DE(msg, "SecurityError"));
 }
 
 const WINDOW_KEYS = ["window", "self", "location", "close", "closed", "focus", "blur", "frames", "length", "top", "opener", "parent", "postMessage"];
@@ -187,7 +198,7 @@ function makeView(t: Window, v: Viewer): object {
     const get = (p: string | symbol): unknown => {
         if (typeof p === "symbol") {
             if (quietSymbol(p)) return undefined;
-            throw securityError(v);
+            throw securityError(v, "read", p);
         }
         switch (p) {
             case "window": case "self": case "frames": return view;
@@ -209,31 +220,61 @@ function makeView(t: Window, v: Viewer): object {
         // anchor frame as parent.frames["a-…"].
         const named = childNamed(t, p);
         if (named !== undefined) return crossOriginView(named, null, v.win);
-        throw securityError(v);
+        throw securityError(v, "read", p);
+    };
+    // Until the navigation that makes it another origin's commits, the frame
+    // is still its initial about:blank — its creator's origin, natively
+    // readable and writable (a script writes into it, adds listeners). The
+    // view then forwards to it, keeping itself as its window, self and
+    // frames (one WindowProxy throughout) and its functions bound to it,
+    // one per function (`f.alert === f.alert`). Once a committed document
+    // has been seen it never forwards again.
+    let initial = true;
+    const blank = (): boolean => {
+        if (!initial) return false;
+        let href = "";
+        try { href = t.location.href; } catch { href = ""; }
+        if (href !== "about:blank") initial = false;
+        return initial;
+    };
+    const bound = new SafeWeakMap<object, unknown>();
+    const forward = (p: string | symbol): unknown => {
+        if (p === "window" || p === "self" || p === "frames") return view;
+        const val = nR.get(t, p, t) as unknown;
+        if (typeof val !== "function") return val;
+        let b = bound.get(val as object);
+        if (!b) { b = nbind(val as (...a: unknown[]) => unknown, t); bound.set(val as object, b); }
+        return b;
     };
     const known = (p: string | symbol): boolean =>
         typeof p === "string"
             ? aIncludes(WINDOW_KEYS, p) || p === "then" || (isIndex(p) && Number(p) < t.length) || childNamed(t, p) !== undefined
             : quietSymbol(p);
     const view: object = new Proxy({}, {
-        get: (_o, p) => get(p),
+        get: (_o, p) => (blank() ? forward(p) : get(p)),
         set: (_o, p, value) => {
-            if (p !== "location") throw securityError(v);
+            if (blank()) return nR.set(t, p, value, t);
+            if (p !== "location") throw securityError(v, "set", p);
             (location as { href: unknown }).href = value;
             return true;
         },
         has: (_o, p) => {
+            if (blank()) return nR.has(t, p);
             if (known(p)) return true;
             throw securityError(v);
         },
         getOwnPropertyDescriptor: (_o, p) => {
-            if (!known(p)) throw securityError(v);
+            if (blank()) {
+                const d = nR.getOwnPropertyDescriptor(t, p);
+                return d ? { ...d, configurable: true } : undefined; // (the view's own target holds none)
+            }
+            if (!known(p)) throw securityError(v, "read", p);
             return { value: get(p), writable: false, enumerable: false, configurable: true };
         },
-        ownKeys: () => [...WINDOW_KEYS, "then", Symbol.toStringTag, Symbol.hasInstance, Symbol.isConcatSpreadable],
-        defineProperty: () => { throw securityError(v); },
-        deleteProperty: () => { throw securityError(v); },
-        getPrototypeOf: () => null,
+        ownKeys: () => (blank() ? nR.ownKeys(t) : [...WINDOW_KEYS, "then", Symbol.toStringTag, Symbol.hasInstance, Symbol.isConcatSpreadable]),
+        defineProperty: (_o, p, d) => { if (blank()) return nR.defineProperty(t, p, d); throw securityError(v); },
+        deleteProperty: (_o, p) => { if (blank()) return nR.deleteProperty(t, p); throw securityError(v); },
+        getPrototypeOf: () => (blank() ? nR.getPrototypeOf(t) : null),
         setPrototypeOf: (_o, proto) => proto === null,
     });
     return view;
@@ -298,14 +339,17 @@ function makeLocationView(t: Window, v: Viewer): object {
         throw stacked(new DE(how === "set" ? `Failed to set a named property 'href' on 'Location': ${why}` : `Failed to execute 'replace' on 'Location': ${why}`, "SecurityError"));
     };
     const replace = (url: unknown): void => { busting(String(url), "replace"); t.location.replace(to(String(url))); };
+    // a setter-only accessor's descriptor: get undefined (enumerable off, configurable on)
+    const hrefDesc = nO.getOwnPropertyDescriptor({ set href(value: unknown) { busting(String(value), "set"); t.location.href = to(String(value)); } }, "href")!;
+    nO.defineProperty(hrefDesc, "enumerable", { value: false });
     return new Proxy({}, {
         get: (_o, p) => {
             if (p === "replace") return replace;
             if (p === "then" || (typeof p === "symbol" && quietSymbol(p))) return undefined;
-            throw securityError(v);
+            throw securityError(v, "read", p, "Location");
         },
         set: (_o, p, value) => {
-            if (p !== "href") throw securityError(v);
+            if (p !== "href") throw securityError(v, "set", p, "Location");
             busting(String(value), "set");
             t.location.href = to(String(value));
             return true;
@@ -317,7 +361,9 @@ function makeLocationView(t: Window, v: Viewer): object {
         getOwnPropertyDescriptor: (_o, p) => {
             if (p === "replace") return { value: replace, writable: false, enumerable: false, configurable: true };
             if (p === "then" || (typeof p === "symbol" && quietSymbol(p))) return { value: undefined, writable: false, enumerable: false, configurable: true };
-            throw securityError(v);
+            // href: a setter, no getter (as natively)
+            if (p === "href") return hrefDesc;
+            throw securityError(v, "read", p, "Location");
         },
         ownKeys: () => ["href", "replace", "then", Symbol.toStringTag, Symbol.hasInstance, Symbol.isConcatSpreadable],
         defineProperty: () => { throw securityError(v); },

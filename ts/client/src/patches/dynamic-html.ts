@@ -470,6 +470,31 @@ function patchRawText(targetWindow: Window, rewriteOne: (url: string) => string)
             return nR.apply(native, self, args.map((a) => rewriteTextNode(self, a, rewriteOne))) as void;
         });
     }
+    // insertAdjacentText: text placed inside the element (afterbegin,
+    // beforeend) or beside it (beforebegin, afterend: into its parent) — a
+    // <script>'s or <style>'s text. The native is given the rewritten text
+    // (its own position check, errors and parent rules), and the text node
+    // it made keeps the page's text for read-back.
+    if (E && ncall(nOP.hasOwnProperty, E, "insertAdjacentText")) {
+        save(E, "insertAdjacentText");
+        wrapMethod<(...a: unknown[]) => void>(E, "insertAdjacentText", (native, self, args) => {
+            if (args.length < 2 || !isEl(self) || typeof args[0] === "symbol" || typeof args[1] === "symbol") return nR.apply(native, self, args) as void;
+            const pos = String(args[0]); // each argument converted once, as natively
+            const where = sLower(pos);
+            const inside = where === "afterbegin" || where === "beforeend";
+            const target = inside ? self : where === "beforebegin" || where === "afterend" ? self.parentNode as Element | null : null;
+            if (!target || !isEl(target) || target.namespaceURI !== "http://www.w3.org/1999/xhtml" || (target.localName !== "script" && target.localName !== "style")) {
+                return nR.apply(native, self, args) as void;
+            }
+            const text = String(args[1]);
+            const raw = rawText(target, text, rewriteOne);
+            if (raw === null || raw === text) return nR.apply(native, self, [pos, text, ...args.slice(2)]) as void;
+            nR.apply(native, self, [pos, raw, ...args.slice(2)]);
+            const made = where === "afterbegin" ? self.firstChild : where === "beforeend" ? self.lastChild
+                : where === "beforebegin" ? self.previousSibling : self.nextSibling;
+            if (made && made.nodeType === 3) recordTextNode(made, raw, text);
+        });
+    }
 }
 
 /**

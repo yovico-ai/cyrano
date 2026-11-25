@@ -14,6 +14,8 @@
 //     [src="V"]   →  :is([src="V"], [src="proxied(V)"])
 //     [href^="V"] →  :is([href^="V"], [href^="proxied(V)"])
 //
+// `~=` and `|=` are widened as `=` (a URL attribute is one token:
+// contexture.org's widget finds its images with `img[src~="<url>"]`).
 // `*=` and `$=` admit the proxied form of a value naming a host after
 // `//`, with or without (the end of) a scheme before it
 // (`[src*="//html-load.com/loader.min.js"]`, Ad-Shield's recovery code
@@ -92,7 +94,7 @@ function bracketEnd(s: string, start: number): number {
 }
 
 // [ name op value flags? ]
-const ATTR = /^\[\s*([A-Za-z_][\w-]*)\s*(=|\^=|\*=|\$=)\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^\s\]"']+))\s*([iIsS])?\s*\]$/;
+const ATTR = /^\[\s*([A-Za-z_][\w-]*)\s*(=|\^=|\*=|\$=|~=|\|=)\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^\s\]"']+))\s*([iIsS])?\s*\]$/;
 
 /** A proxied URL as an element may hold it: unmarked, and marked js and css (spec/Containment.agda Mark). */
 function withMarks(proxied: string): string[] {
@@ -138,6 +140,9 @@ function widenAttribute(whole: string, rewriteOne: (url: string) => string, prox
         const scheme = sStarts(value.toLowerCase(), "https") ? ["https"] : ["http", "https"];
         for (const s of scheme) alternatives.push(`${proxyBase}/cyrano/${s}/`, `${proxyBase}/cyrano/${s}!`);
     } else {
+        // ~= on a URL attribute (one token) is =, and |= is = or the value
+        // and "-": widened as = is; a ~= value with whitespace matches nothing.
+        if (op === "~=" && /[\t\n\f\r ]/.test(value)) return whole;
         let proxied: string;
         try { proxied = rewriteOne(value); } catch { return whole; }
         if (proxied === value) return whole;

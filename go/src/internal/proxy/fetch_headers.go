@@ -183,6 +183,16 @@ func initiatorOrigin(v string) string {
 		return ""
 	}
 	u, err := url.Parse(v)
+	if err == nil && strings.EqualFold(u.Scheme, "blob") && u.Opaque != "" {
+		// A blob: context (a blob: worker) is of the origin inside its URL
+		// (URL Standard: a blob: URL's origin); it sends no Referer, so this
+		// names it (its fetches went with no Origin, and no preflight).
+		// (one step: an inner blob: URL's origin is opaque)
+		if in, err := url.Parse(u.Opaque); err == nil && (in.Scheme == "http" || in.Scheme == "https") && in.Host != "" {
+			return in.Scheme + "://" + in.Host
+		}
+		return ""
+	}
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return ""
 	}
@@ -324,6 +334,24 @@ func scriptDocSet(session, script, doc string) {
 	scriptDocs.m[session+"\x00"+script] = doc
 }
 
+// workletDest: a worklet's module or one it imports (spec/Disposition.agda
+// workletDest).
+func workletDest(d string) bool {
+	switch strings.ToLower(d) {
+	case "audioworklet", "paintworklet", "sharedstorageworklet":
+		return true
+	}
+	return false
+}
+
+// workletImport: a worklet's request (dest) whose Referer (from) is a
+// worklet module noted with its document — an import, made by that
+// document as directly (a worklet's settings are its document's); worklet
+// module URLs carry no mark to tell.
+func workletImport(session, dest string, from *url.URL) bool {
+	return workletDest(dest) && from != nil && scriptDocGet(session, pageKey(from)) != ""
+}
+
 // scriptish: a URL mark of a script's or stylesheet's (spec Containment
 // destScript, destStyle and kin): its own requests (imports, fonts) are
 // its document's.
@@ -340,16 +368,17 @@ func (h *Handler) scriptDocument(req *http.Request, referer string, from, target
 		return ""
 	}
 	session := sessionIn(req)
+	dest := strings.ToLower(req.Header.Get("Sec-Fetch-Dest"))
 	refScript := false
 	if u, err := url.Parse(referer); err == nil {
-		refScript = scriptish(urlrewrite.TargetDest(u.EscapedPath()))
+		refScript = scriptish(urlrewrite.TargetDest(u.EscapedPath())) || workletImport(session, dest, from)
 	}
 	doc := pageKey(from)
 	if refScript {
 		doc = scriptDocGet(session, pageKey(from))
 	}
 	mark, _ := req.Context().Value(destContextKey{}).(urlrewrite.Dest)
-	if dest := strings.ToLower(req.Header.Get("Sec-Fetch-Dest")); doc != "" && (scriptish(mark) || dest == "script" || dest == "style") {
+	if doc != "" && (scriptish(mark) || dest == "script" || dest == "style" || workletDest(dest)) {
 		scriptDocSet(session, pageKey(target), doc)
 	}
 	if !refScript {

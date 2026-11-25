@@ -26,8 +26,8 @@
 -- that is not a header name (a token) fails the whole header — no name is
 -- then exposed. (A first reading that trimmed all ASCII whitespace and kept
 -- any item was refuted by Chromium 147.)
--- Not modelled: preflights, opaque ("no-cors") responses, redirects (the
--- tainted origin "null").
+-- Preflights: spec/Preflight.agda. Not modelled: opaque ("no-cors")
+-- responses, redirects (the tainted origin "null").
 --
 -- Implemented by go/src/internal/proxy/cors.go, proxy/cookies.go and
 -- ts/client/src/patches/cors.ts, fetch.ts, xhr.ts.
@@ -172,3 +172,23 @@ exposed cred expose name =
 
   listed : List Str
   listed = exposeList expose
+
+------------------------------------------------------------------------
+-- The response's type a script sees (Fetch §4.1 main fetch, the filtered
+-- responses; Chromium, measured: opaque-response-vs-chromium): of a
+-- request to another origin, "cors" in cors mode, "opaque" in no-cors
+-- mode — status 0, no status text, no URL, no header, no body (its readers
+-- an empty body's); of one to its own origin "basic". (A same-origin-mode
+-- request to another origin the browser refuses before any.) Through the
+-- proxy every response is basic to the browser: the runtime shows these.
+
+data ReqMode : Set where
+  modeCors modeNoCors modeSameOrigin modeNavigate : ReqMode
+
+data RespType : Set where
+  basicT corsT opaqueT : RespType
+
+responseType : ReqMode → Bool → RespType
+responseType modeCors   true = corsT
+responseType modeNoCors true = opaqueT
+responseType _          _    = basicT

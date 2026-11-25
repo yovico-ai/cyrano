@@ -29,6 +29,7 @@ open import Data.List.Base using (List; []; _∷_)
 open import Data.String.Base using (toList)
 
 open import Url using (Str; eqStr)
+import Url
 
 data Credentials : Set where
   include omit sameOrigin : Credentials
@@ -168,3 +169,55 @@ encodeDirKey (c ∷ s)    = c ∷ encodeDirKey s
 
 opfsDir : Str → Str
 opfsDir key = toList "crn" ++ (sep ∷ encodeDirKey key ++ (sep ∷ []))
+
+-- ---------------------------------------------------------------------
+-- The old FileSystem API (TS: patches/storage.ts patchOldFileSystem):
+-- webkitRequestFileSystem's TEMPORARY and PERSISTENT file systems were the
+-- proxy origin's one each (round K's built-in survey: one site's files were
+-- found by another). The page's root is the real root's directory named as
+-- its OPFS root is (opfsDir). A path the page gives an entry at page path
+-- `at` — from the root when it starts with "/", else from `at`; "" and "."
+-- segments dropped, ".." one up and never above the root (measured,
+-- Chromium) — is that directory's path; a real path under it shows as the
+-- page's. (The root itself is refused removal or a move, as natively: the
+-- runtime asks the real root.)
+fsPath : Str → Str → Str → Str
+fsPath key at given = root ++ joined (walk (start given) (Url.splitOn (Url.is 47) given))
+  where
+  open import Data.List.Base using (_++_; reverse)
+  root : Str
+  root = '/' ∷ opfsDir key
+  -- the segments walked so far, innermost first
+  start : Str → List Str
+  start ('/' ∷ _) = []
+  start _         = reverse (dropEmpty (Url.splitOn (Url.is 47) at))
+    where
+    dropEmpty : List Str → List Str
+    dropEmpty [] = []
+    dropEmpty ([] ∷ ss) = dropEmpty ss
+    dropEmpty (s ∷ ss) = s ∷ dropEmpty ss
+  walk : List Str → List Str → List Str
+  walk acc [] = acc
+  walk acc ([] ∷ ss) = walk acc ss
+  walk acc (('.' ∷ []) ∷ ss) = walk acc ss
+  walk [] (('.' ∷ '.' ∷ []) ∷ ss) = walk [] ss
+  walk (_ ∷ acc) (('.' ∷ '.' ∷ []) ∷ ss) = walk acc ss
+  walk acc (s ∷ ss) = walk (s ∷ acc) ss
+  joined : List Str → Str
+  joined [] = []
+  joined segs = go (reverse segs)
+    where
+    go : List Str → Str
+    go [] = []
+    go (s ∷ ss) = '/' ∷ s ++ go ss
+
+-- A real path as the page sees it: under the key's directory, the rest
+-- ("/" for the directory itself); any other, as it is.
+shownPath : Str → Str → Str
+shownPath key real = strip ('/' ∷ opfsDir key) real
+  where
+  strip : Str → Str → Str
+  strip [] [] = '/' ∷ []
+  strip [] rest@('/' ∷ _) = rest
+  strip (p ∷ ps) (c ∷ cs) = if eqStr (p ∷ []) (c ∷ []) then strip ps cs else real
+  strip _ _ = real

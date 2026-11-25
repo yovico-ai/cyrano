@@ -5,7 +5,8 @@
 // into or sent somewhere later). It gets its opener's runtime, as an empty
 // frame does its creator's: what the page writes into it and where it sends
 // it go through the proxy, its document.cookie is the opener's cookies (no
-// channel entry shows), its origin the page's.
+// channel entry shows), its origin the page's. document.open's
+// three-argument form opens one as window.open does.
 //
 // Needs the built bundle and Playwright's Chromium; `make browser-check`.
 
@@ -37,6 +38,9 @@ const n1 = window.open("about:blank", "nm");
 n1.location = "https://other.example/assigned";
 const n2 = window.open("", "nm2");
 n2.location.href = "https://other.example/href";
+// document.open with three arguments is window.open (round K: it opened the URL outside the proxy)
+const d = document.open("https://other.example/docopen", "_blank", ""); out.docOpen = d !== null && typeof d === "object";
+const d2 = document.open.call(document, "https://other.example/docopen2", "dn", "popup"); out.docOpen2 = d2 !== null;
 window.out = out;
 })();
 `;
@@ -82,7 +86,7 @@ describe.skipIf(!wanted)("a popup opened on about:blank, in Chromium, through th
         await page.evaluate(() => new Promise((res) => setTimeout(res, 1500)));
         const out = await page.evaluate(() => (window as unknown as { out: unknown }).out);
         await ctx.close();
-        expect(out).toEqual({ popupCookie: "fromPopup=1; op=1", openerCookie: "fromPopup=1; op=1", origin: true });
+        expect(out).toEqual({ popupCookie: "fromPopup=1; op=1", openerCookie: "fromPopup=1; op=1", origin: true, docOpen: true, docOpen2: true });
         expect(outside).toEqual([]);
     }, 60_000);
 });

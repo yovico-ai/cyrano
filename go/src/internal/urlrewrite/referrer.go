@@ -266,5 +266,5 @@ func secFetchSite(i absURL, iSite string, t absURL, tSite string) string {
 // originCarryingDest: the destinations whose same-origin CORS requests carry
 // Origin (spec/Referrer.agda originHeader carries).
 func originCarryingDest(d string) bool {
-	return d == "script" || d == "style" || d == "font" || d == "image"
+	return d == "script" || d == "style" || d == "font" || d == "image" || d == "audioworklet" || d == "paintworklet"
 }

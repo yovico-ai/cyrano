@@ -19,6 +19,8 @@
 --     takes (no Content-Type, one without "/", */*, unknown/unknown,
 --     application/unknown) and its bytes sniff as HTML (sniffHtml); a fetch() or XHR (empty)
 --     is the page's data, as sent; any other destination too.
+--   * A worklet's module, by its Sec-Fetch-Dest before any mark, is
+--     JavaScript for a scope with no runtime (asWorklet: workletDest).
 --   * A request with no Sec-Fetch-Dest (a client that sends none) goes by
 --     the MIME type's essence.
 --
@@ -38,10 +40,12 @@ open import Data.Nat.Base using (ℕ; zero; suc)
 open import Containment using (Dest; destScript; destStyle; destFrame; destInert; destImageSet; destModuleWorker; destCred; destScriptCred; destStyleCred; destAnon)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl)
 
+-- asWorklet: a worklet's module (below, workletDest).
 data Kind : Set where
-  asJs asCss asHtml asXml asIs : Kind
+  asJs asCss asHtml asXml asIs asWorklet : Kind
 
 kindName : Kind → String
+kindName asWorklet = "worklet"
 kindName asJs   = "js"
 kindName asCss  = "css"
 kindName asHtml = "html"
@@ -171,7 +175,7 @@ sniffOf b = sniff (sniffHtml b) (xmlMagic b)
 
 unmarked : Maybe Str → Maybe Str → Sniff → Kind
 unmarked (just d₀) ct sn =
-  if inS d ("script" ∷ "worker" ∷ "sharedworker" ∷ "serviceworker" ∷ "audioworklet" ∷ "paintworklet" ∷ []) then asJs
+  if inS d ("script" ∷ "worker" ∷ "sharedworker" ∷ "serviceworker" ∷ []) then asJs
   else if eqStr d (toList "style") then asCss
   else if inS d ("document" ∷ "iframe" ∷ "frame" ∷ "embed" ∷ "object" ∷ []) then document ct
   else asIs
@@ -200,18 +204,35 @@ unmarked nothing (just t) _ =
   else asIs
 unmarked nothing nothing _ = asIs
 
+-- A worklet's module (Sec-Fetch-Dest audioworklet, paintworklet,
+-- sharedstorageworklet; Fetch's worklet destinations, measured in
+-- Chromium) and every module it imports, whatever the URL's mark: its code
+-- runs in a worklet global, where there is no runtime — no window, no
+-- location, no fetch or XHR, import() refused (HTML "worklets") — so it
+-- gets only the JS rules that need none: static import and export
+-- specifiers proxified (unmarked: they too are judged by this), and
+-- import.meta.url its own URL. What would reach the proxy's origin there
+-- is only what those name. The client's blob: module the same
+-- (patches/worklet.ts).
+workletDest : Maybe Str → Bool
+workletDest (just d) = inS (map lowerAscii d) ("audioworklet" ∷ "paintworklet" ∷ "sharedstorageworklet" ∷ [])
+workletDest nothing  = false
+
 responseKind : Maybe Dest → Maybe Str → Maybe Str → Sniff → Kind
-responseKind (just destScript) _ _ _ = asJs
-responseKind (just destModuleWorker) _ _ _ = asJs
-responseKind (just destScriptCred) _ _ _ = asJs
-responseKind (just destStyleCred) _ _ _ = asCss
-responseKind (just destCred) sfd ct sn = unmarked sfd ct sn
-responseKind (just destAnon) sfd ct sn = unmarked sfd ct sn
-responseKind (just destStyle)  _ _ _ = asCss
-responseKind (just destFrame)  sfd ct sn = unmarked sfd ct sn
-responseKind (just destInert)  sfd ct sn = unmarked sfd ct sn
-responseKind (just destImageSet) sfd ct sn = unmarked sfd ct sn
-responseKind nothing           sfd ct sn = unmarked sfd ct sn
+responseKind d sfd ct sn = if workletDest sfd then asWorklet else byMark d sfd ct sn
+  where
+  byMark : Maybe Dest → Maybe Str → Maybe Str → Sniff → Kind
+  byMark (just destScript) _ _ _ = asJs
+  byMark (just destModuleWorker) _ _ _ = asJs
+  byMark (just destScriptCred) _ _ _ = asJs
+  byMark (just destStyleCred) _ _ _ = asCss
+  byMark (just destCred) sfd ct sn = unmarked sfd ct sn
+  byMark (just destAnon) sfd ct sn = unmarked sfd ct sn
+  byMark (just destStyle)  _ _ _ = asCss
+  byMark (just destFrame)  sfd ct sn = unmarked sfd ct sn
+  byMark (just destInert)  sfd ct sn = unmarked sfd ct sn
+  byMark (just destImageSet) sfd ct sn = unmarked sfd ct sn
+  byMark nothing           sfd ct sn = unmarked sfd ct sn
 
 ------------------------------------------------------------------------
 -- Whether a stylesheet applies (Chromium, checked: quirks-sheets-vs-

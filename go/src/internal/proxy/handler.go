@@ -117,7 +117,8 @@ func New(opts Options) *Handler {
 	if t == nil {
 		t = upstream.NewRoundTripper(opts.SkipTLSVerify)
 	}
-	return &Handler{opts: opts, transport: t}
+	// A cross-origin request that needs a CORS preflight gets one first (preflight.go).
+	return &Handler{opts: opts, transport: preflighting{next: t}}
 }
 
 // hopByHopHeaders are connection-scoped and must not propagate end-to-end.
@@ -365,9 +366,10 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		// that one — as noted when it was loaded (scriptDocs), else unknown
 		// (orb.go: not judged).
 		if ref, err := url.Parse(req.Header.Get("Referer")); err == nil && urlrewrite.OnProxy(ref.String(), h.opts.ProxyCfg) {
-			if scriptish(urlrewrite.TargetDest(ref.EscapedPath())) {
+			from := h.originalReferrer(ref.String())
+			if scriptish(urlrewrite.TargetDest(ref.EscapedPath())) || workletImport(sessionIn(req), req.Header.Get("Sec-Fetch-Dest"), from) {
 				doc := ""
-				if from := h.originalReferrer(ref.String()); from != nil {
+				if from != nil {
 					doc = scriptDocGet(sessionIn(req), pageKey(from))
 				}
 				if doc != "" {
@@ -587,8 +589,8 @@ func (h *Handler) errorHandler(target *url.URL, inbound *http.Request) func(http
 		)
 		if errors.Is(err, errCORS) || errors.Is(err, ErrOrbBlocked) {
 			// A network error, to page code what a CORS failure (or an
-			// ORB block: orb.go) is.
-			panic(http.ErrAbortHandler)
+			// ORB block: orb.go; a refused preflight: preflight.go) is.
+			networkErrorNoRetry(w, inbound)
 		}
 		var re rewriteError
 		if errors.As(err, &re) {
@@ -790,4 +792,25 @@ func corpFails(resp *http.Response) bool {
 	}
 	none, _ := req.Context().Value(noCredentialsKey{}).(bool)
 	return urlrewrite.CORPBlocks(h, has, emb, !none, page, req.URL.String())
+}
+
+// networkErrorNoRetry fails the browser's request as a network error that
+// it does not send again. The origin has answered already (a CORS or ORB
+// refusal, a refused preflight); Chrome resends a request whose reused
+// HTTP/1.1 connection closes with nothing received, so the origin got it
+// twice (preflight-vs-chromium). Over HTTP/1.x a response Chromium
+// refuses as a whole is sent (two Content-Lengths:
+// ERR_RESPONSE_HEADERS_MULTIPLE_CONTENT_LENGTH — headers received, so no
+// resend; a truncated status line it took as a response: scripts loaded);
+// over HTTP/2 the stream is reset.
+func networkErrorNoRetry(w http.ResponseWriter, r *http.Request) {
+	if r.ProtoMajor == 1 {
+		if conn, buf, err := http.NewResponseController(w).Hijack(); err == nil {
+			_, _ = buf.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nContent-Length: 1\r\nConnection: close\r\n\r\n")
+			_ = buf.Flush()
+			_ = conn.Close()
+			panic(http.ErrAbortHandler)
+		}
+	}
+	panic(http.ErrAbortHandler)
 }

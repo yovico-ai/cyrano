@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { defaultJsRewriteOptions, rewriteJsSource } from "../../src/js/rewriter";
+import { defaultJsRewriteOptions, rewriteJsSource, workletJsRewriteOptions } from "../../src/js/rewriter";
 import { original, unmarked } from "../../src/js/marks";
 
 const all = defaultJsRewriteOptions();
@@ -23,7 +23,7 @@ const cases = JSON.parse(readFileSync(resolve(__dirname, "../../../../spec/js-re
 
 describe("JS rewriting rules", () => {
     it.each(cases)("%s: %s", (_rule, src, want) => {
-        const out = rewriteJsSource(src, _rule.startsWith("jsUrl") ? { ...all, jsUrl: true } : all);
+        const out = rewriteJsSource(src, _rule.startsWith("jsUrl") ? { ...all, jsUrl: true } : _rule.startsWith("worklet") ? workletJsRewriteOptions() : all);
         expect(code(out)).toBe(want);
         expect(original(out)).toBe(src);
         expect(out.split("\n").length).toBe(src.split("\n").length);
