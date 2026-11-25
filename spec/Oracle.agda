@@ -401,6 +401,8 @@ dispatch op args =
   -- preflightheaders [<name> <value>]…; maxage <0|1 present> <value>;
   -- preflightok <status> <0|1> <ACAO> <0|1> <ACAC> <cred 0|1> <origin>
   -- <method> <unsafe names, ","-joined> <ACAM lines, U+001E-joined> <ACAH lines, same>
+  -- corsdest <Sec-Fetch-Dest>: "yes" when a cors-mode request of it is CORS-checked by the proxy
+  else if eqStr op (toList "corsdest") then oneArg (λ d → toList (if Orb.corsElementDest d then "yes" else "no")) args
   -- responsetype <cors|no-cors|same-origin|navigate> <cross 0|1>: basic, cors or opaque
   else if eqStr op (toList "responsetype") then twoArgs (λ m c → toList (typeName (Fetch.responseType (fetchModeOf m) (eqStr c (toList "1"))))) args
   else if eqStr op (toList "needspreflight") then needsPreflightReq args

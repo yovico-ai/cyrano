@@ -130,3 +130,17 @@ func TestInitiatorOriginBlob(t *testing.T) {
 		}
 	}
 }
+
+func TestSpecConformance_CorsElementDest(t *testing.T) {
+	oracle := specoracle.Need(t)
+	for _, d := range []string{"script", "Script", "style", "image", "font", "audio", "video", "track", "audioworklet", "paintworklet",
+		"sharedstorageworklet", "manifest", "json", "empty", "", "document", "iframe", "worker", "sharedworker", "serviceworker", "report", "object", "embed"} {
+		want, _, err := oracle.Ask("corsdest", d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := map[bool]string{true: "yes", false: "no"}[corsElementDest(d)]; got != want {
+			t.Errorf("corsElementDest(%q) = %s, spec %s", d, got, want)
+		}
+	}
+}

@@ -149,8 +149,10 @@ Chromium) is failed by the proxy when the script was asked in no-cors mode
 (the page's own: a missing crossorigin stays missing), whatever
 Access-Control-Allow-Origin it carries, and is not a redirect (adform's 301
 has an HTML body; the browser follows it); a cors-mode one (crossorigin, a
-module) gets the CORS check by the page's origin, as for anonymous
-(`proxy/orb.go` scriptCORSFails; snowball-io.io, `script-mode-vs-chromium`):
+module) — and every cors-mode element request: a stylesheet, image, font,
+media (Orb.agda corsElementDest; `cors-elements-vs-chromium`) — gets the
+CORS check by the page's origin, with credentials when its URL is marked
+use-credentials (`proxy/orb.go` scriptCORSFails; snowball-io.io, `script-mode-vs-chromium`):
 "null" for a sandboxed document; when the Referer is itself a script or
 stylesheet (a module's import, a sheet's font) by the document it was
 loaded for (`scriptDocs`), not judged where that is not known. A sandboxed
@@ -522,7 +524,9 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   global). Its imports are its document's (Origin even same-origin, as
   measured: `worklet-vs-chromium`). Gaps: a blob: module's imports carry
   no Referer, so the proxy cannot tell their document (Origin and
-  Sec-Fetch-Site the target's own; blob: module workers too);
+  Sec-Fetch-Site the target's own; blob: module workers too — kept: the
+  fix would change the proven URL format for request headers only; an
+  internal endpoint carrying the initiator is the way if a site needs it);
   import.meta.resolve gives the proxified URL. A worker reads its own URL,
   fragment included (a served worker's from its own location, unwrapped;
   a blob: worker's the page's blob URL with the page's origin; Turbopack's

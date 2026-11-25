@@ -11,11 +11,17 @@ request flows through the proxy. No browser extension, no native client, no
 PAC file, no system proxy setting — visit a proxified URL like
 
 ```
-http://proxy:9081/?goto=<base64url(https://example.com/)>
+https://proxy/cyrano/https/example.com/
 ```
 
-…and everything else (URL containment, DOM/JS rewriting, cookie sync,
-WebSocket upgrade) happens transparently behind that one entry point.
+…and everything else (URL containment, DOM/JS rewriting, cookies, WebSocket
+upgrade, WebRTC relay) happens transparently behind that one entry point.
+
+The rule everything is judged by: **the page cannot tell.** Its own scripts
+see exactly what they would on the origin — URLs as the browser serializes
+them, attribute text as the page wrote it, native errors in Chromium's own
+words, functions that look native — and the origin sees what a direct
+Chrome sends (TLS and HTTP/2 fingerprint, header order, CORS preflights).
 
 ## Why this exists
 
@@ -43,85 +49,88 @@ using numerous open source modules. It is amazing how easier it is than
 
 ## What it does
 
-- **URL containment** — every URL the browser would request gets rewritten
-  to land on the proxy origin via `?goto=<base64url(target)>`. Wire-
-  compatible scheme across both runtimes (Go server, TS client).
-- **HTML rewriting** — token-stream over `golang.org/x/net/html`. Rewrites
-  every URL-bearing attribute, inlines a bootstrap `<script src="/rewriter.js">`,
-  drops CSP `<meta>`, strips SRI, forces `crossorigin=use-credentials`,
-  injects cookie-sync `onload` hooks.
-- **JavaScript rewriting** (server side) — full AST-level transformation
-  via `tdewolff/parse/v2/js`. Wraps `location` reads/writes/member access,
-  `top` / `parent`, `eval`/`obj.eval`, `document.write`, `postMessage`,
-  dynamic computed-member access (`obj[expr]`).
-- **JavaScript rewriting** (client side) — same rule set, ported to a
-  browser-deliverable acorn-based pass. Runs at runtime over `eval(src)`,
-  `new Function(args, body)`, and inline `<script>` content inside any
-  HTML payload that arrives through `document.write` / `innerHTML` /
-  `outerHTML` / `insertAdjacentHTML`.
-- **CSS rewriting** — server side via `tdewolff/parse/v2/css`, client side
-  via a regex pass over `url(...)` and `@import "..."`. Both sides cover
-  inline `<style>` content, `style="..."` attributes,
-  `CSSStyleSheet.insertRule`, and `CSSStyleDeclaration` named-property
-  setters / `setProperty` / `cssText`.
-- **Prototype patches** in the browser — `fetch`, `XMLHttpRequest`,
-  `WebSocket`, `EventSource`, `Worker`, `SharedWorker`, the URL-bearing
-  attribute setters (`src` / `href` / `srcset` / `action` / `data` /
-  `poster`), `Element.innerHTML` / `outerHTML` / `insertAdjacentHTML` /
-  `setAttribute`, the `Function` constructor, the `CSSStyleDeclaration`
-  surfaces above.
-- **WebSocket upgrade** — `http.Hijacker` + bidirectional pipe. No frame
-  parsing; we shovel bytes.
-- **Server-Sent Events / streaming** — passthrough; nothing is buffered when
-  there's nothing to rewrite.
-- **Per-session cookie storage** — proxy holds origin cookies in its own
-  store and syncs them into `document.cookie` per page load, so cross-
-  origin cookie state never leaks into the proxy's single shared origin.
+- **URL containment** — every URL the browser would request is rewritten to
+  land on the proxy as `/cyrano/<scheme>/<host><path>`, with marks for what
+  the request is for (`/cyrano/https!js/…` for a script, `!css`, `!frame`, a
+  referrer policy, credentials) — the same scheme in both runtimes.
+- **HTML rewriting** (server) — a token stream over `golang.org/x/net/html`
+  fed by the spec's own tokenizer: every URL-bearing attribute (one table,
+  `spec/Attrs.agda`), inline scripts and styles, event-handler attributes,
+  `srcdoc`, `data:` / `blob:` frame documents; XML documents (SVG, XHTML)
+  edited in place. Start and end tags the rules leave alone go out byte for
+  byte; the originals travel in a `crn-o` attribute for read-back. The
+  runtime bootstrap goes in first and fails closed.
+- **JavaScript rewriting** — invertible edits spliced into the page's own
+  text (never re-printed): `location`, `top` / `parent`, `eval` and its
+  forms, `document.write`, `postMessage`, computed members, `import()`,
+  `import.meta`, workers, `javascript:` URLs. Server: an own recognizer in
+  Go (`jsrewrite`); client: the acorn-based reference; one shared case file
+  (`spec/js-rewrite/cases.json`).
+- **CSS rewriting** — CSS Syntax tokenization as far as finding URLs needs
+  it (`spec/Css.agda`), both runtimes, each URL keeping its written form.
+- **The browser runtime** (`ts/client`) — patches every surface a page can
+  load, read or navigate through: fetch / XHR (CORS, opaque responses,
+  exposed headers), WebSocket, EventSource, workers and worklets, the DOM's
+  insertion and serialization methods, CSSOM, Typed OM, canvas tainting,
+  storage partitions (localStorage, IndexedDB names, OPFS, the old
+  FileSystem API, Web Locks), the cross-origin window view, the navigation
+  net, error and timing entries — and reads everything back as the page
+  wrote it.
+- **The upstream leg** — Chrome's TLS ClientHello (tls-client / uTLS,
+  extension order permuted, sessions resumed), HTTP/2 settings, header
+  order and casing, client hints, `Origin` / `Referer` / `Sec-Fetch-*` as a
+  direct Chrome computes them, CORS preflights, ORB / CORP / mixed-content
+  judged as Chromium would, HTTPS-Upgrades.
+- **Cookies** live on the server, per session, under Chromium's limits and
+  context rules (SameSite, CHIPS partitions, Lax-allowing-unsafe); the
+  page's `document.cookie` and Cookie Store API read and write that jar.
+- **WebSocket** — `http.Hijacker` + bidirectional pipe; **WebRTC** — every
+  peer connection relayed through cyrano's own TURN server.
+- **Isolation** — upstream connections, TLS session tickets, cookies and
+  storage are per user session; nothing crosses sessions.
 
-The exhaustive surface list — every object, function, and runtime hook on
-both sides — is in [REQUIREMENTS.md](REQUIREMENTS.md).
+The functional requirements are in [REQUIREMENTS.md](REQUIREMENTS.md); what
+is done, how, and the known gaps are in [CLAUDE.md](CLAUDE.md).
+
+## An executable spec
+
+The rewriting rules are specified in Agda (`spec/*.agda`: URL containment,
+srcset, CSS, HTML tokenization, attributes, CSP, cookies, referrer and
+`Sec-Fetch-*`, CORS preflights, ORB, canvas origin-clean, …), compiled to an
+oracle. The Go and TS conformance tests compare each runtime against it, and
+the `*-vs-chromium` tests compare the spec and both runtimes against real
+Chromium. A rule changes in the spec first, then in both runtimes.
 
 ## Repo layout
 
 ```
 .
-├── go/                         Go server (production target)
+├── go/                       Go server
 │   ├── src/
-│   │   ├── cmd/cyrano/          binary entry
+│   │   ├── cmd/cyrano/        the binary (cmd/mitmprobe: a diagnostic forward proxy)
 │   │   └── internal/
-│   │       ├── urlrewrite/       URL containment scheme — Rewrite() / Unwrap()
-│   │       ├── proxy/            ReverseProxy + body-rewrite pipeline
-│   │       ├── wsproxy/          WebSocket upgrade hijack + bidir pipe
-│   │       ├── htmlrewrite/      x/net/html token-stream rewriter
-│   │       ├── jsrewrite/        tdewolff/parse/v2/js AST rewriter
-│   │       ├── cssrewrite/       tdewolff/parse/v2/css url() + @import rewriter
-│   │       ├── static/           static-file handler
-│   │       ├── config/           env-var + JSON config loader
-│   │       └── server/           dispatch + endpoints + body-rewriter wiring
-│   ├── assets/                   static root (TS bundle, landing page)
-│   └── scripts/                  Dockerfile, build.sh, run.sh
-│
+│   │       ├── urlrewrite/     containment, CSP, referrer, cookies' rules …
+│   │       ├── proxy/          the reverse proxy: request headers, CORS, ORB, preflights, framing
+│   │       ├── server/         dispatch, endpoints, body rewriting
+│   │       ├── htmlrewrite/    HTML and XML rewriting
+│   │       ├── jsrewrite/      the JS recognizer and rules
+│   │       ├── cssrewrite/     CSS rewriting
+│   │       ├── upstream/       the Chrome-impersonating client (TLS, HTTP/2, HTTP/1.1 head)
+│   │       ├── cookiejar/      the server-side jar
+│   │       ├── headerorder/ dnscache/ tlsdial/ wsproxy/ turn/ static/ config/
+│   │       └── specoracle/     runs the compiled spec for conformance tests
+│   ├── assets/                 static root (the TS bundle, the landing page)
+│   └── scripts/                build.sh, run.sh, Dockerfile
 ├── ts/
-│   ├── client/                  strict-TS browser runtime (vite IIFE → go/assets/client/)
-│   │   └── src/
-│   │       ├── rewriter.ts        entry — sets window.$rewriter_init
-│   │       ├── runtime/           bootstrap, api, base-url-state, iframe-injection
-│   │       ├── url/               base64url, containment scheme
-│   │       ├── wrappers/          WrappedLocation, eval, document-write, post-message,
-│   │       │                      window-tree, member-expression
-│   │       ├── patches/           fetch, xhr, websocket, event-source, worker,
-│   │       │                      url-attributes, dynamic-html, css-rules,
-│   │       │                      css-style-declaration, function-ctor, html-rewriter
-│   │       ├── js/                acorn-based JS source rewriter (client-side parity)
-│   │       ├── css/               regex-based CSS source rewriter
-│   │       └── cookies/           apply-payload, sync, decrypt, document-cookie
-│   └── bug-miner/                Playwright DOM-diff harness
-│
-├── LICENSE
-├── README.md
-├── REQUIREMENTS.md              functional spec + complete surface inventory
-├── CLAUDE.md                    session guidance for working in this repo
-└── .gitignore
+│   ├── client/                 the strict-TS browser runtime (vite IIFE → go/assets/client/)
+│   │   ├── src/                 runtime/ native/ patches/ wrappers/ url/ js/ css/ xml/ cookies/ messaging/ ui/
+│   │   └── tests/               unit (vitest + happy-dom), spec/ (conformance), native/ (vs real Chromium)
+│   ├── e2e/                    Playwright tools: site regression, live comparison, the problems queue
+│   └── bug-miner/              an older DOM-diff harness (predates the /cyrano/ URL scheme)
+├── spec/                       the Agda spec and the JS rules' shared cases
+├── REQUIREMENTS.md             functional spec
+├── CLAUDE.md                   working notes: what is done, how, known gaps
+└── LICENSE
 ```
 
 ## Running it
@@ -130,91 +139,67 @@ both sides — is in [REQUIREMENTS.md](REQUIREMENTS.md).
 # Build the TS client (output → go/assets/client/rewriter.js)
 ( cd ts/client && npm install && npm run build )
 
-# Build the Go binary
+# Build the Go binary (→ go/assets/cyrano)
 ./go/scripts/build.sh
 
-# Run with defaults (localhost:9081, see go/scripts/run.sh for all env vars)
+# Run with local defaults (http://localhost:9081; go/scripts/run.sh lists every env var)
 ./go/scripts/run.sh
 
-# Open the landing page (a one-input form that URL-encodes a target)
+# Open the landing page (a one-input form that goes to /cyrano/<scheme>/<host>/…)
 open http://localhost:9081/
 ```
 
-Configuration is read from environment variables. `go/scripts/run.sh` sets
-them all to local-dev defaults and launches the binary. For production,
-inject them via your container/secrets mechanism instead.
+Configuration is read from environment variables; `go/scripts/run.sh` sets
+them to local-dev defaults. Serve it over TLS for real use
+(`CYRANO_HTTPS_ENABLED`, `CYRANO_SSL_CERT`, `CYRANO_SSL_KEY`,
+`CYRANO_PUBLIC_URL=https://…`): over plain HTTP the browser keeps six
+connections to the proxy for every site's traffic, and ad-heavy pages behave
+unlike direct. WebRTC needs the TURN port open (`CYRANO_TURN_PORT`, default
+3478, and `CYRANO_TURN_IP`).
 
 ## Tests
 
 ```bash
-# Go server (7 packages)
-( cd go/src && go test ./... )
+# Go, and the full-stack e2e tests (proxy + fixture upstreams)
+( cd go/src && go test ./... && go test -tags e2e ./internal/e2e )
 
-# TS client (238 tests, vitest + happy-dom)
-( cd ts/client && npm test )
-( cd ts/client && npm run typecheck )
+# TS: strict typecheck and unit tests
+( cd ts/client && npm run typecheck && npm test )
+
+# Spec conformance (Go + TS against the compiled Agda spec), and the spec
+# and both runtimes against real Chromium (Playwright's Chromium, ts/e2e)
+env -u LD_LIBRARY_PATH nix develop --command make spec-check browser-check
 ```
 
-## System testing — bug-miner
+Plain `go test` / `vitest` skip the conformance tests when the oracle is
+missing or stale; `make spec-check` builds it.
 
-`ts/bug-miner` is a Playwright-based DOM-diff harness that stress-tests the
-proxy against real websites. It picks three random English words, queries
-DuckDuckGo, opens the first result both directly and through the proxy, then
-compares the two rendered DOMs to surface rewriter bugs.
+## Testing against real sites
 
-**Setup (one time):**
+`ts/e2e/tools` holds the harnesses used day to day:
 
-```bash
-cd ts/bug-miner
-npm install
-npm run install-browsers   # downloads Playwright's Chromium
-```
+- `site-regress.cjs` — every site a fix was made for
+  (`regression-sites.json`), direct against proxied: DOM, styles, errors,
+  failed requests, and any request that escaped the proxy. Run it before a
+  commit that touches rewriting, against a TLS instance:
+  `PROXY=https://localhost:9443 node tools/site-regress.cjs`.
+- `live-compare.cjs` — one site direct against proxied, in the same
+  browser, with clicks.
+- `xdrive.cjs` — the bot-protected sites, in a stock Chrome driven through
+  X input (no DevTools protocol, which those sites refuse).
+- `problems-queue.md` — what the random-site runs found and what became of it.
 
-**Run:**
-
-```bash
-# Start the proxy first (separate terminal)
-./go/scripts/run.sh
-
-# One run, headed (visible browser window), random query
-cd ts/bug-miner && npm run mine
-
-# Specific query, headless, five iterations
-npm run mine -- --query "wikipedia history" --headless --runs 5
-```
-
-Key flags:
-
-| flag | default | meaning |
-|---|---|---|
-| `--runs N` | 1 | iterations |
-| `--query "..."` | random words | skip random search, use this query |
-| `--proxy URL` | `http://localhost:9081` | proxy origin |
-| `--headless` | off | run without a visible window |
-| `--browser chrome\|chromium` | `chrome` | system Chrome or bundled Chromium |
-| `--slow-mo N` | 0 | ms between actions (useful for visual debugging) |
-
-Reports land in `ts/bug-miner/reports/<session>/`. Each run produces:
-- `run.json` — URL, verdict, console errors, signals
-- `direct.html` — DOM rendered without the proxy
-- `proxied.html` — DOM rendered through the proxy
-- `summary.md` — verdict table across the session
-
-Verdicts: `ok` / `suspicious` / `broken`. The most actionable signal is a
-**proxy leak** — any request from the proxied page that bypasses the proxy
-origin, indicating a URL-containment bug. Drop a run directory into a Claude
-Code session to investigate: it contains the URL, both DOMs, and all JS errors.
+A site-found bug also gets a distilled test in
+`ts/client/tests/native/*-vs-chromium.test.ts` that fails without the fix.
 
 ## Roadmap
 
-- **Multi-instance session affinity.** The cookie store is in-process; a
-  second pod doesn't share it. An external store adds latency on the hot
-  path, so the preferred approach for Kubernetes is sticky routing (Istio
-  consistent-hash on `crnsid`) rather than externalizing state.
-- Worker injection (currently only the constructor URL is rewritten —
-  the worker's own runtime patches aren't injected; needs a server-side
-  preamble for worker scripts).
-- `postMessage` `targetOrigin` translation when the receiver is a cross-
-  realm Window with strict origin checks.
-- AES-CTR cookie payload encryption (Web Crypto on the TS side; matching
-  helper on the Go side).
+- **Multi-instance session affinity.** Session state (cookie jar, upstream
+  pools) is per process; for several instances, sticky routing on the
+  session cookie rather than an external store on the hot path.
+- **Permissions isolation.** Permission grants (camera, notifications, …)
+  are the proxy origin's, shared by every site.
+- The known gaps listed in [CLAUDE.md](CLAUDE.md) — among them a faithful
+  CSP translation (it is weakened, not translated), reading markup back in
+  a few remaining places (shadow roots' own serialization, ranges), and
+  passkeys / FedCM, which cannot work by design.

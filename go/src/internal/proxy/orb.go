@@ -59,16 +59,16 @@ type subresourceRequesterKey struct{}
 // opaqueRequesterKey marks a request from an opaque-origin (sandboxed) document.
 type opaqueRequesterKey struct{}
 
-// scriptCORSFails reports whether a cors-mode script's cross-origin
-// response fails the CORS check (spec Orb.corsFails, Fetch.corsCheck): by
-// the page's origin, as for anonymous — the runtimes make every crossorigin
-// use-credentials, so the page's own credentials mode is not known; one
-// asking use-credentials of a "*" origin fails natively and runs here. A
+// scriptCORSFails reports whether a cors-mode element request's
+// cross-origin response — a script's, a stylesheet's, an image's, a
+// font's, media's… (spec Orb.corsElementDest) — fails the CORS check
+// (spec Orb.corsFails, Fetch.corsCheck): by the page's origin, with
+// credentials when the URL carries a credentials mark (use-credentials). A
 // redirect is checked too, as natively. Read before the response's
 // headers are translated.
 func scriptCORSFails(resp *http.Response) bool {
 	req := resp.Request
-	if req == nil || req.URL == nil || !strings.EqualFold(req.Header.Get("Sec-Fetch-Dest"), "script") ||
+	if req == nil || req.URL == nil || !corsElementDest(req.Header.Get("Sec-Fetch-Dest")) ||
 		!strings.EqualFold(req.Header.Get("Sec-Fetch-Mode"), "cors") {
 		return false
 	}
@@ -89,7 +89,20 @@ func scriptCORSFails(resp *http.Response) bool {
 	} else if strings.EqualFold(origin, req.URL.Scheme+"://"+req.URL.Host) {
 		return false
 	}
-	return !corsCheck(resp.Header.Values("Access-Control-Allow-Origin"), nil, origin, false)
+	// The element's credentials mode, by its URL's mark (use-credentials: include).
+	mark, _ := req.Context().Value(destContextKey{}).(urlrewrite.Dest)
+	cred := mark == urlrewrite.DestCred || mark == urlrewrite.DestScriptCred || mark == urlrewrite.DestStyleCred
+	return !corsCheck(resp.Header.Values("Access-Control-Allow-Origin"), resp.Header.Values("Access-Control-Allow-Credentials"), origin, cred)
+}
+
+// corsElementDest: an element destination whose cors-mode requests the
+// proxy CORS-checks (spec/Orb.agda corsElementDest).
+func corsElementDest(d string) bool {
+	switch strings.ToLower(d) {
+	case "script", "style", "image", "font", "audio", "video", "track", "audioworklet", "paintworklet", "sharedstorageworklet", "manifest", "json":
+		return true
+	}
+	return false
 }
 
 // opaqueElementCORS: a sandboxed (opaque-origin) document is cross-origin

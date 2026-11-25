@@ -42,11 +42,11 @@
 --     and ACAO: * ran, a SyntaxError);
 --   * cors — the CORS check (Fetch.corsCheck, by the page's origin): the
 --     proxy fails a response it refuses (`corsFails`; a crossorigin script
---     without Access-Control-Allow-Origin ran). The credentials mode is the page's
---     crossorigin, which the runtimes make use-credentials: the check is
---     made as for anonymous ("*" allowed, Access-Control-Allow-Credentials
---     not asked) — a page asking use-credentials of a "*" origin fails
---     natively and runs here.
+--     without Access-Control-Allow-Origin ran) — of every element
+--     destination (`corsElementDest`). The credentials mode is the
+--     page's crossorigin, told by the URL's credentials mark: include
+--     ("*" refused, Access-Control-Allow-Credentials asked) for
+--     use-credentials, else as for anonymous.
 --   The page's origin is its document's: "null" for a sandboxed one
 --   (the browser's own requests from it are the only cross-site ones to
 --   the proxy), and not known when the request's Referer is itself a
@@ -239,6 +239,28 @@ proxyBlocks crossOrigin redirect ct noCors body = crossOrigin ∧ not redirect �
 -- response of a cors request, before it follows a redirect).
 corsFails : Bool → Bool → Bool → Bool
 corsFails crossOrigin noCors allows = crossOrigin ∧ not noCors ∧ not allows
+
+-- Not scripts only (round I: a <link rel=stylesheet crossorigin> without
+-- Access-Control-Allow-Origin loaded through the proxy — its rules
+-- readable — where directly it fails; a use-credentials image answered
+-- ACAO "*" loaded): every element destination a cors-mode request has is
+-- checked so. (fetch / XHR, destination empty, are the runtime's to name:
+-- Fetch.agda; a document is never cors.) The check's credentials are the
+-- element's: include when its URL carries a credentials mark (Containment
+-- destCred, destScriptCred, destStyleCred: a crossorigin=use-credentials
+-- element — the rewriters make every crossorigin one so and mark the
+-- page's own), else none.
+corsElementDest : Str → Bool
+corsElementDest d = oneOf ("script" ∷ "style" ∷ "image" ∷ "font" ∷ "audio" ∷ "video" ∷ "track" ∷ "audioworklet" ∷ "paintworklet" ∷ "sharedstorageworklet" ∷ "manifest" ∷ "json" ∷ [])
+  where
+  open import Data.List.Base using (List; []; _∷_)
+  open import Data.String.Base using (String)
+  lowerAll : Str → Str
+  lowerAll [] = []
+  lowerAll (c ∷ cs) = lowerAscii c ∷ lowerAll cs
+  oneOf : List String → Bool
+  oneOf [] = false
+  oneOf (x ∷ xs) = eqStr (lowerAll d) (toList x) ∨ oneOf xs
 
 ------------------------------------------------------------------------
 -- Why this is exact. Whether a cross-origin script runs (`mimeOk`: the
