@@ -246,6 +246,7 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 	// documentBase), its own attribute too: not against the base it sets
 	// below (multistate.us's <base href="../"> came out one level too high).
 	preBase := cfg.BaseURL
+	integrityAttr, hasIntegrity := getAttr(attrs, "integrity") // (dropped below, before the URLs are rewritten)
 	rewriteOne := func(raw string, opts urlOpts) string {
 		dest := urlrewrite.CredDest(credentialed, URLDest(svg, tag, opts.attr, strings.Fields(strings.ToLower(rel)), strings.ToLower(as), hasAs))
 		// An iframe sandboxed without allow-scripts runs nothing: its
@@ -265,7 +266,15 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 		}
 		// In a legacy-encoded document the query is the browser's: in the
 		// document's encoding (spec/Encoding.agda).
-		return urlrewrite.Requery(urlrewrite.RewriteMarked(raw, base, cfg.Proxy, urlrewrite.Mark{Policy: policy, Dest: dest}), raw, cfg.QueryEncoder)
+		// Its integrity rides the URL for the proxy to check on the origin's
+		// bytes (spec/Sri.agda; the attribute itself is dropped below).
+		integrity := ""
+		if urlrewrite.SRIHonored(svg, tag, opts.attr, strings.Fields(strings.ToLower(rel))) {
+			if hasIntegrity {
+				integrity, _ = urlrewrite.SRIMark(integrityAttr)
+			}
+		}
+		return urlrewrite.Requery(urlrewrite.RewriteMarked(raw, base, cfg.Proxy, urlrewrite.Mark{Policy: policy, Dest: dest, Integrity: integrity}), raw, cfg.QueryEncoder)
 	}
 
 	// HTML_BASETAG — <base href> updates the in-flight base URL so all
@@ -311,7 +320,8 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 	}
 
 	// HTML_INTEGRITY — we mutate <script>/<link> bodies so subresource
-	// integrity hashes will never match. Drop the attr.
+	// integrity hashes will never match. Drop the attr: its metadata went
+	// into the element's URL (rewriteOne), the proxy checks it.
 	attrs = removeAttr(attrs, "integrity")
 
 	// HTML_CROSSORIGIN — force `use-credentials` so cookies follow the

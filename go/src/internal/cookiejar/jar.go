@@ -10,6 +10,7 @@
 package cookiejar
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,8 +18,9 @@ import (
 	"github.com/yovico/cyrano/internal/urlrewrite"
 )
 
-// Expiry: a session cookie (Session) or one alive until Until (ms after
-// the epoch, as Chromium reports an expiry).
+// Expiry: a session cookie (Session) or one alive until Until (µs after
+// the epoch: Chromium's cookie clock; the channel writes it in ms with the
+// fraction, MsText).
 type Expiry struct {
 	Session bool
 	Until   uint64
@@ -47,13 +49,13 @@ func SameID(a, b urlrewrite.StoredCookie) bool {
 		a.Partitioned == b.Partitioned && a.PartitionKey == b.PartitionKey
 }
 
-// Cap is Chromium's longest cookie life: 400 days, in ms.
-const Cap = 400 * 86400 * 1000
+// Cap is Chromium's longest cookie life: 400 days, in µs.
+const Cap = 400 * 86400 * 1000000
 
 // CapSeconds is the same in seconds (a Max-Age).
 const CapSeconds = 400 * 86400
 
-// ExpiryOf is a Set-Cookie's expiry at now, in ms (spec CookieJar.expiryOf): Max-Age
+// ExpiryOf is a Set-Cookie's expiry at now, in µs (spec CookieJar.expiryOf): Max-Age
 // before Expires, each capped at 400 days; ok false when it is already
 // expired (a deletion).
 func ExpiryOf(now uint64, sc urlrewrite.SetCookie) (Expiry, bool) {
@@ -66,10 +68,10 @@ func ExpiryOf(now uint64, sc urlrewrite.SetCookie) (Expiry, bool) {
 		if !ok {
 			return Expiry{Session: true}, true
 		}
-		if t*1000 <= now {
+		if t*1000000 <= now {
 			return Expiry{}, false
 		}
-		return Expiry{Until: capped(t * 1000)}, true
+		return Expiry{Until: capped(t * 1000000)}, true
 	}
 	if sc.MaxAge == nil || *sc.MaxAge == "" {
 		return byExpires()
@@ -88,7 +90,7 @@ func ExpiryOf(now uint64, sc urlrewrite.SetCookie) (Expiry, bool) {
 	if n > CapSeconds {
 		n = CapSeconds
 	}
-	return Expiry{Until: capped(now + n*1000)}, true
+	return Expiry{Until: capped(now + n*1000000)}, true
 }
 
 // natOf reads decimal digits (at least one), saturating.
@@ -131,7 +133,38 @@ func expiryText(ch Change) string {
 	case ch.Expiry.Session:
 		return ""
 	}
-	return strconv.FormatUint(ch.Expiry.Until, 10)
+	return MsText(ch.Expiry.Until)
+}
+
+// MsText is a time in µs as the channel writes it (spec CookieJar.msText):
+// ms, and its microseconds, when it has some, as a fraction.
+func MsText(t uint64) string {
+	s := strconv.FormatUint(t/1000, 10)
+	if f := t % 1000; f != 0 {
+		s += "." + strings.TrimRight(fmt.Sprintf("%03d", f), "0")
+	}
+	return s
+}
+
+// MsNum reads MsText back (spec CookieJar.msNum): ms digits, then "." and
+// one to three digits; in µs.
+func MsNum(s string) (uint64, bool) {
+	m, f, dot := strings.Cut(s, ".")
+	ms, ok := natOf(m)
+	if !ok {
+		return 0, false
+	}
+	if !dot {
+		return ms * 1000, true
+	}
+	if len(f) < 1 || len(f) > 3 {
+		return 0, false
+	}
+	fr, ok := natOf(f + strings.Repeat("0", 3-len(f)))
+	if !ok {
+		return 0, false
+	}
+	return ms*1000 + fr, true
 }
 
 // ChanName is the channel entry's name for ch (inbox or outbox).
@@ -206,7 +239,7 @@ func Unchan(inbox bool, name, value string) (ch Change, n uint64, applied *uint6
 	case e == "":
 		ch = Change{Cookie: c, Expiry: Expiry{Session: true}}
 	default:
-		t, tok := natOf(e)
+		t, tok := MsNum(e)
 		if !tok {
 			return Change{}, 0, nil, false
 		}
@@ -221,7 +254,7 @@ type Entry struct {
 	Expiry   Expiry
 	Site     string // registrable domain (or the host): the 180's key
 	Created  uint64
-	Accessed uint64 // ms: the once-a-minute threshold
+	Accessed uint64 // µs: the once-a-minute threshold
 	Order    uint64 // the jar's tick at the last access: the LRU order
 }
 
@@ -480,12 +513,12 @@ func (j *Jar) ApplyOutbox(now uint64, site string, ch Change, k uint64) []Number
 	return out
 }
 
-// Touch records that the cookies used reports were used at now (ms), at
+// Touch records that the cookies used reports were used at now (µs), at
 // most once a minute each (Chromium's kLastAccessThreshold).
 func (j *Jar) Touch(now uint64, used func(urlrewrite.StoredCookie) bool) {
 	for i := range j.Entries {
 		e := &j.Entries[i]
-		if used(e.Cookie) && e.Accessed+60000 <= now {
+		if used(e.Cookie) && e.Accessed+60000000 <= now {
 			j.Tick++
 			e.Accessed, e.Order = now, j.Tick
 		}
@@ -503,12 +536,24 @@ func (j *Jar) EndSession() {
 	j.Entries = keep
 }
 
-// Created is when the live cookie of c's identity was made (ms), if any.
+// Created is when the live cookie of c's identity was made (µs), if any.
 func (j *Jar) Created(now uint64, c urlrewrite.StoredCookie) (uint64, bool) {
 	if e := j.findLive(now, c); e != nil {
 		return e.Created, true
 	}
 	return 0, false
+}
+
+// ToMicro turns a jar kept in ms (written before 2026-11-25) into µs.
+func (j *Jar) ToMicro() {
+	for i := range j.Entries {
+		e := &j.Entries[i]
+		if !e.Expiry.Session {
+			e.Expiry.Until *= 1000
+		}
+		e.Created *= 1000
+		e.Accessed *= 1000
+	}
 }
 
 // Live is the jar's live cookies at now, in creation order.

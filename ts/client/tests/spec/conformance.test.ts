@@ -89,6 +89,26 @@ describe.skipIf(located.skip !== "")("spec conformance", () => {
         }), runs);
     });
 
+    // An element's integrity (spec Sri.markOf) rides its URL (rewriteUrlWithI),
+    // the proxy reads it (targetIntegrity), unwrap ignores it.
+    it("rewriteUrl with an integrity mark, targetIntegrity and unwrap", async () => {
+        const input = fc.constantFrom(...proxies).chain((proxy) =>
+            fc.tuple(fc.constant(proxy), fc.constantFrom(...bases), fc.constantFrom("-", "-", ...policies), fc.constantFrom("-", "js", "css", "jsc", "cssc"),
+                fc.constantFrom("sha256-AbC-_d", "sha384-x.sha384-y", "sha512-" + "Q".repeat(86)), url(proxy)));
+        await fc.assert(fc.asyncProperty(input, async ([proxy, base, pol, dest, im, raw]) => {
+            fc.pre(!nodeIsNotChromium(raw));
+            const want = await ask(() => oracle.ask("rewritemarki", [proxy, base, pol, dest, im, raw]));
+            const got = rewriteUrl(raw, new URL(base), config(proxy), pol === "-" ? undefined : pol, dest === "-" ? undefined : (dest as Dest), im);
+            expect(got, `rewriteUrl(${JSON.stringify(raw)}, ${pol}, ${dest}, ${im}) on ${base}`).toBe(want);
+            const ti = await oracle.ask("targetintegrity", [got]);
+            if (ti !== null) {
+                expect(ti, `targetIntegrity(${got})`).toBe(im);
+                const back = await ask(() => oracle.unwrap(proxy, got));
+                expect(unwrapProxiedUrl(got, config(proxy)), `unwrapProxiedUrl(${got})`).toBe(back.out);
+            }
+        }), runs);
+    });
+
     // The navigation net (spec Route.netDestination): where a navigation
     // to an absolute URL goes instead, or nowhere else.
     it("netDestination", async () => {

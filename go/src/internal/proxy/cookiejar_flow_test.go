@@ -275,7 +275,7 @@ func TestJarFlow_LaxAllowingUnsafe(t *testing.T) {
 	// Two minutes and more later.
 	jar.mu.Lock()
 	for i := range jar.get("s1").Jar.Entries {
-		jar.get("s1").Jar.Entries[i].Created -= 121000
+		jar.get("s1").Jar.Entries[i].Created -= 121000000 // µs: past the two minutes
 	}
 	jar.mu.Unlock()
 	if got := post(); got != "" {

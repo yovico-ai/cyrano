@@ -172,7 +172,7 @@ func (h *Handler) upstreamCookies(req *http.Request, target *url.URL, sessionID 
 	*req = *req.WithContext(context.WithValue(req.Context(), cookieCtxKey{}, cx))
 	outbox, writers, legacy, legacyNames := browserPairs(strings.Join(req.Header.Values("Cookie"), "; "))
 	var cookies []urlrewrite.StoredCookie
-	created := map[string]uint64{} // scope → when made (ms): Lax-allowing-unsafe
+	created := map[string]uint64{} // scope → when made (µs): Lax-allowing-unsafe
 	jar := h.opts.CookieJar
 	if jar != nil && sessionID != "" {
 		pend := &pendingCookies{legacy: legacyNames}
@@ -232,12 +232,12 @@ func (h *Handler) upstreamCookies(req *http.Request, target *url.URL, sessionID 
 
 	topNav := strings.EqualFold(req.Header.Get("Sec-Fetch-Mode"), "navigate") &&
 		strings.EqualFold(req.Header.Get("Sec-Fetch-Dest"), "document")
-	nowMs := unixNow()
+	nowUs := unixNow()
 	var send []urlrewrite.StoredCookie
 	for _, c := range urlrewrite.SelectCookies(false, to, cookies) {
 		age := uint64(1 << 62) // the old wire form's: its age is not known
-		if t, ok := created[c.Scope()]; ok && t <= nowMs {
-			age = nowMs - t
+		if t, ok := created[c.Scope()]; ok && t <= nowUs {
+			age = (nowUs - t) / 1000 // ms
 		}
 		if urlrewrite.InCtx(false, cx, c) && urlrewrite.SameSiteAllows(c.SameSite, sameSiteReq, topSafeNav, topNav, age) {
 			send = append(send, c)

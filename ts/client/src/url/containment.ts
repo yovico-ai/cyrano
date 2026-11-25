@@ -125,8 +125,11 @@ function pctDecode(s: string): string {
 function cyranoTarget(pathname: string): { scheme: string; policy: string | null; dest: Dest | null; host: string; rest: string } | null {
     const m = /^\/cyrano\/(http|https|ws|wss)((?:![^/!]*)*)\/([^/]+)(.*)$/s.exec(pathname);
     if (m === null) return null;
-    // The markers (spec schemeSegment): [!<policy>][!<dest>], by their own names.
-    const marks = m[2] === "" ? [] : m[2]!.slice(1).split("!");
+    // The markers (spec schemeSegment): [!<policy>][!<dest>], by their own
+    // names, after an integrity's "!=…" is split off (spec splitIntegrity).
+    const eq = m[2]!.indexOf("!=");
+    const markText = eq < 0 ? m[2]! : m[2]!.slice(0, eq);
+    const marks = markText === "" ? [] : markText.slice(1).split("!");
     let policy: string | null = null, dest: Dest | null = null;
     if (marks.length === 1) {
         if (isDest(marks[0]!)) dest = marks[0] as Dest;
@@ -227,6 +230,9 @@ export function rewriteUrl(
     // What it is requested for, a script or a stylesheet: carried after the
     // policy, /cyrano/https!js/…, for the proxy to rewrite it as such.
     dest?: Dest,
+    // An element's integrity (spec/Sri.agda markOf): last, /cyrano/https!js!=sha384-…/…,
+    // for the proxy to check the origin's bytes (spec Containment integrityText).
+    integrity?: string,
 ): string {
     if (typeof rawUrl !== "string" || rawUrl.length === 0) return rawUrl;
     if (config.identity) return rawUrl;
@@ -276,7 +282,8 @@ export function rewriteUrl(
     const rest = afterAuthority(absolute);
     const tail = rest.slice(absolute.pathname.length); // ?query#fragment, exactly
     const seg = escapePct(segmentOf(userinfoText(absolute) + absolute.host));
-    const schemeSeg = scheme + (policy && REFERRER_POLICIES.has(policy) ? `!${policy}` : "") + (dest && isDest(dest) ? `!${dest}` : "");
+    const schemeSeg = scheme + (policy && REFERRER_POLICIES.has(policy) ? `!${policy}` : "") + (dest && isDest(dest) ? `!${dest}` : "")
+        + (integrity && /^[A-Za-z0-9._-]+$/.test(integrity) ? `!=${integrity}` : "");
     return `${apiBase}/cyrano/${schemeSeg}/${seg}${escapePct(absolute.pathname)}${tail}`;
 }
 

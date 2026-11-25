@@ -89,10 +89,10 @@ func dump(j *Jar, inbox []string) string {
 func TestSpecConformance_Jar(t *testing.T) {
 	oracle := specoracle.Need(t)
 	rapid.Check(t, func(rt *rapid.T) {
-		now := uint64(1795000000000)
+		now := uint64(1795000000000000) // µs
 		var script []string
 		for i, n := 0, rapid.IntRange(1, 25).Draw(rt, "ops"); i < n; i++ {
-			now += uint64(rapid.SampledFrom([]int{0, 1, 30, 61, 120}).Draw(rt, "dt")) * 1000
+			now += uint64(rapid.SampledFrom([]int{0, 1, 30, 61, 120}).Draw(rt, "dt")) * 1000000
 			switch rapid.IntRange(0, 9).Draw(rt, "op") {
 			case 0, 1, 2, 3, 4:
 				u := rapid.SampledFrom(jarURLs).Draw(rt, "url")
@@ -125,7 +125,7 @@ func TestSpecConformance_Jar(t *testing.T) {
 					attr := rapid.SampledFrom([]string{"", "; Secure", "; Priority=Low", "; Priority=High", "; Max-Age=999"}).Draw(rt, "battr")
 					script = append(script, strings.Join([]string{"put", "http", fmt.Sprint(now + uint64(b)), jarSites[u], u, fmt.Sprintf("c%d=1%s", b, attr)}, us))
 				}
-				now += 200000
+				now += 200000000
 			}
 		}
 		want, _, err := oracle.Ask("jar", strings.Join(script, "\n"))
@@ -151,7 +151,7 @@ func TestSpecConformance_Chan(t *testing.T) {
 		u := rapid.SampledFrom(jarURLs).Draw(rt, "url")
 		s := rapid.SampledFrom(jarNames).Draw(rt, "name") + "=" + rapid.SampledFrom([]string{"1", "", "a:b!c", "é"}).Draw(rt, "v") +
 			rapid.SampledFrom(jarAttrs).Draw(rt, "attr")
-		e := rapid.SampledFrom([]string{"", "x", "1795000123456"}).Draw(rt, "exp")
+		e := rapid.SampledFrom([]string{"", "x", "1795000123456", "1795000123456.749", "1795000123456.5", "1795000123456.05"}).Draw(rt, "exp")
 		k := uint64(rapid.IntRange(0, 99).Draw(rt, "k"))
 		ap := "-"
 		var apn *uint64
@@ -189,7 +189,8 @@ func TestSpecConformance_Chan(t *testing.T) {
 		case "":
 			ch.Expiry = Expiry{Session: true}
 		default:
-			ch.Expiry = Expiry{Until: 1795000123456}
+			t, _ := MsNum(e)
+			ch.Expiry = Expiry{Until: t}
 		}
 		name, value := ChanName(inbox, ch), ChanValue(ch, k, apn)
 		if got := name + "\n" + value; got != want {

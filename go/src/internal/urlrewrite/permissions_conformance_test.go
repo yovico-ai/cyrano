@@ -43,6 +43,22 @@ func TestSpecConformance_PermissionsPolicy(t *testing.T) {
 		if got := strings.Join(TranslatePermissionsPolicy(lines), "\n"); got != want {
 			rt.Fatalf("TranslatePermissionsPolicy(%q)\n got  %q\n spec %q", lines, got, want)
 		}
+		// the table a document's runtime is given (spec Permissions.table)
+		wantT, _, err := oracle.Ask("pptable", strings.Join(lines, "\n"))
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		gotT := "none"
+		if tb, ok := PermissionsTable(lines); ok {
+			rows := make([]string, len(tb))
+			for i, r := range tb {
+				rows[i] = strings.Join(r, "\x1f")
+			}
+			gotT = strings.Join(rows, "\n")
+		}
+		if gotT != wantT {
+			rt.Fatalf("PermissionsTable(%q)\n got  %q\n spec %q", lines, gotT, wantT)
+		}
 	})
 }
 

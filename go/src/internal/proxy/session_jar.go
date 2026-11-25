@@ -37,6 +37,7 @@ type session struct {
 	BrowserSession string        `json:"bs"`
 	Issued         int64         `json:"bsAt"` // when the marker was issued (unix seconds)
 	MarkerSeen     bool          `json:"bsSeen"` // a request has come with it: the browser has it
+	Micro          bool          `json:"us"`     // the jar's times are µs (before 2026-11-25: ms)
 	undelivered    []string      // inbox entries of failed responses, for the next one
 }
 
@@ -79,10 +80,13 @@ func (j *SessionJar) get(id string) *session {
 	if s, ok := j.sessions[id]; ok {
 		return s
 	}
-	s := &session{}
+	s := &session{Micro: true}
 	if j.dir != "" && validSessionID(id) {
 		if b, err := os.ReadFile(filepath.Join(j.dir, id+".json")); err == nil {
 			_ = json.Unmarshal(b, s)
+		}
+		if !s.Micro {
+			s.Jar.ToMicro() // a jar written in ms
 		}
 	}
 	j.sessions[id] = s
@@ -201,15 +205,15 @@ func GenerateSessionID() string {
 	return hex.EncodeToString(b)
 }
 
-// unixNow is the jar's clock: ms after the epoch.
-func unixNow() uint64 { return uint64(time.Now().UnixMilli()) }
+// unixNow is the jar's clock: µs after the epoch (Chromium's cookie clock).
+func unixNow() uint64 { return uint64(time.Now().UnixMicro()) }
 
 // Store keeps c for the session (expires zero: a session cookie), as a
 // response's Set-Cookie would; site is its registrable domain.
 func (j *SessionJar) Store(sessionID string, c urlrewrite.StoredCookie, expires time.Time) {
 	e := cookiejar.Expiry{Session: expires.IsZero()}
 	if !e.Session {
-		e.Until = uint64(expires.UnixMilli())
+		e.Until = uint64(expires.UnixMicro())
 	}
 	j.With(sessionID, func(jar *cookiejar.Jar) {
 		jar.Put(false, unixNow(), cookieSite(c.Domain), cookiejar.Change{Cookie: c, Expiry: e})

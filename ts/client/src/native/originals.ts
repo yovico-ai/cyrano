@@ -111,12 +111,25 @@ export function holdAttr(el: Element, name: string, value: string): void {
 }
 
 /** Records that `el` now holds `now` for `name`, where the page wrote `was`. */
+/**
+ * What the page wrote for a value an element holds — the last recorded,
+ * by value, bounded: for reads that give a held value with no element to
+ * ask (an XPath string result: patches/xpath.ts). Two elements holding the
+ * same value written two ways: the last one's.
+ */
+const writtenByHeld = new SafeMap<string, string>();
+export function writtenFor(held: string): string | undefined { return writtenByHeld.get(held); }
+
 export function recordAttr(el: Element, name: string, now: string | null, was: string | null): void {
     const key = lower(name);
     if (now === was) return forgetAttr(el, key);
     let m = attrStore.get(el);
     if (!m) attrStore.set(el, (m = new SafeMap()));
     m.set(key, { now, was });
+    if (typeof now === "string" && typeof was === "string") {
+        if (writtenByHeld.size >= 4096 && !writtenByHeld.has(now)) { for (const k of writtenByHeld.keys()) { writtenByHeld.delete(k); break; } }
+        writtenByHeld.set(now, was);
+    }
     recorded.any = true;
     noteAttr(el, key, now, was);
 }

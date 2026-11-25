@@ -47,8 +47,19 @@ export function expiryOf(now: number, sc: SetCookie): Expiry | null {
 }
 
 const flags = (c: StoredCookie): string => (c.secure ? "s" : "i") + c.sameSite + c.priority;
-// (In whole ms: memory may hold microseconds, the channel's form does not.)
-const expiryText = (ch: Change): string => (ch.gone ? "x" : ch.expiry.session ? "" : String(Math.floor(ch.expiry.until)));
+/** A time in ms (to the µs) as the channel writes it (spec CookieJar.msText): ms, and its microseconds as a fraction. */
+export function msText(ms: number): string {
+    const us = Math.round(ms * 1000);
+    const f = us % 1000;
+    return String((us - f) / 1000) + (f === 0 ? "" : "." + String(f).padStart(3, "0").replace(/0+$/, ""));
+}
+/** msText read back (spec CookieJar.msNum), in ms; null when not that form. */
+export function msNum(s: string): number | null {
+    const m = /^([0-9]+)(?:\.([0-9]{1,3}))?$/.exec(s);
+    if (!m) return null;
+    return (Number(m[1]) * 1000 + Number((m[2] ?? "").padEnd(3, "0") || "0")) / 1000;
+}
+const expiryText = (ch: Change): string => (ch.gone ? "x" : ch.expiry.session ? "" : msText(ch.expiry.until));
 
 export const chanName = (inbox: boolean, ch: Change): string => (inbox ? INBOX : OUTBOX) + scope(ch.cookie);
 
@@ -85,7 +96,7 @@ export function unchan(inbox: boolean, name: string, value: string): { change: C
     if (e === "x") change = { cookie, gone: true, expiry: { session: true } };
     else if (e === "") change = { cookie, gone: false, expiry: { session: true } };
     else {
-        const t = natOf(e);
+        const t = msNum(e);
         if (t === null) return null;
         change = { cookie, gone: false, expiry: { session: false, until: t } };
     }

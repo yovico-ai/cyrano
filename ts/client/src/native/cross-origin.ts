@@ -29,6 +29,7 @@
 import { relaxed } from "../url/document-domain";
 import { sharedData } from "./shared";
 import { stacked } from "./stacked";
+import { maskAs } from "./surface";
 import { SafeWeakMap, SafeWeakSet, nO, nR, nbind, ncall, aIncludes } from "./intrinsics";
 import { internalsOf } from "./internals";
 import { heldAttr } from "./originals";
@@ -183,7 +184,29 @@ function securityError(v: Viewer, op?: "read" | "set", p?: PropertyKey, iface = 
     return stacked(new DE(msg, "SecurityError"));
 }
 
-const WINDOW_KEYS = ["window", "self", "location", "close", "closed", "focus", "blur", "frames", "length", "top", "opener", "parent", "postMessage"];
+// In Chromium's order: the attributes, then the methods (measured).
+const WINDOW_KEYS = ["window", "self", "location", "closed", "frames", "length", "top", "opener", "parent", "blur", "close", "focus", "postMessage"];
+const WINDOW_ATTRS = ["window", "self", "location", "closed", "frames", "length", "top", "opener", "parent"];
+
+/** The native accessor or method of `win` for `key` (own or on its prototypes). */
+function nativeOf(win: object, key: string, part: "get" | "set" | "value"): object | undefined {
+    for (let o: object | null = win; o; o = nO.getPrototypeOf(o) as object | null) {
+        const d = nO.getOwnPropertyDescriptor(o, key);
+        if (d) return (d as Record<string, unknown>)[part] as object | undefined;
+    }
+    return undefined;
+}
+
+/**
+ * A function the page reads as the native `native` of its own realm
+ * (name, length, source: "function get window() { [native code] }").
+ */
+function lookNative<F extends object>(f: F, native: object | undefined, name: string, length: number): F {
+    nO.defineProperty(f, "name", { value: name, configurable: true });
+    nO.defineProperty(f, "length", { value: length, configurable: true });
+    if (native) maskAs(f, native);
+    return f;
+}
 const isIndex = (p: string): boolean => /^(0|[1-9]\d*)$/.test(p);
 /** Symbols a cross-origin object answers `undefined` to instead of throwing. */
 const quietSymbol = (p: symbol): boolean => p === Symbol.toStringTag || p === Symbol.hasInstance || p === Symbol.isConcatSpreadable;
@@ -205,12 +228,27 @@ function childNamed(t: Window, name: string): Window | undefined {
 
 function makeView(t: Window, v: Viewer): object {
     const location = makeLocationView(t, v);
-    const fns: Record<string, (...a: unknown[]) => unknown> = {
-        postMessage: (...a) => (t.postMessage as (...x: unknown[]) => unknown)(...a),
-        close: () => t.close(),
-        focus: () => t.focus(),
-        blur: () => t.blur(),
+    const methods = {
+        postMessage(...a: unknown[]): unknown { return (t.postMessage as (...x: unknown[]) => unknown)(...a); },
+        close(): void { t.close(); },
+        focus(): void { t.focus(); },
+        blur(): void { t.blur(); },
     };
+    const fns: Record<string, (...a: unknown[]) => unknown> = {};
+    for (const [k, n] of [["postMessage", 1], ["close", 0], ["focus", 0], ["blur", 0]] as const) {
+        fns[k] = lookNative(methods[k] as (...a: unknown[]) => unknown, nativeOf(v.win, k, "value"), k, n);
+    }
+    // HTML CrossOriginGetOwnPropertyHelper: an attribute is an accessor, a
+    // getter per property (and location's setter), the same one each time,
+    // which reads the view's value — for any other receiver Chromium's
+    // "Illegal invocation".
+    const illegal = (): Error => { const TE = (v.win as unknown as { TypeError: ErrorConstructor }).TypeError; return stacked(new TE("Illegal invocation")); };
+    const accessors: Record<string, { get: () => unknown; set?: (x: unknown) => void }> = {};
+    for (const k of WINDOW_ATTRS) {
+        const getter = lookNative(nO.getOwnPropertyDescriptor({ get [k]() { if (this !== view) throw illegal(); return get(k); } }, k)!.get!, nativeOf(v.win, k, "get"), "get " + k, 0);
+        accessors[k] = { get: getter };
+    }
+    accessors["location"]!.set = lookNative(nO.getOwnPropertyDescriptor({ set location(x: unknown) { if (this !== view) throw illegal(); (location as { href: unknown }).href = x; } }, "location")!.set!, nativeOf(v.win, "location", "set"), "set location", 1);
     const get = (p: string | symbol): unknown => {
         if (typeof p === "symbol") {
             if (quietSymbol(p)) return undefined;
@@ -229,7 +267,9 @@ function makeView(t: Window, v: Viewer): object {
         }
         if (isIndex(p)) {
             const child = (t as unknown as Record<string, unknown>)[p];
-            return child === undefined ? undefined : crossOriginView(child, null, v.win);
+            // no such child: Chromium's SecurityError, as for any other name
+            if (child === undefined) throw securityError(v, "read", p);
+            return crossOriginView(child, null, v.win);
         }
         // A child frame by its name (HTML "document-tree child navigable
         // target name property set"): reCAPTCHA's challenge frame finds its
@@ -287,6 +327,8 @@ function makeView(t: Window, v: Viewer): object {
                 return d ? { ...d, configurable: true } : undefined; // (the view's own target holds none)
             }
             if (!known(p)) throw securityError(v, "read", p);
+            const acc = typeof p === "string" ? accessors[p] : undefined;
+            if (acc) return { get: acc.get, set: acc.set, enumerable: false, configurable: true } as PropertyDescriptor; // set: undefined stays a key, as natively
             return { value: get(p), writable: false, enumerable: false, configurable: true };
         },
         ownKeys: () => (blank() ? nR.ownKeys(t) : [...WINDOW_KEYS, "then", Symbol.toStringTag, Symbol.hasInstance, Symbol.isConcatSpreadable]),
@@ -356,10 +398,13 @@ function makeLocationView(t: Window, v: Viewer): object {
         const why = `The current window does not have permission to navigate the target frame to '${abs}'.`;
         throw stacked(new DE(how === "set" ? `Failed to set a named property 'href' on 'Location': ${why}` : `Failed to execute 'replace' on 'Location': ${why}`, "SecurityError"));
     };
-    const replace = (url: unknown): void => { busting(String(url), "replace"); t.location.replace(to(String(url))); };
+    let ownLoc: object | undefined;
+    try { ownLoc = v.win.location; } catch { ownLoc = undefined; }
+    const replace = lookNative({ replace(url: unknown): void { busting(String(url), "replace"); t.location.replace(to(String(url))); } }.replace, ownLoc && nativeOf(ownLoc, "replace", "value"), "replace", 1);
     // a setter-only accessor's descriptor: get undefined (enumerable off, configurable on)
     const hrefDesc = nO.getOwnPropertyDescriptor({ set href(value: unknown) { busting(String(value), "set"); t.location.href = to(String(value)); } }, "href")!;
     nO.defineProperty(hrefDesc, "enumerable", { value: false });
+    lookNative(hrefDesc.set!, ownLoc && nativeOf(ownLoc, "href", "set"), "set href", 1);
     return new Proxy({}, {
         get: (_o, p) => {
             if (p === "replace") return replace;

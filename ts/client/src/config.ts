@@ -39,6 +39,8 @@ export interface ClientConfig {
     referrer?: string;
     /** The page's referrer policy as the proxy recorded it (the srcdoc frames' referrer: spec srcdocReferrer). */
     rp?: string;
+    /** The origin's Permissions-Policy, parsed (spec/Permissions.agda table): document.featurePolicy reads it. */
+    pp?: string[][];
     /**
      * The document's cookies, from the session's jar (spec/CookieJar.agda
      * snapshot): the jar's generation and inbox entries, name and value in

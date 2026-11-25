@@ -145,3 +145,35 @@ func allowWordIsOrigin(w string) bool {
 	}
 	return isAllowlistOrigin(w)
 }
+
+// PermissionsTable is a document's policy as its runtime is given it
+// (spec/Permissions.agda table): each declared feature, in order, and its
+// entries' texts — "*", "'self'", an origin, "<scheme>://*.<host>" — or
+// ok false when there is none or Chromium ignores it.
+func PermissionsTable(lines []string) (t [][]string, ok bool) {
+	d, ok := SFDict(strings.Join(lines, ", "))
+	if !ok {
+		return nil, false
+	}
+	t = make([][]string, 0, len(d))
+	for _, e := range d {
+		row := []string{e.Key}
+		for _, it := range e.Value.Items {
+			switch ppEntry(it) {
+			case ppAll:
+				row = append(row, "*")
+			case ppSelf:
+				row = append(row, "'self'")
+			case ppOrigin:
+				u, _ := parseRef(nil, it.Text)
+				if strings.HasPrefix(u.auth, "%2A.") {
+					row = append(row, u.scheme+"://*"+u.auth[3:])
+				} else {
+					row = append(row, u.originText())
+				}
+			}
+		}
+		t = append(t, row)
+	}
+	return t, true
+}

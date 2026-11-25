@@ -214,8 +214,11 @@ export function patchDynamicHtml(
         const given = typeof args[1] === "string" ? args[1] : String(args[1]);
         const v = attributeValue(self as Element, args[0], given, rewriteOne, proxyOrigin);
         if (v === null) {
-            if (args[0].toLowerCase() === "integrity") pageIntegrity.set(self as object, given);
+            const isIntegrity = args[0].toLowerCase() === "integrity";
+            if (isIntegrity) pageIntegrity.set(self as object, given);
             recordAttr(self as Element, args[0], null, given); // not applied; the page reads it back
+            // Its URL carries it (spec/Sri.agda): marked again before the fetch starts.
+            if (isIntegrity) remarkForIntegrity(self as Element, rewriteOne);
             return;
         }
         const kind = sinkKind(self as Element, args[0]);
@@ -251,7 +254,7 @@ export function patchDynamicHtml(
         }
         return;
     });
-    patchIntegrityProperty(targetWindow);
+    patchIntegrityProperty(targetWindow, rewriteOne);
     patchSrcdocProperty(targetWindow);
     patchAllowProperty(targetWindow);
     patchMetaProperties(targetWindow);
@@ -713,15 +716,26 @@ function patchMetaProperties(targetWindow: Window): void {
     }
 }
 
-function patchIntegrityProperty(targetWindow: Window): void {
+/** An element's integrity changed: its URL is marked with it, while no fetch can have started (not connected). */
+function remarkForIntegrity(el: Element, rewriteOne: RewriteOne): void {
+    try { if (!el.isConnected) remark(el, rewriteOne); } catch { /* as it is */ }
+}
+
+function patchIntegrityProperty(targetWindow: Window, rewriteOne: RewriteOne): void {
     const g = targetWindow as unknown as Record<string, { prototype: object } | undefined>;
     for (const ctorKey of ["HTMLScriptElement", "HTMLLinkElement"]) {
         const proto = g[ctorKey]?.prototype;
         if (!proto) continue;
         save(proto, "integrity");
         wrapAccessor<string>(proto, "integrity", {
-            get: (_get, self) => pageIntegrity.get(self as object) ?? "",
-            set: (_set, self, v) => { pageIntegrity.set(self as object, String(v)); },
+            // the page's value: set through the runtime, else as the markup had it (the server's originals)
+            get: (get, self) => pageIntegrity.get(self as object) ?? originalAttr(self, "integrity")?.value ?? ncall(get, self),
+            set: (_set, self, v) => {
+                const given = String(v);
+                pageIntegrity.set(self as object, given);
+                recordAttr(self as Element, "integrity", null, given); // the attribute reflects it, as written
+                remarkForIntegrity(self as Element, rewriteOne);
+            },
         });
     }
 }

@@ -305,6 +305,9 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		// the body rewriter rewrites the response as that (RequestDest).
 		if requestMark.Dest != "" {
 			*req = *req.WithContext(context.WithValue(req.Context(), destContextKey{}, requestMark.Dest))
+			if requestMark.Integrity != "" {
+				*req = *req.WithContext(context.WithValue(req.Context(), integrityKey{}, requestMark.Integrity))
+			}
 		}
 		req.URL.Scheme = target.Scheme
 		req.URL.Host = target.Host
@@ -451,6 +454,7 @@ type rewriteError struct{ error }
 func (e rewriteError) Unwrap() error { return e.error }
 
 func (h *Handler) translateResponse(resp *http.Response) error {
+	keepPermissionsPolicy(resp)
 	translatePermissionsPolicy(resp.Header)
 	varyOnInitiator(resp.Header)
 	addStylesheetNosniff(resp)

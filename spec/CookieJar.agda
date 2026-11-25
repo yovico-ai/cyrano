@@ -31,8 +31,11 @@
 --   * the browser's own jar thus holds the session's cookies and a few
 --     transient entries, never near its limit.
 --
--- Times are milliseconds after the epoch (as Chromium reports an expiry:
--- cookieStore's `expires`). Outside the model: the public-suffix
+-- Times are microseconds after the epoch (Chromium's cookie clock: an
+-- expiry by Max-Age keeps its creation's microseconds, and cookieStore's
+-- `expires` reads them as a fraction of a ms — a jar of whole ms gave a
+-- response's cookie a whole-ms `expires`, round J). The channel writes
+-- an expiry in ms with that fraction (msText, msNum). Outside the model: the public-suffix
 -- list (the caller gives each cookie's registrable domain), the strict
 -- secure rule (an insecure page overwriting a Secure cookie), last-access
 -- times of cookies a script reads (the runtime reads its memory: the
@@ -47,7 +50,7 @@ open import Data.Bool.Base using (Bool; true; false; _∧_; _∨_; not; if_then_
 open import Data.Char.Base using (Char; toℕ; fromℕ)
 open import Data.List.Base using (List; []; _∷_; _++_; reverse; length; filterᵇ; map)
 open import Data.Maybe.Base using (Maybe; just; nothing)
-open import Data.Nat.Base using (ℕ; zero; suc; _+_; _*_; _∸_; _<ᵇ_; _≤ᵇ_; _≡ᵇ_)
+open import Data.Nat.Base using (ℕ; zero; suc; _+_; _*_; _∸_; _<ᵇ_; _≤ᵇ_; _≡ᵇ_; _/_; _%_)
 open import Data.Product.Base using (_×_; _,_; proj₁; proj₂)
 open import Data.String.Base using (String; toList)
 
@@ -96,13 +99,48 @@ natOf s  = if Url.all isDigit s then just (go s 0) else nothing
   go []       n = n
   go (c ∷ cs) n = go cs (n * 10 + (toℕ c ∸ 48))
 
--- A Set-Cookie's expiry at `now` (ms), as Chromium: Max-Age (seconds;
+-- A time in µs as the channel writes it: ms, and when it has some its
+-- microseconds as a fraction ("1795506438163.749", "….5"; JS reads the
+-- same number Chromium gives).
+msText : ℕ → Str
+msText t = toList (showℕ (t / 1000)) ++ frac (t % 1000)
+  where
+  d : ℕ → Char
+  d n = fromℕ (48 + n)
+  trimZ : Str → Str
+  trimZ s = reverse (dropZ (reverse s))
+    where
+    dropZ : Str → Str
+    dropZ ('0' ∷ r) = dropZ r
+    dropZ r = r
+  frac : ℕ → Str
+  frac zero = []
+  frac f@(suc _) = '.' ∷ trimZ (d (f / 100) ∷ d ((f / 10) % 10) ∷ d (f % 10) ∷ [])
+
+-- The channel's expiry read back: ms digits, then "." and one to three
+-- digits of a fraction; in µs.
+msNum : Str → Maybe ℕ
+msNum s = byParts (break (is 46) s)
+  where
+  pad : Str → Maybe ℕ
+  pad (a ∷ []) = natOf (a ∷ '0' ∷ '0' ∷ [])
+  pad (a ∷ b ∷ []) = natOf (a ∷ b ∷ '0' ∷ [])
+  pad (a ∷ b ∷ c ∷ []) = natOf (a ∷ b ∷ c ∷ [])
+  pad _ = nothing
+  both : Maybe ℕ → Maybe ℕ → Maybe ℕ
+  both (just m) (just f) = just (m * 1000 + f)
+  both _ _ = nothing
+  byParts : Str × Str → Maybe ℕ
+  byParts (m , []) = both (natOf m) (just 0)
+  byParts (m , (_ ∷ f)) = both (natOf m) (pad f)
+
+-- A Set-Cookie's expiry at `now` (µs), as Chromium: Max-Age (seconds;
 -- zero or negative: already expired) before Expires (CookieDate, seconds;
 -- a date not after now: already expired; none read: a session cookie),
 -- either capped at 400 days; neither: a session cookie. nothing: already
 -- expired (a deletion).
 cap : ℕ
-cap = 400 * 86400 * 1000
+cap = 400 * 86400 * 1000000
 
 expiryOf : ℕ → SetCookie → Maybe Expiry
 expiryOf now sc = byMaxAge (maxAge sc)
@@ -115,7 +153,7 @@ expiryOf now sc = byMaxAge (maxAge sc)
     where
     dated : Maybe ℕ → Maybe Expiry
     dated nothing  = just session
-    dated (just t) = if t * 1000 ≤ᵇ now then nothing else just (until (capped (t * 1000)))
+    dated (just t) = if t * 1000000 ≤ᵇ now then nothing else just (until (capped (t * 1000000)))
   byMaxAge : Maybe Str → Maybe Expiry
   byMaxAge nothing         = byExpires (expires sc)
   byMaxAge (just [])       = byExpires (expires sc)
@@ -123,7 +161,7 @@ expiryOf now sc = byMaxAge (maxAge sc)
     where
     positive : Maybe ℕ → Maybe Expiry
     positive (just zero)    = nothing
-    positive (just (suc n)) = just (until (capped (now + suc n * 1000)))
+    positive (just (suc n)) = just (until (capped (now + suc n * 1000000)))
     positive nothing        = byExpires (expires sc)
 
 ------------------------------------------------------------------------
@@ -162,7 +200,7 @@ flagsOf c = (if sSecure c then 's' else 'i') ∷ sameSiteFlag (sSameSite c) ∷ 
 expiryText : Change → Str
 expiryText (gone _)             = toList "x"
 expiryText (put′ _ session)     = []
-expiryText (put′ _ (until t))   = toList (showℕ t)
+expiryText (put′ _ (until t))   = msText t
 
 chanName : Bool → Change → Str
 chanName inbox ch = (if inbox then inboxPrefix else outboxPrefix) ++ scope (changed ch)
@@ -207,15 +245,15 @@ ssOf′ _        = nothing
 prOf : Char → Maybe Priority
 prOf c = if is 76 c then just pLow else if is 77 c then just pMedium else if is 72 c then just pHigh else nothing
 
--- The expiry field; nothing: gone; one not decimal: malformed.
+-- The expiry field (msNum); nothing: gone; one not that form: malformed.
 expOf : Str → Maybe (Maybe Expiry)
 expOf []       = just (just session)
 expOf (x ∷ []) = if is 120 x then just nothing else bad (natOf (x ∷ []))
   where
   bad : Maybe ℕ → Maybe (Maybe Expiry)
-  bad (just t) = just (just (until t))
+  bad (just t) = just (just (until (t * 1000)))
   bad nothing  = nothing
-expOf e = num (natOf e)
+expOf e = num (msNum e)
   where
   num : Maybe ℕ → Maybe (Maybe Expiry)
   num (just t) = just (just (until t))
@@ -604,7 +642,7 @@ touch now used j = go (entries j) (tick j) []
   go : List Entry → ℕ → List Entry → Jar
   go []       k acc = record j { entries = reverse acc ; tick = k }
   go (e ∷ es) k acc =
-    if used (eCookie e) ∧ (eAccessed e + 60000 ≤ᵇ now) then go es (suc k) (record e { eAccessed = now ; eOrder = suc k } ∷ acc)
+    if used (eCookie e) ∧ (eAccessed e + 60000000 ≤ᵇ now) then go es (suc k) (record e { eAccessed = now ; eOrder = suc k } ∷ acc)
     else go es k (e ∷ acc)
 
 -- What the browser session's end does: session cookies are gone.

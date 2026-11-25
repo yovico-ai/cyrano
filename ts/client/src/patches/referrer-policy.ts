@@ -14,6 +14,7 @@
 // the referrerPolicy property (the keyword, or "" when invalid), and its URLs
 // unmarked.
 
+import { sriHonored, sriMark } from "../url/sri";
 import { documentQueryEncoder, requery } from "../url/doc-query";
 import { SafeSet, nO, ncall } from "../native/intrinsics";
 import { heldAttr, holdAttr, originalAttr, recordAttr } from "../native/originals";
@@ -28,7 +29,7 @@ export interface RewriteOne {
     (url: string): string;
     withPolicy?: (url: string, policy: string) => string;
     /** Marked: a referrer policy of its own, what it is requested for (spec/Containment.agda Mark). */
-    withMark?: (url: string, policy: string | null, dest: Dest | null) => string;
+    withMark?: (url: string, policy: string | null, dest: Dest | null, integrity?: string | null) => string;
     /**
      * The same, resolving against a document base set by `<base href>`
      * (spec/Html.agda documentBase: parsed against the current base); null
@@ -95,10 +96,30 @@ function rewriteFor0(el: Element, rewriteOne0: RewriteOne, attr?: string): (url:
     } catch { /* as it is */ }
     const p = elementPolicy(el);
     const d = attr === undefined ? null : urlDestOf(el, attr);
+    const i = attr === undefined ? null : integrityMarkOf(el, attr);
     const withMark = rewriteOne.withMark;
-    if ((p || d) && withMark) return (u) => withMark(u, p, d);
+    if ((p || d || i) && withMark) return (u) => withMark(u, p, d, i);
     const withPolicy = rewriteOne.withPolicy;
     return p && withPolicy ? (u) => withPolicy(u, p) : rewriteOne;
+}
+
+/**
+ * The integrity mark this element attribute's URL carries (spec/Sri.agda
+ * markOf, honored): the page's integrity — as it set it (the runtime's
+ * setters record it) or as the markup had it.
+ */
+function integrityMarkOf(el: Element, attr: string): string | null {
+    try {
+        const svg = el.namespaceURI === "http://www.w3.org/2000/svg";
+        const tag = svg ? el.localName : el.localName.toLowerCase();
+        if (tag !== "script" && tag !== "link") return null;
+        const rel = heldAttr(el, "rel");
+        const rels = rel === null ? [] : rel.toLowerCase().split(/[\t\n\f\r ]+/).filter((t) => t !== "");
+        if (!sriHonored(svg, tag, attr.toLowerCase(), rels)) return null;
+        const o = originalAttr(el, "integrity");
+        const v = o !== undefined ? o.value : heldAttr(el, "integrity");
+        return v === null ? null : sriMark(v);
+    } catch { return null; }
 }
 
 /** The element's URL attributes rewritten again from what the page wrote (its policy changed). */

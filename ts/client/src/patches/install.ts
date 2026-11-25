@@ -8,6 +8,8 @@
 //
 // A window is patched once: runtime/bootstrap.ts checks before calling.
 
+import { patchFeaturePolicy } from "./feature-policy";
+import { patchXPath } from "./xpath";
 import { patchOldFileSystem } from "./old-filesystem";
 import { patchCanvasTaint } from "./canvas-taint";
 import { patchSvgHref } from "./svg-href";
@@ -111,8 +113,8 @@ export function installPatches(
     const rewriterFor = (base: () => URL): RewriteOne => Object.assign((rawUrl: string): string =>
         rewriteUrl(rawUrl, base(), config), {
         withPolicy: (rawUrl: string, policy: string): string => rewriteUrl(rawUrl, base(), config, policy),
-        withMark: (rawUrl: string, policy: string | null, dest: Dest | null): string =>
-            rewriteUrl(rawUrl, base(), config, policy ?? undefined, dest ?? undefined),
+        withMark: (rawUrl: string, policy: string | null, dest: Dest | null, integrity?: string | null): string =>
+            rewriteUrl(rawUrl, base(), config, policy ?? undefined, dest ?? undefined, integrity ?? undefined),
         baseHref: (): string => base().href,
         withBase: (href: string): RewriteOne | null => {
             let b: URL;
@@ -219,6 +221,8 @@ export function installPatches(
     if (flattened) step("patchCrossOriginWindows", () => patchCrossOriginWindows(targetWindow, (frame) =>
         injectIntoIframe(frame as HTMLIFrameElement, targetWindow, config, getCurrentBaseUrl().href)));
     // Selectors on URL attributes find elements by their original URLs (patches/selectors.ts).
+    step("patchFeaturePolicy", () => patchFeaturePolicy(targetWindow, config.pp ?? null, () => getCurrentBaseUrl().origin, new URL(config.apiBaseURL).origin));
+    step("patchXPath", () => patchXPath(targetWindow, rewriteOne, unwrapOne));
     step("patchSelectors", () => patchSelectors(targetWindow, rewriteOne, config.apiBaseURL));
     step("patchResponseHeaders", () => patchResponseHeaders(targetWindow, opaqueOrigin));
     // FedCM requests would leave the browser outside the proxy (patches/fedcm.ts).

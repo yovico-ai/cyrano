@@ -43,7 +43,7 @@
 import { SafeSet, nOP, nR, ncall, sEnds, sStarts } from "../native/intrinsics";
 import { wrapMethod } from "../native/surface";
 
-const URL_ATTRS = new SafeSet([
+export const URL_ATTRS = new SafeSet([
     "src", "href", "action", "formaction", "poster", "data", "background", "cite", "manifest", "ping", "attributionsrc", "xlink:href",
 ]);
 
@@ -97,7 +97,7 @@ function bracketEnd(s: string, start: number): number {
 const ATTR = /^\[\s*([A-Za-z_][\w-]*)\s*(=|\^=|\*=|\$=|~=|\|=)\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^\s\]"']+))\s*([iIsS])?\s*\]$/;
 
 /** A proxied URL as an element may hold it: unmarked, and marked js and css (spec/Containment.agda Mark). */
-function withMarks(proxied: string): string[] {
+export function withMarks(proxied: string): string[] {
     const at = proxied.indexOf("/cyrano/");
     if (at < 0) return [proxied];
     const segEnd = proxied.indexOf("/", at + 8);

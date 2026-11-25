@@ -179,7 +179,9 @@ place is kept in localStorage under a bare name no page's view lists.
 Limits: a page that makes `<body>` a shadow host itself (first: no
 toolbar there; later: its attachShadow throws); every body child goes to
 its one slot (manual assignment); computed `cursor` reads
-the toolbar's while the pointer is over it; an element beneath with a
+the toolbar's while the pointer is over it; a body child's `display:
+inherit` (or `all: inherit`) takes the slot's `contents` (the flat tree's
+parent; every other inherited value is the body's); an element beneath with a
 cursor of its own keeps it.
 
 ## The navigation net
@@ -313,7 +315,9 @@ and origin are the opener's (`popup-blank-vs-chromium`;
   changes, as Chromium's (one per write shown at the page's URL, even of
   the same value; a later task; the browser's own, listing the channel,
   are stopped — only trusted ones: `cookie-change-events-vs-chromium`);
-  an expiry keeps microseconds as Chromium's (coarsened). Gaps: a made
+  an expiry keeps microseconds as Chromium's (coarsened; the jar's clock
+  is µs, the channel writes ms with the fraction — CookieJar.agda msText;
+  `cookie-expiry-vs-chromium`). Gaps: a made
   change event is not isTrusted; a script's write over an HttpOnly cookie
   shows in its memory until the next document; a third party's cookie a subresource sets reaches a
   live frame of that party only with its next document; last access of
@@ -458,13 +462,18 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   `Notification.permission` in a third-party frame (`patches/embedded.ts`).
   Permissions-Policy and an iframe's `allow` are read as Chromium reads
   them and translated (spec/Permissions.agda, Allow.agda: origins become
-  self / 'src', which on the proxy every frame is).
+  self / 'src', which on the proxy every frame is). A top-level
+  document's `featurePolicy` answers from the origin's policy (the
+  server's parsed table, config `pp`; Permissions.agda allows /
+  allowlist: `allowsFeature(f, location.origin)` read false on every
+  page; `feature-policy-vs-chromium`); a frame's puts the page's origin
+  for the proxy's. Gap: a feature allowed only to other origins still
+  works in the document itself (the header cannot tell them apart).
   Still different in a third-party frame: Permissions Policy (features with
   a 'self' default stay on: `document.featurePolicy`, `permissions.query`,
   `screen.isExtended`), the parent's timing entry for the frame (natively
   zeroed without Timing-Allow-Origin), `nextHopProtocol` h2 where a direct
-  Chrome speaks h3, `featurePolicy.getAllowlistForFeature` naming the proxy
-  origin; a stand-in's `.caller` throws (strict function) and V8's own
+  Chrome speaks h3, `featurePolicy` by its container policy; a stand-in's `.caller` throws (strict function) and V8's own
   messages print its source (`Reflect.construct(Object, [], fetch)`).
   A response that varies on Origin is told to the browser as varying on
   Crn-I too (`proxy/vary.go`, spec/Carry.agda varyForBrowser): one cached
@@ -638,7 +647,9 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
 - **Random-site testing** (2026-11-18; Google 3 random words, compare
   direct vs proxied with `ts/e2e/tools/live-compare.cjs`, `HEADED=1` on a
   virtual display — never open windows on the owner's desktop, see memory).
-  Fixed from it: selectors on URL attributes match the original URL
+  Fixed from it: selectors on URL attributes match the original URL — and
+  XPath comparisons on them (spec/XPath.agda widenXPath; `string(@href)`
+  reads as written; `xpath-vs-chromium`)
   (`patches/selectors.ts`; Squarespace ran its scripts twice); the page's
   own Request goes to fetch as is (a rebuilt one has a stream body HTTP/1.1
   cannot send), judged by the URL it holds, not its `url` (YouTube's
@@ -858,7 +869,9 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
 - **Windows of another origin** (`native/cross-origin.ts`): a child frame
   by number (`frames[0]`, `window[1]`, `top.frames[0]`: R18) and a popup
   opened on another origin's URL (judged by that URL while on about:blank)
-  are the cross-origin view (`cross-origin-index-vs-chromium`); a frame of
+  are the cross-origin view (`cross-origin-index-vs-chromium`: its own
+  properties described as Chromium's — accessors, native-looking functions,
+  its key order); a frame of
   another origin navigating the top without a user gesture gets
   Chromium's framebusting SecurityError (`framebusting-vs-chromium`);
   `navigation.entries()` lists the page's own run of same-origin entries
@@ -915,6 +928,18 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   browser drops the runtime's headers in no-cors; Cookies.markedCookies),
   and Sec-Fetch-Storage-Access follows the marks
   (`element-credentials-vs-chromium`).
+- **Subresource Integrity** (spec/Sri.agda; `sri-vs-chromium`): a
+  rewritten script's or stylesheet's bytes never match its `integrity`, so
+  both rewriters drop the attribute and put its metadata in the element's
+  URL — the scheme segment's last marker `!=<alg-digest[.…]>` (the
+  strongest algorithm's items, base64url; Containment integrityText,
+  proved to unwrap and to read back) — for a script's src and a
+  stylesheet / preload / modulepreload link's href, the runtime's setters
+  too (integrity set before or after src: the URL re-marked while the
+  element is not connected). The proxy hashes the origin's decoded bytes
+  and fails a mismatch, or an opaque response (another origin's in no-cors
+  mode), as a network error (`proxy.SRIFails`). `integrity` reads the
+  page's value. Gap: an import map's "integrity" section (dropped).
 - **CORP / COEP** (spec/Corp.agda): the proxy runs the cross-origin
   resource policy check for no-cors subresource requests by the page's
   original origin and its recorded embedder policy (COEP /

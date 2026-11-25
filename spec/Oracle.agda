@@ -56,7 +56,7 @@
 --   orbblocks <ct|"-"> <body>         → {"out":"yes"|"no"} (ORB blocks a cross-origin no-cors script)
 --   unchan <in|out> <name> <value> → the channel entry read back (lines: h|d, domain, path, name, value,
 --     s|i, samesite, priority, expiry ""|x|seconds, number, applied|-), or null
---   chan <in|out> <url> <set-cookie> <expiry ""|x|seconds> <number> <applied|-> → name LF value of the
+--   chan <in|out> <url> <set-cookie> <expiry ""|x|ms[.µs]> <number> <applied|-> → name LF value of the
 --     channel entry for the cookie the Set-Cookie stores at url (http), or null
 --   jar <script> → the jar after the script (lines, fields U+001F):
 --     put <api|http> <now> <site> <url> <set-cookie> | outbox <now> <site> <name> <value> | touch <now> <url> | end
@@ -68,7 +68,7 @@
 --     snap <url> <gen> (<inbox name> <inbox value>)* | read <now> <url> | ack <n> <gen>
 --     out: "R" cookie string, per read; "K" scope flags expiry gen pending|- value, per known cookie
 --   cookiedate <Expires string> → {"out":"<seconds after the epoch, 0 before it>"|"none"}
---   (jar and mem: times in ms after the epoch)
+--   (jar: times in µs after the epoch; mem: in ms, as the runtime keeps them)
 --   orbproxy <cross-origin 0|1> <redirect 0|1> <ct|"-"> <no-cors 0|1> <body> → {"out":"yes"|"no"} (the proxy fails it: ORB)
 --   sheetnosniff <same-origin 0|1> <ct|"-"> <nosniff 0|1> → {"out":"yes"|"no"} (the proxy adds nosniff)
 --   htmltail <scripting 0|1> <markup>  → {"out":"<offset>"|"none"} (where an unfinished construct at the end begins)
@@ -251,6 +251,8 @@ import Selectors
 import JsUrl
 import Canvas
 import Preflight
+import XPath
+import Sri
 open import Html using (ScriptKind; scriptClassic; scriptModule; scriptImportMap; scriptSpeculation; scriptData; scriptKind; documentBase; BaseURL; baseOf′; aboutBlank; beyond)
 
 ------------------------------------------------------------------------
@@ -394,6 +396,12 @@ dispatch op args =
   else if eqStr op (toList "rewritewith") then rewriteWithReq args
   else if eqStr op (toList "targetpolicy") then targetPolicyReq args
   else if eqStr op (toList "targetdest") then targetDestReq args
+  else if eqStr op (toList "targetintegrity") then targetIntegrityReq args
+  else if eqStr op (toList "rewritemarki") then rewriteMarkIReq args
+  else if eqStr op (toList "srimark") then sriMarkReq args
+  else if eqStr op (toList "sripasses") then sriPassesReq args
+  else if eqStr op (toList "srihonored") then sriHonoredReq args
+  else if eqStr op (toList "srifails") then sriFailsReq args
   else if eqStr op (toList "rewritemark") then rewriteMarkReq args
   else if eqStr op (toList "disposition") then dispositionReq args
   else if eqStr op (toList "judgeddest") then judgedDestReq args
@@ -420,6 +428,8 @@ dispatch op args =
   else if eqStr op (toList "setspolicy") then setsPolicyReq args
   else if eqStr op (toList "postdelivery") then postDeliveryReq args
   else if eqStr op (toList "widenselector") then widenSelectorReq args
+  -- widenxpath <proxy> <base> <expression>: the expression the DOM is given
+  else if eqStr op (toList "widenxpath") then widenXPathReq args
   else if eqStr op (toList "crossorigin") then crossoriginReq args
   else if eqStr op (toList "refreshread") then refreshReadReq args
   else if eqStr op (toList "wsmark") then wsMarkReq args
@@ -430,6 +440,8 @@ dispatch op args =
   else if eqStr op (toList "secchua") then secChUaReq args
   else if eqStr op (toList "upgradable") then upgradableReq args
   else if eqStr op (toList "ppallows") then ppAllowsReq args
+  else if eqStr op (toList "pptable") then ppTableReq args
+  else if eqStr op (toList "ppallowlist") then ppAllowlistReq args
   else if eqStr op (toList "allowframe") then allowFrameReq args
   else if eqStr op (toList "fpallows") then fpAllowsReq args
   else if eqStr op (toList "fprewrite") then fpRewriteReq args
@@ -616,6 +628,7 @@ dispatch op args =
   ... | just _  | nothing = errorReply "BadBase"
   rewriteMarkReq _ = errorReply "BadRequest"
 
+
   unwrapReq : List Str → Str
   unwrapReq (p ∷ h ∷ []) with proxyOf p
   ... | just px = answerReply h (unwrap px h)
@@ -658,6 +671,61 @@ dispatch op args =
     named nothing    = nothing
   ... | _ = maybeOut nothing
   targetPolicyReq _ = errorReply "BadRequest"
+
+  -- rewritemarki <proxy> <base> <policy|-> <dest|-> <integrity mark> <url> (rewriteUrlWithI)
+  markPol : Str → Maybe (Maybe Policy)
+  markPol t = if eqStr t (toList "-") then just nothing else polOf (policyToken t)
+    where
+    polOf : Maybe Policy → Maybe (Maybe Policy)
+    polOf (just x) = just (just x)
+    polOf nothing  = nothing
+
+  markDst : Str → Maybe (Maybe Dest)
+  markDst t = if eqStr t (toList "-") then just nothing
+              else if eqStr t (toList "js") then just (just destScript)
+              else if eqStr t (toList "css") then just (just destStyle)
+              else if eqStr t (toList "jsc") then just (just destScriptCred)
+              else if eqStr t (toList "cssc") then just (just destStyleCred)
+              else nothing
+
+  rewriteMarkIReq : List Str → Str
+  rewriteMarkIReq (p ∷ b ∷ pt ∷ dt ∷ it ∷ raw ∷ []) with proxyOf p | baseOf b | markPol pt | markDst dt
+  ... | just px | just base | just x | just d = answerReply raw (rewriteUrlWithI px (mark x d) (just it) base raw)
+  ... | _ | _ | _ | _ = errorReply "BadRequest"
+  rewriteMarkIReq _ = errorReply "BadRequest"
+
+  -- targetintegrity <url> → its integrity mark, or none
+  targetIntegrityReq : List Str → Str
+  targetIntegrityReq (u ∷ []) with parse nothing (preprocess u)
+  ... | url a = maybeOut (targetIntegrity (path a))
+  ... | _ = maybeOut nothing
+  targetIntegrityReq _ = errorReply "BadRequest"
+
+  -- srimark <metadata> → the mark, or none
+  sriMarkReq : List Str → Str
+  sriMarkReq (m ∷ []) = maybeOut (Sri.markOf m)
+  sriMarkReq _ = errorReply "BadRequest"
+
+  sriDigest : Str → Str → Str → Sri.Alg → Str
+  sriDigest d1 d2 d3 Sri.sha256 = d1
+  sriDigest d1 d2 d3 Sri.sha384 = d2
+  sriDigest d1 d2 d3 Sri.sha512 = d3
+
+  -- sripasses <mark> <sha256 digest> <sha384> <sha512> (canonical base64url) → yes|no
+  sriPassesReq : List Str → Str
+  sriPassesReq (m ∷ d1 ∷ d2 ∷ d3 ∷ []) = out (if Sri.passes m (sriDigest d1 d2 d3) then toList "yes" else toList "no")
+  sriPassesReq _ = errorReply "BadRequest"
+
+  -- srifails <mark|-> <eligible 0|1> <sha256> <sha384> <sha512> → yes|no
+  sriFailsReq : List Str → Str
+  sriFailsReq (m ∷ e ∷ d1 ∷ d2 ∷ d3 ∷ []) =
+    out (if Sri.fails (if eqStr m (toList "-") then nothing else just m) (eqStr e (toList "1")) (sriDigest d1 d2 d3) then toList "yes" else toList "no")
+  sriFailsReq _ = errorReply "BadRequest"
+
+  -- srihonored <svg 0|1> <tag> <attr> <rels, space-separated> → yes|no
+  sriHonoredReq : List Str → Str
+  sriHonoredReq (sv ∷ t ∷ a ∷ rs ∷ []) = out (if Sri.honored (eqStr sv (toList "1")) t a (splitOn (is 32) rs) then toList "yes" else toList "no")
+  sriHonoredReq _ = errorReply "BadRequest"
 
   -- disposition <js|css|-> <0|1 Sec-Fetch-Dest present> <Sec-Fetch-Dest> <0|1 Content-Type present> <Content-Type> <0|1 sniffed>
   dispositionReq : List Str → Str
@@ -793,6 +861,13 @@ dispatch op args =
   ... | nothing | _ = errorReply "BadProxy"
   ... | just _ | nothing = errorReply "BadBase"
   widenSelectorReq _ = errorReply "BadRequest"
+
+  widenXPathReq : List Str → Str
+  widenXPathReq (p ∷ b ∷ e ∷ []) with proxyOf p | baseOf b
+  ... | just px | just base = out (XPath.widenXPath (λ raw → answerText raw (rewriteUrl px base raw)) e)
+  ... | nothing | _ = errorReply "BadProxy"
+  ... | just _ | nothing = errorReply "BadBase"
+  widenXPathReq _ = errorReply "BadRequest"
 
   -- postdelivery <sender origin> <recipient origin> <targetOrigin>
   postDeliveryReq : List Str → Str
@@ -1134,6 +1209,24 @@ dispatch op args =
     out (if Permissions.allows (eqStr d (toList "1")) (splitOn (is 10) ls) f doc o then toList "yes" else toList "no")
   ppAllowsReq _ = errorReply "BadRequest"
 
+  -- pptable <field lines, LF-separated> → lines "feature US entry US …", or "none"
+  ppTableReq : List Str → Str
+  ppTableReq (ls ∷ []) with Permissions.table (splitOn (is 10) ls)
+  ... | nothing = out (toList "none")
+  ... | just t  = out (joinPP '\n' (Data.List.Base.map (λ { (k , es) → joinPP (fromℕ 31) (k ∷ es) }) t))
+    where
+    import Data.List.Base
+    joinPP : Char → List Str → Str
+    joinPP c [] = []
+    joinPP c (x ∷ []) = x
+    joinPP c (x ∷ xs) = x ++ c ∷ joinPP c xs
+  ppTableReq _ = errorReply "BadRequest"
+
+  -- ppallowlist <field lines, LF-separated> <feature> <default * 0|1> <doc origin> → entries, LF-separated
+  ppAllowlistReq : List Str → Str
+  ppAllowlistReq (ls ∷ f ∷ d ∷ doc ∷ []) = out (joinNL (Permissions.allowlist (eqStr d (toList "1")) (splitOn (is 10) ls) f doc))
+  ppAllowlistReq _ = errorReply "BadRequest"
+
   -- pptranslate <field lines, LF-separated> → the lines, LF-separated
   ppTranslateReq : List Str → Str
   ppTranslateReq (ls ∷ []) = out (joinLF (Permissions.translate (splitOn (is 10) ls)))
@@ -1360,15 +1453,20 @@ dispatch op args =
   jarNat : Str → Maybe ℕ
   jarNat = CookieJar.natOf
 
+  -- (the runtime's memory keeps ms: its `now` in µs)
+  msNow : Str → Maybe ℕ
+  msNow n = CookieJar.msNum n
+
+
   jarChangeOf : Stored → Str → Maybe CookieJar.Change
   jarChangeOf c e with e
   ... | [] = just (CookieJar.put′ c CookieJar.session)
-  ... | x ∷ [] = if is 120 x then just (CookieJar.gone c) else secs (jarNat (x ∷ []))
+  ... | x ∷ [] = if is 120 x then just (CookieJar.gone c) else secs (CookieJar.msNum (x ∷ []))
     where
     secs : Maybe ℕ → Maybe CookieJar.Change
     secs (just t) = just (CookieJar.put′ c (CookieJar.until t))
     secs nothing  = nothing
-  ... | e′ = secs (jarNat e′)
+  ... | e′ = secs (CookieJar.msNum e′)
     where
     secs : Maybe ℕ → Maybe CookieJar.Change
     secs (just t) = just (CookieJar.put′ c (CookieJar.until t))
@@ -1508,7 +1606,7 @@ dispatch op args =
     snapX t c (u ∷ g ∷ es) = bySnap (ctxArg t c) (baseOf u) (jarNat g) es
     snapX _ _ _ = r
     readX : Str → Str → List Str → MemRun
-    readX t c (n ∷ u ∷ _) = byRead (ctxArg t c) (jarNat n) (baseOf u)
+    readX t c (n ∷ u ∷ _) = byRead (ctxArg t c) (msNow n) (baseOf u)
     readX _ _ _ = r
     byCmd : List Str → MemRun
     byCmd (cmd ∷ a ∷ b ∷ rest) =
@@ -1516,7 +1614,7 @@ dispatch op args =
       else if eqStr cmd (toList "write") then byWrite (CookieJar.unchan false a b)
       else if eqStr cmd (toList "snap") then bySnap nothing (baseOf a) (jarNat b) rest
       else if eqStr cmd (toList "snapx") then snapX a b rest
-      else if eqStr cmd (toList "read") then byRead nothing (jarNat a) (baseOf b)
+      else if eqStr cmd (toList "read") then byRead nothing (msNow a) (baseOf b)
       else if eqStr cmd (toList "readx") then readX a b rest
       else if eqStr cmd (toList "ack") then byAck (jarNat a) (jarNat b)
       else r

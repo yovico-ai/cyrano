@@ -32,7 +32,7 @@ const change = (u: string, s: string, e: string, pk = "-"): Change | null => {
 };
 
 const arbChange = fc.tuple(fc.constantFrom(...URLS), fc.constantFrom(...NAMES), fc.constantFrom("1", "", "a:b!c", "é"), fc.constantFrom(...ATTRS),
-    fc.constantFrom("", "x", "1795000100000", "1795000900000"), fc.constantFrom(...KEYS));
+    fc.constantFrom("", "x", "1795000100000", "1795000900000", "1795000100000.749", "1795000900000.5"), fc.constantFrom(...KEYS));
 
 describe.skipIf(located.skip !== "")("the cookie jar's runtime half: the spec", () => {
     let oracle: OracleClient;

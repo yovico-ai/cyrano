@@ -51,6 +51,18 @@ describe.skipIf(!wanted)("cross-origin windows by number and window.open, in Chr
                         try { o.doc = typeof frames[0].document; } catch (e) { o.doc = e.name; }
                         try { o.doc2 = typeof top.frames[0].document; } catch (e) { o.doc2 = e.name; }
                         o.len = frames[0].length;
+                        // its own properties as Chromium describes them (HTML CrossOriginGetOwnPropertyHelper)
+                        const w0 = frames[0];
+                        const d = (ob, k) => { try { const x = Object.getOwnPropertyDescriptor(ob, k); if (!x) return "none"; return ["value" in x ? "v:" + typeof x.value : "", "get" in x ? "g:" + typeof x.get : "", "set" in x ? "s:" + typeof x.set : "", x.enumerable ? "E" : "", x.configurable ? "C" : "", "writable" in x ? (x.writable ? "W" : "w") : ""].join(""); } catch (e) { return e.name; } };
+                        const fx = (f) => { try { return [f.name, f.length, Function.prototype.toString.call(f)].join("|"); } catch (e) { return e.name; } };
+                        o.desc = ["window", "self", "location", "closed", "frames", "length", "top", "opener", "parent", "blur", "close", "focus", "postMessage", "then", "zz"].map((k) => k + "=" + d(w0, k));
+                        o.keys = Reflect.ownKeys(w0).map(String);
+                        const gd = (k) => Object.getOwnPropertyDescriptor(w0, k);
+                        o.fns = [fx(gd("window").get), fx(gd("location").get), fx(gd("location").set), fx(w0.close), fx(w0.postMessage), fx(Object.getOwnPropertyDescriptor(w0.location, "href").set), fx(w0.location.replace)];
+                        o.stable = [gd("top").get === gd("top").get, gd("top").get === gd("parent").get, gd("window").get.call(w0) === w0, gd("length").get.call(w0)];
+                        try { o.idx0 = String(w0[0]); } catch (e) { o.idx0 = e.name; }
+                        try { o.idx0b = String(w0["0"]); } catch (e) { o.idx0b = e.name; }
+                        try { gd("length").get.call({}); o.illegal = "none"; } catch (e) { o.illegal = e.constructor.name + ": " + e.message; }
                         const w = window.open("${other}/child", "pop");
                         await new Promise((r) => setTimeout(r, 800));
                         try { o.pop = typeof w.document; } catch (e) { o.pop = e.name; }
@@ -99,7 +111,8 @@ describe.skipIf(!wanted)("cross-origin windows by number and window.open, in Chr
     it("is a cross-origin window there, as directly", async () => {
         const direct = await run(`http://127.0.0.1:${port0}/page`);
         const proxied = await run(`${proxyOrigin}/cyrano/http/127.0.0.1:${port0}/page`);
-        expect(direct).toEqual({ same0: true, same1: true, tag: "[object Object]", doc: "SecurityError", doc2: "SecurityError", len: 0, pop: "SecurityError", popHref: "SecurityError", popClosed: false });
+        expect(direct).toMatchObject({ same0: true, same1: true, tag: "[object Object]", doc: "SecurityError", doc2: "SecurityError", len: 0, pop: "SecurityError", popHref: "SecurityError", popClosed: false });
+        expect((direct as { fns: string[] }).fns[0]).toBe("get window|0|function get window() { [native code] }");
         expect(proxied).toEqual(direct);
     }, 60_000);
 });

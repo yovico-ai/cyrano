@@ -173,6 +173,10 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 					"target", target.String(), "ct", ct, "err", err)
 				return fmt.Errorf("read upstream body: %w", err)
 			}
+			// The element's integrity, on the origin's bytes (spec/Sri.agda).
+			if proxy.SRIFails(resp, body) {
+				return proxy.ErrIntegrity
+			}
 			rewritten := cssrewrite.Rewrite(body, cssrewrite.Options{
 				BaseURL: target,
 				Proxy:   proxyCfg,
@@ -325,6 +329,10 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			// (proxy/orb.go; spec/Orb.agda).
 			if proxy.OrbBlocks(resp, body) {
 				return proxy.ErrOrbBlocked
+			}
+			// The element's integrity, on the origin's bytes (spec/Sri.agda).
+			if proxy.SRIFails(resp, body) {
+				return proxy.ErrIntegrity
 			}
 			rewrite := rewriteJSFor(target)
 			if kind == kindWorklet {
@@ -990,6 +998,11 @@ func pageConfig(base map[string]any, resp *http.Response, target *url.URL) map[s
 	// <meta name=referrer> after it itself.
 	if target != nil {
 		cp["rp"] = string(proxy.PagePolicy(resp, target))
+	// The origin's Permissions-Policy, parsed: the document's featurePolicy
+	// reads it (spec/Permissions.agda table; the browser has the translation).
+	if tb, ok := urlrewrite.PermissionsTable(proxy.OriginalPermissionsPolicy(resp)); ok {
+		cp["pp"] = tb
+	}
 	}
 	// The nonce the page's CSP asks of scripts, for bootstraps the client
 	// writes itself (document.write'd documents).

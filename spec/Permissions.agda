@@ -134,3 +134,55 @@ translate : List Str → List Str
 translate lines with policy lines
 ... | just p  = joinComma (map (λ { (k , es) → k ++ '=' ∷ render es }) p) ∷ []
 ... | nothing = lines
+
+------------------------------------------------------------------------
+-- What the document reads (document.featurePolicy; permissions-vs-
+-- chromium). Through the proxy the browser answers for the proxy's origin
+-- and the translated header: `allowsFeature(f, location.origin)` read
+-- false on every proxied page, `getAllowlistForFeature` named the proxy,
+-- and a feature the policy gives only other origins read allowed. A
+-- top-level document's runtime answers from the origin's policy, which
+-- the server gives it parsed (table: each declared feature and its
+-- entries' texts; nothing when there is none or it is ignored).
+
+entryText : Entry → Str
+entryText all        = toList "*"
+entryText self       = toList "'self'"
+entryText (orig x)   = x
+entryText (wild p h) = p ++ '*' ∷ h
+
+table : List Str → Maybe (List (Str × List Str))
+table lines with policy lines
+... | just p  = just (map (λ { (k , es) → k , map entryText es }) p)
+... | nothing = nothing
+
+-- getAllowlistForFeature (Chromium, measured): "*" alone when the list
+-- has *; else the document's origin when it has self, then the origins,
+-- then the *. patterns, each in the header's order; a feature not
+-- declared: its default (* or the document's origin).
+allowlist : Bool → List Str → Str → Str → List Str
+allowlist defaultAll lines f doc with policy lines
+... | nothing = byDefault
+  where
+  byDefault : List Str
+  byDefault = if defaultAll then toList "*" ∷ [] else doc ∷ []
+... | just p with lookupF f p
+...   | nothing = if defaultAll then toList "*" ∷ [] else doc ∷ []
+...   | just es =
+  if anyE isAll es then toList "*" ∷ []
+  else (if anyE isSelf es then doc ∷ [] else []) ++ origins es ++ wilds es
+  where
+  isAll : Entry → Bool
+  isAll all = true
+  isAll _   = false
+  isSelf : Entry → Bool
+  isSelf self = true
+  isSelf _    = false
+  origins : List Entry → List Str
+  origins [] = []
+  origins (orig x ∷ r) = x ∷ origins r
+  origins (_ ∷ r) = origins r
+  wilds : List Entry → List Str
+  wilds [] = []
+  wilds (wild p h ∷ r) = (p ++ '*' ∷ h) ∷ wilds r
+  wilds (_ ∷ r) = wilds r

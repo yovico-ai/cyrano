@@ -52,11 +52,12 @@ open import Data.Char.Base using (Char; toℕ; fromℕ)
 open import Data.List.Base using (List; []; _∷_; _++_; map)
 open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.Nat.Base using (ℕ; zero; suc; _≡ᵇ_)
-open import Data.Product.Base using (_×_; _,_; Σ)
+open import Data.Product.Base using (_×_; _,_; Σ; proj₁; proj₂)
+open import Data.List.Properties using (++-assoc)
 open import Data.String.Base using (String; toList)
 open import Data.Char.Properties using (toℕ-injective)
 open import Data.Nat.Properties using (≡ᵇ⇒≡)
-open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; cong; cong₂; subst)
+open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; cong; cong₂; subst; trans)
 
 open import Scheme
 open import Url
@@ -186,10 +187,44 @@ markText (mark pol d) = polText pol ++ destText d
   destText (just x) = '!' ∷ toList (destName x)
   destText nothing  = []
 
--- The scheme segment: "<scheme>[!<policy>][!<dest>]"; nothing when the
--- scheme is not one cyrano proxifies or a marker is not one cyrano writes.
-schemeSegment : Str → Maybe (Scheme × Mark)
-schemeSegment s = bySplit (splitOn (is 33) s)
+-- Subresource Integrity (Sri.agda): an element's `integrity` rides its
+-- proxified URL as a last marker "!=<text>" (Sri.markOf: no "!" or "/"
+-- in it, and no policy or destination name starts "="); the proxy checks
+-- the origin's bytes against it. The scheme segment is read without it.
+isEq : Char → Bool
+isEq c = is 61 c
+
+startsEq : Str → Bool
+startsEq []      = false
+startsEq (c ∷ _) = isEq c
+
+dropOne : Str → Str
+dropOne []       = []
+dropOne (_ ∷ cs) = cs
+
+-- The segment up to its first "!=", and the integrity after it.
+splitIntegrity : Str → Str × Maybe Str
+splitIntegrity []       = [] , nothing
+splitIntegrity (c ∷ cs) =
+  if is 33 c ∧ startsEq cs then ([] , just (dropOne cs)) else consI c (splitIntegrity cs)
+  where
+  consI : Char → Str × Maybe Str → Str × Maybe Str
+  consI x (a , i) = (x ∷ a) , i
+
+-- No "!=" in it.
+clean : Str → Bool
+clean []       = true
+clean (c ∷ cs) = not (is 33 c ∧ startsEq cs) ∧ clean cs
+
+integrityText : Maybe Str → Str
+integrityText nothing  = []
+integrityText (just t) = '!' ∷ '=' ∷ t
+
+-- The scheme segment: "<scheme>[!<policy>][!<dest>][!=<integrity>]";
+-- nothing when the scheme is not one cyrano proxifies or a marker is not
+-- one cyrano writes.
+schemeSegment₀ : Str → Maybe (Scheme × Mark)
+schemeSegment₀ s = bySplit (splitOn (is 33) s)
   where
   policyNamed : Str → Maybe R.Policy
   policyNamed t with R.policyToken t
@@ -230,6 +265,12 @@ schemeSegment s = bySplit (splitOn (is 33) s)
   bySplit (sc ∷ t ∷ u ∷ [])  = withScheme (schemeOf sc) (twoMarkers t u)
   bySplit _                  = nothing
 
+schemeSegment : Str → Maybe (Scheme × Mark)
+schemeSegment s = schemeSegment₀ (proj₁ (splitIntegrity s))
+
+segmentIntegrity : Str → Maybe Str
+segmentIntegrity s = proj₂ (splitIntegrity s)
+
 -- A path proxify can have produced: /cyrano/<scheme>[!<policy>][!<dest>]/<host><rest>.
 target : List Str → Maybe (Scheme × Str × List Str)
 target []                 = nothing
@@ -248,6 +289,13 @@ targetMark (c ∷ s ∷ h ∷ rest) with isCyrano c ∧ not (isEmpty h) | scheme
 ... | true | just (_ , m) = m
 ... | _    | _            = noMark
 targetMark _ = noMark
+
+-- The integrity a proxified path carries, if any.
+targetIntegrity : List Str → Maybe Str
+targetIntegrity (c ∷ s ∷ h ∷ rest) with isCyrano c ∧ not (isEmpty h) | schemeSegment s
+... | true | just _ = segmentIntegrity s
+... | _    | _      = nothing
+targetIntegrity _ = nothing
 
 -- The referrer policy a proxified path carries, if any.
 targetPolicy : List Str → Maybe R.Policy
@@ -287,6 +335,13 @@ proxifyWith p m a = mkAbs (pScheme p) (pAuth p)
                       ∷ escapePct (segmentOf (auth a)) ∷ map escapePct (path a))
                     (query a) (frag a)
 
+-- … with an integrity (Sri.markOf) too.
+proxifyWithI : Proxy → Mark → Maybe Str → Abs → Abs
+proxifyWithI p m i a = mkAbs (pScheme p) (pAuth p)
+                    (toList "cyrano" ∷ (schemeChars (scheme a) ++ markText m ++ integrityText i)
+                      ∷ escapePct (segmentOf (auth a)) ∷ map escapePct (path a))
+                    (query a) (frag a)
+
 -- What a parsed URL becomes (marked m).
 rewriteAbsWith : Proxy → Mark → Abs → Answer
 rewriteAbsWith p m a = decide (sameOrigin p a) (target (path a))
@@ -316,6 +371,33 @@ rewriteUrlWith p m b (c ∷ cs) = classify (preprocess (c ∷ cs))
   where
   byParse : Parsed → Answer
   byParse (url a)     = rewriteAbsWith p m a
+  byParse otherScheme = keep notProxifiable
+  byParse invalid     = keep unparseable
+  byParse outside     = silent
+
+  classify : Str → Answer
+  classify []       = byParse (parse (just b) [])
+  classify (d ∷ ds) = if isHash d then keep anchor else byParse (parse (just b) (d ∷ ds))
+
+-- … with an integrity mark (an element's `integrity`, Sri.markOf): the
+-- same answer, the proxified form carrying it.
+rewriteAbsWithI : Proxy → Mark → Maybe Str → Abs → Answer
+rewriteAbsWithI p m nothing  a = rewriteAbsWith p m a
+rewriteAbsWithI p m (just t) a = decide (sameOrigin p a) (target (path a))
+  where
+  decide : Bool → Maybe (Scheme × Str × List Str) → Answer
+  decide true  _        = if underCyrano (path a) then keep alreadyProxified
+                          else emit proxyOrigin (href a)
+  decide false (just _) = emit remapped (href (mkAbs (pScheme p) (pAuth p) (path a) (query a) (frag a)))
+  decide false nothing  = emit proxified (href (proxifyWithI p m (just t) a))
+
+rewriteUrlWithI : Proxy → Mark → Maybe Str → Abs → Str → Answer
+rewriteUrlWithI p m nothing  b s        = rewriteUrlWith p m b s
+rewriteUrlWithI p m (just t) b []       = keep emptyRef
+rewriteUrlWithI p m (just t) b (c ∷ cs) = classify (preprocess (c ∷ cs))
+  where
+  byParse : Parsed → Answer
+  byParse (url a)     = rewriteAbsWithI p m (just t) a
   byParse otherScheme = keep notProxifiable
   byParse invalid     = keep unparseable
   byParse outside     = silent
@@ -870,3 +952,459 @@ unwrap-proxifyWith p s m h hs x xs q f c rewrite sameOrigin-proxifyWith p m (mkA
 mark-proxifyWith : ∀ p s m h hs x xs q f →
   targetMark (path (proxifyWith p m (mkAbs s (h ∷ hs) (x ∷ xs) q f))) ≡ m
 mark-proxifyWith p s m h hs x xs q f rewrite segment-nonEmpty h hs | segment-mark s m = refl
+
+-- The integrity marker: no base segment holds "!=" (no policy or
+-- destination name starts "="), so the marker reads back, and the rest
+-- of the segment as before.
+clean-mark : ∀ s m → clean (schemeChars s ++ markText m) ≡ true
+clean-mark http (mark nothing nothing) = refl
+clean-mark http (mark nothing (just destScript)) = refl
+clean-mark http (mark nothing (just destStyle)) = refl
+clean-mark http (mark nothing (just destFrame)) = refl
+clean-mark http (mark nothing (just destInert)) = refl
+clean-mark http (mark nothing (just destImageSet)) = refl
+clean-mark http (mark nothing (just destModuleWorker)) = refl
+clean-mark http (mark nothing (just destCred)) = refl
+clean-mark http (mark nothing (just destScriptCred)) = refl
+clean-mark http (mark nothing (just destStyleCred)) = refl
+clean-mark http (mark nothing (just destAnon)) = refl
+clean-mark http (mark (just R.noReferrer) nothing) = refl
+clean-mark http (mark (just R.noReferrer) (just destScript)) = refl
+clean-mark http (mark (just R.noReferrer) (just destStyle)) = refl
+clean-mark http (mark (just R.noReferrer) (just destFrame)) = refl
+clean-mark http (mark (just R.noReferrer) (just destInert)) = refl
+clean-mark http (mark (just R.noReferrer) (just destImageSet)) = refl
+clean-mark http (mark (just R.noReferrer) (just destModuleWorker)) = refl
+clean-mark http (mark (just R.noReferrer) (just destCred)) = refl
+clean-mark http (mark (just R.noReferrer) (just destScriptCred)) = refl
+clean-mark http (mark (just R.noReferrer) (just destStyleCred)) = refl
+clean-mark http (mark (just R.noReferrer) (just destAnon)) = refl
+clean-mark http (mark (just R.noReferrerWhenDowngrade) nothing) = refl
+clean-mark http (mark (just R.noReferrerWhenDowngrade) (just destScript)) = refl
+clean-mark http (mark (just R.noReferrerWhenDowngrade) (just destStyle)) = refl
+clean-mark http (mark (just R.noReferrerWhenDowngrade) (just destFrame)) = refl
+clean-mark http (mark (just R.noReferrerWhenDowngrade) (just destInert)) = refl
+clean-mark http (mark (just R.noReferrerWhenDowngrade) (just destImageSet)) = refl
+clean-mark http (mark (just R.noReferrerWhenDowngrade) (just destModuleWorker)) = refl
+clean-mark http (mark (just R.noReferrerWhenDowngrade) (just destCred)) = refl
+clean-mark http (mark (just R.noReferrerWhenDowngrade) (just destScriptCred)) = refl
+clean-mark http (mark (just R.noReferrerWhenDowngrade) (just destStyleCred)) = refl
+clean-mark http (mark (just R.noReferrerWhenDowngrade) (just destAnon)) = refl
+clean-mark http (mark (just R.sameOrigin) nothing) = refl
+clean-mark http (mark (just R.sameOrigin) (just destScript)) = refl
+clean-mark http (mark (just R.sameOrigin) (just destStyle)) = refl
+clean-mark http (mark (just R.sameOrigin) (just destFrame)) = refl
+clean-mark http (mark (just R.sameOrigin) (just destInert)) = refl
+clean-mark http (mark (just R.sameOrigin) (just destImageSet)) = refl
+clean-mark http (mark (just R.sameOrigin) (just destModuleWorker)) = refl
+clean-mark http (mark (just R.sameOrigin) (just destCred)) = refl
+clean-mark http (mark (just R.sameOrigin) (just destScriptCred)) = refl
+clean-mark http (mark (just R.sameOrigin) (just destStyleCred)) = refl
+clean-mark http (mark (just R.sameOrigin) (just destAnon)) = refl
+clean-mark http (mark (just R.origin) nothing) = refl
+clean-mark http (mark (just R.origin) (just destScript)) = refl
+clean-mark http (mark (just R.origin) (just destStyle)) = refl
+clean-mark http (mark (just R.origin) (just destFrame)) = refl
+clean-mark http (mark (just R.origin) (just destInert)) = refl
+clean-mark http (mark (just R.origin) (just destImageSet)) = refl
+clean-mark http (mark (just R.origin) (just destModuleWorker)) = refl
+clean-mark http (mark (just R.origin) (just destCred)) = refl
+clean-mark http (mark (just R.origin) (just destScriptCred)) = refl
+clean-mark http (mark (just R.origin) (just destStyleCred)) = refl
+clean-mark http (mark (just R.origin) (just destAnon)) = refl
+clean-mark http (mark (just R.strictOrigin) nothing) = refl
+clean-mark http (mark (just R.strictOrigin) (just destScript)) = refl
+clean-mark http (mark (just R.strictOrigin) (just destStyle)) = refl
+clean-mark http (mark (just R.strictOrigin) (just destFrame)) = refl
+clean-mark http (mark (just R.strictOrigin) (just destInert)) = refl
+clean-mark http (mark (just R.strictOrigin) (just destImageSet)) = refl
+clean-mark http (mark (just R.strictOrigin) (just destModuleWorker)) = refl
+clean-mark http (mark (just R.strictOrigin) (just destCred)) = refl
+clean-mark http (mark (just R.strictOrigin) (just destScriptCred)) = refl
+clean-mark http (mark (just R.strictOrigin) (just destStyleCred)) = refl
+clean-mark http (mark (just R.strictOrigin) (just destAnon)) = refl
+clean-mark http (mark (just R.originWhenCrossOrigin) nothing) = refl
+clean-mark http (mark (just R.originWhenCrossOrigin) (just destScript)) = refl
+clean-mark http (mark (just R.originWhenCrossOrigin) (just destStyle)) = refl
+clean-mark http (mark (just R.originWhenCrossOrigin) (just destFrame)) = refl
+clean-mark http (mark (just R.originWhenCrossOrigin) (just destInert)) = refl
+clean-mark http (mark (just R.originWhenCrossOrigin) (just destImageSet)) = refl
+clean-mark http (mark (just R.originWhenCrossOrigin) (just destModuleWorker)) = refl
+clean-mark http (mark (just R.originWhenCrossOrigin) (just destCred)) = refl
+clean-mark http (mark (just R.originWhenCrossOrigin) (just destScriptCred)) = refl
+clean-mark http (mark (just R.originWhenCrossOrigin) (just destStyleCred)) = refl
+clean-mark http (mark (just R.originWhenCrossOrigin) (just destAnon)) = refl
+clean-mark http (mark (just R.strictOriginWhenCrossOrigin) nothing) = refl
+clean-mark http (mark (just R.strictOriginWhenCrossOrigin) (just destScript)) = refl
+clean-mark http (mark (just R.strictOriginWhenCrossOrigin) (just destStyle)) = refl
+clean-mark http (mark (just R.strictOriginWhenCrossOrigin) (just destFrame)) = refl
+clean-mark http (mark (just R.strictOriginWhenCrossOrigin) (just destInert)) = refl
+clean-mark http (mark (just R.strictOriginWhenCrossOrigin) (just destImageSet)) = refl
+clean-mark http (mark (just R.strictOriginWhenCrossOrigin) (just destModuleWorker)) = refl
+clean-mark http (mark (just R.strictOriginWhenCrossOrigin) (just destCred)) = refl
+clean-mark http (mark (just R.strictOriginWhenCrossOrigin) (just destScriptCred)) = refl
+clean-mark http (mark (just R.strictOriginWhenCrossOrigin) (just destStyleCred)) = refl
+clean-mark http (mark (just R.strictOriginWhenCrossOrigin) (just destAnon)) = refl
+clean-mark http (mark (just R.unsafeUrl) nothing) = refl
+clean-mark http (mark (just R.unsafeUrl) (just destScript)) = refl
+clean-mark http (mark (just R.unsafeUrl) (just destStyle)) = refl
+clean-mark http (mark (just R.unsafeUrl) (just destFrame)) = refl
+clean-mark http (mark (just R.unsafeUrl) (just destInert)) = refl
+clean-mark http (mark (just R.unsafeUrl) (just destImageSet)) = refl
+clean-mark http (mark (just R.unsafeUrl) (just destModuleWorker)) = refl
+clean-mark http (mark (just R.unsafeUrl) (just destCred)) = refl
+clean-mark http (mark (just R.unsafeUrl) (just destScriptCred)) = refl
+clean-mark http (mark (just R.unsafeUrl) (just destStyleCred)) = refl
+clean-mark http (mark (just R.unsafeUrl) (just destAnon)) = refl
+clean-mark https (mark nothing nothing) = refl
+clean-mark https (mark nothing (just destScript)) = refl
+clean-mark https (mark nothing (just destStyle)) = refl
+clean-mark https (mark nothing (just destFrame)) = refl
+clean-mark https (mark nothing (just destInert)) = refl
+clean-mark https (mark nothing (just destImageSet)) = refl
+clean-mark https (mark nothing (just destModuleWorker)) = refl
+clean-mark https (mark nothing (just destCred)) = refl
+clean-mark https (mark nothing (just destScriptCred)) = refl
+clean-mark https (mark nothing (just destStyleCred)) = refl
+clean-mark https (mark nothing (just destAnon)) = refl
+clean-mark https (mark (just R.noReferrer) nothing) = refl
+clean-mark https (mark (just R.noReferrer) (just destScript)) = refl
+clean-mark https (mark (just R.noReferrer) (just destStyle)) = refl
+clean-mark https (mark (just R.noReferrer) (just destFrame)) = refl
+clean-mark https (mark (just R.noReferrer) (just destInert)) = refl
+clean-mark https (mark (just R.noReferrer) (just destImageSet)) = refl
+clean-mark https (mark (just R.noReferrer) (just destModuleWorker)) = refl
+clean-mark https (mark (just R.noReferrer) (just destCred)) = refl
+clean-mark https (mark (just R.noReferrer) (just destScriptCred)) = refl
+clean-mark https (mark (just R.noReferrer) (just destStyleCred)) = refl
+clean-mark https (mark (just R.noReferrer) (just destAnon)) = refl
+clean-mark https (mark (just R.noReferrerWhenDowngrade) nothing) = refl
+clean-mark https (mark (just R.noReferrerWhenDowngrade) (just destScript)) = refl
+clean-mark https (mark (just R.noReferrerWhenDowngrade) (just destStyle)) = refl
+clean-mark https (mark (just R.noReferrerWhenDowngrade) (just destFrame)) = refl
+clean-mark https (mark (just R.noReferrerWhenDowngrade) (just destInert)) = refl
+clean-mark https (mark (just R.noReferrerWhenDowngrade) (just destImageSet)) = refl
+clean-mark https (mark (just R.noReferrerWhenDowngrade) (just destModuleWorker)) = refl
+clean-mark https (mark (just R.noReferrerWhenDowngrade) (just destCred)) = refl
+clean-mark https (mark (just R.noReferrerWhenDowngrade) (just destScriptCred)) = refl
+clean-mark https (mark (just R.noReferrerWhenDowngrade) (just destStyleCred)) = refl
+clean-mark https (mark (just R.noReferrerWhenDowngrade) (just destAnon)) = refl
+clean-mark https (mark (just R.sameOrigin) nothing) = refl
+clean-mark https (mark (just R.sameOrigin) (just destScript)) = refl
+clean-mark https (mark (just R.sameOrigin) (just destStyle)) = refl
+clean-mark https (mark (just R.sameOrigin) (just destFrame)) = refl
+clean-mark https (mark (just R.sameOrigin) (just destInert)) = refl
+clean-mark https (mark (just R.sameOrigin) (just destImageSet)) = refl
+clean-mark https (mark (just R.sameOrigin) (just destModuleWorker)) = refl
+clean-mark https (mark (just R.sameOrigin) (just destCred)) = refl
+clean-mark https (mark (just R.sameOrigin) (just destScriptCred)) = refl
+clean-mark https (mark (just R.sameOrigin) (just destStyleCred)) = refl
+clean-mark https (mark (just R.sameOrigin) (just destAnon)) = refl
+clean-mark https (mark (just R.origin) nothing) = refl
+clean-mark https (mark (just R.origin) (just destScript)) = refl
+clean-mark https (mark (just R.origin) (just destStyle)) = refl
+clean-mark https (mark (just R.origin) (just destFrame)) = refl
+clean-mark https (mark (just R.origin) (just destInert)) = refl
+clean-mark https (mark (just R.origin) (just destImageSet)) = refl
+clean-mark https (mark (just R.origin) (just destModuleWorker)) = refl
+clean-mark https (mark (just R.origin) (just destCred)) = refl
+clean-mark https (mark (just R.origin) (just destScriptCred)) = refl
+clean-mark https (mark (just R.origin) (just destStyleCred)) = refl
+clean-mark https (mark (just R.origin) (just destAnon)) = refl
+clean-mark https (mark (just R.strictOrigin) nothing) = refl
+clean-mark https (mark (just R.strictOrigin) (just destScript)) = refl
+clean-mark https (mark (just R.strictOrigin) (just destStyle)) = refl
+clean-mark https (mark (just R.strictOrigin) (just destFrame)) = refl
+clean-mark https (mark (just R.strictOrigin) (just destInert)) = refl
+clean-mark https (mark (just R.strictOrigin) (just destImageSet)) = refl
+clean-mark https (mark (just R.strictOrigin) (just destModuleWorker)) = refl
+clean-mark https (mark (just R.strictOrigin) (just destCred)) = refl
+clean-mark https (mark (just R.strictOrigin) (just destScriptCred)) = refl
+clean-mark https (mark (just R.strictOrigin) (just destStyleCred)) = refl
+clean-mark https (mark (just R.strictOrigin) (just destAnon)) = refl
+clean-mark https (mark (just R.originWhenCrossOrigin) nothing) = refl
+clean-mark https (mark (just R.originWhenCrossOrigin) (just destScript)) = refl
+clean-mark https (mark (just R.originWhenCrossOrigin) (just destStyle)) = refl
+clean-mark https (mark (just R.originWhenCrossOrigin) (just destFrame)) = refl
+clean-mark https (mark (just R.originWhenCrossOrigin) (just destInert)) = refl
+clean-mark https (mark (just R.originWhenCrossOrigin) (just destImageSet)) = refl
+clean-mark https (mark (just R.originWhenCrossOrigin) (just destModuleWorker)) = refl
+clean-mark https (mark (just R.originWhenCrossOrigin) (just destCred)) = refl
+clean-mark https (mark (just R.originWhenCrossOrigin) (just destScriptCred)) = refl
+clean-mark https (mark (just R.originWhenCrossOrigin) (just destStyleCred)) = refl
+clean-mark https (mark (just R.originWhenCrossOrigin) (just destAnon)) = refl
+clean-mark https (mark (just R.strictOriginWhenCrossOrigin) nothing) = refl
+clean-mark https (mark (just R.strictOriginWhenCrossOrigin) (just destScript)) = refl
+clean-mark https (mark (just R.strictOriginWhenCrossOrigin) (just destStyle)) = refl
+clean-mark https (mark (just R.strictOriginWhenCrossOrigin) (just destFrame)) = refl
+clean-mark https (mark (just R.strictOriginWhenCrossOrigin) (just destInert)) = refl
+clean-mark https (mark (just R.strictOriginWhenCrossOrigin) (just destImageSet)) = refl
+clean-mark https (mark (just R.strictOriginWhenCrossOrigin) (just destModuleWorker)) = refl
+clean-mark https (mark (just R.strictOriginWhenCrossOrigin) (just destCred)) = refl
+clean-mark https (mark (just R.strictOriginWhenCrossOrigin) (just destScriptCred)) = refl
+clean-mark https (mark (just R.strictOriginWhenCrossOrigin) (just destStyleCred)) = refl
+clean-mark https (mark (just R.strictOriginWhenCrossOrigin) (just destAnon)) = refl
+clean-mark https (mark (just R.unsafeUrl) nothing) = refl
+clean-mark https (mark (just R.unsafeUrl) (just destScript)) = refl
+clean-mark https (mark (just R.unsafeUrl) (just destStyle)) = refl
+clean-mark https (mark (just R.unsafeUrl) (just destFrame)) = refl
+clean-mark https (mark (just R.unsafeUrl) (just destInert)) = refl
+clean-mark https (mark (just R.unsafeUrl) (just destImageSet)) = refl
+clean-mark https (mark (just R.unsafeUrl) (just destModuleWorker)) = refl
+clean-mark https (mark (just R.unsafeUrl) (just destCred)) = refl
+clean-mark https (mark (just R.unsafeUrl) (just destScriptCred)) = refl
+clean-mark https (mark (just R.unsafeUrl) (just destStyleCred)) = refl
+clean-mark https (mark (just R.unsafeUrl) (just destAnon)) = refl
+clean-mark ws (mark nothing nothing) = refl
+clean-mark ws (mark nothing (just destScript)) = refl
+clean-mark ws (mark nothing (just destStyle)) = refl
+clean-mark ws (mark nothing (just destFrame)) = refl
+clean-mark ws (mark nothing (just destInert)) = refl
+clean-mark ws (mark nothing (just destImageSet)) = refl
+clean-mark ws (mark nothing (just destModuleWorker)) = refl
+clean-mark ws (mark nothing (just destCred)) = refl
+clean-mark ws (mark nothing (just destScriptCred)) = refl
+clean-mark ws (mark nothing (just destStyleCred)) = refl
+clean-mark ws (mark nothing (just destAnon)) = refl
+clean-mark ws (mark (just R.noReferrer) nothing) = refl
+clean-mark ws (mark (just R.noReferrer) (just destScript)) = refl
+clean-mark ws (mark (just R.noReferrer) (just destStyle)) = refl
+clean-mark ws (mark (just R.noReferrer) (just destFrame)) = refl
+clean-mark ws (mark (just R.noReferrer) (just destInert)) = refl
+clean-mark ws (mark (just R.noReferrer) (just destImageSet)) = refl
+clean-mark ws (mark (just R.noReferrer) (just destModuleWorker)) = refl
+clean-mark ws (mark (just R.noReferrer) (just destCred)) = refl
+clean-mark ws (mark (just R.noReferrer) (just destScriptCred)) = refl
+clean-mark ws (mark (just R.noReferrer) (just destStyleCred)) = refl
+clean-mark ws (mark (just R.noReferrer) (just destAnon)) = refl
+clean-mark ws (mark (just R.noReferrerWhenDowngrade) nothing) = refl
+clean-mark ws (mark (just R.noReferrerWhenDowngrade) (just destScript)) = refl
+clean-mark ws (mark (just R.noReferrerWhenDowngrade) (just destStyle)) = refl
+clean-mark ws (mark (just R.noReferrerWhenDowngrade) (just destFrame)) = refl
+clean-mark ws (mark (just R.noReferrerWhenDowngrade) (just destInert)) = refl
+clean-mark ws (mark (just R.noReferrerWhenDowngrade) (just destImageSet)) = refl
+clean-mark ws (mark (just R.noReferrerWhenDowngrade) (just destModuleWorker)) = refl
+clean-mark ws (mark (just R.noReferrerWhenDowngrade) (just destCred)) = refl
+clean-mark ws (mark (just R.noReferrerWhenDowngrade) (just destScriptCred)) = refl
+clean-mark ws (mark (just R.noReferrerWhenDowngrade) (just destStyleCred)) = refl
+clean-mark ws (mark (just R.noReferrerWhenDowngrade) (just destAnon)) = refl
+clean-mark ws (mark (just R.sameOrigin) nothing) = refl
+clean-mark ws (mark (just R.sameOrigin) (just destScript)) = refl
+clean-mark ws (mark (just R.sameOrigin) (just destStyle)) = refl
+clean-mark ws (mark (just R.sameOrigin) (just destFrame)) = refl
+clean-mark ws (mark (just R.sameOrigin) (just destInert)) = refl
+clean-mark ws (mark (just R.sameOrigin) (just destImageSet)) = refl
+clean-mark ws (mark (just R.sameOrigin) (just destModuleWorker)) = refl
+clean-mark ws (mark (just R.sameOrigin) (just destCred)) = refl
+clean-mark ws (mark (just R.sameOrigin) (just destScriptCred)) = refl
+clean-mark ws (mark (just R.sameOrigin) (just destStyleCred)) = refl
+clean-mark ws (mark (just R.sameOrigin) (just destAnon)) = refl
+clean-mark ws (mark (just R.origin) nothing) = refl
+clean-mark ws (mark (just R.origin) (just destScript)) = refl
+clean-mark ws (mark (just R.origin) (just destStyle)) = refl
+clean-mark ws (mark (just R.origin) (just destFrame)) = refl
+clean-mark ws (mark (just R.origin) (just destInert)) = refl
+clean-mark ws (mark (just R.origin) (just destImageSet)) = refl
+clean-mark ws (mark (just R.origin) (just destModuleWorker)) = refl
+clean-mark ws (mark (just R.origin) (just destCred)) = refl
+clean-mark ws (mark (just R.origin) (just destScriptCred)) = refl
+clean-mark ws (mark (just R.origin) (just destStyleCred)) = refl
+clean-mark ws (mark (just R.origin) (just destAnon)) = refl
+clean-mark ws (mark (just R.strictOrigin) nothing) = refl
+clean-mark ws (mark (just R.strictOrigin) (just destScript)) = refl
+clean-mark ws (mark (just R.strictOrigin) (just destStyle)) = refl
+clean-mark ws (mark (just R.strictOrigin) (just destFrame)) = refl
+clean-mark ws (mark (just R.strictOrigin) (just destInert)) = refl
+clean-mark ws (mark (just R.strictOrigin) (just destImageSet)) = refl
+clean-mark ws (mark (just R.strictOrigin) (just destModuleWorker)) = refl
+clean-mark ws (mark (just R.strictOrigin) (just destCred)) = refl
+clean-mark ws (mark (just R.strictOrigin) (just destScriptCred)) = refl
+clean-mark ws (mark (just R.strictOrigin) (just destStyleCred)) = refl
+clean-mark ws (mark (just R.strictOrigin) (just destAnon)) = refl
+clean-mark ws (mark (just R.originWhenCrossOrigin) nothing) = refl
+clean-mark ws (mark (just R.originWhenCrossOrigin) (just destScript)) = refl
+clean-mark ws (mark (just R.originWhenCrossOrigin) (just destStyle)) = refl
+clean-mark ws (mark (just R.originWhenCrossOrigin) (just destFrame)) = refl
+clean-mark ws (mark (just R.originWhenCrossOrigin) (just destInert)) = refl
+clean-mark ws (mark (just R.originWhenCrossOrigin) (just destImageSet)) = refl
+clean-mark ws (mark (just R.originWhenCrossOrigin) (just destModuleWorker)) = refl
+clean-mark ws (mark (just R.originWhenCrossOrigin) (just destCred)) = refl
+clean-mark ws (mark (just R.originWhenCrossOrigin) (just destScriptCred)) = refl
+clean-mark ws (mark (just R.originWhenCrossOrigin) (just destStyleCred)) = refl
+clean-mark ws (mark (just R.originWhenCrossOrigin) (just destAnon)) = refl
+clean-mark ws (mark (just R.strictOriginWhenCrossOrigin) nothing) = refl
+clean-mark ws (mark (just R.strictOriginWhenCrossOrigin) (just destScript)) = refl
+clean-mark ws (mark (just R.strictOriginWhenCrossOrigin) (just destStyle)) = refl
+clean-mark ws (mark (just R.strictOriginWhenCrossOrigin) (just destFrame)) = refl
+clean-mark ws (mark (just R.strictOriginWhenCrossOrigin) (just destInert)) = refl
+clean-mark ws (mark (just R.strictOriginWhenCrossOrigin) (just destImageSet)) = refl
+clean-mark ws (mark (just R.strictOriginWhenCrossOrigin) (just destModuleWorker)) = refl
+clean-mark ws (mark (just R.strictOriginWhenCrossOrigin) (just destCred)) = refl
+clean-mark ws (mark (just R.strictOriginWhenCrossOrigin) (just destScriptCred)) = refl
+clean-mark ws (mark (just R.strictOriginWhenCrossOrigin) (just destStyleCred)) = refl
+clean-mark ws (mark (just R.strictOriginWhenCrossOrigin) (just destAnon)) = refl
+clean-mark ws (mark (just R.unsafeUrl) nothing) = refl
+clean-mark ws (mark (just R.unsafeUrl) (just destScript)) = refl
+clean-mark ws (mark (just R.unsafeUrl) (just destStyle)) = refl
+clean-mark ws (mark (just R.unsafeUrl) (just destFrame)) = refl
+clean-mark ws (mark (just R.unsafeUrl) (just destInert)) = refl
+clean-mark ws (mark (just R.unsafeUrl) (just destImageSet)) = refl
+clean-mark ws (mark (just R.unsafeUrl) (just destModuleWorker)) = refl
+clean-mark ws (mark (just R.unsafeUrl) (just destCred)) = refl
+clean-mark ws (mark (just R.unsafeUrl) (just destScriptCred)) = refl
+clean-mark ws (mark (just R.unsafeUrl) (just destStyleCred)) = refl
+clean-mark ws (mark (just R.unsafeUrl) (just destAnon)) = refl
+clean-mark wss (mark nothing nothing) = refl
+clean-mark wss (mark nothing (just destScript)) = refl
+clean-mark wss (mark nothing (just destStyle)) = refl
+clean-mark wss (mark nothing (just destFrame)) = refl
+clean-mark wss (mark nothing (just destInert)) = refl
+clean-mark wss (mark nothing (just destImageSet)) = refl
+clean-mark wss (mark nothing (just destModuleWorker)) = refl
+clean-mark wss (mark nothing (just destCred)) = refl
+clean-mark wss (mark nothing (just destScriptCred)) = refl
+clean-mark wss (mark nothing (just destStyleCred)) = refl
+clean-mark wss (mark nothing (just destAnon)) = refl
+clean-mark wss (mark (just R.noReferrer) nothing) = refl
+clean-mark wss (mark (just R.noReferrer) (just destScript)) = refl
+clean-mark wss (mark (just R.noReferrer) (just destStyle)) = refl
+clean-mark wss (mark (just R.noReferrer) (just destFrame)) = refl
+clean-mark wss (mark (just R.noReferrer) (just destInert)) = refl
+clean-mark wss (mark (just R.noReferrer) (just destImageSet)) = refl
+clean-mark wss (mark (just R.noReferrer) (just destModuleWorker)) = refl
+clean-mark wss (mark (just R.noReferrer) (just destCred)) = refl
+clean-mark wss (mark (just R.noReferrer) (just destScriptCred)) = refl
+clean-mark wss (mark (just R.noReferrer) (just destStyleCred)) = refl
+clean-mark wss (mark (just R.noReferrer) (just destAnon)) = refl
+clean-mark wss (mark (just R.noReferrerWhenDowngrade) nothing) = refl
+clean-mark wss (mark (just R.noReferrerWhenDowngrade) (just destScript)) = refl
+clean-mark wss (mark (just R.noReferrerWhenDowngrade) (just destStyle)) = refl
+clean-mark wss (mark (just R.noReferrerWhenDowngrade) (just destFrame)) = refl
+clean-mark wss (mark (just R.noReferrerWhenDowngrade) (just destInert)) = refl
+clean-mark wss (mark (just R.noReferrerWhenDowngrade) (just destImageSet)) = refl
+clean-mark wss (mark (just R.noReferrerWhenDowngrade) (just destModuleWorker)) = refl
+clean-mark wss (mark (just R.noReferrerWhenDowngrade) (just destCred)) = refl
+clean-mark wss (mark (just R.noReferrerWhenDowngrade) (just destScriptCred)) = refl
+clean-mark wss (mark (just R.noReferrerWhenDowngrade) (just destStyleCred)) = refl
+clean-mark wss (mark (just R.noReferrerWhenDowngrade) (just destAnon)) = refl
+clean-mark wss (mark (just R.sameOrigin) nothing) = refl
+clean-mark wss (mark (just R.sameOrigin) (just destScript)) = refl
+clean-mark wss (mark (just R.sameOrigin) (just destStyle)) = refl
+clean-mark wss (mark (just R.sameOrigin) (just destFrame)) = refl
+clean-mark wss (mark (just R.sameOrigin) (just destInert)) = refl
+clean-mark wss (mark (just R.sameOrigin) (just destImageSet)) = refl
+clean-mark wss (mark (just R.sameOrigin) (just destModuleWorker)) = refl
+clean-mark wss (mark (just R.sameOrigin) (just destCred)) = refl
+clean-mark wss (mark (just R.sameOrigin) (just destScriptCred)) = refl
+clean-mark wss (mark (just R.sameOrigin) (just destStyleCred)) = refl
+clean-mark wss (mark (just R.sameOrigin) (just destAnon)) = refl
+clean-mark wss (mark (just R.origin) nothing) = refl
+clean-mark wss (mark (just R.origin) (just destScript)) = refl
+clean-mark wss (mark (just R.origin) (just destStyle)) = refl
+clean-mark wss (mark (just R.origin) (just destFrame)) = refl
+clean-mark wss (mark (just R.origin) (just destInert)) = refl
+clean-mark wss (mark (just R.origin) (just destImageSet)) = refl
+clean-mark wss (mark (just R.origin) (just destModuleWorker)) = refl
+clean-mark wss (mark (just R.origin) (just destCred)) = refl
+clean-mark wss (mark (just R.origin) (just destScriptCred)) = refl
+clean-mark wss (mark (just R.origin) (just destStyleCred)) = refl
+clean-mark wss (mark (just R.origin) (just destAnon)) = refl
+clean-mark wss (mark (just R.strictOrigin) nothing) = refl
+clean-mark wss (mark (just R.strictOrigin) (just destScript)) = refl
+clean-mark wss (mark (just R.strictOrigin) (just destStyle)) = refl
+clean-mark wss (mark (just R.strictOrigin) (just destFrame)) = refl
+clean-mark wss (mark (just R.strictOrigin) (just destInert)) = refl
+clean-mark wss (mark (just R.strictOrigin) (just destImageSet)) = refl
+clean-mark wss (mark (just R.strictOrigin) (just destModuleWorker)) = refl
+clean-mark wss (mark (just R.strictOrigin) (just destCred)) = refl
+clean-mark wss (mark (just R.strictOrigin) (just destScriptCred)) = refl
+clean-mark wss (mark (just R.strictOrigin) (just destStyleCred)) = refl
+clean-mark wss (mark (just R.strictOrigin) (just destAnon)) = refl
+clean-mark wss (mark (just R.originWhenCrossOrigin) nothing) = refl
+clean-mark wss (mark (just R.originWhenCrossOrigin) (just destScript)) = refl
+clean-mark wss (mark (just R.originWhenCrossOrigin) (just destStyle)) = refl
+clean-mark wss (mark (just R.originWhenCrossOrigin) (just destFrame)) = refl
+clean-mark wss (mark (just R.originWhenCrossOrigin) (just destInert)) = refl
+clean-mark wss (mark (just R.originWhenCrossOrigin) (just destImageSet)) = refl
+clean-mark wss (mark (just R.originWhenCrossOrigin) (just destModuleWorker)) = refl
+clean-mark wss (mark (just R.originWhenCrossOrigin) (just destCred)) = refl
+clean-mark wss (mark (just R.originWhenCrossOrigin) (just destScriptCred)) = refl
+clean-mark wss (mark (just R.originWhenCrossOrigin) (just destStyleCred)) = refl
+clean-mark wss (mark (just R.originWhenCrossOrigin) (just destAnon)) = refl
+clean-mark wss (mark (just R.strictOriginWhenCrossOrigin) nothing) = refl
+clean-mark wss (mark (just R.strictOriginWhenCrossOrigin) (just destScript)) = refl
+clean-mark wss (mark (just R.strictOriginWhenCrossOrigin) (just destStyle)) = refl
+clean-mark wss (mark (just R.strictOriginWhenCrossOrigin) (just destFrame)) = refl
+clean-mark wss (mark (just R.strictOriginWhenCrossOrigin) (just destInert)) = refl
+clean-mark wss (mark (just R.strictOriginWhenCrossOrigin) (just destImageSet)) = refl
+clean-mark wss (mark (just R.strictOriginWhenCrossOrigin) (just destModuleWorker)) = refl
+clean-mark wss (mark (just R.strictOriginWhenCrossOrigin) (just destCred)) = refl
+clean-mark wss (mark (just R.strictOriginWhenCrossOrigin) (just destScriptCred)) = refl
+clean-mark wss (mark (just R.strictOriginWhenCrossOrigin) (just destStyleCred)) = refl
+clean-mark wss (mark (just R.strictOriginWhenCrossOrigin) (just destAnon)) = refl
+clean-mark wss (mark (just R.unsafeUrl) nothing) = refl
+clean-mark wss (mark (just R.unsafeUrl) (just destScript)) = refl
+clean-mark wss (mark (just R.unsafeUrl) (just destStyle)) = refl
+clean-mark wss (mark (just R.unsafeUrl) (just destFrame)) = refl
+clean-mark wss (mark (just R.unsafeUrl) (just destInert)) = refl
+clean-mark wss (mark (just R.unsafeUrl) (just destImageSet)) = refl
+clean-mark wss (mark (just R.unsafeUrl) (just destModuleWorker)) = refl
+clean-mark wss (mark (just R.unsafeUrl) (just destCred)) = refl
+clean-mark wss (mark (just R.unsafeUrl) (just destScriptCred)) = refl
+clean-mark wss (mark (just R.unsafeUrl) (just destStyleCred)) = refl
+clean-mark wss (mark (just R.unsafeUrl) (just destAnon)) = refl
+
+∧-true-l : ∀ a b → (a ∧ b) ≡ true → a ≡ true
+∧-true-l true  b h = refl
+∧-true-l false b ()
+
+∧-true-r : ∀ a b → (a ∧ b) ≡ true → b ≡ true
+∧-true-r true  b h = h
+∧-true-r false b ()
+
+not-true : ∀ a → not a ≡ true → a ≡ false
+not-true false _ = refl
+not-true true  ()
+
+split-clean : ∀ xs → clean xs ≡ true → splitIntegrity xs ≡ (xs , nothing)
+split-clean [] _ = refl
+split-clean (c ∷ cs) h = go (split-clean cs (∧-true-r (not (is 33 c ∧ startsEq cs)) (clean cs) h))
+  where
+  go : splitIntegrity cs ≡ (cs , nothing) → splitIntegrity (c ∷ cs) ≡ (c ∷ cs , nothing)
+  go ih rewrite not-true (is 33 c ∧ startsEq cs) (∧-true-l (not (is 33 c ∧ startsEq cs)) (clean cs) h) | ih = refl
+
+split-int : ∀ xs t → clean xs ≡ true → splitIntegrity (xs ++ '!' ∷ '=' ∷ t) ≡ (xs , just t)
+split-int [] t _ = refl
+split-int (c ∷ []) t _ with is 33 c
+... | true  = refl
+... | false = refl
+split-int (c ∷ cs@(d ∷ ds)) t h = go (split-int cs t (∧-true-r (not (is 33 c ∧ isEq d)) (clean cs) h))
+  where
+  go : splitIntegrity (cs ++ '!' ∷ '=' ∷ t) ≡ (cs , just t) → splitIntegrity ((c ∷ cs) ++ '!' ∷ '=' ∷ t) ≡ (c ∷ cs , just t)
+  go ih rewrite not-true (is 33 c ∧ isEq d) (∧-true-l (not (is 33 c ∧ isEq d)) (clean cs) h) | ih = refl
+
+segment-integrity : ∀ s m t → schemeSegment (schemeChars s ++ markText m ++ integrityText (just t)) ≡ just (s , m)
+segment-integrity s m t =
+  trans (cong schemeSegment (sym (++-assoc (schemeChars s) (markText m) ('!' ∷ '=' ∷ t))))
+  (trans (cong (λ r → schemeSegment₀ (proj₁ r)) (split-int (schemeChars s ++ markText m) t (clean-mark s m)))
+  (trans (sym (cong (λ r → schemeSegment₀ (proj₁ r)) (split-clean (schemeChars s ++ markText m) (clean-mark s m))))
+  (segment-mark s m)))
+
+integrity-of : ∀ s m t → segmentIntegrity (schemeChars s ++ markText m ++ integrityText (just t)) ≡ just t
+integrity-of s m t =
+  trans (cong segmentIntegrity (sym (++-assoc (schemeChars s) (markText m) ('!' ∷ '=' ∷ t))))
+  (cong proj₂ (split-int (schemeChars s ++ markText m) t (clean-mark s m)))
+
+-- An integrity-marked URL unwraps to its target, and carries its mark
+-- and its integrity to the proxy.
+unwrap-proxifyWithI : ∀ p s m t h hs x xs q f → canonical s (h ∷ hs) →
+  unwrapAbs p (proxifyWithI p m (just t) (mkAbs s (h ∷ hs) (x ∷ xs) q f)) ≡ original (mkAbs s (h ∷ hs) (x ∷ xs) q f)
+unwrap-proxifyWithI p s m t h hs x xs q f c rewrite sameScheme-refl (pScheme p) | eqStr-refl (hostPort (pAuth p)) | segment-nonEmpty h hs | segment-integrity s m t | decode-escape (segmentOf (h ∷ hs)) | c | decode-escape-map (x ∷ xs) = refl
+
+mark-proxifyWithI : ∀ p s m t h hs x xs q f →
+  targetMark (path (proxifyWithI p m (just t) (mkAbs s (h ∷ hs) (x ∷ xs) q f))) ≡ m
+mark-proxifyWithI p s m t h hs x xs q f rewrite segment-nonEmpty h hs | segment-integrity s m t = refl
+
+integrity-proxifyWithI : ∀ p s m t h hs x xs q f →
+  targetIntegrity (path (proxifyWithI p m (just t) (mkAbs s (h ∷ hs) (x ∷ xs) q f))) ≡ just t
+integrity-proxifyWithI p s m t h hs x xs q f rewrite segment-nonEmpty h hs | segment-integrity s m t | integrity-of s m t = refl

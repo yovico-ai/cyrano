@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"fmt"
 	"errors"
 	"net/http"
 	"net/url"
@@ -50,6 +51,38 @@ func OrbBlocks(resp *http.Response, body []byte) bool {
 	}
 	redirect := resp.StatusCode >= 300 && resp.StatusCode < 400 && resp.Header.Get("Location") != ""
 	return urlrewrite.ProxyOrbBlocks(cross, redirect, ct, hasCT, noCors, body)
+}
+
+// integrityKey carries the integrity mark of the request's proxified URL.
+type integrityKey struct{}
+
+// ErrIntegrity fails a response whose bytes do not match the element's
+// integrity (spec/Sri.agda fails): a network error, as ORB's.
+var ErrIntegrity = fmt.Errorf("integrity mismatch: %w", ErrOrbBlocked)
+
+// SRIFails reports whether the proxy fails this response (spec Sri.fails)
+// for the integrity its URL carries, given its whole decoded body: an
+// opaque response (another origin's, asked in no-cors mode — a script
+// without crossorigin) is not eligible, any other must match.
+func SRIFails(resp *http.Response, body []byte) bool {
+	req := resp.Request
+	if req == nil || req.URL == nil {
+		return false
+	}
+	mark, _ := req.Context().Value(integrityKey{}).(string)
+	if mark == "" {
+		return false
+	}
+	page, _ := req.Context().Value(requesterKey{}).(string)
+	cross := false
+	if p, err := url.Parse(page); err == nil && page != "" {
+		cross = !strings.EqualFold(p.Scheme+"://"+p.Host, req.URL.Scheme+"://"+req.URL.Host)
+	}
+	if opaque, _ := req.Context().Value(opaqueRequesterKey{}).(bool); opaque && page != "" {
+		cross = true
+	}
+	noCors := strings.EqualFold(req.Header.Get("Sec-Fetch-Mode"), "no-cors")
+	return urlrewrite.SRIFails(mark, true, !(cross && noCors), body)
 }
 
 // subresourceRequesterKey marks a request whose Referer is a script or

@@ -243,11 +243,13 @@ func FrameDest(sandbox string, hasSandbox bool) Dest {
 }
 
 // Mark is what a proxified URL carries besides its target (spec Mark): a
-// referrer policy of its own, what the request is for. The scheme
-// segment is "<scheme>[!<policy>][!<dest>]".
+// referrer policy of its own, what the request is for, and an element's
+// integrity metadata (spec Sri.markOf; Containment integrityText). The
+// scheme segment is "<scheme>[!<policy>][!<dest>][!=<integrity>]".
 type Mark struct {
-	Policy Policy
-	Dest   Dest
+	Policy    Policy
+	Dest      Dest
+	Integrity string
 }
 
 func (m Mark) text() string {
@@ -257,6 +259,9 @@ func (m Mark) text() string {
 	}
 	if m.Dest != "" {
 		s += "!" + string(m.Dest)
+	}
+	if m.Integrity != "" {
+		s += "!=" + m.Integrity
 	}
 	return s
 }
@@ -352,10 +357,22 @@ var markerPolicies = map[Policy]bool{
 	StrictOrigin: true, OriginWhenCrossOrigin: true, StrictOriginWhenCrossOrigin: true, UnsafeURL: true,
 }
 
-// schemeSegment reads "<scheme>[!<policy>][!<dest>]" (spec
-// schemeSegment): false when the scheme is not one cyrano proxifies or a
-// marker is not one cyrano writes.
+// schemeSegment reads "<scheme>[!<policy>][!<dest>][!=<integrity>]"
+// (spec schemeSegment, splitIntegrity): false when the scheme is not one
+// cyrano proxifies or a marker is not one cyrano writes.
 func schemeSegment(seg string) (scheme string, m Mark, ok bool) {
+	integrity := ""
+	if i := strings.Index(seg, "!="); i >= 0 {
+		seg, integrity = seg[:i], seg[i+2:]
+	}
+	scheme, m, ok = schemeSegment0(seg)
+	if ok {
+		m.Integrity = integrity
+	}
+	return scheme, m, ok
+}
+
+func schemeSegment0(seg string) (scheme string, m Mark, ok bool) {
 	parts := strings.Split(seg, "!")
 	scheme = parts[0]
 	if _, proxifiable := defaultPort[scheme]; !proxifiable {
