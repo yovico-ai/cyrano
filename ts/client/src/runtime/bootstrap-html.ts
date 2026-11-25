@@ -15,11 +15,13 @@ import { xmlBootstrap, type XmlNs } from "../xml/rewriter";
 // origin outside the proxy. Go: htmlrewrite.FailClosed (the same text).
 export const FAIL_CLOSED = 'if(!window.$rewriter_init){window.stop();throw new Error("cyrano: runtime not loaded")}';
 
-export function buildBootstrapHtml(config: ClientConfig, href: string): string {
+export function buildBootstrapHtml(config: ClientConfig, href: string, srcdocRef?: string | null): string {
     const src = config.apiBaseURL + config.source;
-    // The written document has its own referrer: its creator's URL.
-    const { referrer: _creatorsOwn, ...childConfig } = config;
+    // The written document has its own referrer: a srcdoc one its creator's
+    // URL by the creator's policy (spec srcdocReferrer), others the browser's.
+    const { referrer: _creatorsOwn, ...rest } = config;
     void _creatorsOwn;
+    const childConfig = srcdocRef === undefined ? rest : { ...rest, referrer: srcdocRef ?? "" };
     const nonce = config.nonce ? ` nonce="${config.nonce.replace(/[^A-Za-z0-9+/_=-]/g, "")}"` : "";
     if (config.xb) {
         // No inline script runs under the page's policy: the second step is

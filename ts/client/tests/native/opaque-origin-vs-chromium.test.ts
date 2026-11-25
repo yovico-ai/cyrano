@@ -29,6 +29,8 @@ type Browser = { newPage(): Promise<Page>; close(): Promise<void> };
 const PROBE = `<script>
 window.got = new Promise(function (done) {
   var out = { origin: String(self.origin), domain: document.domain };
+  // writing document.cookie in it: the setter's own SecurityError (round J: proxied, the getter's words)
+  try { document.cookie = "a=1"; out.cookieSet = "ok"; } catch (e) { out.cookieSet = e.name + ": " + e.message; }
   var x = new XMLHttpRequest();
   x.open("GET", "http://b.test:PORT/data?x");
   x.onload = function () {
@@ -110,7 +112,7 @@ describe.skipIf(!wanted)("a sandboxed document in Chromium, direct and proxied",
     it("requests and origin as direct, no preflight", async () => {
         const direct = await run(`http://a.test:${port}/page`);
         const proxied = await run(`http://127.0.0.1:${port}/cyrano/http/a.test:${port}/page`);
-        expect(direct).toEqual({ origin: "null", domain: "", xhr: "200 data", headers: ["s", null, true, false], fetch: "200 cors data" });
+        expect(direct).toMatchObject({ cookieSet: "SecurityError: Failed to set the 'cookie' property on 'Document': The document is sandboxed and lacks the 'allow-same-origin' flag.", origin: "null", domain: "", xhr: "200 data", headers: ["s", null, true, false], fetch: "200 cors data" });
         expect(proxied).toEqual(direct);
         expect(refusals[0]).toEqual(['Refused to get unsafe header "x-hidden"']);
         expect(refusals[1]).toEqual(refusals[0]);

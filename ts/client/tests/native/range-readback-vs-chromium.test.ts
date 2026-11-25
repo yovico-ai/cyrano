@@ -34,6 +34,9 @@ r = document.createRange(); r.setStart(d.querySelector("a").firstChild, 0); r.se
 out.attrs = [...r.cloneContents().querySelectorAll("[href],[src]")].map((e) => e.getAttribute("href") ?? e.getAttribute("src")).join(" ");
 const e2 = document.createElement("div"); e2.innerHTML = '<span><a href="/x?e">e</a></span><b><img src="/y.gif"></b>'; document.body.append(e2);
 r = document.createRange(); r.setStart(e2.firstChild, 0); r.setEnd(e2.lastChild, 1); out.extracted = ser(r.extractContents()); out.left = e2.innerHTML;
+// a script's text in a range's string (round K): as the page wrote it
+const sc = document.createElement("script"); sc.text = "var crnRangeProbe = location.href.length + top.length;"; const holder = document.createElement("div"); holder.append("before ", sc, " after"); document.body.append(holder);
+r = document.createRange(); r.selectNodeContents(holder); out.str = r.toString();
 window.out = out;
 `;
 

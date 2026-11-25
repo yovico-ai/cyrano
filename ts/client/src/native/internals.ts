@@ -46,7 +46,8 @@ export interface Internals {
      */
     pendingSender?: Window | undefined;
     /** The runtime bootstrap as HTML, for documents this window creates from markup. */
-    bootstrapHtml?: () => string;
+    /** The bootstrap for a document written here; `srcdoc`: an iframe's srcdoc (its referrer: spec srcdocReferrer). */
+    bootstrapHtml?: (srcdoc?: boolean) => string;
     /** The bootstrap for a document whose location is `href` (a frame's data: document). */
     bootstrapHtmlAt?: (href: string) => string;
     /** The XML bootstrap of a document of that root namespace at `href`. */

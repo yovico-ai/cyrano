@@ -539,7 +539,7 @@ func noDictionaryRegistration(resp *http.Response) {
 // unsafe-url, as recordPagePolicy does the header); false when content is
 // no policy.
 func RecordMetaPolicy(resp *http.Response, target *url.URL, content string) bool {
-	p := urlrewrite.HeaderPolicy(content)
+	p := urlrewrite.MetaPolicy(content) // a meta's own syntax: legacy keywords, no list
 	if p == "" {
 		return false
 	}
@@ -549,4 +549,17 @@ func RecordMetaPolicy(resp *http.Response, target *url.URL, content string) bool
 	}
 	pagePolicies.set(sessionIn(req), pageKey(target), p)
 	return true
+}
+
+// PagePolicy is the referrer policy recorded for the document at target
+// (its header, then a <meta name=referrer> the rewriter saw), or the default.
+func PagePolicy(resp *http.Response, target *url.URL) urlrewrite.Policy {
+	var req *http.Request
+	if resp != nil {
+		req = resp.Request
+	}
+	if p := pagePolicies.get(sessionIn(req), pageKey(target)); p != "" {
+		return p
+	}
+	return urlrewrite.DefaultPolicy
 }

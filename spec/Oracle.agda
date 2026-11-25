@@ -401,6 +401,12 @@ dispatch op args =
   -- preflightheaders [<name> <value>]…; maxage <0|1 present> <value>;
   -- preflightok <status> <0|1> <ACAO> <0|1> <ACAC> <cred 0|1> <origin>
   -- <method> <unsafe names, ","-joined> <ACAM lines, U+001E-joined> <ACAH lines, same>
+  -- credblocked <userinfo 0|1> <Sec-Fetch-Dest>: "yes" when the proxy refuses the request
+  else if eqStr op (toList "credblocked") then twoArgs (λ u d → toList (if Fetch.credentialsBlocked (eqStr u (toList "1")) d then "yes" else "no")) args
+  -- domainset <host> <ip 0|1> <current> <value> <empty 0|1> <public suffix 0|1>: set:V | empty | tld:V | notsuffix:V:CURRENT
+  else if eqStr op (toList "domainset") then domainSetReq args
+  -- canintercept <document URL> <destination>: "yes" / "no" ("bad" when the document URL does not parse)
+  else if eqStr op (toList "canintercept") then twoArgs (λ d t → interceptAnswer d t) args
   -- corsdest <Sec-Fetch-Dest>: "yes" when a cors-mode request of it is CORS-checked by the proxy
   else if eqStr op (toList "corsdest") then oneArg (λ d → toList (if Orb.corsElementDest d then "yes" else "no")) args
   -- responsetype <cors|no-cors|same-origin|navigate> <cross 0|1>: basic, cors or opaque
@@ -504,6 +510,10 @@ dispatch op args =
   else if eqStr op (toList "initref") then initRefReq args
   else if eqStr op (toList "policy") then policyReq args
   else if eqStr op (toList "referrer") then referrerReq args
+  -- metapolicy <content>: the policy name, or nothing
+  else if eqStr op (toList "metapolicy") then oneArg (λ c → metaAnswer c) args
+  -- srcdocreferrer <policy> <parent URL>: a srcdoc frame's document.referrer
+  else if eqStr op (toList "srcdocreferrer") then srcdocReq args
   else if eqStr op (toList "origin") then originReq args
   else if eqStr op (toList "site") then siteReq args
   else if eqStr op (toList "setcookie") then setCookieReq args
@@ -720,6 +730,19 @@ dispatch op args =
   typeName Fetch.basicT = "basic"
   typeName Fetch.corsT = "cors"
   typeName Fetch.opaqueT = "opaque"
+
+  domainSetReq : List Str → Str
+  domainSetReq (h ∷ ip ∷ cur ∷ v ∷ e ∷ ps ∷ []) with Frames.domainSet h (eqStr ip (toList "1")) cur v (eqStr e (toList "1")) (eqStr ps (toList "1"))
+  ... | Frames.setTo x = out (toList "set:" ++ x)
+  ... | Frames.emptyDom = out (toList "empty")
+  ... | Frames.topLevel x = out (toList "tld:" ++ x)
+  ... | Frames.notSuffix x c = out (toList "notsuffix:" ++ x ++ (':' ∷ c))
+  domainSetReq _ = errorReply "BadRequest"
+
+  interceptAnswer : Str → Str → Str
+  interceptAnswer d t with Url.parse nothing (Url.preprocess d)
+  ... | Url.url a = toList (if Route.canIntercept a t then "yes" else "no")
+  ... | _ = toList "bad"
 
   pairs : List Str → List (Str × Str)
   pairs (n ∷ v ∷ rest) = (n , v) ∷ pairs rest
@@ -1236,6 +1259,17 @@ dispatch op args =
   ... | just p  = out (toList (policyName p))
   ... | nothing = out []
   policyReq _ = errorReply "BadRequest"
+
+  metaAnswer : Str → Str
+  metaAnswer c with metaPolicy c
+  ... | just pol = toList (policyName pol)
+  ... | nothing  = toList "none"
+
+  srcdocReq : List Str → Str
+  srcdocReq (p ∷ f ∷ []) with policyToken p | baseOf f
+  ... | just pol | just from = maybeOut (srcdocReferrer pol from)
+  ... | _        | _         = errorReply "OutOfModel"
+  srcdocReq _ = errorReply "BadRequest"
 
   referrerReq : List Str → Str
   referrerReq (p ∷ f ∷ t ∷ []) with policyToken p | baseOf f | baseOf t

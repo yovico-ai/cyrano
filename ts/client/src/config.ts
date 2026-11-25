@@ -37,6 +37,8 @@ export interface ClientConfig {
      * the browser's own referrer is unwrapped.
      */
     referrer?: string;
+    /** The page's referrer policy as the proxy recorded it (the srcdoc frames' referrer: spec srcdocReferrer). */
+    rp?: string;
     /**
      * The document's cookies, from the session's jar (spec/CookieJar.agda
      * snapshot): the jar's generation and inbox entries, name and value in

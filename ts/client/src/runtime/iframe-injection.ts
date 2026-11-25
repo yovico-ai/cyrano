@@ -10,6 +10,7 @@
 // rewriter API itself, only how to bootstrap one in a child window given a
 // parent that already has $rewriter_init available.
 
+import { srcdocReferrerFrom } from "../url/srcdoc-referrer";
 import { unwrapProxiedUrl } from "../url/containment";
 import { heldAttr } from "../native/originals";
 import { contentWindowOf } from "../native/cross-origin";
@@ -63,7 +64,13 @@ export function injectIntoIframe(
         if (src && unwrapProxiedUrl(src, parentConfig) !== src) return;
     } catch { return; }
 
-    injectIntoWindow(childWindow, parentWindow, parentConfig, parentBaseHref);
+    // A srcdoc frame keeps this Window when its about:srcdoc document
+    // replaces the initial about:blank (same origin): its referrer is the
+    // srcdoc's (spec srcdocReferrer), given here — its own bootstrap then
+    // finds the runtime already in place.
+    let referrer: string | null | undefined;
+    try { if (iframe.hasAttribute("srcdoc")) referrer = srcdocReferrerFrom(parentWindow, parentConfig as { rp?: unknown }); } catch { referrer = undefined; }
+    injectIntoWindow(childWindow, parentWindow, parentConfig, parentBaseHref, referrer);
 }
 
 /**
@@ -76,6 +83,7 @@ export function injectIntoWindow(
     parentWindow: Window,
     parentConfig: ClientConfig,
     parentBaseHref: string,
+    srcdocRef?: string | null,
 ): void {
     const childWindow = child as WindowWithRewriter;
     try {
@@ -103,8 +111,9 @@ export function injectIntoWindow(
 
         // The child's referrer is its creator's URL, not the creator's own
         // referrer: left to the browser's value (unwrapped).
-        const { referrer: _creatorsOwn, ...childConfig } = parentConfig;
+        const { referrer: _creatorsOwn, ...rest } = parentConfig;
         void _creatorsOwn;
+        const childConfig = srcdocRef === undefined ? rest : { ...rest, referrer: srcdocRef ?? "" };
         const childApi = childInit(childWindow, childConfig).inject();
         childApi.set_base_url(parentBaseHref);
         childWindow.$rewriter = childApi;

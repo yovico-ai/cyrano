@@ -68,6 +68,26 @@ policyToken s =
   t : Str
   t = lowerAll′ (trim s)
 
+-- A <meta name=referrer>'s content: one whole token, trimmed, case aside —
+-- no comma list (a list is invalid, ignored: measured) — and HTML's legacy
+-- keywords: never → no-referrer, default → the default policy, always →
+-- unsafe-url, origin-when-crossorigin → origin-when-cross-origin. (The
+-- proxy took only header tokens: a page's "never" was ignored, its
+-- requests' Referer and its srcdoc frames' referrer the default's.)
+metaPolicy : Str → Maybe Policy
+metaPolicy s =
+  if eqStr t (toList "never") then just noReferrer
+  else if eqStr t (toList "default") then just defaultPolicy
+  else if eqStr t (toList "always") then just unsafeUrl
+  else if eqStr t (toList "origin-when-crossorigin") then just originWhenCrossOrigin
+  else if any (is 44) t then nothing
+  else policyToken t
+  where
+  isWS : Char → Bool
+  isWS c = is 32 c ∨ is 9 c ∨ is 10 c ∨ is 12 c ∨ is 13 c
+  t : Str
+  t = lowerAll′ (reverse (dropWhile isWS (reverse (dropWhile isWS s))))
+
 -- A policy's name, as the header and the referrerpolicy attribute write it.
 policyName : Policy → Data.String.Base.String
 policyName noReferrer                  = "no-referrer"
@@ -158,21 +178,16 @@ lengthS : Str → ℕ
 lengthS []       = 0
 lengthS (_ ∷ cs) = Data.Nat.Base.suc (lengthS cs)
 
--- §8.3 for a request to `target` from a document at `ref` under `p`.
-referrer : Policy → Abs → Abs → Maybe Str
-referrer p ref target = decide p
+
+-- §8.3's decision, given whether the target is same-origin and a downgrade.
+referrerFor : Policy → Abs → Bool → Bool → Maybe Str
+referrerFor p ref same down = decide p
   where
   full : Str
   full = if 4096 <ᵇ lengthS (asReferrer ref) then asOriginReferrer ref else asReferrer ref
 
   only : Str
   only = asOriginReferrer ref
-
-  same : Bool
-  same = sameOriginOf ref target
-
-  down : Bool
-  down = downgrade ref target
 
   decide : Policy → Maybe Str
   decide noReferrer                  = nothing
@@ -183,6 +198,20 @@ referrer p ref target = decide p
   decide originWhenCrossOrigin       = if same then just full else just only
   decide strictOriginWhenCrossOrigin = if same then just full else if down then nothing else just only
   decide unsafeUrl                   = just full
+
+
+-- §8.3 for a request to `target` from a document at `ref` under `p`.
+
+referrer : Policy → Abs → Abs → Maybe Str
+referrer p ref target = referrerFor p ref (sameOriginOf ref target) (downgrade ref target)
+
+-- A srcdoc frame's document.referrer: its parent's URL by the parent's
+-- policy, about:srcdoc taken as another origin, never a downgrade
+-- (Chromium, measured: the default gives the parent's origin and "/";
+-- no-referrer and same-origin nothing; unsafe-url the whole URL).
+-- Through the proxy it read "" (round J).
+srcdocReferrer : Policy → Abs → Maybe Str
+srcdocReferrer p ref = referrerFor p ref false false
 
 ------------------------------------------------------------------------
 -- Fetch §3.1: the Origin header, for a request with this mode and method

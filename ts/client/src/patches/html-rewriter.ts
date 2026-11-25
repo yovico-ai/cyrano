@@ -65,8 +65,10 @@ export function rewriteSrcdoc(
     proxyOrigin: string = "",
     bootstrap?: () => string,
 ): string {
-    const rewritten = rewriteHtmlString(html, rewriteOne, proxyOrigin, bootstrap, { scripting: true, document: true });
-    return bootstrap ? withBootstrap(rewritten, bootstrap()) : rewritten;
+    // (true: a srcdoc's bootstrap, which gives it its own referrer — wherever it goes in)
+    const bs = bootstrap ? (): string => (bootstrap as (srcdoc?: boolean) => string)(true) : undefined;
+    const rewritten = rewriteHtmlString(html, rewriteOne, proxyOrigin, bs, { scripting: true, document: true });
+    return bs ? withBootstrap(rewritten, bs()) : rewritten;
 }
 
 /**

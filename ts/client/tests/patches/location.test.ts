@@ -35,10 +35,13 @@ describe("patchWindowLocation origin/domain wrapping", () => {
         expect(document.domain).toBe("claude.ai");
     });
 
-    it("document.domain setter is a no-op (does not throw)", () => {
+    it("document.domain's setter throws Chromium's SecurityError for another site's domain (spec Frames.domainSet)", () => {
         chromiumShapes();
         patchWindowLocation(window, fakeWrappedLocation(), (u) => u);
-        expect(() => { document.domain = "evil.com"; }).not.toThrow();
+        expect(() => { document.domain = "evil.com"; }).toThrow(/'evil.com' is not a suffix of 'claude.ai'/);
+        expect(() => { document.domain = ""; }).toThrow(/is an empty domain/);
+        expect(document.domain).toBe("claude.ai");
+        document.domain = "claude.ai"; // its own host: taken
         expect(document.domain).toBe("claude.ai");
     });
 });

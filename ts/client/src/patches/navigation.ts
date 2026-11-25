@@ -22,6 +22,8 @@
 // navigation: with the proxy's, each internal link looked external and was
 // sent through /url?q=, nested deeper each time.
 
+import { canIntercept } from "../url/can-intercept";
+import { stacked } from "../native/stacked";
 import { blobNavigationFor } from "./blob-document";
 import type { RewriteOne } from "./referrer-policy";
 import { wrapAccessor, wrapMethod } from "../native/surface";
@@ -65,6 +67,33 @@ export function patchNavigation(
     for (const name of ["NavigationHistoryEntry", "NavigationDestination"]) {
         const proto = g[name]?.prototype;
         if (proto) wrapAccessor<string | null>(proto, "url", { get: (native, self) => original(nR.apply(native, self, [])) as string | null });
+    }
+    // A navigation the page may intercept, judged on the original URLs
+    // (spec/Route.agda canIntercept): the browser compares proxified ones,
+    // always same-origin, so a link to another site was interceptable and a
+    // router kept it in-page (round K). Where it may not, intercept()
+    // throws Chromium's SecurityError.
+    if (NE && net.destination && net.url) {
+        const docUrl = (): string => unwrapOne(targetWindow.location.href);
+        const destOf = (e: unknown): string | null => {
+            try { const u = ncall(net.url!, ncall(net.destination!, e)); return typeof u === "string" ? unwrapOne(u) : null; } catch { return null; }
+        };
+        const allowed = (e: unknown): boolean => { const t = destOf(e); return t === null || canIntercept(docUrl(), t); };
+        if (getter(NE, "canIntercept")) {
+            wrapAccessor<boolean>(NE, "canIntercept", { get: (get, self) => ncall(get, self) && allowed(self) });
+        }
+        const DE = (targetWindow as unknown as { DOMException?: new (m: string, n: string) => Error }).DOMException;
+        if (typeof (NE as Record<string, unknown>)["intercept"] === "function" && DE) {
+            wrapMethod<(...a: unknown[]) => unknown>(NE, "intercept", (native, self, args) => {
+                if (!allowed(self)) {
+                    const doc = docUrl();
+                    let origin = doc;
+                    try { origin = new URL(doc).origin; } catch { /* as it is */ }
+                    throw stacked(new DE(`Failed to execute 'intercept' on 'NavigateEvent': A navigation with URL '${destOf(self) ?? ""}' cannot be intercepted by in a window with origin '${origin}' and URL '${doc}'.`, "SecurityError"));
+                }
+                return nR.apply(native, self, args);
+            });
+        }
     }
     const Nav = g["Navigation"]?.prototype;
     if (!Nav) return;

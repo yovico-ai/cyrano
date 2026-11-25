@@ -164,7 +164,8 @@ export function blobDocumentFor(win: Window, url: string, rewriteOne: RewriteOne
     if (hit) return hit;
     const read = readBlob(win, url, "text/plain; charset=utf-8");
     if (!read || !htmlDocumentType(read.type)) return null;
-    return remake(win, "doc " + url, rewriteSrcdoc(read.source, underBlobBase(rewriteOne, url), proxyOrigin, bootstrap), read.type);
+    // (not a srcdoc: its referrer stays the browser's — the flag is not passed on)
+    return remake(win, "doc " + url, rewriteSrcdoc(read.source, underBlobBase(rewriteOne, url), proxyOrigin, bootstrap ? () => bootstrap() : undefined), read.type);
 }
 
 /** The URL a stylesheet link is given for a blob: URL: the rewritten sheet's, or null to give the URL as it is. */

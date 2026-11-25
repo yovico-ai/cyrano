@@ -197,7 +197,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				Proxy:             proxyCfg,
 				RewriterJSPath:    static.RuntimeURL(vhost.RewriterJSPath),
 				InjectBootstrap:   !urlrewrite.NoScriptsRun(originalPolicies(resp)) && !proxy.InertFrame(resp),
-				ClientPassthrough: pageConfig(clientPassthrough, resp),
+				ClientPassthrough: pageConfig(clientPassthrough, resp, target),
 				ScriptNonce:       proxy.ScriptNonce(originalPolicies(resp)),
 				ExternalBootstrap: !urlrewrite.InlineScriptAllowed(originalPolicies(resp)),
 				RewriteInlineJS:   rewriteJSFor(target),
@@ -237,11 +237,12 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				// …nor a frame sandboxed without allow-scripts (spec/Frames.agda
 				// inertFrame; the frame's URL says so).
 				InjectBootstrap:   !urlrewrite.NoScriptsRun(originalPolicies(resp)) && !proxy.InertFrame(resp),
-				ClientPassthrough: pageConfig(clientPassthrough, resp),
+				ClientPassthrough: pageConfig(clientPassthrough, resp, target),
 				ScriptNonce:       proxy.ScriptNonce(originalPolicies(resp)),
 				ExternalBootstrap: !urlrewrite.InlineScriptAllowed(originalPolicies(resp)),
 			}
 			cfg.OnReferrerPolicy = func(content string) bool { return proxy.RecordMetaPolicy(resp, target, content) }
+			cfg.SrcdocReferrer = func() (string, bool) { return urlrewrite.SrcdocReferrer(proxy.PagePolicy(resp, target), target.String()) }
 			cfg.OnMetaCSP = func(content string) { proxy.RecordMetaUIR(resp, target, content) }
 			if cfg.ExternalBootstrap {
 				cfg.ClientPassthrough["xb"] = true // documents this page writes need the same
@@ -973,7 +974,7 @@ func clientBase(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig) map[string
 // pageConfig is the client config for one document: the vhost's, plus
 // document.referrer — natively the Referer the document was requested
 // with, which is what the upstream was sent for it (proxy.directFetchHeaders).
-func pageConfig(base map[string]any, resp *http.Response) map[string]any {
+func pageConfig(base map[string]any, resp *http.Response, target *url.URL) map[string]any {
 	cp := make(map[string]any, len(base)+2)
 	for k, v := range base {
 		cp[k] = v
@@ -983,6 +984,13 @@ func pageConfig(base map[string]any, resp *http.Response) map[string]any {
 		referrer = resp.Request.Header.Get("Referer")
 	}
 	cp["referrer"] = referrer
+	// The page's referrer policy as the proxy recorded it (the header the
+	// browser gets says unsafe-url), for the srcdoc documents the client
+	// writes (their referrer: spec srcdocReferrer); the client reads a
+	// <meta name=referrer> after it itself.
+	if target != nil {
+		cp["rp"] = string(proxy.PagePolicy(resp, target))
+	}
 	// The nonce the page's CSP asks of scripts, for bootstraps the client
 	// writes itself (document.write'd documents).
 	if n := proxy.ScriptNonce(originalPolicies(resp)); n != "" {

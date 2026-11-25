@@ -368,15 +368,23 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 	// run as it is parsed. Its base URL is the page's.
 	if tag == "iframe" {
 		if v, ok := getAttr(attrs, "srcdoc"); ok {
-			// The frame's document has its own referrer — this page's URL —
-			// not this page's: left to the browser's value.
+			// The frame's document has its own referrer: this page's URL by
+			// this page's policy (srcdocReferrer; it read "" — round J),
+			// else left to the browser's value.
 			sub := *cfg
-			if _, has := sub.ClientPassthrough["referrer"]; has {
-				sub.ClientPassthrough = make(map[string]any, len(cfg.ClientPassthrough))
+			if _, has := sub.ClientPassthrough["referrer"]; has || cfg.SrcdocReferrer != nil {
+				sub.ClientPassthrough = make(map[string]any, len(cfg.ClientPassthrough)+1)
 				for k, v := range cfg.ClientPassthrough {
 					if k != "referrer" {
 						sub.ClientPassthrough[k] = v
 					}
+				}
+				if cfg.SrcdocReferrer != nil {
+					r, ok := cfg.SrcdocReferrer()
+					if !ok {
+						r = "" // none: document.referrer reads ""
+					}
+					sub.ClientPassthrough["referrer"] = r
 				}
 			}
 			var doc bytes.Buffer

@@ -192,3 +192,13 @@ responseType : ReqMode → Bool → RespType
 responseType modeCors   true = corsT
 responseType modeNoCors true = opaqueT
 responseType _          _    = basicT
+
+------------------------------------------------------------------------
+-- Chromium blocks a subresource request whose URL carries credentials
+-- (user:pass@ — a user alone too; same-origin or not; a frame's
+-- navigation too: measured), letting only a top-level navigation through.
+-- Through the proxy the userinfo travels inside the proxified path, so the
+-- browser saw none and the request loaded (round K): the proxy refuses it,
+-- nothing sent. dest: Sec-Fetch-Dest, lowercase.
+credentialsBlocked : Bool → Str → Bool
+credentialsBlocked userinfo dest = userinfo ∧ not (eqStr dest (toList "document"))

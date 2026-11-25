@@ -226,6 +226,13 @@ func (h *Handler) serveTarget(w http.ResponseWriter, r *http.Request, target *ur
 			target = &up
 		}
 	}
+	// A request whose URL carries credentials, other than a top-level
+	// navigation, Chromium blocks (spec/Fetch.agda credentialsBlocked); the
+	// userinfo travels in the proxified path, so the browser saw none.
+	if credentialsBlocked(target.User != nil, r.Header.Get("Sec-Fetch-Dest")) {
+		h.opts.Logger.Debug("credentialed subresource blocked", "target", target.Redacted())
+		panic(http.ErrAbortHandler) // a network error, nothing sent
+	}
 	switch h.mixedContent(r, target) {
 	case urlrewrite.MixedBlocked:
 		h.opts.Logger.Debug("mixed content blocked", "target", target.String())
@@ -813,4 +820,10 @@ func networkErrorNoRetry(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	panic(http.ErrAbortHandler)
+}
+
+// credentialsBlocked (spec/Fetch.agda credentialsBlocked): a URL with
+// userinfo, for anything but a top-level navigation.
+func credentialsBlocked(userinfo bool, dest string) bool {
+	return userinfo && !strings.EqualFold(dest, "document")
 }

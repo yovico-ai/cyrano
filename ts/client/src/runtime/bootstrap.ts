@@ -5,6 +5,7 @@
 // head-injection script expects. It also makes it easy to construct the API
 // without immediately patching globals (useful in tests).
 
+import { srcdocReferrerFrom } from "../url/srcdoc-referrer";
 import { patchLocationReflection } from "../patches/location-reflect";
 import { isDocumentObject, isWindowObject } from "../native/brand";
 import { isView } from "../native/cross-origin";
@@ -39,7 +40,8 @@ export function init(
             const api = createRewriterApi(targetWindow, config);
             const internals: Internals = {
                 api,
-                bootstrapHtml: () => buildBootstrapHtml(config, (api.get_base_url() ?? new URL(targetWindow.location.href)).href),
+                bootstrapHtml: (srcdoc?: boolean) => buildBootstrapHtml(config, (api.get_base_url() ?? new URL(targetWindow.location.href)).href,
+                    srcdoc ? srcdocReferrerFrom(targetWindow, config) : undefined),
                 bootstrapHtmlAt: (href: string) => buildBootstrapHtml(config, href),
                 bootstrapXmlAt: (ns, href) => buildXmlBootstrap(config, ns, href),
             };

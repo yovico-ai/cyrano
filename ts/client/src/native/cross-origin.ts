@@ -26,6 +26,8 @@
 // object that is not plainly a window (`w[0]`) give the real child window;
 // document.domain relaxation is not modelled.
 
+import { relaxed } from "../url/document-domain";
+import { sharedData } from "./shared";
 import { stacked } from "./stacked";
 import { SafeWeakMap, SafeWeakSet, nO, nR, nbind, ncall, aIncludes } from "./intrinsics";
 import { internalsOf } from "./internals";
@@ -107,6 +109,20 @@ function originalOriginOf(w: unknown, unwrap: (url: string) => string): string |
  * cross-origin view otherwise. `pendingOrigin`: the origin the window is
  * navigating to, when known (an iframe's src).
  */
+/** The document.domain each window set (patches/location.ts): one table for the page tree. */
+export function documentDomains(): SafeWeakMap<object, string> {
+    return sharedData("documentDomains", () => new SafeWeakMap<object, string>());
+}
+
+/** Two windows relaxed to one domain (spec/Frames.agda relaxed): both set it, same scheme and port. */
+function relaxedPair(a: object, b: object, aOrigin: string, bOrigin: string | null): boolean {
+    if (bOrigin === null) return false;
+    const m = documentDomains();
+    let same = false;
+    try { const x = new URL(aOrigin), y = new URL(bOrigin); same = x.protocol === y.protocol && x.port === y.port; } catch { same = false; }
+    return relaxed(m.get(a), m.get(b), same);
+}
+
 export function crossOriginView<T>(target: T, pendingOrigin: string | null = null, from?: object): T {
     const v = from ? viewers.get(from) : undefined;
     if (!v || typeof target !== "object" || target === null || (target as unknown) === v.win) return target;
@@ -131,9 +147,9 @@ export function crossOriginView<T>(target: T, pendingOrigin: string | null = nul
     // page read its location: proxied it threw).
     let committed = false;
     try { committed = (target as unknown as Window).location.href !== "about:blank"; } catch { committed = false; }
-    const cross = pendingOrigin !== null && !(committed && theirs !== null)
+    const cross = (pendingOrigin !== null && !(committed && theirs !== null)
         ? pendingOrigin !== mine
-        : theirs !== null && theirs !== mine;
+        : theirs !== null && theirs !== mine) && !relaxedPair(v.win, target as unknown as object, mine, theirs);
     // A browser has one WindowProxy for a frame through all its
     // navigations: page code that took it while the frame was still its own
     // origin's (a blank frame a script writes into, then navigates) keeps
@@ -230,7 +246,9 @@ function makeView(t: Window, v: Viewer): object {
     // one per function (`f.alert === f.alert`). Once a committed document
     // has been seen it never forwards again.
     let initial = true;
+    const relaxedNow = (): boolean => { try { return relaxedPair(v.win, t, v.origin(), originalOriginOf(t, v.unwrap)); } catch { return false; } };
     const blank = (): boolean => {
+        if (relaxedNow()) return true; // relaxed to one domain since (document.domain): as same-origin
         if (!initial) return false;
         let href = "";
         try { href = t.location.href; } catch { href = ""; }

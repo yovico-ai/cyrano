@@ -107,3 +107,38 @@ func TestSpecConformance_SecFetchSite(t *testing.T) {
 		}
 	})
 }
+
+func TestSpecConformance_SrcdocReferrer(t *testing.T) {
+	oracle := specoracle.Need(t)
+	for _, p := range []string{"no-referrer", "no-referrer-when-downgrade", "same-origin", "origin", "strict-origin",
+		"origin-when-cross-origin", "strict-origin-when-cross-origin", "unsafe-url"} {
+		for _, ref := range []string{"http://127.0.0.1:8773/dir/page?x=1", "https://a.example/p#f", "https://u:p@a.example/q?z"} {
+			want, ok, err := oracle.Ask("srcdocreferrer", p, ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, gok := SrcdocReferrer(HeaderPolicy(p), ref)
+			if gok != ok || (ok && got != want) {
+				t.Errorf("SrcdocReferrer(%s, %q) = %q %v, spec %q %v", p, ref, got, gok, want, ok)
+			}
+		}
+	}
+}
+
+func TestSpecConformance_MetaPolicy(t *testing.T) {
+	oracle := specoracle.Need(t)
+	for _, c := range []string{"never", "NEVER", " always ", "default", "origin-when-crossorigin", "no-referrer, unsafe-url", "unsafe-url, bogus", "bogus", " origin ",
+		"same-origin", "", "strict-origin-when-cross-origin", "no-referrer-when-downgrade", "origin-when-cross-origin", "\tunsafe-url\n"} {
+		want, _, err := oracle.Ask("metapolicy", c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := string(MetaPolicy(c))
+		if got == "" {
+			got = "none"
+		}
+		if got != want {
+			t.Errorf("MetaPolicy(%q) = %s, spec %s", c, got, want)
+		}
+	}
+}

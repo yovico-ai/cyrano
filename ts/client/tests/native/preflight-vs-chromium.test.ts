@@ -144,6 +144,13 @@ describe.skipIf(!wanted)("CORS preflights, in Chromium, through the proxy", () =
         const proxied = await run(`${proxyOrigin}/cyrano/http/${self.slice(7)}/page.html`);
         expect(direct.log.filter((l) => l.includes(" OPTIONS ")).length).toBeGreaterThan(15);
         expect(proxied.out).toEqual(direct.out);
-        expect(proxied.log).toEqual(direct.log);
+        // Each case's requests in their order (a preflight before its
+        // request); cases running at once (the worker's) may interleave.
+        const byCase = (log: string[]): string[] => {
+            const m = new Map<string, string[]>();
+            for (const l of log) { const c = l.split(" ")[0]!; m.set(c, [...(m.get(c) ?? []), l]); }
+            return [...m.keys()].sort().flatMap((k) => m.get(k)!);
+        };
+        expect(byCase(proxied.log)).toEqual(byCase(direct.log));
     }, 90_000);
 });

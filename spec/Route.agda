@@ -77,3 +77,19 @@ netDestination p dest with parse nothing (preprocess dest)
   byScheme ws    = nothing
   byScheme wss   = nothing
 ... | _ = nothing
+
+------------------------------------------------------------------------
+-- Whether the page may intercept a navigation (Navigation API
+-- NavigateEvent.canIntercept; HTML "can have its URL rewritten", for an
+-- http(s) document): the destination's scheme, userinfo, host and port
+-- are the document's — path, query and fragment may differ (measured,
+-- Chromium). Through the proxy the browser compares two proxified URLs,
+-- always same-origin: a link to another site was interceptable and a
+-- router kept it in-page (round K). The runtime decides on the original
+-- URLs (patches/navigation.ts); where this is false, intercept() throws
+-- Chromium's SecurityError.
+canIntercept : Abs → Str → Bool
+canIntercept doc target with parse (just doc) (preprocess target)
+... | url t = Url.sameScheme (scheme doc) (scheme t) ∧ Url.eqStr (auth doc) (auth t)
+  where open import Data.Bool.Base using (_∧_)
+... | _ = false

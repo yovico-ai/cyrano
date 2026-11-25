@@ -74,6 +74,10 @@ type Config struct {
 	// OnReferrerPolicy is told the content of a <meta name="referrer"> and
 	// reports whether it is a policy (then the tag is given unsafe-url).
 	OnReferrerPolicy func(content string) bool
+	// SrcdocReferrer is a srcdoc frame's document.referrer, by the page's
+	// policy at that point (header, then any <meta name=referrer> already
+	// seen): spec/Referrer.agda srcdocReferrer. Nil: left to the browser.
+	SrcdocReferrer func() (string, bool)
 	// OnMetaCSP is told the content of a <meta http-equiv=content-security-policy>
 	// as the page wrote it (its upgrade-insecure-requests, proxy.RecordMetaUIR).
 	OnMetaCSP func(content string)

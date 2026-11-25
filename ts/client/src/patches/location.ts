@@ -14,6 +14,9 @@
 // same value here (config.referrer); without it, the browser's own value —
 // a proxied URL — is unwrapped.
 
+import { canonicalDomain, domainSet, isIpHost, isPublicSuffix } from "../url/document-domain";
+import { documentDomains } from "../native/cross-origin";
+import { stacked } from "../native/stacked";
 import { ncall } from "../native/intrinsics";
 import type { WrappedLocation } from "../wrappers/wrapped-location";
 import { wrapAccessor } from "../native/surface";
@@ -42,12 +45,32 @@ export function patchWindowLocation(
         wrapAccessor<string>(doc, "referrer", {
             get: (get, self) => (typeof referrer === "string" ? referrer : unwrapOne(ncall(get, self))),
         });
-        // The setter is kept a no-op only in effect: domain relaxation is
-        // meaningless when every frame already shares the proxy origin.
+        // document.domain as HTML sets it (spec/Frames.agda domainSet): a
+        // bad value throws Chromium's SecurityError, a good one becomes the
+        // effective domain — the window views relax to it (relaxed:
+        // native/cross-origin.ts). The native setter is never called: on the
+        // proxy origin it would judge the proxy's host.
+        const DE = (targetWindow as unknown as { DOMException?: new (m: string, n: string) => Error }).DOMException;
+        const read = (self: unknown): string => {
+            if (self !== targetWindow.document) return documentDomain(String((targetWindow as unknown as { origin?: unknown }).origin), baseOf().hostname);
+            const set = documentDomains().get(targetWindow);
+            return set ?? documentDomain(String((targetWindow as unknown as { origin?: unknown }).origin), baseOf().hostname);
+        };
         wrapAccessor<string>(doc, "domain", {
             // An opaque origin's domain is "" (HTML document.domain).
-            get: () => documentDomain(String((targetWindow as unknown as { origin?: unknown }).origin), baseOf().hostname),
-            set: () => { /* see above */ },
+            get: (_get, self) => read(self),
+            set: (_set, self, value) => {
+                if (self !== targetWindow.document || !DE) return;
+                const given = String(value);
+                const host = baseOf().hostname;
+                const v = canonicalDomain(given);
+                const r = domainSet(host, isIpHost(host), read(self), v, given === "", isPublicSuffix(v));
+                const fail = (why: string): never => { throw stacked(new DE(`Failed to set the 'domain' property on 'Document': ${why}`, "SecurityError")); };
+                if (r.kind === "empty") fail("'' is an empty domain.");
+                if (r.kind === "tld") fail(`'${r.v}' is a top-level domain.`);
+                if (r.kind === "notsuffix") fail(`'${r.v}' is not a suffix of '${r.current}'.`);
+                if (r.kind === "set") documentDomains().set(targetWindow, r.v);
+            },
         });
     }
     const N = (targetWindow as unknown as { Node?: { prototype: Node } }).Node;

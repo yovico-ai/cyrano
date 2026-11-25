@@ -144,3 +144,18 @@ func TestSpecConformance_CorsElementDest(t *testing.T) {
 		}
 	}
 }
+
+func TestSpecConformance_CredentialsBlocked(t *testing.T) {
+	oracle := specoracle.Need(t)
+	for _, u := range []bool{true, false} {
+		for _, d := range []string{"document", "Document", "iframe", "image", "script", "style", "empty", "", "frame", "worker"} {
+			want, _, err := oracle.Ask("credblocked", map[bool]string{true: "1", false: "0"}[u], strings.ToLower(d))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := map[bool]string{true: "yes", false: "no"}[credentialsBlocked(u, d)]; got != want {
+				t.Errorf("credentialsBlocked(%v, %q) = %s, spec %s", u, d, got, want)
+			}
+		}
+	}
+}

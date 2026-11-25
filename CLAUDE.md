@@ -384,8 +384,12 @@ and origin are the opener's (`popup-blank-vs-chromium`;
   what 'strict-dynamic' admitted stays admitted (data: and blob: added:
   Discourse's module stubs on devforum.okta.com;
   `csp-strict-dynamic-vs-chromium`).
-- **Referrer policy**: the document's (header, `<meta name=referrer>`) is
-  recorded per page; a request's own (an element's `referrerpolicy`,
+- **Referrer policy**: the document's (header, `<meta name=referrer>` —
+  one whole token with HTML's legacy keywords, never/always/default/
+  origin-when-crossorigin: spec/Referrer.agda metaPolicy) is
+  recorded per page; a srcdoc frame's `document.referrer` is its parent's
+  URL by that policy, about:srcdoc another origin (srcdocReferrer, both
+  runtimes; `srcdoc-referrer-vs-chromium`); a request's own (an element's `referrerpolicy`,
   `fetch`/`Request` `referrerPolicy`) travels in its proxified URL,
   `/cyrano/https!origin/…` (spec/Containment.agda `rewriteUrlWith`,
   `targetPolicy`; unwrap ignores it — proved). The browser is always told
@@ -859,7 +863,15 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   Chromium's framebusting SecurityError (`framebusting-vs-chromium`);
   `navigation.entries()` lists the page's own run of same-origin entries
   only, `index` / `canGoBack` / `back()` by it
-  (`navigation-entries-vs-chromium`). A child frame by name (`window.kid`,
+  (`navigation-entries-vs-chromium`); a navigate event's `canIntercept` is
+  judged on the original URLs (spec/Route.agda canIntercept: a link to
+  another site was interceptable), `intercept()` throwing Chromium's
+  SecurityError where it may not (`navigation-intercept-vs-chromium`).
+  `document.domain` is set as HTML sets it (spec/Frames.agda domainSet:
+  Chromium's SecurityErrors, a public suffix — private ones too — refused,
+  the check against the origin's host), and two windows that both set the
+  same domain, same scheme and port, script each other (relaxed;
+  `document-domain-vs-chromium`). A child frame by name (`window.kid`,
   bare `kid`) is the same view: Chromium gives Window.prototype and the
   named properties object immutable prototypes, so it is an accessor on
   Window.prototype per child name, hidden from reflection, kept in step at
@@ -943,6 +955,10 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   undefined as their text; a Symbol to the native, which throws); only a
   real Trusted Types value stays one (`trustedLike`; rakuten.co.jp's
   pixel; `sink-objects-vs-chromium`).
+- **Credentials in a subresource URL** (`http://u:p@host/…`, a user alone
+  too): Chromium blocks every such request but a top-level navigation; the
+  userinfo travels in the proxified path, so the proxy refuses it
+  (spec/Fetch.agda credentialsBlocked; `credentials-url-vs-chromium`).
 - **Mixed content** is judged by the proxy as the browser would have
   (spec/MixedContent.agda; through the proxy every request is same-origin
   https to the browser): for an https page (its Crn-I, else its Referer)

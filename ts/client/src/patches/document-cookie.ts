@@ -123,7 +123,9 @@ export function patchDocumentCookie(targetWindow: Window, baseUrl: () => URL, on
                     ncall(nativeSet, self, value);
                     return;
                 }
-                ncall(nativeGet, self); // a document that may not write cookies throws here, as natively
+                // a document that may not write cookies throws here, the setter's own
+                // SecurityError (the getter's named 'read': round J); "" sets nothing
+                ncall(nativeSet, self, "");
                 const ch = cookieWrite(String(value), baseUrl(), cookieCtxOf(targetWindow));
                 if (ch === null) return;
                 snapshotFirst(targetWindow, baseUrl());

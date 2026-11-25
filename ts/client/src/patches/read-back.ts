@@ -293,6 +293,21 @@ export function patchReadBack(targetWindow: Window, onElement: (el: Element) => 
         }
     }
 
+    // Range.toString(): the range's text nodes joined — a script's text in it
+    // as rewritten (round K: a whole-body range read the rules' calls). It is
+    // the textContent of its contents, which read back as written.
+    if (RP && typeof RP["toString"] === "function" && typeof RP["cloneContents"] === "function") {
+        const tcGet = nO.getOwnPropertyDescriptor((g["Node"]?.prototype ?? {}) as object, "textContent")?.get as ((this: unknown) => string) | undefined;
+        wrapMethod<(...a: unknown[]) => string>(RP, "toString", (native, self, args) => {
+            const raw = nR.apply(native, self, args) as string;
+            if (!mayDiffer(raw) || !tcGet) return raw;
+            try {
+                const frag = ncall(RP["cloneContents"] as (this: unknown) => DocumentFragment, self);
+                return ncall(tcGet, frag);
+            } catch { return raw; }
+        });
+    }
+
     // ── the page's observers never see the originals attribute go ──────
     type Rec = { type: string; attributeName: string | null };
     const mine = (r: Rec): boolean => r.type === "attributes" && r.attributeName === ORIGINALS_ATTR;

@@ -55,6 +55,28 @@ func HeaderPolicy(v string) Policy {
 	return out
 }
 
+// MetaPolicy is the policy a <meta name=referrer>'s content sets, or ""
+// (spec/Referrer.agda metaPolicy): one whole token, trimmed, case aside, no
+// comma list, and HTML's legacy keywords.
+func MetaPolicy(v string) Policy {
+	t := strings.ToLower(strings.Trim(v, " \t\n\f\r"))
+	switch t {
+	case "never":
+		return NoReferrer
+	case "default":
+		return DefaultPolicy
+	case "always":
+		return UnsafeURL
+	case "origin-when-crossorigin":
+		return OriginWhenCrossOrigin
+	}
+	if strings.Contains(t, ",") {
+		return ""
+	}
+	p, _ := PolicyToken(t)
+	return p
+}
+
 func (u absURL) originText() string { return u.scheme + "://" + hostPort(u.auth) }
 
 func sameOriginURL(a, b absURL) bool {
@@ -130,12 +152,28 @@ func Referrer(p Policy, ref, target string) (string, bool) {
 	if rres != parsedURL || tres != parsedURL {
 		return "", false
 	}
+	return referrerFor(p, r, sameOriginURL(r, t), downgrade(r, t))
+}
+
+// SrcdocReferrer is a srcdoc frame's document.referrer (spec/Referrer.agda
+// srcdocReferrer): its parent's URL by the parent's policy, about:srcdoc
+// taken as another origin and never a downgrade (Chromium, measured).
+func SrcdocReferrer(p Policy, ref string) (string, bool) {
+	r, rres := parseRef(nil, preprocess(ref))
+	if rres != parsedURL {
+		return "", false
+	}
+	return referrerFor(p, r, false, false)
+}
+
+// referrerFor is §8.3's decision given whether the target is same-origin
+// and a downgrade (spec referrerFor).
+func referrerFor(p Policy, r absURL, same, down bool) (string, bool) {
 	only := r.originText() + "/"
 	full := r.asReferrer()
 	if len([]rune(full)) > 4096 { // Chromium
 		full = only
 	}
-	same, down := sameOriginURL(r, t), downgrade(r, t)
 	switch p {
 	case NoReferrer:
 		return "", false

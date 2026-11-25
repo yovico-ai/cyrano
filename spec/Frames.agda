@@ -72,6 +72,44 @@ selfOrigin nativeOrigin original = if opaqueByNative nativeOrigin then toList "n
 documentDomain : Str → Str → Str
 documentDomain nativeOrigin host = if opaqueByNative nativeOrigin then [] else host
 
+-- Setting document.domain (HTML "document.domain setter"; Chromium,
+-- measured: document-domain-vs-chromium). Through the proxy the runtime's
+-- setter did nothing: a bad value did not throw, a good one did not take
+-- (round I, K). host: the origin's host; ip: it is an IP address; current:
+-- what document.domain reads now (Chromium names it in the message); v: the
+-- value canonicalized as a URL host (lowercase, "1" → "0.0.0.1"); empty: the
+-- value given was ""; publicSuffix: v is a public suffix, ICANN or private
+-- (github.io is refused). The check is against the origin's host, not the
+-- current domain (a page may set it back).
+data DomainSet : Set where
+  setTo     : Str → DomainSet
+  emptyDom  : DomainSet
+  topLevel  : Str → DomainSet
+  notSuffix : Str → Str → DomainSet
+
+domainSet : Str → Bool → Str → Str → Bool → Bool → DomainSet
+domainSet host ip current v empty publicSuffix =
+  if empty then emptyDom
+  else if ip then (if eqStr v host then setTo v else notSuffix v current)
+  else if publicSuffix then topLevel v
+  else if eqStr v host ∨ endsDot v host then setTo v
+  else notSuffix v current
+  where
+  open import Data.List.Base using (reverse)
+  endsWith : Str → Str → Bool
+  endsWith [] _ = true
+  endsWith (_ ∷ _) [] = false
+  endsWith (a ∷ as) (b ∷ bs) = eqStr (a ∷ []) (b ∷ []) ∧ endsWith as bs
+  endsDot : Str → Str → Bool
+  endsDot x h = endsWith (reverse ('.' ∷ x)) (reverse h) -- h ends with "." ++ x
+
+-- Two documents relaxed to one domain script each other: both set
+-- document.domain, to the same value, and their origins share a scheme and
+-- port (measured: one side setting it changes nothing).
+relaxed : Maybe Str → Maybe Str → Bool → Bool
+relaxed (just a) (just b) sameSchemePort = eqStr a b ∧ sameSchemePort
+relaxed _ _ _ = false
+
 ------------------------------------------------------------------------
 -- Who embeds a framed document (Go: proxy/frame_ancestors.go): the
 -- document the proxy judges its frame-ancestors and X-Frame-Options
