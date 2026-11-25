@@ -14,14 +14,17 @@
 // another origin is judged by its own Access-Control-Expose-Headers.
 
 import { SafeMap, SafeWeakMap, nO, nR, ncall } from "../native/intrinsics";
-import { wrapMethod } from "../native/surface";
+import { wrapAccessor, wrapMethod } from "../native/surface";
 import { crossOriginXhr, exposedBy, type Exposed } from "./cors";
 
 const CARRIER = "crn-h";
 
 type Originals = Record<string, string[] | null>;
 
-function parse(raw: string | null): Originals | null {
+/** The origin's reason phrase Crn-H carries (spec/Carry.agda statusText), under a name no header has. */
+const STATUS_TEXT = ":status-text";
+
+function parseAll(raw: string | null): Originals | null {
     if (!raw) return null;
     try {
         const o = JSON.parse(raw) as unknown;
@@ -29,6 +32,21 @@ function parse(raw: string | null): Originals | null {
     } catch {
         return null;
     }
+}
+
+/** The headers Crn-H carries (the phrase is not one). */
+function parse(raw: string | null): Originals | null {
+    const o = parseAll(raw);
+    if (!o || !(STATUS_TEXT in o)) return o;
+    const out: Originals = {};
+    for (const k of nO.keys(o)) if (k !== STATUS_TEXT) out[k] = o[k]!;
+    return out; // (a carrier with the phrase alone is a carrier still: never shown)
+}
+
+/** The phrase Crn-H carries, or null. */
+function phraseOf(raw: string | null): string | null {
+    const v = parseAll(raw)?.[STATUS_TEXT];
+    return v && typeof v[0] === "string" ? v[0] : null;
 }
 
 /** A realm's view of response headers, for the fetch wrapper. */
@@ -50,6 +68,8 @@ export const headerViewsOf = (realm: object): HeaderViews | undefined => viewsOf
  */
 export function patchResponseHeaders(targetWindow: Window, opaque = false): void {
     const g = targetWindow as unknown as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+    // Headers#get as it is before the wrapping below (statusText reads the carrier through it).
+    const headersGet = (g["Headers"] as { prototype?: Headers } | undefined)?.prototype?.get;
 
     // ── fetch: Headers ──────────────────────────────────────────────────
     const HeadersCtor = g["Headers"] as (new (init?: Array<[string, string]>) => Headers) | undefined;
@@ -100,6 +120,22 @@ export function patchResponseHeaders(targetWindow: Window, opaque = false): void
         });
     }
 
+    // ── statusText: an HTTP/1.x origin's reason phrase (the browser spoke
+    // HTTP/2 to the proxy, which has none: round I) ─────────────────────
+    const R = (g["Response"] as { prototype: object } | undefined)?.prototype;
+    const nHeaders = R ? nO.getOwnPropertyDescriptor(R, "headers")?.get : undefined;
+    if (R && nHeaders && headersGet && nO.getOwnPropertyDescriptor(R, "statusText")?.get) {
+        const nGet = headersGet;
+        wrapAccessor<string>(R, "statusText", {
+            get: (get, self) => {
+                const v = ncall(get, self) as string;
+                let raw: string | null = null;
+                try { raw = ncall(nGet, ncall(nHeaders, self) as object, CARRIER) as string | null; } catch { raw = null; }
+                return phraseOf(raw) ?? v;
+            },
+        });
+    }
+
     // ── XMLHttpRequest ──────────────────────────────────────────────────
     const X = (g["XMLHttpRequest"] as { prototype: XMLHttpRequest } | undefined)?.prototype;
     if (X && !opaque) {
@@ -128,6 +164,16 @@ export function patchResponseHeaders(targetWindow: Window, opaque = false): void
             if (orig && name in orig) return orig[name] ? orig[name]!.join(", ") : null;
             return nR.apply(native, self, args) as string | null;
         });
+        if (nO.getOwnPropertyDescriptor(X, "statusText")?.get) {
+            wrapAccessor<string>(X, "statusText", {
+                get: (get, self) => {
+                    const v = ncall(get, self) as string;
+                    let raw: string | null = null;
+                    try { raw = ncall(nativeOne, self, CARRIER) as string | null; } catch { raw = null; }
+                    return phraseOf(raw) ?? v;
+                },
+            });
+        }
         wrapMethod<(...a: unknown[]) => string>(X, "getAllResponseHeaders", (native, self, args) => {
             const all = nR.apply(native, self, args) as string;
             const orig = originalsOf(self);

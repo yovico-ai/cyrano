@@ -243,7 +243,9 @@ and origin are the opener's (`popup-blank-vs-chromium`).
   (least recently used, only those IndexedDB holds); a write fails only
   when the writer's own partition passes the quota. Limit: entries evicted
   from the native store read as missing for the first moments of the
-  site's next load, until IndexedDB answers. Web Locks names and the Origin Private File System are per
+  site's next load, until IndexedDB answers. A clear() reaches another tab as one
+  event with key null, as natively (a marker brackets its removals:
+  `storage-clear-event-vs-chromium`). Web Locks names and the Origin Private File System are per
   partition too (spec/Storage.agda lockName, opfsDir: the page's root is
   its key's directory of the real one, named ""; `web-locks-vs-chromium`).
   sessionStorage stays native (prefixed; a native refusal names the page's
@@ -324,7 +326,9 @@ and origin are the opener's (`popup-blank-vs-chromium`).
   name the error has when the stack is first read, the message it was
   made with (recorded by the Error stand-in; `error-header-vs-chromium`;
   an error V8 throws itself shows a message changed before the first
-  read — it is never seen made). A member that is written (`obj[k] = …`, `x.top = …`,
+  read — it is never seen made). A DOMException the runtime throws itself
+  has a stack, as Blink's do (`native/stacked.ts`;
+  `runtime-exception-stack-vs-chromium`). A member that is written (`obj[k] = …`, `x.top = …`,
   `x.parent = …`: the next token a plain `=`) is left as written (R3, R5),
   so V8 names a function from its target as directly (`obj.<computed>`;
   rewritten, frames read `$rewriter.wrap_member_expression`: Adobe Launch).
@@ -463,7 +467,10 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   once per eval origin, so a body made again at the same place is the same
   source (V8's compilation cache; the tag table bounded). Media Session
   artwork `src`s are proxified (the browser fetches them itself:
-  visitoslo.com; `media-metadata-vs-chromium`). Markup written into a
+  visitoslo.com; `media-metadata-vs-chromium`), and so are a notification's
+  icon, image, badge and action icons (`patches/notification.ts`, windows
+  and workers, showNotification too; `notification-images-vs-chromium`,
+  headed: headless fetches none). Markup written into a
   document with no `<base href>` yet takes the first one it writes as the
   base of what follows in the same write (Flashtalking richloads on
   ginifab.com: `written-base-vs-chromium`). A module worker (`{type: "module"}`) has
@@ -480,7 +487,10 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   errors read its own script's lines as directly (the preamble is its first
   line: spec/Stack.agda workerLine, in its stacks and the page's Worker
   error events, which name the page's URL; a blob: worker's rewritten copy
-  gets no eval preamble, `globalScript`) (`worker-origin-vs-chromium`).
+  gets no eval preamble, `globalScript`) (`worker-origin-vs-chromium`). A worker
+  script of another origin is refused with the native's SecurityError
+  (through the proxy it ran; libraries fall back to a blob worker on it:
+  `worker-cross-origin-vs-chromium`).
   `WebSocket#url` reads the page's URL made ws(s) as the browser makes it
   (toutiao.com: `websocket-url-vs-chromium`). `WebSocketStream` is wrapped as WebSocket
   is (it connected from the browser straight to the origin). A message an
@@ -525,7 +535,11 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   serialization pairs template content with its clone's, and a URL in a
   document with no browsing context (template content, DOMParser) resolves
   the page's value against that document's base, as natively (heart.org's
-  Vue templates; `template-readback-vs-chromium`). `serviceWorker.getRegistration`
+  Vue templates; `template-readback-vs-chromium`); an XHR's response
+  document reads its own URL and resolves its links against it
+  (`xhr-document-vs-chromium`). A link's stringifier reads what its
+  `href` reads, and its URL-part setters leave the attribute as the page's
+  URL (`anchor-stringifier-vs-chromium`). `serviceWorker.getRegistration`
   is judged by the page's own origin (none can be registered: undefined;
   another origin: the native's SecurityError naming the page's; staples.com;
   `service-worker-vs-chromium`). Google search answers `/sorry` through the proxy. Akamai Bot Manager's
@@ -744,7 +758,9 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   body a rewriter replaced — the rest streams as the origin sent it). They
   went out raw: cnn.com's 720 kB brotli document was 7.9 MB to the
   browser. The page reads the origin's Content-Encoding / Content-Length
-  (Crn-H) and sizes (crnb). On localhost this does not show in load times;
+  (Crn-H) and sizes (crnb). An HTTP/1.x origin's reason phrase rides Crn-H too
+  (`:status-text`, no header name; spec/Carry.agda statusText): fetch's and
+  XHR's `statusText` read it (`status-text-vs-chromium`). On localhost this does not show in load times;
   measure it by bytes, or over a throttled link. Server CPU on a large
   document: `CYRANO_PPROF` — CSS text that names no URL is not tokenized
   (as the client: a third of cnn.com's rewrite was `style` attributes);
@@ -825,7 +841,10 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   origin navigates (the runtime takes the attribute away for the click:
   `download-link-vs-chromium`); Element Timing / LCP / long-animation-frame
   script URLs and HashChangeEvent URLs unwrapped
-  (`timing-entry-urls-vs-chromium`); registerProtocolHandler judged by the
+  (`timing-entry-urls-vs-chromium`); ReportingObserver reports name the
+  page's URLs, a source in the runtime null (`patches/reports.ts`, the
+  Report prototype patched from the first report: it has no global name;
+  `reports-vs-chromium`); registerProtocolHandler judged by the
   page's origin, handed the proxified URL with `%s` kept
   (`protocol-handler-vs-chromium`).
 - **Clear-Site-Data** (spec/ClearSiteData.agda): the browser is never
@@ -869,7 +888,9 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   spec/Upgrades.agda; `make chrome-check` — real Chrome, as Playwright's
   Chromium has the feature off): a main-frame http navigation to a unique
   name (a known ICANN TLD; not a.example) is sent to https first and falls back to http when https
-  fails (times.com: certificate for nytimes.com). The landing page sends a
+  fails (times.com: certificate for nytimes.com), or has no response
+  within 3 s (Chrome's limit, measured: spec/Upgrades.agda fallbackAfter;
+  neverssl.com's 443 hangs). The landing page sends a
   bare host as http. A navigation that cannot reach its origin gets an error
   page (subresources: connection closed). Check ads in a Chrome profile
   without an ad blocker: through the proxy its network rules still match
@@ -941,6 +962,11 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   answered as Chrome answers a caller it does not allow (own origin:
   resolves; another owner: NotAllowedError; runAdAuction: null; an
   incomplete one: the native's TypeError) — `ad-auction-vs-chromium`.
+  `new WebTransport(url)` is aimed at the proxy, which carries no HTTP/3:
+  it fails there as for an unreachable server (`ready` rejects), never
+  around it (`patches/browser-windows.ts`; `webtransport-vs-chromium`). A
+  Document Picture-in-Picture window gets the opener's runtime before the
+  page has it (`picture-in-picture-vs-chromium`, headed).
 - **Not wrapped yet**: `AsyncFunction`/`GeneratorFunction` constructors;
   an SVG element's `href.baseVal` (SVGAnimatedString; setAttribute /
   setAttributeNS are rewritten). URL-bearing attributes are one table in
@@ -990,7 +1016,10 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   An iframe whose `sandbox` attribute lacks allow-scripts gets none
   either: its URL is marked `!inert` in place of `!frame` by the document
   holding it (spec/Frames.agda frameDest, inertFrame; both runtimes), and
-  what that frame then navigates itself to inherits it. Open: a sandbox
+  what that frame then navigates itself to inherits it. Same-origin
+  (`allow-same-origin`), its parent scripts it: it is given its creator's
+  runtime told its own URL, its own scripts still not running
+  (`sandboxed-frame-vs-chromium`). Open: a sandbox
   attribute changed after the frame was given its URL. A parent
   navigating a child frame the browser holds cross-origin (sandboxed,
   opaque) goes through a location view that can be set, not read

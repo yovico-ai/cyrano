@@ -343,6 +343,7 @@ export function createRewriterApi(
         wrap_worker_url: (url) => {
             // reCAPTCHA passes a TrustedScriptURL object, not a plain string.
             // String(TrustedScriptURL) returns the inner URL, which we can then proxify.
+            if (typeof url === "symbol") return url; // the constructor's own TypeError
             const urlStr = typeof url === "string" ? url : (url != null ? String(url) : null);
             if (!urlStr) return url;
             return rewriteOne(urlStr);

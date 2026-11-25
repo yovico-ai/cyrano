@@ -29,9 +29,10 @@
 // Known gaps: SharedWorker names are shared; data
 // stored before this existed stays, invisible, under its bare names.
 
+import { stacked } from "../native/stacked";
 import { getDomain } from "tldts";
 
-import { SafeWeakMap, nO, nR, ncall, sStarts, sIncludes } from "../native/intrinsics";
+import { SafeWeakMap, SafeWeakSet, nO, nR, ncall, sStarts, sIncludes } from "../native/intrinsics";
 import { internalsOf } from "../native/internals";
 import { wrapAccessor, wrapConstructor, wrapMethod } from "../native/surface";
 import { captureIdb, partitionFor, type NativeStorage, type Partition } from "./local-store";
@@ -62,6 +63,9 @@ export function lockName(prefix: string, name: string): string {
 export function opfsDirName(key: string): string {
     return TAG + key.replace(/[%/\\]/g, (c) => (c === "%" ? "%25" : c === "/" ? "%2F" : "%5C")) + SEP;
 }
+
+/** The marker a partition's clear() brackets its removals with: outside every page's names (U+001E in place of the last U+001F). */
+export function clearMarker(prefix: string): string { return prefix.slice(0, -1) + "\u001eclear"; }
 
 /** The prefix of this context's names: its storage key (partitionKey). */
 export type Prefix = () => string;
@@ -229,7 +233,7 @@ export function patchWebStorage(targetWindow: Window, prefix: Prefix, unwrapOne:
     } catch { nativeLocal = null; } // a sandboxed document: the native throws
     const DOMExc = g["DOMException"] as (new (m: string, n: string) => Error) | undefined;
     const quotaError = (k: string): Error => DOMExc
-        ? new DOMExc(`Failed to execute 'setItem' on 'Storage': Setting the value of '${k}' exceeded the quota.`, "QuotaExceededError")
+        ? stacked(new DOMExc(`Failed to execute 'setItem' on 'Storage': Setting the value of '${k}' exceeded the quota.`, "QuotaExceededError"))
         : new Error("QuotaExceededError");
     // A native refusal names what was stored ("crn␟KEY␟name"): the page
     // reads its own name, as directly (sports-reference.com's quota errors).
@@ -237,7 +241,7 @@ export function patchWebStorage(targetWindow: Window, prefix: Prefix, unwrapOne:
         try { return f(); } catch (e) {
             const m = (e as { message?: unknown })?.message;
             if (DOMExc && typeof m === "string" && sIncludes(m, stored)) {
-                throw new DOMExc(m.split(stored).join(name), String((e as { name?: unknown }).name));
+                throw stacked(new DOMExc(m.split(stored).join(name), String((e as { name?: unknown }).name)));
             }
             throw e;
         }
@@ -304,11 +308,21 @@ export function patchWebStorage(targetWindow: Window, prefix: Prefix, unwrapOne:
         const real = realOf(self);
         if (!real) return nR.apply(native, self, args);
         const t = tier(real);
-        if (t) { t.clear(); forget(real); return undefined; }
-        const p = prefix();
-        for (const k of keysOf(real)) ncall(nat.removeItem, real, p + k); // this origin's only
-        forget(real);
-        return undefined;
+        // Other tabs are told one clear, as natively (key null), not a removal
+        // per key: the removals are bracketed by a marker outside every page's
+        // names (round K). An empty storage fires nothing, as natively.
+        const any = t ? t.keys().length > 0 : keysOf(real).length > 0;
+        const marker = clearMarker(prefix());
+        if (any) { try { ncall(nat.setItem, real, marker, "1"); } catch { /* per key, then */ } }
+        try {
+            if (t) { t.clear(); forget(real); return undefined; }
+            const p = prefix();
+            for (const k of keysOf(real)) ncall(nat.removeItem, real, p + k); // this origin's only
+            forget(real);
+            return undefined;
+        } finally {
+            if (any) { try { ncall(nat.removeItem, real, marker); } catch { /* none */ } }
+        }
     });
     wrapMethod<(...a: unknown[]) => unknown>(SP, "key", (native, self, args) => {
         const real = realOf(self);
@@ -383,6 +397,8 @@ export function patchWebStorage(targetWindow: Window, prefix: Prefix, unwrapOne:
     }
 
     // ── storage events ──────────────────────────────────────────────────
+    const clearing = new SafeWeakSet<object>(); // areas another tab is clearing
+    const asClear = new SafeWeakSet<object>(); // events shown as a clear (key null)
     // Another window's write fires `storage` here whatever site it belongs
     // to: other origins' events stop before any page listener.
     const SE = g["StorageEvent"]?.prototype as object | undefined;
@@ -396,6 +412,24 @@ export function patchWebStorage(targetWindow: Window, prefix: Prefix, unwrapOne:
             try { k = ncall(keyGet, e); } catch { return; }
             const area = areaGet ? ncall(areaGet, e) : null;
             if (area) forget(area);
+            // Another tab's clear(): its removals are stopped, and the marker's
+            // own removal is shown as the one event a native clear fires.
+            if (area && k === clearMarker(prefix())) {
+                const nv = newValueGet ? (ncall(newValueGet, e) as string | null) : null;
+                if (nv !== null) { clearing.add(area); e.stopImmediatePropagation(); return; }
+                clearing.delete(area);
+                // The whole partition went (the native store is only a cache of it).
+                const t = tier(area);
+                if (t) for (const key of t.keys()) t.external(key, null);
+                asClear.add(e);
+                return;
+            }
+            if (area && clearing.has(area) && k !== null && sStarts(k, prefix())) {
+                const t = tier(area);
+                if (t) t.external(k.slice(prefix().length), null);
+                e.stopImmediatePropagation();
+                return;
+            }
             if (area && k !== null && sStarts(k, prefix())) {
                 const t = tier(area);
                 const nv = newValueGet ? (ncall(newValueGet, e) as string | null) : null;
@@ -404,8 +438,14 @@ export function patchWebStorage(targetWindow: Window, prefix: Prefix, unwrapOne:
             // (key null: a clear() — the native clear is never called by a proxied page.)
             if (k === null || !sStarts(k, prefix())) e.stopImmediatePropagation();
         }, true);
+        for (const name of ["oldValue", "newValue"]) {
+            if (nO.getOwnPropertyDescriptor(SE, name)?.get) {
+                wrapAccessor<string | null>(SE, name, { get: (get, self) => (typeof self === "object" && self !== null && asClear.has(self) ? null : ncall(get, self)) });
+            }
+        }
         wrapAccessor<string | null>(SE, "key", {
             get: (get, self) => {
+                if (typeof self === "object" && self !== null && asClear.has(self)) return null;
                 const k = ncall(get, self);
                 const p = prefix();
                 return k !== null && sStarts(k, p) ? k.slice(p.length) : k;

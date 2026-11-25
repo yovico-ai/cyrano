@@ -26,6 +26,7 @@
 // object that is not plainly a window (`w[0]`) give the real child window;
 // document.domain relaxation is not modelled.
 
+import { stacked } from "./stacked";
 import { SafeWeakMap, SafeWeakSet, nO, ncall, aIncludes } from "./intrinsics";
 import { internalsOf } from "./internals";
 import { heldAttr } from "./originals";
@@ -152,7 +153,7 @@ export function crossOriginView<T>(target: T, pendingOrigin: string | null = nul
 
 function securityError(v: Viewer): Error {
     const DE = (v.win as unknown as { DOMException: typeof DOMException }).DOMException;
-    return new DE(`Blocked a frame with origin "${v.origin()}" from accessing a cross-origin frame.`, "SecurityError");
+    return stacked(new DE(`Blocked a frame with origin "${v.origin()}" from accessing a cross-origin frame.`, "SecurityError"));
 }
 
 const WINDOW_KEYS = ["window", "self", "location", "close", "closed", "focus", "blur", "frames", "length", "top", "opener", "parent", "postMessage"];
@@ -294,7 +295,7 @@ function makeLocationView(t: Window, v: Viewer): object {
         let abs = url;
         try { abs = v.unwrap(to(url)); } catch { /* as given */ }
         const why = `The current window does not have permission to navigate the target frame to '${abs}'.`;
-        throw new DE(how === "set" ? `Failed to set a named property 'href' on 'Location': ${why}` : `Failed to execute 'replace' on 'Location': ${why}`, "SecurityError");
+        throw stacked(new DE(how === "set" ? `Failed to set a named property 'href' on 'Location': ${why}` : `Failed to execute 'replace' on 'Location': ${why}`, "SecurityError"));
     };
     const replace = (url: unknown): void => { busting(String(url), "replace"); t.location.replace(to(String(url))); };
     return new Proxy({}, {

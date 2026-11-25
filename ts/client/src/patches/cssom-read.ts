@@ -12,6 +12,7 @@
 // Declarations (style, getComputedStyle) read back in
 // css-style-declaration.ts.
 
+import { stacked } from "../native/stacked";
 import { nO, ncall } from "../native/intrinsics";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 import { heldAttr, originalAttr } from "../native/originals";
@@ -59,7 +60,7 @@ export function patchCssomRead(targetWindow: Window, unwrapOne: (u: string) => s
             return false;
         }
     };
-    const refuse = (key: string): never => { throw new (DE ?? Error)(MESSAGES[key]!, "SecurityError"); };
+    const refuse = (key: string): never => { throw stacked(new (DE ?? Error)(MESSAGES[key]!, "SecurityError")); };
     for (const key of ["cssRules", "rules"]) {
         if (nO.getOwnPropertyDescriptor(CSS, key)?.get) wrapAccessor<unknown>(CSS, key, { get: (gt, self) => (muted(self) ? refuse(key) : ncall(gt, self)) });
     }

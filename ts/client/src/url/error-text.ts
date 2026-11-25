@@ -4,6 +4,7 @@
 // '…' failed to load."). Directly it names the page's URL. Error reporters
 // send the message, and chunk-retry code reads the URL out of it.
 
+import { stacked } from "../native/stacked";
 import { nO, nOP, nR, ncall, sEnds } from "../native/intrinsics";
 
 // Saved at load: a page may replace it (Zone.js does).
@@ -49,7 +50,7 @@ export function unwrapErrorMessage(e: unknown, proxy: string, unwrap: (u: string
         if (!DE || ncall(nOP.toString, e) !== "[object DOMException]") return e;
         const m = (e as { message?: unknown }).message;
         if (typeof m !== "string" || m.indexOf(proxy + "/cyrano/") < 0) return e;
-        return new DE(unwrapUrlsInText(m, proxy, unwrap), String((e as { name?: unknown }).name));
+        return stacked(new DE(unwrapUrlsInText(m, proxy, unwrap), String((e as { name?: unknown }).name)));
     } catch {
         return e;
     }

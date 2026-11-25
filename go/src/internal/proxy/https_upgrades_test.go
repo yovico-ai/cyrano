@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func navigation(path, session string) *http.Request {
@@ -92,5 +93,34 @@ func TestNavigationError_Page(t *testing.T) {
 	h.ServeHTTP(rec, navigation("/cyrano/https/unreachable.invalid/p", "s"))
 	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), `href="/cyrano/http/unreachable.invalid/p"`) {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// hangingTransport never answers: a 443 that accepts and says nothing.
+type hangingTransport struct{}
+
+func (hangingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	<-r.Context().Done()
+	return nil, r.Context().Err()
+}
+
+// An upgraded navigation whose https load gets no response falls back to
+// http after Chrome's limit (measured: 3.0 s), not the upstream's timeout.
+func TestHTTPSUpgrade_FallsBackAfterTheAttemptsLimit(t *testing.T) {
+	h := New(Options{CookieJar: NewSessionJar(), SessionCookieName: "crnsct", Transport: hangingTransport{}})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, navigation("/cyrano/http/slow-https.com/", "s1"))
+	if rec.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("http navigation: %d; want the upgrade", rec.Code)
+	}
+	start := time.Now()
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, navigation("/cyrano/https/slow-https.com/", "s1"))
+	took := time.Since(start)
+	if rec.Code != http.StatusTemporaryRedirect || rec.Header().Get("Location") != "/cyrano/http/slow-https.com/" {
+		t.Fatalf("hanging https load: %d %q; want 307 back to http", rec.Code, rec.Header().Get("Location"))
+	}
+	if took < upgradeAttempt-100*time.Millisecond || took > upgradeAttempt+time.Second {
+		t.Fatalf("fell back after %v; want about %v", took, upgradeAttempt)
 	}
 }

@@ -10,6 +10,7 @@
 // origin is refused with the native's SecurityError, naming the page's;
 // otherwise there is no registration (none can be made).
 
+import { stacked } from "../native/stacked";
 import { nR } from "../native/intrinsics";
 import { wrapMethod } from "../native/surface";
 
@@ -38,9 +39,9 @@ export function patchServiceWorker(targetWindow: Window, getBase: () => URL = ()
             return nR.apply(native, self, args) as Promise<ServiceWorkerRegistration | undefined>; // the native refuses it
         }
         if (u.origin !== base.origin) {
-            return g.Promise.reject(new g.DOMException(
+            return g.Promise.reject(stacked(new g.DOMException(
                 `Failed to get a ServiceWorkerRegistration: The origin of the provided documentURL ('${u.origin}') does not match the current origin ('${base.origin}').`,
-                "SecurityError"));
+                "SecurityError")));
         }
         return g.Promise.resolve(undefined);
     });

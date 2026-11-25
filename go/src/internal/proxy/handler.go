@@ -197,6 +197,8 @@ func (h *Handler) ServeHTTPWithTarget(w http.ResponseWriter, r *http.Request, ta
 
 // serveTarget runs the httputil.ReverseProxy for an already-resolved target.
 func (h *Handler) serveTarget(w http.ResponseWriter, r *http.Request, target *url.URL) {
+	// An upgraded navigation's https attempt has Chrome's limit (https_upgrades.go).
+	r = h.upgradeDeadline(r, target)
 	// Mixed content, as the browser would have judged it (spec/MixedContent.agda):
 	// through the proxy every request is same-origin https, so its own checks
 	// never fire (a-hospital.com's http share.js ran on its https page).
@@ -415,10 +417,11 @@ func (h *Handler) modifyResponse(resp *http.Response) error {
 	opaqueElementCORS(resp)
 	h.restartForCriticalCH(resp) // may replace resp with a second response
 	sessionID, _ := resp.Request.Context().Value(SessionContextKey{}).(string)
+	upgradeResponded(resp)
 	upgradeLoaded(resp, sessionID)
 	// Whatever is changed below, scripts still read what the origin sent.
 	sent := resp.Header.Clone()
-	defer func() { carryOriginalHeaders(resp.Header, sent) }()
+	defer func() { carryOriginalHeaders(resp.Header, sent, statusPhrase(resp)) }()
 	// A short HTTP/2 body is the response it is (short_body.go).
 	if err := fitShortBody(resp); err != nil {
 		return err

@@ -21,6 +21,7 @@
 // document — deferred bodies beyond that are lost (the native's are not);
 // beacons are small. A proxy-side store fired by a small beacon would lift it.
 
+import { stacked } from "../native/stacked";
 import { SafeMap, SafeWeakMap, nO, nR, ncall, sStarts } from "../native/intrinsics";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 
@@ -149,7 +150,7 @@ export function patchFetchLater(
         });
     }
     const quotaError = (msg: string): Error =>
-        w.QuotaExceededError ? new w.QuotaExceededError(msg) : new w.DOMException(msg, "QuotaExceededError");
+        stacked(w.QuotaExceededError ? new w.QuotaExceededError(msg) : new w.DOMException(msg, "QuotaExceededError"));
     // The native's refusals that are the proxy's doing: the proxy origin's
     // shared quota; and, on a plain-http proxy, the proxied URL being
     // insecure ("only supported over HTTPS", a TypeError — counted as the
@@ -195,7 +196,7 @@ export function patchFetchLater(
         // An insecure original URL is refused as natively (a TLS proxy would
         // make its proxied URL secure). Loopback hosts are trustworthy.
         if (original.protocol === "http:" && !/^(localhost|127\.\d+\.\d+\.\d+|\[::1\])$|\.localhost$/i.test(original.hostname)) {
-            throw new w.DOMException("Failed to execute 'fetchLater' on 'Window': fetchLater was passed an insecure URL.", "SecurityError");
+            throw stacked(new w.DOMException("Failed to execute 'fetchLater' on 'Window': fetchLater was passed an insecure URL.", "SecurityError"));
         }
         // The native's own argument errors (a negative activateAfter, …) as
         // natively; only a request it would accept is counted.

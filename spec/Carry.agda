@@ -130,3 +130,15 @@ varyLists tok v = anyTok (splitOn (is 44) v)
 
 varyForBrowser : Str → Str
 varyForBrowser v = if varyLists (toList "origin") v ∧ not (varyLists (toList "crn-i") v) then v ++ toList ", Crn-I" else v
+
+-- The origin's reason phrase, for statusText (TS: response-headers.ts;
+-- Go: proxy.carryOriginalHeaders): the browser talks HTTP/2 to the proxy,
+-- which has none, where an HTTP/1.x origin's response directly has its
+-- status line's phrase (round I: fetch / XHR statusText read "" for
+-- neverssl.com's "Not Found"). Carried in crnH under the name ":status-text",
+-- which no header can have (":" is no token character); an HTTP/2 or /3
+-- origin has none directly either. http1: the origin spoke HTTP/1.x.
+statusText : Data.Bool.Base.Bool → Str → Maybe Str
+statusText Data.Bool.Base.false _  = nothing
+statusText Data.Bool.Base.true  [] = nothing
+statusText Data.Bool.Base.true  p  = just p

@@ -12,6 +12,7 @@
 // naming the page's identifier. Known difference: directly, Chrome answers
 // canMakePayment() true for Google Pay (its app installs just in time).
 
+import { stacked } from "../native/stacked";
 import { SafeWeakMap, nO, nR, ncall } from "../native/intrinsics";
 import { wrapConstructor, wrapMethod } from "../native/surface";
 
@@ -64,7 +65,7 @@ export function patchPaymentRequest(targetWindow: Window): void {
         const list = typeof self === "object" && self !== null ? ids.get(self) : undefined;
         const m = (e as { message?: unknown } | null)?.message;
         if (!list || !DE || typeof m !== "string" || m.indexOf(PLACEHOLDER) < 0) return e;
-        return new DE(m.replace(/crn-no-app-([a-z]+)/g, (_x, l: string) => list[indexOf(l)] ?? _x), String((e as { name?: unknown }).name));
+        return stacked(new DE(m.replace(/crn-no-app-([a-z]+)/g, (_x, l: string) => list[indexOf(l)] ?? _x), String((e as { name?: unknown }).name)));
     };
     for (const k of ["show", "canMakePayment", "hasEnrolledInstrument"]) {
         if (typeof nO.getOwnPropertyDescriptor(P, k)?.value !== "function") continue;

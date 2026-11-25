@@ -8,6 +8,7 @@
 // native call the page's base URL follows the real location — for every
 // change, a "#fragment" one included.
 
+import { stacked } from "../native/stacked";
 import { nR } from "../native/intrinsics";
 import { wrapMethod } from "../native/surface";
 
@@ -36,10 +37,10 @@ export function patchHistory(
             // A URL already on the proxy is cyrano's own (read back from the
             // real location by code cyrano did not rewrite): passed through.
             if (target && target.origin !== base.origin && unwrapOne(target.href) === target.href) {
-                throw new Dom(
+                throw stacked(new Dom(
                     `Failed to execute '${name}' on 'History': A history state object with URL '${target.href}' ` +
                     `cannot be created in a document with origin '${base.origin}' and URL '${base.href}'.`,
-                    "SecurityError");
+                    "SecurityError"));
             }
             const next = args.slice();
             next[2] = target ? rewriteOne(raw) : raw;

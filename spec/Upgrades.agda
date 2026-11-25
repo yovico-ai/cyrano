@@ -151,3 +151,10 @@ onFailed : ℕ → HostState → Bool × HostState
 onFailed now s =
   if freshAt now pendingFor (pending s) then true , hostState nothing (just now)
   else false , s
+
+-- An upgraded navigation whose https load has not got its response within
+-- this many milliseconds falls back to http, as one that failed does
+-- (measured in Chrome: a 443 that accepts and never answers, the http
+-- request at 3.0 s; Go: proxy.upgradeAttempt — neverssl.com's 443 hangs).
+fallbackAfter : ℕ
+fallbackAfter = 3000

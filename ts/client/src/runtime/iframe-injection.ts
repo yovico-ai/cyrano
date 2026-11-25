@@ -42,6 +42,21 @@ export function injectIntoIframe(
     // a blank frame on its way to a proxied URL: the navigation reuses the
     // window, and the runtime stamped on it would stay the creator's
     // (dynamic-iframe.ts maybeInjectIframe).
+    // A frame sandboxed without scripts but same-origin (allow-same-origin):
+    // its document has no runtime of its own (its URL is marked !inert:
+    // spec/Frames.agda inertFrame), yet its parent scripts it — what the
+    // parent writes into it, its natives, its URLs (round I: they escaped).
+    // It is given its creator's runtime, told its own URL; no script of its
+    // own runs, as directly.
+    try {
+        const here = String((childWindow as unknown as Window).location.href);
+        if (/\/cyrano\/[^/]*!inert(?=[!/])/.test(here)) {
+            const own = unwrapProxiedUrl(here, parentConfig);
+            injectIntoWindow(childWindow, parentWindow, parentConfig, own);
+            try { (childWindow.$rewriter as unknown as { set_location?: (u: string) => void } | undefined)?.set_location?.(own); } catch { /* as it is */ }
+            return;
+        }
+    } catch { return; }
     try {
         if (!/^about:/i.test(String((childWindow as unknown as Window).location.href))) return;
         const src = heldAttr(iframe, "src"); // as held: getAttribute reads the page's back

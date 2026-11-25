@@ -11,6 +11,7 @@
 // sign-in (Google Identity Services does). Everything else about
 // navigator.credentials is the browser's.
 
+import { stacked } from "../native/stacked";
 import { nR } from "../native/intrinsics";
 import { wrapMethod } from "../native/surface";
 
@@ -24,6 +25,6 @@ export function patchFedCM(targetWindow: Window): void {
         if (identity === undefined || identity === null) return nR.apply(native, self, args);
         const DE = g["DOMException"] as typeof DOMException;
         const P = g["Promise"] as PromiseConstructor;
-        return P.reject(new DE("Error retrieving a token.", "NetworkError"));
+        return P.reject(stacked(new DE("Error retrieving a token.", "NetworkError")));
     });
 }

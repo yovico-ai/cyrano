@@ -22,7 +22,7 @@ import { rewriteSrcsetAttribute } from "./srcset";
 import { URL_BEARING_ELEMENTS, isSrcsetAttr, kindOf, rewriteByKind, rewriteUrlList } from "./url-attribute-map";
 import { elementBlobValue } from "./blob-document";
 import { bootstrapOf } from "./dynamic-html";
-import { wrapConstructor, wrapAccessor } from "../native/surface";
+import { wrapConstructor, wrapAccessor, wrapMethod } from "../native/surface";
 import { heldAttr, originalAttr, recordAttr, noteAttr } from "../native/originals";
 
 type ProtoLike = { prototype: object };
@@ -83,6 +83,14 @@ export function patchUrlAttributes(
                             if (o && o.value !== null) {
                                 try { return new NURL(o.value, doc.baseURI).href; } catch { return o.value; }
                             }
+                            // Not rewritten (an XHR's response document): its
+                            // text against its base, the base unwrapped — the
+                            // browser resolved it against the proxied URL, a
+                            // root-relative one onto the proxy's own origin.
+                            const raw = heldAttr(self as Element, attribute);
+                            if (raw !== null && !o) {
+                                try { return new NURL(raw, unwrapOne(doc.baseURI)).href; } catch { return raw; }
+                            }
                         }
                     }
                     // An element given rewritten blob: content reads back the page's URL.
@@ -99,6 +107,8 @@ export function patchUrlAttributes(
                     // null/undefined keep their native meaning; Trusted Types
                     // objects stringify to their URL.
                     if (value == null) return ncall(set, self, value);
+                    // (a Symbol: the native's own TypeError — String() would take it)
+                    if (typeof value === "symbol") return ncall(set, self, value);
                     const s = String(value);
                     const rw = rewriteFor(self as Element, rewriteOne, attribute);
                     const now = elementBlobValue(self as Element, attribute, s, rw, "", bootstrapOf(self))
@@ -205,9 +215,21 @@ export function patchAnchorUrlReflection(
                         const u = original(self);
                         if (!u) return ncall(set, self, value);
                         (u as unknown as Record<string, unknown>)[part] = value;
-                        ncall(hrefSet, self, rewriteOne(u.href));
+                        const now = rewriteOne(u.href);
+                        ncall(hrefSet, self, now);
+                        // The attribute reads as the browser re-serializes it: the page's URL.
+                        recordAttr(self as Element, "href", now, u.href);
                     },
                 }),
+            });
+        }
+        // The stringifier is href's getter natively, a method of its own:
+        // what the runtime's href reads (round H: String(a) read the
+        // proxified URL). Looked up when called — href is wrapped after this.
+        if (typeof nO.getOwnPropertyDescriptor(proto, "toString")?.value === "function") {
+            wrapMethod<(...a: unknown[]) => unknown>(proto, "toString", (native, self, args) => {
+                const get = findDescriptor(proto, "href")?.get;
+                return get ? ncall(get, self) : nR.apply(native, self, args);
             });
         }
     }

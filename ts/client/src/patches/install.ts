@@ -28,13 +28,16 @@ import { patchErrorEvents } from "./error-events";
 import { patchTimers } from "./timers";
 import { patchAttrHistory } from "./attr-history";
 import { patchDragData } from "./drag-data";
+import { patchReports } from "./reports";
 import { patchWebRtc } from "./webrtc";
+import { patchPictureInPicture, patchWebTransport } from "./browser-windows";
 import { installToolbar } from "../ui/toolbar";
 import { patchSelectors } from "./selectors";
 import { patchStorageNames, patchWebStorage, storagePrefix } from "./storage";
 import { patchCacheUrls } from "./cache-urls";
 import { patchTypedOm, patchWebAnimations } from "./typed-om";
 import { patchMediaMetadata } from "./media-metadata";
+import { patchNotification } from "./notification";
 import { patchReflection } from "../native/hidden-globals";
 import { patchDocumentWrite } from "../wrappers/document-write";
 import { buildBootstrapHtml } from "../runtime/bootstrap-html";
@@ -140,6 +143,7 @@ export function installPatches(
     step("patchPerformanceEntryNames", () => patchPerformanceEntryNames(targetWindow, unwrapOne, rewriteOne, new URL(config.apiBaseURL).origin,
         config.identity ? config.apiBaseURL + config.source : undefined));
     step("patchCspViolationEvents", () => patchCspViolationEvents(targetWindow, unwrapOne, new URL(config.apiBaseURL).origin));
+    step("patchReports", () => patchReports(targetWindow, unwrapOne, config.apiBaseURL + config.source));
 
     // Anchor/area URL-part reflection must be patched before patchUrlAttributes
     // wraps the href getter/setter — we need the native getter/setter to read
@@ -154,7 +158,7 @@ export function installPatches(
     step("patchXmlHttpRequest", () => patchXmlHttpRequest(targetWindow, rewriteOne, unwrapOne, getCurrentBaseUrl, cors));
     step("patchWebSocket", () => patchWebSocket(targetWindow, rewriteOne, unwrapOne, () => getCurrentBaseUrl().origin));
     step("patchEventSource", () => patchEventSource(targetWindow, rewriteOne, unwrapOne));
-    step("patchWorker", () => patchWorker(targetWindow, rewriteOne, patchBlobWorkerSource(targetWindow, config, getCurrentBaseUrl), config));
+    step("patchWorker", () => patchWorker(targetWindow, rewriteOne, patchBlobWorkerSource(targetWindow, config, getCurrentBaseUrl), config, getCurrentBaseUrl));
     step("patchServiceWorker", () => patchServiceWorker(targetWindow, getCurrentBaseUrl));
     // Dynamic-HTML patches must come BEFORE the per-class property-setter
     // patches: dynamic-html captures Element.prototype.setAttribute as the
@@ -179,6 +183,9 @@ export function installPatches(
     step("patchDragData", () => patchDragData(targetWindow, cssBack));
     // WebRTC through cyrano's relay only (patches/webrtc.ts).
     step("patchWebRtc", () => patchWebRtc(targetWindow, config.rtc));
+    // WebTransport never around the proxy; a Picture-in-Picture window gets the runtime (patches/browser-windows.ts).
+    step("patchWebTransport", () => patchWebTransport(targetWindow, rewriteOne));
+    step("patchPictureInPicture", () => patchPictureInPicture(targetWindow, config, () => getCurrentBaseUrl()));
     step("patchFunctionConstructor", () => patchFunctionConstructor(targetWindow));
     step("patchDynamicIframeAppend", () => patchDynamicIframeAppend(targetWindow, config, () => getCurrentBaseUrl().href, rewriteOne));
     step("patchHistory", () => patchHistory(targetWindow, rewriteOne, setBaseUrl, unwrapOne, getCurrentBaseUrl));
@@ -221,6 +228,8 @@ export function installPatches(
     step("patchTypedOm", () => patchTypedOm(targetWindow, rewriteOne));
     step("patchWebAnimations", () => patchWebAnimations(targetWindow, rewriteOne));
     step("patchMediaMetadata", () => patchMediaMetadata(targetWindow, rewriteOne, unwrapOne));
+    // A notification's images the browser fetches itself (patches/notification.ts).
+    step("patchNotification", () => patchNotification(targetWindow, rewriteOne, unwrapOne));
     // Before document.cookie is wrapped: it writes with the native setter.
     // The document's cookies, from the session's jar: memory's from its first access.
     step("cookieSnapshot", () => givenSnapshot(targetWindow, config.ck));

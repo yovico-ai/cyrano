@@ -12,6 +12,7 @@ package proxy
 // the session (Chrome keeps such an allowlist too).
 
 import (
+	"context"
 	"html"
 	"net"
 	"net/http"
@@ -170,6 +171,43 @@ func (h *Handler) upgradeNavigation(w http.ResponseWriter, r *http.Request, host
 	w.Header().Set("Location", to)
 	w.WriteHeader(http.StatusTemporaryRedirect)
 	return true
+}
+
+// upgradeAttempt is how long an upgraded navigation's https load has to
+// get its response before it falls back to http, as Chrome's
+// HTTPS-Upgrades does (spec/Upgrades.agda fallbackAfter; measured: a 443
+// that accepts and never answers, Chrome's http request at 3.0 s).
+const upgradeAttempt = 3 * time.Second
+
+type upgradeTimerKey struct{}
+
+// upgradeDeadline gives an upgraded navigation's https request its
+// attempt's limit: cancelled when no response came within it (the error
+// then falls back, upgradeFailed); stopped by the response (modifyResponse).
+func (h *Handler) upgradeDeadline(r *http.Request, target *url.URL) *http.Request {
+	if target.Scheme != "https" || !isMainFrameNavigation(r) {
+		return r
+	}
+	key := upgradeKey(h.sessionOf(r), target.Host)
+	upgrades.mu.Lock()
+	pending := fresh(upgrades.pending, key, upgradePending)
+	upgrades.mu.Unlock()
+	if !pending {
+		return r
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	timer := time.AfterFunc(upgradeAttempt, cancel)
+	return r.WithContext(context.WithValue(ctx, upgradeTimerKey{}, timer))
+}
+
+// upgradeResponded stops an upgraded navigation's attempt timer.
+func upgradeResponded(resp *http.Response) {
+	if resp.Request == nil {
+		return
+	}
+	if t, ok := resp.Request.Context().Value(upgradeTimerKey{}).(*time.Timer); ok {
+		t.Stop()
+	}
 }
 
 // upgradeLoaded ends an upgrade whose https navigation reached a page. A

@@ -50,7 +50,7 @@ export function patchWebSocket(
     // from the browser straight to the origin (round K).
     for (const name of ["WebSocket", "WebSocketStream"]) {
         const native = wrapConstructor<new (...a: unknown[]) => object>(targetWindow, name, (Native, args, newTarget) => {
-            if (!args.length) return nR.construct(Native, args, newTarget as never);
+            if (!args.length || typeof args[0] === "symbol") return nR.construct(Native, args, newTarget as never);
             const raw = String(args[0]);
             const proxied = rewriteOne(raw);
             const origin = pageOrigin();

@@ -20,7 +20,7 @@ export function patchXmlHttpRequest(
     if (!XHR?.prototype) return;
     const proto = XHR.prototype;
     wrapMethod<(...a: unknown[]) => void>(proto, "open", (native, self, args) => {
-        if (args.length < 2) return nR.apply(native, self, args) as void; // the native's own TypeError
+        if (args.length < 2 || typeof args[1] === "symbol") return nR.apply(native, self, args) as void; // the native's own TypeError
         const next = args.slice();
         const given = String(args[1]);
         // (a legacy-encoded document's query in its encoding: spec/Encoding.agda)

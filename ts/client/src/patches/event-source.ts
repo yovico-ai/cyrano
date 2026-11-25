@@ -14,7 +14,7 @@ export function patchEventSource(
     // has "same-origin" credentials (spec Cookies.elementCookies).
     const withMark = (rewriteOne as RewriteOne).withMark;
     const native = wrapConstructor<typeof EventSource>(targetWindow, "EventSource", (Native, args, newTarget) => {
-        if (!args.length) return nR.construct(Native, args, newTarget as typeof EventSource);
+        if (!args.length || typeof args[0] === "symbol") return nR.construct(Native, args, newTarget as typeof EventSource);
         let cred = false;
         try { cred = Boolean((args[1] as { withCredentials?: unknown } | undefined)?.withCredentials); } catch { cred = false; }
         const url = cred && withMark ? withMark(String(args[0]), null, "cred") : rewriteOne(String(args[0]));

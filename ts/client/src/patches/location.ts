@@ -32,8 +32,13 @@ export function patchWindowLocation(
     // (Document.prototype in a browser).
     const doc = targetWindow.document;
     if (doc) {
-        wrapAccessor<string>(doc, "URL", { get: () => wrappedLocation.href });
-        wrapAccessor<string>(doc, "documentURI", { get: () => wrappedLocation.href });
+        // The window's own document reads the location view; another (an
+        // XHR's response document, a DOMParser's) its own URL, unwrapped
+        // (round H: an XHR document read the page's URL).
+        const own = (get: (this: unknown) => string, self: unknown): string =>
+            self === targetWindow.document ? wrappedLocation.href : unwrapOne(ncall(get, self));
+        wrapAccessor<string>(doc, "URL", { get: own });
+        wrapAccessor<string>(doc, "documentURI", { get: own });
         wrapAccessor<string>(doc, "referrer", {
             get: (get, self) => (typeof referrer === "string" ? referrer : unwrapOne(ncall(get, self))),
         });

@@ -26,6 +26,8 @@ import type { ClientConfig } from "../config";
 import { unwrapErrorMessage, unwrapRejection } from "../url/error-text";
 import { patchPerformanceEntryNames } from "../patches/install";
 import { patchTimers } from "../patches/timers";
+import { patchNotification } from "../patches/notification";
+import { patchWebTransport } from "../patches/browser-windows";
 import { isUrlLikeSpecifier, rewriteUrl, unwrapProxiedUrl } from "../url/containment";
 import { metaResolver } from "../wrappers/meta-resolve";
 import { WorkerWrappedLocation } from "../wrappers/worker-location";
@@ -173,6 +175,7 @@ export function initWorker(
         },
         wrap_meta_resolve: metaResolver(config),
         wrap_worker_url: (url) => {
+            if (typeof url === "symbol") return url; // the constructor's own TypeError
             const urlStr = typeof url === "string" ? url : (url != null ? String(url) : null);
             return urlStr ? rewriteOne(urlStr) : url;
         },
@@ -245,9 +248,11 @@ function patchWorkerScope(
     // proxified, and one of a blob: or data: script this worker built gets
     // the runtime and the rewritten source, as in a window (douyin.com's
     // decoder workers ran without it and fetched their origins).
-    patchWorker(realm, rewriteOne, patchBlobWorkerSource(realm, config, () => baseUrl));
+    patchWorker(realm, rewriteOne, patchBlobWorkerSource(realm, config, () => baseUrl), config, () => baseUrl);
     patchFunctionConstructor(realm);
     patchTimers(scope as object);
+    patchNotification(realm, rewriteOne, unwrapOne);
+    patchWebTransport(scope as object, rewriteOne);
     // importScripts is classic-worker-only and synchronous.
     if (typeof scope.importScripts === "function") {
         const proxy = new URL(config.apiBaseURL).origin;

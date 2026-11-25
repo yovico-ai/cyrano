@@ -122,6 +122,8 @@ export function patchFetch(
 
     const nativeFetch = wrapMethod<typeof fetch>(targetWindow, "fetch", (native, self, args) => {
         const [input, ...rest] = args;
+        // (a Symbol: the native's own rejection — String() would take it)
+        if (typeof input === "symbol") return nR.apply(native, self, args) as Promise<Response>;
         const viaRequest = isRequest(input);
         // A Request's URL is the one it holds, read by the native getter
         // (and unwrapped): a page's `url` can be its own (a subclass's

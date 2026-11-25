@@ -18,6 +18,21 @@ import (
 // The same idea as the originals attribute for markup.
 const OriginalHeadersName = "Crn-H"
 
+// StatusTextName is the Crn-H entry of an HTTP/1.x origin's reason phrase.
+const StatusTextName = ":status-text"
+
+// statusPhrase is the reason phrase of an HTTP/1.x response ("" for HTTP/2
+// and /3, which have none — nor directly).
+func statusPhrase(resp *http.Response) string {
+	if resp == nil || resp.ProtoMajor != 1 {
+		return ""
+	}
+	if i := strings.IndexByte(resp.Status, ' '); i >= 0 {
+		return strings.TrimSpace(resp.Status[i+1:])
+	}
+	return ""
+}
+
 // notScriptVisible are headers no script can read from a response, or that
 // belong to the hop, not the response.
 var notScriptVisible = map[string]bool{
@@ -28,8 +43,13 @@ var notScriptVisible = map[string]bool{
 
 // carryOriginalHeaders compares the headers about to go to the browser with
 // those the origin sent, and records the origin's wherever they differ.
-func carryOriginalHeaders(now, sent http.Header) {
+func carryOriginalHeaders(now, sent http.Header, phrase string) {
 	orig := map[string][]string{}
+	// The origin's reason phrase (spec/Carry.agda statusText), under a
+	// name no header can have.
+	if phrase != "" {
+		orig[StatusTextName] = []string{phrase}
+	}
 	for name, was := range sent {
 		if notScriptVisible[name] || name == OriginalHeadersName {
 			continue

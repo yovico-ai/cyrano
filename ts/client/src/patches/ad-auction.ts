@@ -15,6 +15,7 @@
 // refuse (a biddingLogicURL of another origin than the owner) are not
 // judged here.
 
+import { stacked } from "../native/stacked";
 import { nO, nR, ncall } from "../native/intrinsics";
 import { wrapMethod } from "../native/surface";
 
@@ -52,7 +53,7 @@ export function patchAdAuction(targetWindow: Window, pageOrigin: () => string): 
             const answer = joinAnswer(complete, String(owner), pageOrigin());
             if (answer === "native") return nR.apply(native, self, args);
             if (answer === "joined") return done(undefined);
-            return ncall(reject, P, new DE("Permission to join interest group denied.", "NotAllowedError"));
+            return ncall(reject, P, stacked(new DE("Permission to join interest group denied.", "NotAllowedError")));
         });
     }
     if (typeof nO.getOwnPropertyDescriptor(nav, "runAdAuction")?.value === "function") {

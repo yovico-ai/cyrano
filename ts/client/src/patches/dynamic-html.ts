@@ -192,6 +192,7 @@ export function patchDynamicHtml(
         const local = qname.slice(qname.indexOf(":") + 1);
         const name = args[0] === XLINK_NS && local.toLowerCase() === "href" ? "xlink:href" : args[0] == null || args[0] === "" ? qname : null;
         if (name === null) return nR.apply(native, self, args) as void;
+        if (typeof args[2] === "symbol") return nR.apply(native, self, args) as void; // the native's TypeError
         const given = typeof args[2] === "string" ? args[2] : String(args[2]);
         const v = attributeValue(self as Element, name, given, rewriteOne, proxyOrigin);
         if (v === null || v === given) return nR.apply(native, self, args) as void;
@@ -209,6 +210,7 @@ export function patchDynamicHtml(
         }
         // setAttribute stringifies its value; a Trusted Types object (a
         // TrustedScriptURL for script.src, …) is the string it wraps.
+        if (typeof args[1] === "symbol") return nR.apply(native, self, args) as void; // the native's TypeError
         const given = typeof args[1] === "string" ? args[1] : String(args[1]);
         const v = attributeValue(self as Element, args[0], given, rewriteOne, proxyOrigin);
         if (v === null) {
