@@ -397,8 +397,16 @@ and origin are the opener's (`popup-blank-vs-chromium`).
   hints are per original origin (`proxy/client_hints.go`; gaps listed
   there: delegation, `<meta>` Accept-CH, the first cross-site navigation).
   Compression dictionaries are never registered (spec/Dictionary.agda:
-Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS never resumes a
-  session (no `pre_shared_key`), as a first connection.
+Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS resumes
+  sessions as Chrome does (`upstream/resume.go`: tls-client's profiles lack
+  `pre_shared_key`, so it kept no session cache and every connection was a
+  full handshake; now the extension is last, absent while there is no
+  ticket; `TestSessionResumption`, compared with a real Chrome's resumed
+  hello). Tickets are per (session, host) client — never another session's;
+  session-less requests (every unauthenticated user's bucket) resume
+  nothing — and lost when the client is swept (10 min idle) or the
+  session's clients dropped; WebSocket (`tlsdial`) never resumes; Chrome partitions them by top-level site too, as
+  it does connections — ours, pooled per host, are not.
 - **Cloudflare**: x.com, claude.ai, nowsecure.nl pass in real Chrome; the
   managed challenge at scrapingcourse.com/cloudflare-challenge passes
   silently through the proxy (2026-11-18), as direct. Its root cause was

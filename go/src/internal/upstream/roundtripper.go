@@ -260,8 +260,15 @@ func (rt *RoundTripper) clientFor(key string, profile profiles.ClientProfile) (t
 		return e.client, nil
 	}
 	idle := 90 * time.Second
+	// TLS tickets live in the client's session cache, so they never cross
+	// sessions; the session-less bucket ("") is every unauthenticated
+	// user's at once, so it resumes nothing (a shared ticket would link them).
+	hello := profile
+	if sessionOfKey(key) != "" {
+		hello = withResumption(profile)
+	}
 	opts := []tls_client.HttpClientOption{
-		tls_client.WithClientProfile(profile),
+		tls_client.WithClientProfile(hello),
 		// Chrome sends its ClientHello extensions in a new order on every
 		// connection (since 108: TLS ClientHello extension permutation); a
 		// profile's fixed order is one constant full JA3 — a known library's
