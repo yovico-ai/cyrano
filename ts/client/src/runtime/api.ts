@@ -6,6 +6,7 @@
 // stay narrow. Adding a new wrapper means: write the module, import it here,
 // expose it on the returned RewriterApi.
 
+import { applyCoop } from "../patches/coop";
 import { hideSecureContext } from "../native/secure-context";
 import { rewriteSrcdoc } from "../patches/html-rewriter";
 import { navigationUrl } from "../url/js-url";
@@ -189,6 +190,8 @@ export function createRewriterApi(
             if (!secureJudged) {
                 secureJudged = true;
                 try { if (!trustworthy(new URL(full))) hideSecureContext(targetWindow); } catch { /* judged by the URL alone */ }
+                // A popup's first document: severed from its opener as a group switch would (spec/Coop.agda).
+                try { applyCoop(targetWindow, config, new URL(full).origin, new URL(config.apiBaseURL).origin); } catch { /* as it is */ }
             }
         },
 

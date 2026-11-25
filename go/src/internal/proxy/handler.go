@@ -233,6 +233,14 @@ func (h *Handler) serveTarget(w http.ResponseWriter, r *http.Request, target *ur
 		h.opts.Logger.Debug("credentialed subresource blocked", "target", target.Redacted())
 		panic(http.ErrAbortHandler) // a network error, nothing sent
 	}
+	// A request in mode "same-origin" (a worker's script) to another origin
+	// than its document's is a network error (spec/Fetch.agda
+	// sameOriginModeFails): through the proxy every target is same-origin to
+	// the browser, and after a redirect it ran the page it landed on.
+	if from := h.requestingDocument(r); from != nil && sameOriginModeFails(r.Header.Get("Sec-Fetch-Mode"), originOfURL(from), originOfURL(target)) {
+		h.opts.Logger.Debug("same-origin request to another origin", "target", target.Redacted())
+		panic(http.ErrAbortHandler) // a network error, nothing sent
+	}
 	switch h.mixedContent(r, target) {
 	case urlrewrite.MixedBlocked:
 		h.opts.Logger.Debug("mixed content blocked", "target", target.String())
@@ -456,6 +464,7 @@ func (e rewriteError) Unwrap() error { return e.error }
 func (h *Handler) translateResponse(resp *http.Response) error {
 	keepPermissionsPolicy(resp)
 	translatePermissionsPolicy(resp.Header)
+	neutralizeCoop(resp)
 	varyOnInitiator(resp.Header)
 	addStylesheetNosniff(resp)
 	if resp.Header.Get("Alt-Svc") != "" {
@@ -828,6 +837,22 @@ func networkErrorNoRetry(w http.ResponseWriter, r *http.Request) {
 
 // credentialsBlocked (spec/Fetch.agda credentialsBlocked): a URL with
 // userinfo, for anything but a top-level navigation.
+// sameOriginModeFails is spec Fetch.sameOriginModeFails (Sec-Fetch-Mode, origins as serialized).
+func sameOriginModeFails(mode, client, target string) bool {
+	return strings.EqualFold(mode, "same-origin") && client != target
+}
+
+func originOfURL(u *url.URL) string {
+	scheme, host := strings.ToLower(u.Scheme), strings.ToLower(u.Hostname())
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if p := u.Port(); p != "" && !(scheme == "http" && p == "80") && !(scheme == "https" && p == "443") {
+		host += ":" + p
+	}
+	return scheme + "://" + host
+}
+
 func credentialsBlocked(userinfo bool, dest string) bool {
 	return userinfo && !strings.EqualFold(dest, "document")
 }

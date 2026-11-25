@@ -18,13 +18,16 @@
 --   * a fetch directive (CSP3 §6.1) gets the proxy origin, unless it
 --     allows nothing ('none', with at most 'report-sample' beside it) or
 --     already lists it;
---   * the connect policy admits blob: and data: too: the runtime reads a
---     page's blob: or data: worker script (to rewrite it) with an XHR the
---     page does not make, which connect-src governs (Costco: every such
---     read was a violation, reported and fired at the page). A
---     connect-src gains them; a default-src without a connect-src is
---     given one, its own list with them (the others still fall back to
---     default-src unchanged). 'none' alone stays;
+--   * the connect policy admits blob: too: the runtime reads a page's
+--     blob: worker script (to rewrite it) with an XHR the page does not
+--     make, which connect-src governs (Costco: every such read was a
+--     violation, reported and fired at the page). A data: one it decodes
+--     itself (DataUrl.agda), so data: is not admitted: a page's
+--     `fetch("data:,")` is refused as directly (Cloudflare's challenge
+--     probes it: round K). A connect-src gains blob:; a default-src
+--     without a connect-src is given one, its own list with it (the
+--     others still fall back to default-src unchanged). 'none' alone
+--     stays. Known: the page's own `fetch(blobURL)` is then admitted;
 --   * a script/style directive (and default-src) with a hash source: the
 --     rewritten inline scripts cannot match their hashes, and a hash makes
 --     the browser ignore 'unsafe-inline' — its nonces, hashes and
@@ -226,7 +229,7 @@ wsOrigin s = if prefixCI (toList "https://") s then toList "wss://" ++ drop 8 s
 -- What the runtime reads, admitted to a connect list (with the proxy's
 -- WebSocket origin, when there is a proxy origin).
 readable : CspProxy → List Str → List Str
-readable p ws = if noneOnly ws then ws else appendIfAbsent (toList "data:") (appendIfAbsent (toList "blob:") (withWs ws))
+readable p ws = if noneOnly ws then ws else appendIfAbsent (toList "blob:") (withWs ws)
   where
   withWs : List Str → List Str
   withWs vs = if isEmpty (origin p) then vs else appendIfAbsent (wsOrigin (origin p)) vs

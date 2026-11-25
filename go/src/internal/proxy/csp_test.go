@@ -90,7 +90,7 @@ func TestRewriteCSP(t *testing.T) {
 			name:        "proxy origin added to every *-src directive",
 			in:          "default-src 'self'; script-src https://cdn.example.com; img-src *; connect-src 'self'",
 			proxyOrigin: "https://proxy.example.com",
-			want:        "default-src 'self' https://proxy.example.com; script-src https://cdn.example.com https://proxy.example.com; img-src * https://proxy.example.com; connect-src 'self' https://proxy.example.com wss://proxy.example.com blob: data:",
+			want:        "default-src 'self' https://proxy.example.com; script-src https://cdn.example.com https://proxy.example.com; img-src * https://proxy.example.com; connect-src 'self' https://proxy.example.com wss://proxy.example.com blob:",
 		},
 		{
 			name:        "proxy origin not duplicated when already present",
@@ -157,7 +157,7 @@ func TestRewriteCSP(t *testing.T) {
 		{
 			name: "both directives together",
 			in:   "default-src 'self'; trusted-types default; require-trusted-types-for 'script'; script-src 'nonce-abc'",
-			want: "default-src 'self'; trusted-types default " + urlrewrite.TrustedTypesPolicy + "; require-trusted-types-for 'script'; script-src 'nonce-abc'; connect-src 'self' blob: data:",
+			want: "default-src 'self'; trusted-types default " + urlrewrite.TrustedTypesPolicy + "; require-trusted-types-for 'script'; script-src 'nonce-abc'; connect-src 'self' blob:",
 		},
 	}
 

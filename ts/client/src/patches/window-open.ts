@@ -15,7 +15,8 @@ import { navigationUrl } from "../url/js-url";
 import { nR } from "../native/intrinsics";
 import { blobNavigationFor } from "./blob-document";
 import type { RewriteOne } from "./referrer-policy";
-import { crossOriginView } from "../native/cross-origin";
+import { coopOpened, coopSevered, crossOriginView } from "../native/cross-origin";
+import { coopOf } from "../url/coop";
 import { wrapMethod } from "../native/surface";
 import { decodeSource, mapSources } from "../url/features";
 import { injectIntoWindow } from "../runtime/iframe-injection";
@@ -47,6 +48,11 @@ export function patchWindowOpen(targetWindow: Window, rewriteOne: (url: string) 
         // A blob: HTML document the page built opens as its rewritten copy.
         const blobDoc = config ? blobNavigationFor(targetWindow, given, rewriteOne as RewriteOne, new URL(config.apiBaseURL).origin) : null;
         const w = nR.apply(native, self, [blobDoc ?? navigationUrl(given, rewriteOne), ...args.slice(1)]) as Window | null;
+        // Its first document decides whether its group is its own (spec/Coop.agda): it reads the opener's policy.
+        if (w && config && base) {
+            // (both registries made here, in the opener's copy: the popup's finds them through its opener)
+            try { coopSevered(); coopOpened().set(w, { coop: coopOf(config.coop ?? null, true, config.coep === true), origin: base().origin }); } catch { /* none */ }
+        }
         if (/^\s*about:/i.test(given)) giveRuntime(w, targetWindow, config, base);
         // On its way to that URL's origin: it is that origin's already (the
         // popup is still on about:blank when open returns; judged so, it was

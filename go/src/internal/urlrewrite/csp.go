@@ -214,8 +214,10 @@ func allowsNothing(vals []string) bool {
 
 // readableCSP admits to a connect list the proxy's WebSocket origin (a
 // page's sockets go to it, and an https: source does not admit wss:) and
-// what the runtime reads itself: a page's blob: or data: worker script, by
-// an XHR the page does not make (spec readable). 'none' alone stays.
+// what the runtime reads itself: a page's blob: worker script, by an XHR
+// the page does not make (spec readable; a data: one it decodes itself, so
+// data: is not admitted — Cloudflare probes fetch("data:,")). 'none'
+// alone stays.
 func readableCSP(vals []string, proxyOrigin string) []string {
 	if allowsNothing(vals) {
 		return vals
@@ -223,7 +225,7 @@ func readableCSP(vals []string, proxyOrigin string) []string {
 	if proxyOrigin != "" {
 		vals = appendIfAbsent(vals, wsOriginCSP(proxyOrigin))
 	}
-	return appendIfAbsent(appendIfAbsent(vals, "blob:"), "data:")
+	return appendIfAbsent(vals, "blob:")
 }
 
 // wsOriginCSP is the proxy's origin as a WebSocket's (spec wsOrigin).

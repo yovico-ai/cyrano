@@ -32,6 +32,7 @@ import { createHash } from "node:crypto";
 
 const BODY = "window.ran = (window.ran || []).concat(document.currentScript ? document.currentScript.dataset.k : 'dyn');";
 const CSS = "#x { color: rgb(1, 2, 3); }";
+const MOD = "import { v } from './dep.mjs'; window.mod = v; import('./dep2.mjs').then((m) => { window.mod2 = m.v; });";
 const h = (a: string, b: string): string => createHash(a).update(b).digest("base64");
 const b64u = (s: string): string => s.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const S256 = h("sha256", BODY), S384 = h("sha384", BODY), S512 = h("sha512", BODY);
@@ -46,6 +47,7 @@ const page = (port: number): string => "<!doctype html><p id=x>x</p>"
     + `<script data-k="xnc" src="http://localhost:${port}/s.js?xnc" integrity="sha256-${S256}"></script>`
     + `<script data-k="xcors" crossorigin src="http://localhost:${port}/s.js?xcors" integrity="sha256-${S256}"></script>`
     + `<link rel=stylesheet href="/s.css?bad" integrity="${BAD}">`
+    + `<script type=module src="/m/main.mjs" integrity="sha384-${h("sha384", MOD)}"></script>`
     + `<script>
 window.out = new Promise((done) => addEventListener("load", async () => {
   const o = { color: getComputedStyle(document.getElementById("x")).color, idl: document.scripts[0].integrity };
@@ -56,6 +58,8 @@ window.out = new Promise((done) => addEventListener("load", async () => {
   o.dyn = [await add("dynBefore", true, "sha256-${S256}"), await add("dynAfter", false, "sha256-${S256}"), await add("dynBad", false, "${BAD}"), await add("dynBadAttr", true, "${BAD}")];
   o.dynIdl = (() => { const s = document.createElement("script"); s.integrity = "sha384-x"; return [s.integrity, s.getAttribute("integrity")]; })();
   o.ran = (window.ran || []).slice().sort();
+  await new Promise((r) => setTimeout(r, 300));
+  o.mod = [window.mod, window.mod2];
   done(o);
 }));
 </script>`;
@@ -71,6 +75,8 @@ describe.skipIf(!wanted)("Subresource Integrity, in Chromium, through the proxy"
         upstream = createServer((req, res) => {
             const u = new URL(req.url ?? "/", "http://x");
             if (u.pathname === "/s.js") { res.writeHead(200, { "content-type": "text/javascript", "access-control-allow-origin": "*" }); return res.end(BODY); }
+            if (u.pathname === "/m/main.mjs") { res.writeHead(200, { "content-type": "text/javascript" }); return res.end(MOD); }
+            if (u.pathname === "/m/dep.mjs" || u.pathname === "/m/dep2.mjs") { res.writeHead(200, { "content-type": "text/javascript" }); return res.end("export const v = '" + u.pathname + "';"); }
             if (u.pathname === "/s.css") { res.writeHead(200, { "content-type": "text/css" }); return res.end(CSS); }
             res.writeHead(200, { "content-type": "text/html" });
             return res.end(page(port0));
@@ -108,7 +114,7 @@ describe.skipIf(!wanted)("Subresource Integrity, in Chromium, through the proxy"
     it("checks integrity as directly", async () => {
         const direct = await run(`http://127.0.0.1:${port0}/page`);
         const proxied = await run(`${proxyOrigin}/cyrano/http/127.0.0.1:${port0}/page`);
-        expect(direct).toMatchObject({ color: "rgb(0, 0, 0)", idl: CASES.ok });
+        expect(direct).toMatchObject({ color: "rgb(0, 0, 0)", idl: CASES.ok, mod: ["/m/dep.mjs", "/m/dep2.mjs"] });
         expect((direct as { ran: string[] }).ran).not.toContain("bad");
         expect(proxied).toEqual(direct);
     }, 120_000);

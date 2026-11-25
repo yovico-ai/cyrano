@@ -202,3 +202,15 @@ responseType _          _    = basicT
 -- nothing sent. dest: Sec-Fetch-Dest, lowercase.
 credentialsBlocked : Bool → Str → Bool
 credentialsBlocked userinfo dest = userinfo ∧ not (eqStr dest (toList "document"))
+
+-- A request in mode "same-origin" (a worker's script, a SharedWorker's,
+-- fetch's mode "same-origin") to another origin than its client's is a
+-- network error (Fetch "main fetch" step 12: at every fetch of a redirect
+-- chain too). Through the proxy every target is same-origin to the
+-- browser: such a request reached the other origin, and a worker script
+-- redirected off its page's origin ran the page it landed on (telegram.me's
+-- sticker worker was sent to telegram.org's HTML: round J). The proxy
+-- fails it by the client's original origin ("null" for a sandboxed one:
+-- every target differs). Sec-Fetch-Mode names the mode.
+sameOriginModeFails : Str → Str → Str → Bool
+sameOriginModeFails mode client target = eqStr mode (toList "same-origin") ∧ not (eqStr client target)

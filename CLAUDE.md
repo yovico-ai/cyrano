@@ -378,8 +378,10 @@ and origin are the opener's (`popup-blank-vs-chromium`;
   proxy: dzen.ru's SSO post was refused, `csp-form-action-vs-chromium`); the connect policy
   also admits the proxy's WebSocket origin (`wss://` for an https proxy:
   an https: source does not admit wss:, Csp.agda wsOrigin; emeralds.com's
-  chat), blob: and data: (the runtime reads a page's blob worker
-  script with an XHR the page does not make: Costco); framing (frame-ancestors,
+  chat) and blob: (the runtime reads a page's blob worker script with an
+  XHR the page does not make: Costco) — not data:, which the runtime
+  decodes itself (Cloudflare probes `fetch("data:,")`:
+  `csp-connect-data-vs-chromium`; gap: the page's own `fetch(blobURL)`); framing (frame-ancestors,
   X-Frame-Options) is judged by the proxy for the real embedder, checked
   against Chromium (`framing-vs-chromium`). A faithful translation
   (host-sources → proxied path prefixes, rehashed inline scripts) is not
@@ -940,6 +942,16 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   and fails a mismatch, or an opaque response (another origin's in no-cors
   mode), as a network error (`proxy.SRIFails`). `integrity` reads the
   page's value. Gap: an import map's "integrity" section (dropped).
+- **Cross-Origin-Opener-Policy** (spec/Coop.agda; `coop-vs-chromium`):
+  through the proxy two sites that both send `same-origin` match (one
+  origin) and stay one browsing context group. The browser still severs
+  where the values differ; where only the original origins do, a popup's
+  first document is severed by the runtime (`patches/coop.ts`, at its first
+  set_location, from what its opener's `window.open` recorded): its
+  `opener` reads null, its name is cleared, the opener's handle reads
+  closed and drops postMessage. A non-secure document's COOP is told
+  `unsafe-none` (natively ignored). Gaps: later navigations of the popup;
+  a name lookup of the severed window.
 - **CORP / COEP** (spec/Corp.agda): the proxy runs the cross-origin
   resource policy check for no-cors subresource requests by the page's
   original origin and its recorded embedder policy (COEP /
@@ -980,6 +992,13 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   undefined as their text; a Symbol to the native, which throws); only a
   real Trusted Types value stays one (`trustedLike`; rakuten.co.jp's
   pixel; `sink-objects-vs-chromium`).
+- **Mode same-origin** (spec/Fetch.agda sameOriginModeFails;
+  `same-origin-mode-vs-chromium`): a worker's script, fetch's mode
+  "same-origin" — to another origin than the requesting document's is
+  refused by the proxy before it is sent (through the proxy every target
+  is same-origin to the browser: telegram.me's worker, redirected to
+  telegram.org, ran its HTML). Gap: a cors-mode same-origin fetch
+  redirected to another origin is not CORS-checked.
 - **Credentials in a subresource URL** (`http://u:p@host/…`, a user alone
   too): Chromium blocks every such request but a top-level navigation; the
   userinfo travels in the proxified path, so the proxy refuses it

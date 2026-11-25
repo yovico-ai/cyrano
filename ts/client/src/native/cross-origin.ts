@@ -111,6 +111,19 @@ function originalOriginOf(w: unknown, unwrap: (url: string) => string): string |
  * navigating to, when known (an iframe's src).
  */
 /** The document.domain each window set (patches/location.ts): one table for the page tree. */
+/**
+ * Opener policy (spec/Coop.agda): the popups a window opened, with the
+ * opener's policy and origin, until the popup's first document reads them;
+ * and the popups severed from their opener by an emulated group switch
+ * (the browser cannot see it: every site is the proxy's origin).
+ */
+export function coopOpened(): SafeWeakMap<object, { coop: string; origin: string }> {
+    return sharedData("coopOpened", () => new SafeWeakMap<object, { coop: string; origin: string }>());
+}
+export function coopSevered(): SafeWeakSet<object> {
+    return sharedData("coopSevered", () => new SafeWeakSet<object>());
+}
+
 export function documentDomains(): SafeWeakMap<object, string> {
     return sharedData("documentDomains", () => new SafeWeakMap<object, string>());
 }
@@ -229,7 +242,7 @@ function childNamed(t: Window, name: string): Window | undefined {
 function makeView(t: Window, v: Viewer): object {
     const location = makeLocationView(t, v);
     const methods = {
-        postMessage(...a: unknown[]): unknown { return (t.postMessage as (...x: unknown[]) => unknown)(...a); },
+        postMessage(...a: unknown[]): unknown { if (coopSevered().has(t)) return undefined; return (t.postMessage as (...x: unknown[]) => unknown)(...a); },
         close(): void { t.close(); },
         focus(): void { t.focus(); },
         blur(): void { t.blur(); },
@@ -260,7 +273,7 @@ function makeView(t: Window, v: Viewer): object {
             case "top": return crossOriginView(t.top, null, v.win);
             case "opener": return crossOriginView(v.opener ? ncall(v.opener, t) : t.opener, null, v.win);
             case "length": return t.length;
-            case "closed": return t.closed;
+            case "closed": return coopSevered().has(t) ? true : t.closed;
             case "location": return location;
             case "postMessage": case "close": case "focus": case "blur": return fns[p];
             case "then": return undefined;

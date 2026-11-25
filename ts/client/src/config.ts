@@ -41,6 +41,9 @@ export interface ClientConfig {
     rp?: string;
     /** The origin's Permissions-Policy, parsed (spec/Permissions.agda table): document.featurePolicy reads it. */
     pp?: string[][];
+    /** The document's Cross-Origin-Opener-Policy token (secure contexts only; spec/Coop.agda), and whether its embedder policy isolates. */
+    coop?: string;
+    coep?: boolean;
     /**
      * The document's cookies, from the session's jar (spec/CookieJar.agda
      * snapshot): the jar's generation and inbox entries, name and value in

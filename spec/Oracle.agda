@@ -253,6 +253,7 @@ import Canvas
 import Preflight
 import XPath
 import Sri
+import Coop
 open import Html using (ScriptKind; scriptClassic; scriptModule; scriptImportMap; scriptSpeculation; scriptData; scriptKind; documentBase; BaseURL; baseOf′; aboutBlank; beyond)
 
 ------------------------------------------------------------------------
@@ -402,6 +403,10 @@ dispatch op args =
   else if eqStr op (toList "sripasses") then sriPassesReq args
   else if eqStr op (toList "srihonored") then sriHonoredReq args
   else if eqStr op (toList "srifails") then sriFailsReq args
+  else if eqStr op (toList "cooptoken") then coopTokenReq args
+  else if eqStr op (toList "sameoriginmode") then sameOriginModeReq args
+  else if eqStr op (toList "coopof") then coopOfReq args
+  else if eqStr op (toList "coopemulated") then coopEmulatedReq args
   else if eqStr op (toList "rewritemark") then rewriteMarkReq args
   else if eqStr op (toList "disposition") then dispositionReq args
   else if eqStr op (toList "judgeddest") then judgedDestReq args
@@ -726,6 +731,26 @@ dispatch op args =
   sriHonoredReq : List Str → Str
   sriHonoredReq (sv ∷ t ∷ a ∷ rs ∷ []) = out (if Sri.honored (eqStr sv (toList "1")) t a (splitOn (is 32) rs) then toList "yes" else toList "no")
   sriHonoredReq _ = errorReply "BadRequest"
+
+  -- sameoriginmode <Sec-Fetch-Mode> <client origin> <target origin> → yes|no (Fetch.sameOriginModeFails)
+  sameOriginModeReq : List Str → Str
+  sameOriginModeReq (m ∷ c ∷ t ∷ []) = out (if Fetch.sameOriginModeFails m c t then toList "yes" else toList "no")
+  sameOriginModeReq _ = errorReply "BadRequest"
+
+  -- cooptoken <0|1 present> <header value> → the token, or none
+  coopTokenReq : List Str → Str
+  coopTokenReq (pr ∷ v ∷ []) = maybeOut (Coop.coopToken (if eqStr pr (toList "1") then just v else nothing))
+  coopTokenReq _ = errorReply "BadRequest"
+
+  -- coopof <token|-> <secure 0|1> <corp 0|1> → the value's name
+  coopOfReq : List Str → Str
+  coopOfReq (t ∷ sc ∷ cp ∷ []) = out (Coop.coopName (Coop.coopFromToken (if eqStr t (toList "-") then nothing else just t) (eqStr sc (toList "1")) (eqStr cp (toList "1"))))
+  coopOfReq _ = errorReply "BadRequest"
+
+  -- coopemulated <coop a> <origin a> <coop b> <origin b> <proxy origin> → yes|no
+  coopEmulatedReq : List Str → Str
+  coopEmulatedReq (a ∷ oa ∷ b ∷ ob ∷ px ∷ []) = out (if Coop.emulated (Coop.coopNamed a) oa (Coop.coopNamed b) ob px then toList "yes" else toList "no")
+  coopEmulatedReq _ = errorReply "BadRequest"
 
   -- disposition <js|css|-> <0|1 Sec-Fetch-Dest present> <Sec-Fetch-Dest> <0|1 Content-Type present> <Content-Type> <0|1 sniffed>
   dispositionReq : List Str → Str

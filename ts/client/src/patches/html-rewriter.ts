@@ -456,12 +456,13 @@ function allowsNothing(vals: string[]): boolean {
 /**
  * Admitted to a connect list (spec readable): the proxy's WebSocket origin
  * (a page's sockets go to it; an https: source does not admit wss:) and
- * what the runtime reads itself (a page's blob: / data: worker script).
+ * what the runtime reads itself (a page's blob: worker script; a data: one
+ * it decodes, so data: is not admitted — Cloudflare probes fetch("data:,")).
  */
 function readableCsp(vals: string[], proxyOrigin: string): string[] {
     if (allowsNothing(vals)) return vals;
     if (proxyOrigin !== "") vals = appendIfAbsent(vals, wsOriginCsp(proxyOrigin));
-    return appendIfAbsent(appendIfAbsent(vals, "blob:"), "data:");
+    return appendIfAbsent(vals, "blob:");
 }
 
 /** The proxy's origin as a WebSocket's (spec wsOrigin). */

@@ -998,6 +998,18 @@ func pageConfig(base map[string]any, resp *http.Response, target *url.URL) map[s
 	// <meta name=referrer> after it itself.
 	if target != nil {
 		cp["rp"] = string(proxy.PagePolicy(resp, target))
+	// The document's opener policy (spec/Coop.agda): its header's token,
+	// in a secure context only, and whether its embedder policy makes
+	// same-origin same-origin-plus-COEP — the runtime emulates a popup's
+	// severing the browser cannot see (every site is the proxy's origin).
+	if urlrewrite.Trustworthy(target) {
+		if t := urlrewrite.CoopToken(originalCoop(resp)); t != "" {
+			cp["coop"] = t
+			if e := urlrewrite.EmbedderOf(resp.Header.Get("Cross-Origin-Embedder-Policy"), ""); e == urlrewrite.EmbedderRequireCorp || e == urlrewrite.EmbedderCredentialless {
+				cp["coep"] = true
+			}
+		}
+	}
 	// The origin's Permissions-Policy, parsed: the document's featurePolicy
 	// reads it (spec/Permissions.agda table; the browser has the translation).
 	if tb, ok := urlrewrite.PermissionsTable(proxy.OriginalPermissionsPolicy(resp)); ok {
@@ -1085,6 +1097,10 @@ func workerInitHandler(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig) htt
 			"self.$__crn_key__=null;\n"))
 	})
 }
+
+// originalCoop is the response's Cross-Origin-Opener-Policy as the origin
+// sent it (the proxy leaves it, but for a non-secure document's).
+func originalCoop(resp *http.Response) []string { return resp.Header.Values("Cross-Origin-Opener-Policy") }
 
 // originalPolicies are the response's Content-Security-Policy values as the
 // origin sent them (the proxy's header pass has translated the header by

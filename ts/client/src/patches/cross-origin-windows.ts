@@ -10,7 +10,7 @@
 import { SafeMap, nO, nR, ncall } from "../native/intrinsics";
 import { hideOwn, showOwn } from "../native/hidden-globals";
 import { onInserted } from "./dynamic-iframe";
-import { crossOriginView } from "../native/cross-origin";
+import { coopSevered, crossOriginView } from "../native/cross-origin";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 
 /**
@@ -69,7 +69,8 @@ export function patchCrossOriginWindows(targetWindow: Window, ensureRuntime: (fr
         wrapAccessor<unknown>(ME, "source", { get: (get, self) => crossOriginView(ncall(get, self), null, targetWindow) });
     }
     if (nO.getOwnPropertyDescriptor(targetWindow, "opener")) {
-        wrapAccessor<unknown>(targetWindow, "opener", { get: (get, self) => crossOriginView(ncall(get, self), null, targetWindow) });
+        // (a popup severed from its opener by an emulated group switch has none: spec/Coop.agda)
+        wrapAccessor<unknown>(targetWindow, "opener", { get: (get, self) => (coopSevered().has(self as object) ? null : crossOriginView(ncall(get, self), null, targetWindow)) });
     }
     if (nO.getOwnPropertyDescriptor(targetWindow, "frameElement")) {
         wrapAccessor<unknown>(targetWindow, "frameElement", {

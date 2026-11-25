@@ -36,11 +36,29 @@ function tablesOf(win: unknown): Record<string, unknown> | undefined {
     return i && typeof i === "object" ? i.data : undefined;
 }
 
+// The relatives' native accessors, taken when this copy loads: the runtime
+// later puts its views in their place (another origin's opener is the
+// cross-origin view, through which no table can be read — a popup of
+// another site made its own registries, apart from its opener's).
+const relativeGetters: Array<(() => unknown) | undefined> = ["top", "parent", "opener"].map((k) => {
+    try {
+        for (let o: object | null = globalThis; o; o = nO.getPrototypeOf(o) as object | null) {
+            const d = nO.getOwnPropertyDescriptor(o, k);
+            if (d) return d.get ? (d.get as () => unknown) : undefined;
+        }
+    } catch { /* none */ }
+    return undefined;
+});
+
 export function sharedData<T>(key: string, make: () => T): T {
     if (key in tables) return tables[key] as T;
     let found: unknown;
     const g = globalThis as unknown as { top?: unknown; parent?: unknown; opener?: unknown };
-    const relatives: Array<() => unknown> = [() => g.top, () => g.parent, () => g.opener];
+    const relatives: Array<() => unknown> = [
+        () => (relativeGetters[0] ? relativeGetters[0].call(globalThis) : g.top),
+        () => (relativeGetters[1] ? relativeGetters[1].call(globalThis) : g.parent),
+        () => (relativeGetters[2] ? relativeGetters[2].call(globalThis) : g.opener),
+    ];
     for (let i = 0; i < relatives.length && found === undefined; i++) {
         try {
             const other = relatives[i]!();

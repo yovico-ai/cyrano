@@ -32,6 +32,7 @@
 //
 // Known gap: the object URL's origin is the proxy's (blob:http://proxy/…)
 // where natively it is the site's; translating blob: URLs is a follow-up.
+import { readDataUrl } from "../url/data-url";
 import { specifierProxifier } from "./blob-document";
 import { rewriteUrl, type Dest } from "../url/containment";
 import type { RewriteOne } from "./referrer-policy";
@@ -158,6 +159,17 @@ function readScript(targetWindow: Window, url: string): { source: string; type: 
 /** A blob: or data: URL's text and type, read synchronously with the XHR saved at load (undefined when it cannot be). */
 export function readBlob(targetWindow: Window, url: string, mime: string): { source: string; type: string } | undefined {
     if (!/^(blob|data):/i.test(url)) return undefined;
+    // A data: URL is decoded here, not read (spec/Csp.agda readable: the
+    // page's connect policy is not given data:, so a read would be refused).
+    if (/^[\x00-\x20]*data:/i.test(url)) {
+        const d = readDataUrl(url);
+        if (d) {
+            try {
+                const text = new (targetWindow as unknown as { TextDecoder: typeof TextDecoder }).TextDecoder("utf-8").decode(new Uint8Array(d.body));
+                return { source: text, type: d.head === "" ? "text/plain;charset=US-ASCII" : d.head };
+            } catch { /* read it */ }
+        }
+    }
     const s = savedXhr.get(targetWindow);
     if (!s) return undefined;
     try {

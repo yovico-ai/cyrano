@@ -46,6 +46,20 @@ func keepPermissionsPolicy(resp *http.Response) {
 	resp.Request = resp.Request.WithContext(context.WithValue(resp.Request.Context(), ppKey{}, vs))
 }
 
+// neutralizeCoop: a Cross-Origin-Opener-Policy delivered over a document
+// that is not a secure context is ignored (spec/Coop.agda coopOf: HTML
+// obtains none there); through the proxy the browser would see it over
+// https and act on it. It is told unsafe-none (the page reads the origin's
+// value through Crn-H).
+func neutralizeCoop(resp *http.Response) {
+	if resp.Request == nil || resp.Request.URL == nil || len(resp.Header.Values("Cross-Origin-Opener-Policy")) == 0 {
+		return
+	}
+	if !urlrewrite.Trustworthy(resp.Request.URL) {
+		resp.Header.Set("Cross-Origin-Opener-Policy", "unsafe-none")
+	}
+}
+
 func translatePermissionsPolicy(h http.Header) {
 	if vs := h.Values("Permissions-Policy"); len(vs) > 0 {
 		h.Del("Permissions-Policy")

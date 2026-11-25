@@ -184,7 +184,7 @@ func TestRewrite_CrossoriginFontPreloadStaysAnonymous(t *testing.T) {
 // the proxy origin added where sources are allowed, 'none' left alone.
 func TestRewrite_TranslatesCspMeta(t *testing.T) {
 	got := rewrite(t, `<meta http-equiv="content-security-policy" content="default-src 'self'; object-src 'none'; frame-src 'none'; report-uri /r">`)
-	want := `<meta http-equiv="content-security-policy" content="default-src 'self' http://localhost:9081; object-src 'none'; frame-src 'none'; connect-src 'self' http://localhost:9081 ws://localhost:9081 blob: data:">`
+	want := `<meta http-equiv="content-security-policy" content="default-src 'self' http://localhost:9081; object-src 'none'; frame-src 'none'; connect-src 'self' http://localhost:9081 ws://localhost:9081 blob:">`
 	if got != want {
 		t.Errorf("\n got  %s\n want %s", got, want)
 	}
