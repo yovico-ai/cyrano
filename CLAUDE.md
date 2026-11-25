@@ -210,7 +210,10 @@ and origin are the opener's (`popup-blank-vs-chromium`;
 - **Reading markup back** is done for attributes, script/style text
   (set by scripts, or rewritten by the server: the marked edits are taken
   out), an ancestor's `textContent`, a script's text node, and
-  serialization, isEqualNode (Next.js's head manager re-inserted a rewritten
+  serialization, isEqualNode, a Range's cloneContents / extractContents,
+  shadow roots (a declarative one's originals taken when the page reaches
+  it; its innerHTML / getHTML; a host's getHTML with serializableShadowRoots:
+  `shadow-readback-vs-chromium`, `range-readback-vs-chromium`) (Next.js's head manager re-inserted a rewritten
   script it found unequal: washingtonpost.com ran its ads twice)
   (`native/originals.ts`, `patches/read-back.ts`; the server
   carries originals in the `crn-o` attribute, consumed before page scripts

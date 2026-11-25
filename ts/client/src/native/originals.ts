@@ -50,6 +50,10 @@ interface Natives {
     inert: () => Document | null;
     textGet(this: Node): string | null;
     textSet(this: Node, v: string): void;
+    /** The native appendChild: building a serialization box must not run the runtime's insertion fix-ups (they proxify again). */
+    appendChild(this: Node, n: Node): Node;
+    shadowRoot: ((this: Element) => ShadowRoot | null) | undefined;
+    attachShadow: ((this: Element, init: ShadowRootInit) => ShadowRoot) | undefined;
 }
 let nat: Natives | null = null;
 
@@ -86,6 +90,9 @@ export function initOriginals(targetWindow: Window): void {
         cloneNode: N["cloneNode"] as Natives["cloneNode"],
         textGet: text.get as Natives["textGet"],
         textSet: text.set as Natives["textSet"],
+        appendChild: N["appendChild"] as Natives["appendChild"],
+        shadowRoot: accessor(E as object | undefined, "shadowRoot")?.get as Natives["shadowRoot"],
+        attachShadow: E["attachShadow"] as Natives["attachShadow"],
     };
 }
 
@@ -161,11 +168,14 @@ export function forgetAttr(el: Element, name: string): void {
 // element's originals are taken on first reading it (read-back.ts sets
 // this for a document that is not HTML; Go htmlrewrite RewriteXML writes
 // them).
-let consumeOnRead = false;
-export function consumeOriginalsOnRead(): void { consumeOnRead = true; }
+/** (Kept for callers: elements are now always consumed when read.) */
+export function consumeOriginalsOnRead(): void { /* always on */ }
 
 export function originalAttr(el: unknown, name: string): { value: string | null } | undefined {
-    if (consumeOnRead && nat && typeof el === "object" && el !== null && (el as Node).nodeType === 1) {
+    // (Any element read with its originals still on it, not only in an XML
+    // document: a declarative shadow root's markup is parsed into a tree
+    // the load-time consumer never sees.)
+    if (nat && typeof el === "object" && el !== null && (el as Node).nodeType === 1) {
         try { if (ncall(nat.getAttribute, el as Element, ORIGINALS_ATTR) !== null) consume(el); } catch { /* read natively */ }
     }
     if (!recorded.any || !nat || typeof el !== "object" || el === null) return undefined;
@@ -421,8 +431,14 @@ export function asWritten<T extends Node>(node: T): T {
  * own document, with scripting, gives it raw. Each such text is replaced by
  * a token for the serialization and put back, raw, in the result.
  */
-export function serializedAsWritten(node: Node, serialize: (n: Node) => string): string {
+export function serializedAsWritten(node: Node, serialize: (n: Node) => string, withShadows = false): string {
+    // Originals still on the markup (a shadow root's: see originalAttr) are taken first.
+    try { if (typeof (node as Element).querySelector === "function" && (node as Element).querySelector(`[${ORIGINALS_ATTR}]`)) consume(node); } catch { /* as it is */ }
     const clone = asWritten(node);
+    // getHTML asked for shadow roots: a clone has none (shadow roots are not
+    // cloned), and the host's serialization lost them (round J) — each open
+    // root is given back to its copy, as written.
+    if (withShadows && clone !== node) giveShadows(node, clone);
     if (clone === node) return serialize(node);
     const held: string[] = [];
     try {
@@ -500,4 +516,33 @@ function trustedForAttr(el: Element, name: string, value: string): string {
     const kind = n === "srcdoc" ? "HTML" : sStarts(n, "on") ? "Script"
         : (n === "src" && (el.tagName === "SCRIPT" || el.tagName === "EMBED")) || ((n === "data" || n === "codebase") && el.tagName === "OBJECT") ? "ScriptURL" : null;
     return (kind ? trusted(globalThis, kind, value) : value) as string;
+}
+
+/** Appends with the native appendChild (no insertion fix-ups): a box for serializing. */
+export function appendNatively(parent: Node, child: Node): void {
+    if (nat) ncall(nat.appendChild, parent, child); else parent.appendChild(child);
+}
+
+/** Gives each element of `copy` the open shadow root its counterpart in `source` has, its children as written. */
+function giveShadows(source: Node, copy: Node): void {
+    if (!nat || !nat.shadowRoot || !nat.attachShadow) return;
+    const from = elementsOf(source), to = elementsOf(copy);
+    if (from.length !== to.length) return;
+    for (let i = 0; i < from.length; i++) {
+        let root: ShadowRoot | null = null;
+        try { root = ncall(nat.shadowRoot, from[i]!) as ShadowRoot | null; } catch { root = null; }
+        if (!root) continue;
+        try { if (root.querySelector(`[${ORIGINALS_ATTR}]`)) consume(root); } catch { /* as it is */ } // never reached by the page yet
+        try {
+            const r = root as ShadowRoot & { serializable?: boolean; clonable?: boolean };
+            const init = { mode: r.mode, delegatesFocus: r.delegatesFocus, serializable: r.serializable === true, clonable: r.clonable === true } as ShadowRootInit;
+            const dst = ncall(nat.attachShadow, to[i]!, init) as ShadowRoot;
+            for (let c = root.firstChild; c; c = c.nextSibling) {
+                const w = asWritten(c);
+                const put = w === c ? ncall(nat.cloneNode, c, true) : w;
+                giveShadows(c, put);
+                ncall(nat.appendChild, dst, put);
+            }
+        } catch { /* left without it */ }
+    }
 }

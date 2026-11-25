@@ -15,7 +15,7 @@
 
 import { nO, nOP, nR, ncall } from "../native/intrinsics";
 import {
-    ORIGINALS_ATTR, asWritten, consume, consumeOriginalsOnRead, inertDocument, copyOriginals, forgetAttr, mayDiffer, originalAttr, originalText,
+    ORIGINALS_ATTR, appendNatively, asWritten, consume, consumeOriginalsOnRead, inertDocument, copyOriginals, forgetAttr, mayDiffer, originalAttr, originalText,
     serializedAsWritten, textAsWritten,
     isScriptOrStyle,
 } from "../native/originals";
@@ -160,12 +160,28 @@ export function patchReadBack(targetWindow: Window, onElement: (el: Element) => 
             return mayDiffer(raw) ? serializedAsWritten(self as Node, (n) => ncall(get, n) as string) : raw;
         },
     });
+    // Whether a getHTML call serializes shadow roots.
+    const wantsShadows = (o: unknown): boolean => typeof o === "object" && o !== null &&
+        ((o as { serializableShadowRoots?: unknown }).serializableShadowRoots === true || Array.isArray((o as { shadowRoots?: unknown }).shadowRoots));
     if ("getHTML" in E) {
         wrapMethod<(...a: unknown[]) => string>(E, "getHTML", (native, self, args) =>
         {
             const raw = nR.apply(native, self, args) as string;
-            return mayDiffer(raw) ? serializedAsWritten(self as Node, (n) => nR.apply(native, n, args) as string) : raw;
+            return mayDiffer(raw) ? serializedAsWritten(self as Node, (n) => nR.apply(native, n, args) as string, wantsShadows(args[0])) : raw;
         });
+    }
+    // A shadow root the parser filled (<template shadowrootmode>) is a tree
+    // the load-time consumer never sees: its originals are taken when the
+    // page gets hold of it — an open root by shadowRoot, a closed one by
+    // ElementInternals' — and before it is serialized.
+    const ORIG_SEL = "[crn-o]";
+    const takeRoot = (r: unknown): void => {
+        try { if (r && typeof (r as ShadowRoot).querySelector === "function" && (r as ShadowRoot).querySelector(ORIG_SEL)) consume(r); } catch { /* as it is */ }
+    };
+    for (const [name, key] of [["Element", "shadowRoot"], ["ElementInternals", "shadowRoot"]] as const) {
+        const proto = (g as unknown as Record<string, { prototype: object } | undefined>)[name]?.prototype;
+        if (!proto || !nO.getOwnPropertyDescriptor(proto, key)?.get) continue;
+        wrapAccessor<unknown>(proto, key, { get: (get, self) => { const r = ncall(get, self); takeRoot(r); return r; } });
     }
     const SR = g["ShadowRoot"]?.prototype;
     if (SR && ncall(nOP.hasOwnProperty, SR, "innerHTML")) {
@@ -173,6 +189,7 @@ export function patchReadBack(targetWindow: Window, onElement: (el: Element) => 
         // element, whose innerHTML is the same serialization.
         wrapAccessor<unknown>(SR, "innerHTML", {
             get: (get, self) => {
+                takeRoot(self);
                 const raw = ncall(get, self);
                 if (!mayDiffer(raw) || !innerGet) return raw;
                 try {
@@ -181,13 +198,35 @@ export function patchReadBack(targetWindow: Window, onElement: (el: Element) => 
                     const box = (inertDocument() ?? root.ownerDocument).createElement("div");
                     for (let c = root.firstChild; c; c = c.nextSibling) {
                         const w = asWritten(c);
-                        box.appendChild(w === c ? box.ownerDocument.importNode(c, true) : w); // never move the real child
+                        // never move the real child; natively, or the insertion fix-ups proxify the clone again
+                        appendNatively(box, w === c ? box.ownerDocument.importNode(c, true) : w);
                     }
                     return ncall(innerGet, box);
                 } catch {
                     return ncall(get, self);
                 }
             },
+        });
+    }
+    const elGetHTML = (E as Record<string, unknown>)["getHTML"] as ((this: unknown, o?: unknown) => string) | undefined;
+    if (SR && elGetHTML && ncall(nOP.hasOwnProperty, SR, "getHTML")) {
+        // As its innerHTML: its children as written, in a detached box (an
+        // Element's getHTML of the box is the same serialization).
+        wrapMethod<(...a: unknown[]) => string>(SR, "getHTML", (native, self, args) => {
+            takeRoot(self);
+            const raw = nR.apply(native, self, args) as string;
+            if (!mayDiffer(raw)) return raw;
+            try {
+                const root = self as ShadowRoot;
+                const box = (inertDocument() ?? root.ownerDocument).createElement("div");
+                for (let c = root.firstChild; c; c = c.nextSibling) {
+                    const w = asWritten(c);
+                    appendNatively(box, w === c ? box.ownerDocument.importNode(c, true) : w);
+                }
+                return ncall(elGetHTML, box, ...args);
+            } catch {
+                return raw;
+            }
         });
     }
     const XS = g["XMLSerializer"]?.prototype;
@@ -212,6 +251,46 @@ export function patchReadBack(targetWindow: Window, onElement: (el: Element) => 
             if (typeof args[0] === "object" && args[0] !== null) copyOriginals(args[0] as Node, copy, args[1] === true);
             return copy;
         });
+    }
+
+    // ── a range's contents keep their originals ─────────────────────────
+    // cloneContents clones, in tree order, every element the range
+    // intersects below its common ancestor (contained ones deep, partially
+    // contained ones shallow); extractContents moves the contained ones
+    // (they keep their own) and clones the partially contained. So the
+    // fragment's elements pair, in tree order, with the source elements the
+    // range intersects — taken before the native runs (round I: a copy
+    // handler's getSelection().getRangeAt(0).cloneContents() read the
+    // proxified URLs).
+    const RP = g["Range"]?.prototype as Record<string, unknown> | undefined;
+    const cacGet = RP ? nO.getOwnPropertyDescriptor(RP, "commonAncestorContainer")?.get as ((this: unknown) => Node) | undefined : undefined;
+    const intersects = RP?.["intersectsNode"] as ((this: unknown, n: Node) => boolean) | undefined;
+    const qsa = nO.getOwnPropertyDescriptor((g["Element"]?.prototype ?? {}) as object, "querySelectorAll")?.value as ((this: unknown, s: string) => ArrayLike<Element>) | undefined;
+    const fragQsa = nO.getOwnPropertyDescriptor((g["DocumentFragment"]?.prototype ?? {}) as object, "querySelectorAll")?.value as ((this: unknown, s: string) => ArrayLike<Element>) | undefined;
+    if (RP && cacGet && intersects && qsa && fragQsa) {
+        const touched = (range: unknown): Element[] => {
+            const out: Element[] = [];
+            let root: Node;
+            try { root = ncall(cacGet, range); } catch { return out; }
+            if (root.nodeType !== 1 && root.nodeType !== 9 && root.nodeType !== 11) return out;
+            const all = ncall(root.nodeType === 1 ? qsa : (root as unknown as { querySelectorAll: typeof qsa }).querySelectorAll!, root, "*") as ArrayLike<Element>;
+            for (let i = 0; i < all.length; i++) { try { if (ncall(intersects, range, all[i]!)) out.push(all[i]!); } catch { /* skipped */ } }
+            return out;
+        };
+        for (const key of ["cloneContents", "extractContents"] as const) {
+            if (typeof RP[key] !== "function") continue;
+            wrapMethod<(...a: unknown[]) => unknown>(RP, key, (native, self, args) => {
+                const src = mayDiffer("") ? touched(self) : [];
+                const frag = nR.apply(native, self, args) as DocumentFragment;
+                if (!src.length || !frag) return frag;
+                try {
+                    const got = ncall(fragQsa, frag, "*") as ArrayLike<Element>;
+                    if (got.length !== src.length) return frag;
+                    for (let i = 0; i < got.length; i++) if (got[i] !== src[i]) copyOriginals(src[i]!, got[i]!, false);
+                } catch { /* as the native made it */ }
+                return frag;
+            });
+        }
     }
 
     // ── the page's observers never see the originals attribute go ──────
