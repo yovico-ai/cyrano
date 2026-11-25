@@ -44,6 +44,8 @@ export interface ClientConfig {
     /** The document's Cross-Origin-Opener-Policy token (secure contexts only; spec/Coop.agda), and whether its embedder policy isolates. */
     coop?: string;
     coep?: boolean;
+    /** The document's Origin-Agent-Cluster header as sent (spec/Oac.agda). */
+    oac?: string;
     /**
      * The document's cookies, from the session's jar (spec/CookieJar.agda
      * snapshot): the jar's generation and inbox entries, name and value in

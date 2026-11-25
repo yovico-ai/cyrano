@@ -691,3 +691,26 @@ private
   -- A self-closing root runs nothing: no bootstrap.
   ex7 : rw "<svg xmlns=\"http://www.w3.org/2000/svg\" style=\"x\"/>" ≡ toList "<svg xmlns=\"http://www.w3.org/2000/svg\" style=\"D(x)\" crn-o=\"{&quot;style&quot;:&quot;x&quot;}\"/>"
   ex7 = refl
+
+------------------------------------------------------------------------
+-- An XML document styled by XSLT (an <?xml-stylesheet?> whose type is
+-- one Chromium takes as XSL). The transformation's output replaces the
+-- document — the bootstrap goes with it — and loads what it names from
+-- its origins: a stylesheet, a script, images (round I: sitemaps, feeds).
+-- The output keeps the document's policy container, so the proxy gives
+-- such a document a policy admitting the proxy's origin alone ('self'):
+-- what the output loads through the proxy (relative URLs) loads, what it
+-- would load from another origin is refused, never fetched outside it.
+-- (Rewriting the XSL itself — literal result elements, xsl:import, values
+-- taken from the data — is not done.)
+xslType : Str → Bool
+xslType t = any′ (map toList ("text/xml" ∷ "text/xsl" ∷ "application/xml" ∷ "application/xhtml+xml" ∷ "application/rss+xml" ∷ "application/atom+xml" ∷ []))
+  where
+  lower : Str → Str
+  lower = map lowerAscii
+  any′ : List Str → Bool
+  any′ [] = false
+  any′ (x ∷ xs) = eqStr (lower t) x ∨ any′ xs
+
+xslNetPolicy : Str
+xslNetPolicy = toList "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:"

@@ -28,6 +28,10 @@ import (
 
 // Options configures one proxy handler instance.
 type Options struct {
+	// LNASpaceOf, when set, gives a host's address space for Local Network
+	// Access in place of resolving it (tests: every fixture is loopback).
+	LNASpaceOf func(host string) (urlrewrite.AddressSpace, bool)
+
 	// SkipTLSVerify disables upstream TLS certificate validation. Only enable
 	// in dev — production must validate.
 	SkipTLSVerify bool
@@ -253,6 +257,12 @@ func (h *Handler) serveTarget(w http.ResponseWriter, r *http.Request, target *ur
 		h.opts.Logger.Debug("same-origin request to another origin", "target", target.Redacted())
 		panic(http.ErrAbortHandler) // a network error, nothing sent
 	}
+	// Local Network Access (spec/Lna.agda, lna.go): a public document's
+	// request to a loopback or private address, a private one's to loopback.
+	if from := h.requestingDocument(r); from != nil && h.lnaRefused(r, pageKey(from), target.String(), target.Hostname()) {
+		h.opts.Logger.Debug("local network access refused", "target", target.Redacted())
+		panic(http.ErrAbortHandler) // a network error, nothing sent
+	}
 	switch h.mixedContent(r, target) {
 	case urlrewrite.MixedBlocked:
 		h.opts.Logger.Debug("mixed content blocked", "target", target.String())
@@ -362,9 +372,8 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 			*req = *req.WithContext(ctx)
 		}
 
-		if h.opts.Logger.Enabled(req.Context(), slog.LevelDebug) {
-			*req = *req.WithContext(context.WithValue(req.Context(), upstream.ConnInfoKey{}, &upstream.ConnInfo{}))
-		}
+		// (the connection's remote address: a document's address space, lna.go)
+		*req = *req.WithContext(context.WithValue(req.Context(), upstream.ConnInfoKey{}, &upstream.ConnInfo{}))
 
 		// The cookies a direct browser would send this request (cookies.go).
 		h.noteBrowserSession(req, sessionID)
@@ -568,6 +577,7 @@ func (h *Handler) translateResponse(resp *http.Response) error {
 		recordPagePolicy(resp, resp.Request.URL)
 		if dest := strings.ToLower(resp.Request.Header.Get("Sec-Fetch-Dest")); setsPolicy(dest) || (dest == "" && strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/html")) {
 			setUIR(sessionIn(resp.Request), pageKey(resp.Request.URL), declaresUIR)
+			h.recordPageSpace(resp)
 			setEmbedder(sessionIn(resp.Request), pageKey(resp.Request.URL),
 				urlrewrite.EmbedderOf(resp.Header.Get("Cross-Origin-Embedder-Policy"), resp.Header.Get("Document-Isolation-Policy")))
 		}

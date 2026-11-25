@@ -725,3 +725,45 @@ func RewriteXMLDocument(src []byte, cfg *Config) []byte {
 	}
 	return []byte(RewriteXML(string(src), rw, boot))
 }
+
+// XSLType: an <?xml-stylesheet?>'s type Chromium takes as XSL (spec
+// XmlDoc.xslType).
+func XSLType(t string) bool {
+	switch strings.ToLower(t) {
+	case "text/xml", "text/xsl", "application/xml", "application/xhtml+xml", "application/rss+xml", "application/atom+xml":
+		return true
+	}
+	return false
+}
+
+// XSLNetPolicy is the policy an XSLT-styled document is given (spec
+// XmlDoc.xslNetPolicy): the transformation's output keeps it, and loads
+// only through the proxy ('self').
+const XSLNetPolicy = "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:"
+
+// XSLTStyled: the document has an <?xml-stylesheet?> of an XSL type.
+func XSLTStyled(src []byte) bool {
+	toks, ok := xmlTokenize(string(src))
+	if !ok {
+		return false
+	}
+	for _, t := range toks {
+		if t.kind != xPI || t.name != "xml-stylesheet" {
+			continue
+		}
+		d := t.data
+		for k := 0; k+6 <= len(d); k++ {
+			if !strings.HasPrefix(d[k:], "type=") {
+				continue
+			}
+			q := d[k+5]
+			if q != '"' && q != '\'' {
+				continue
+			}
+			if n := strings.IndexByte(d[k+6:], q); n >= 0 && XSLType(d[k+6:k+6+n]) {
+				return true
+			}
+		}
+	}
+	return false
+}

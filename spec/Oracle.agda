@@ -254,6 +254,8 @@ import Preflight
 import XPath
 import Sri
 import Coop
+import Lna
+import Oac
 open import Html using (ScriptKind; scriptClassic; scriptModule; scriptImportMap; scriptSpeculation; scriptData; scriptKind; documentBase; BaseURL; baseOf′; aboutBlank; beyond)
 
 ------------------------------------------------------------------------
@@ -404,6 +406,11 @@ dispatch op args =
   else if eqStr op (toList "srihonored") then sriHonoredReq args
   else if eqStr op (toList "srifails") then sriFailsReq args
   else if eqStr op (toList "cooptoken") then coopTokenReq args
+  else if eqStr op (toList "lnaspace4") then lnaSpace4Req args
+  else if eqStr op (toList "lnarefused") then lnaRefusedReq args
+  else if eqStr op (toList "oacreads") then oacReadsReq args
+  else if eqStr op (toList "xsltype") then oneArg (λ t → if XmlDoc.xslType t then toList "yes" else toList "no") args
+  else if eqStr op (toList "xslnet") then out XmlDoc.xslNetPolicy
   else if eqStr op (toList "sameoriginmode") then sameOriginModeReq args
   else if eqStr op (toList "coopof") then coopOfReq args
   else if eqStr op (toList "coopemulated") then coopEmulatedReq args
@@ -736,6 +743,32 @@ dispatch op args =
   sameOriginModeReq : List Str → Str
   sameOriginModeReq (m ∷ c ∷ t ∷ []) = out (if Fetch.sameOriginModeFails m c t then toList "yes" else toList "no")
   sameOriginModeReq _ = errorReply "BadRequest"
+
+  lnaName : Lna.Space → Str
+  lnaName Lna.spLoopback = toList "loopback"
+  lnaName Lna.spLocal    = toList "local"
+  lnaName Lna.spPublic   = toList "public"
+
+  lnaNamed : Str → Lna.Space
+  lnaNamed s = if eqStr s (toList "loopback") then Lna.spLoopback else if eqStr s (toList "local") then Lna.spLocal else Lna.spPublic
+
+  -- lnaspace4 <a> <b> <c> <d> → loopback|local|public
+  lnaSpace4Req : List Str → Str
+  lnaSpace4Req (a ∷ b ∷ c ∷ d ∷ []) with CookieJar.natOf a | CookieJar.natOf b | CookieJar.natOf c | CookieJar.natOf d
+  ... | just a′ | just b′ | just c′ | just d′ = out (lnaName (Lna.space4 a′ b′ c′ d′))
+  ... | _ | _ | _ | _ = errorReply "BadRequest"
+  lnaSpace4Req _ = errorReply "BadRequest"
+
+  -- lnarefused <doc space> <target space> <navigation 0|1> → yes|no
+  lnaRefusedReq : List Str → Str
+  lnaRefusedReq (d ∷ t ∷ n ∷ []) = out (if Lna.refused (lnaNamed d) (lnaNamed t) (eqStr n (toList "1")) then toList "yes" else toList "no")
+  lnaRefusedReq _ = errorReply "BadRequest"
+
+  -- oacreads <recorded true|false|-> <secure 0|1> <header|-> → true|false
+  oacReadsReq : List Str → Str
+  oacReadsReq (r ∷ sc ∷ h ∷ []) =
+    out (if Oac.reads (if eqStr r (toList "-") then nothing else just (eqStr r (toList "true"))) (eqStr sc (toList "1")) (if eqStr h (toList "-") then nothing else just h) then toList "true" else toList "false")
+  oacReadsReq _ = errorReply "BadRequest"
 
   -- cooptoken <0|1 present> <header value> → the token, or none
   coopTokenReq : List Str → Str

@@ -213,6 +213,12 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				cfg.ClientPassthrough["xb"] = true
 			}
 			documentCookies(cfg.ClientPassthrough, cfg.ExternalBootstrap, jar, resp, target)
+			// Styled by XSLT: its output replaces the document (and the
+			// bootstrap) and keeps its policy — loads only through the
+			// proxy (spec XmlDoc.xslNetPolicy).
+			if htmlrewrite.XSLTStyled(body) {
+				resp.Header.Add("Content-Security-Policy", htmlrewrite.XSLNetPolicy)
+			}
 			replaceBody(resp, htmlrewrite.RewriteXMLDocument(body, &cfg))
 
 		case kindHTML:
@@ -1014,7 +1020,12 @@ func pageConfig(base map[string]any, resp *http.Response, target *url.URL) map[s
 				}
 			}
 		}
-		// The origin's Permissions-Policy, parsed: the document's featurePolicy
+		// Its Origin-Agent-Cluster, as sent (spec/Oac.agda): the runtime answers
+	// originAgentCluster by original origin (the browser keys the proxy's).
+	if v := resp.Header.Values("Origin-Agent-Cluster"); len(v) > 0 {
+		cp["oac"] = strings.TrimSpace(strings.Join(v, ", "))
+	}
+	// The origin's Permissions-Policy, parsed: the document's featurePolicy
 		// reads it (spec/Permissions.agda table; the browser has the translation).
 		if tb, ok := urlrewrite.PermissionsTable(proxy.OriginalPermissionsPolicy(resp)); ok {
 			cp["pp"] = tb

@@ -126,6 +126,12 @@ element's originals on first reading it (`consumeOriginalsOnRead`).
 pokemon-vortex.com's `<object>` SVG logo loaded its font from the origin
 (`svg-document-vs-chromium`: the real server, Chromium, direct vs proxied).
 An SVG requested as an image is left as it is (images load nothing).
+A document styled by XSLT (an `<?xml-stylesheet?>` of an XSL type) is
+given a policy admitting the proxy alone (spec/XmlDoc.agda xslNetPolicy;
+`xslt-vs-chromium`): the transformation's output replaces it and keeps
+that policy, so what the output names from another origin is refused
+instead of escaping. Gaps: the output is not rewritten; the XSLTProcessor
+API.
 
 
 By what the request is for, never by its Content-Type, which the proxy
@@ -998,6 +1004,19 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   undefined as their text; a Symbol to the native, which throws); only a
   real Trusted Types value stays one (`trustedLike`; rakuten.co.jp's
   pixel; `sink-objects-vs-chromium`).
+- **originAgentCluster** (spec/Oac.agda; `origin-agent-cluster-vs-chromium`):
+  the first document of an original origin in a browsing context group
+  decides (`?0` false, else true; not a secure context: false); the
+  runtime keeps that table for the group (sharedData) — through the proxy
+  the first proxied document had decided for every site.
+- **Local Network Access** (spec/Lna.agda; `proxy/lna.go`): through the
+  proxy Chromium never judged a request, so a public site's page reached
+  loopback and private addresses (the proxy host's own services, routers,
+  cloud metadata). The proxy records each document's address space (the
+  address its response came over) and refuses a subresource request whose
+  target resolves less public — before it is sent; Chromium would ask the
+  user, the proxy cannot. A document of the internal network may reach it.
+  Navigations are not judged.
 - **Mode same-origin** (spec/Fetch.agda sameOriginModeFails;
   `same-origin-mode-vs-chromium`): a worker's script, fetch's mode
   "same-origin" — to another origin than the requesting document's is
