@@ -7,6 +7,8 @@
 // expose it on the returned RewriterApi.
 
 import { hideSecureContext } from "../native/secure-context";
+import { rewriteSrcdoc } from "../patches/html-rewriter";
+import { navigationUrl } from "../url/js-url";
 import { trustworthy } from "../cookies/rfc";
 import { nO, nR, sStarts } from "../native/intrinsics";
 import { blobScriptFor, dataScriptFor } from "../patches/blob-document";
@@ -201,7 +203,7 @@ export function createRewriterApi(
             //   $rewriter.wrap_set_location(location, function(v){location=v;}).value = newUrl
             // A local binding gets what the page assigns, as is.
             set value(v: string) {
-                setter(loc === wrappedLocation || isLocationObject(loc) ? rewriteOne(v) : v);
+                setter(loc === wrappedLocation || isLocationObject(loc) ? navigationUrl(String(v), rewriteOne) : v);
             },
             // The getter is required by the type but server-rewritten code
             // never reads it. Return the base URL to satisfy TS without lying
@@ -299,6 +301,10 @@ export function createRewriterApi(
         // (`scriptUrl`, passed by the server-side rewriter), not the page's.
         // The import's rejection names the page's URL, as natively (url/error-text.ts).
         wrap_import_result: (p) => unwrapRejection(p, new URL(config.apiBaseURL).origin, (u) => unwrapProxiedUrl(u, config), pageDOMException),
+        // A javascript: URL's completion value (spec/JsUrl.agda): a string
+        // becomes the new document, so it is rewritten as one, with the
+        // bootstrap; anything else as it is.
+        js_url_result: (_target, r) => (typeof r === "string" ? rewriteSrcdoc(r, rewriteOne, initialBaseUrl.origin, buildBootstrap) : r),
         wrap_import_arg: (specifier, scriptUrl) => {
             // import() takes the string of whatever it is given: a URL object
             // (`import(new URL("/a.js", import.meta.url))`: Vite, Yext's

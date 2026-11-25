@@ -73,3 +73,24 @@ func TestSpecConformance_DataDocument(t *testing.T) {
 		}
 	})
 }
+
+func TestSpecConformance_DataDocKind(t *testing.T) {
+	oracle := specoracle.Need(t)
+	heads := []string{"", "text/html", "image/svg+xml", "IMAGE/SVG+XML", " image/svg+xml ", "image/svg+xml;charset=utf-8", "application/xhtml+xml",
+		"text/xml", "application/xml", "application/rss+xml", "text/plain", "image/svg+xml;base64", "image/svgxml"}
+	bodies := []string{"", "<svg/>", "PHN2Zy8+", "%3Csvg%2F%3E", "%FF"}
+	rapid.Check(t, func(rt *rapid.T) {
+		u := "data:" + rapid.SampledFrom(heads).Draw(rt, "head") + "," + rapid.SampledFrom(bodies).Draw(rt, "body")
+		want, _, err := oracle.Ask("datadockind", u)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		got := DataDocKind(u)
+		if got == "" {
+			got = "no"
+		}
+		if got != want {
+			rt.Fatalf("DataDocKind(%q) = %s, spec %s", u, got, want)
+		}
+	})
+}

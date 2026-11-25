@@ -229,8 +229,11 @@ and origin are the opener's (`popup-blank-vs-chromium`).
   CSSOM reads back (`patches/cssom-read.ts`, `css-style-declaration.ts`):
   `StyleSheet#href`, an `@import`'s href, rule `cssText`, declarations
   (`style`, `getComputedStyle`: views whose reads unwrap) name the page's
-  URLs — exact for computed values, a relative URL the page wrote reads
-  back absolute; a sheet of another origin fetched without CORS (an
+  URLs — computed values absolute, specified ones as the page wrote them
+  (relative stays relative) wherever the runtime saw the text written: CSS
+  it rewrote, the server's originals of a `<style>` and a style attribute
+  paired URL by URL (`css/rewriter.ts` writtenUrl; `css-written-urls-vs-chromium`;
+  gap: a `<link>`ed sheet's rules read absolute); a sheet of another origin fetched without CORS (an
   `@import` of another origin in any sheet) throws Chromium's
   SecurityError on `cssRules` & co (`cssom-read-vs-chromium`).
 - **localStorage, each site its own quota** (spec/LocalStore.agda,
@@ -245,7 +248,10 @@ and origin are the opener's (`popup-blank-vs-chromium`).
   from the native store read as missing for the first moments of the
   site's next load, until IndexedDB answers. A clear() reaches another tab as one
   event with key null, as natively (a marker brackets its removals:
-  `storage-clear-event-vs-chromium`). Web Locks names and the Origin Private File System are per
+  `storage-clear-event-vs-chromium`). A storage event never makes a
+  partition: making one writes the store, and a document that writes in
+  the middle of another tab's burst of writes is not given the rest of its
+  events by Chromium (a tab heard only the first of several). Web Locks names and the Origin Private File System are per
   partition too (spec/Storage.agda lockName, opfsDir: the page's root is
   its key's directory of the real one, named ""; `web-locks-vs-chromium`).
   sessionStorage stays native (prefixed; a native refusal names the page's
@@ -511,8 +517,15 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   a refused compile is not retried. A fetch preload keeps its
   crossorigin (Attrs.agda crossoriginValue: Spotify fetched its JSON twice).
   Trusted Types gaps: a page's *default* policy is handed the rewritten
-  text (eval's and a string timer's); `javascript:` URLs are not sinks the
-  runtime handles. Code given to `setTimeout` / `setInterval` as a string
+  text (eval's and a string timer's). A `javascript:` URL's code goes
+  through the rules (spec/JsUrl.agda; a URL attribute in both runtimes,
+  the client's location setters and window.open): its last top-level
+  expression statement's value is handed to `js_url_result`, which makes a
+  string — the frame's new document — a rewritten one with the bootstrap
+  (it loaded from the origin; `js-url-document-vs-chromium`); written back
+  percent-encoded where the URL parser would strip, read back as written.
+  Limits: a completion value from another kind of last statement (`if`,
+  a block) is not caught; XML documents' javascript: URLs are left. Code given to `setTimeout` / `setInterval` as a string
   (or an object: converted once) is rewritten as global code, windows and
   workers (`patches/timers.ts`); `Function` converts each argument once,
   as natively, an object body rewritten too (`string-code-vs-chromium`).
@@ -615,8 +628,9 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   document (iframe/frame src, object data, embed src; markup the server
   sends or the runtime's setters) gets it rewritten as a srcdoc is, in a
   data: URL again, its runtime told the original data: URL
-  (spec/Frames.agda dataDocument; `data-frame-vs-chromium`); an SVG one
-  is not rewritten yet.
+  (spec/Frames.agda dataDocument; `data-frame-vs-chromium`); an SVG,
+  XHTML or XML one as XML (dataDocKind; the client's XML rewriter,
+  `xml/rewriter.ts`, is a port of Go's, checked against spec/XmlDoc.agda).
 - **Turnstile on a page's main thread** (techcrunch.com, 2026-11-20):
   direct, its frame is another process; proxied, every frame shares the
   page's thread, so what its interpreter costs the page feels. It froze
@@ -786,8 +800,13 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS nev
   Chromium's framebusting SecurityError (`framebusting-vs-chromium`);
   `navigation.entries()` lists the page's own run of same-origin entries
   only, `index` / `canGoBack` / `back()` by it
-  (`navigation-entries-vs-chromium`). Gap: a child frame by name
-  (`window.kid`).
+  (`navigation-entries-vs-chromium`). A child frame by name (`window.kid`,
+  bare `kid`) is the same view: Chromium gives Window.prototype and the
+  named properties object immutable prototypes, so it is an accessor on
+  Window.prototype per child name, hidden from reflection, kept in step at
+  insertions, frame loads and name changes (`patchNamedFrames`;
+  `named-frames-vs-chromium`). Limit: a child that renames itself shows by
+  its new name at the next of those.
 - **Start and end tags the rules leave alone go out as written** (byte for
   byte: line breaks, attribute text and encoding, spelling). Rewritten
   CSS keeps each URL's form where it can: a url token unquoted, a string in

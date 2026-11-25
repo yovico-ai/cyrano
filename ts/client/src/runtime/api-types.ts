@@ -50,6 +50,8 @@ export interface RewriterApi {
     wrap_import_arg(specifier: unknown, scriptUrl?: unknown): unknown;
     /** R7: import()'s promise, its rejection's message naming the page's URL. */
     wrap_import_result<T>(p: T): T;
+    /** A javascript: URL's completion value: a string rewritten as a document (spec/JsUrl.agda). */
+    js_url_result(target: unknown, r: unknown): unknown;
     /** R15: import.meta.resolve, resolving as import() does and giving the original URL. */
     wrap_meta_resolve(meta: unknown): unknown;
     wrap_worker_url(url: unknown): unknown;

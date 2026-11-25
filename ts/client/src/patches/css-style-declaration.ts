@@ -38,6 +38,7 @@ export function patchCssStyleDeclaration(
     targetWindow: Window,
     rewriteOne: (url: string) => string,
     readBack: (text: string) => string = (t) => t,
+    readBackWritten: (text: string) => string = readBack,
 ): void {
     const ctor = (targetWindow as unknown as { CSSStyleDeclaration?: { prototype: object } }).CSSStyleDeclaration;
     let proto: object | null = null;
@@ -51,10 +52,12 @@ export function patchCssStyleDeclaration(
 
     // First: every member of the declaration's prototype accepts a view as
     // `this` (the URL patches below wrap these).
-    acceptViews(proto, readBack);
+    // A computed value reads back absolute (as natively); a specified one as written.
+    const back = (r: string, decl: unknown): string => (computed.has(decl as object) ? readBack(r) : readBackWritten(r));
+    acceptViews(proto, back);
     patchSetProperty(proto, rewriteOne);
     patchCssTextSetter(proto, rewriteOne);
-    patchStyleViews(targetWindow, rewriteOne, readBack);
+    patchStyleViews(targetWindow, rewriteOne, back);
     // The named properties (backgroundImage …) are defined on the
     // declaration's most-derived prototype — in current Chrome a subclass
     // (CSSStyleProperties), not CSSStyleDeclaration — so they are looked up
@@ -177,7 +180,10 @@ export function mayHoldUrl(value: string): boolean {
 // What a declaration reads is read back (readBack): a proxified URL as the
 // page's — a computed value exactly (it is absolute natively); a specified
 // one the page wrote relative reads back absolute (a known gap).
-function viewOf(decl: unknown, rewriteOne: (url: string) => string, readBack: (text: string) => string): unknown {
+// The declarations getComputedStyle handed out.
+const computed = new SafeWeakSet<object>();
+
+function viewOf(decl: unknown, rewriteOne: (url: string) => string, readBack: (text: string, decl: unknown) => string): unknown {
     if (typeof decl !== "object" || decl === null || reals.has(decl)) return decl;
     let v = views.get(decl);
     if (!v) {
@@ -190,7 +196,7 @@ function viewOf(decl: unknown, rewriteOne: (url: string) => string, readBack: (t
             },
             get: (target, p, receiver) => {
                 const r = nR.get(target, p, receiver === v ? target : receiver);
-                return typeof r === "string" ? readBack(r) : r;
+                return typeof r === "string" ? readBack(r, target) : r;
             },
             defineProperty: (target, p, d) => {
                 if (typeof p === "string" && "value" in d && typeof d.value === "string" && mayHoldUrl(d.value)) {
@@ -206,17 +212,17 @@ function viewOf(decl: unknown, rewriteOne: (url: string) => string, readBack: (t
 }
 
 /** Every method and accessor of `proto` called on a view acts on the declaration. */
-function acceptViews(proto: object, readBack: (text: string) => string): void {
-    const back = (r: unknown): unknown => (typeof r === "string" ? readBack(r) : r);
+function acceptViews(proto: object, readBack: (text: string, decl: unknown) => string): void {
+    const back = (r: unknown, self: unknown): unknown => (typeof r === "string" ? readBack(r, unview(self)) : r);
     for (const key of nR.ownKeys(proto)) {
         if (key === "constructor") continue;
         const d = nO.getOwnPropertyDescriptor(proto, key);
         if (!d || !d.configurable) continue;
         if (typeof d.value === "function") {
-            wrapMethod<(...a: unknown[]) => unknown>(proto, key, (native, self, args) => back(nR.apply(native, unview(self), args)));
+            wrapMethod<(...a: unknown[]) => unknown>(proto, key, (native, self, args) => back(nR.apply(native, unview(self), args), self));
         } else if (d.get || d.set) {
             wrapAccessor<unknown>(proto, key, {
-                ...(d.get ? { get: (get: (this: unknown) => unknown, self: unknown) => back(ncall(get, unview(self))) } : {}),
+                ...(d.get ? { get: (get: (this: unknown) => unknown, self: unknown) => back(ncall(get, unview(self)), self) } : {}),
                 ...(d.set ? { set: (set: (this: unknown, v: unknown) => void, self: unknown, value: unknown) => ncall(set, unview(self), value) } : {}),
             });
         }
@@ -224,7 +230,7 @@ function acceptViews(proto: object, readBack: (text: string) => string): void {
 }
 
 /** `style` getters hand out views; the `style` setter (cssText) is rewritten. */
-function patchStyleViews(targetWindow: Window, rewriteOne: (url: string) => string, readBack: (text: string) => string): void {
+function patchStyleViews(targetWindow: Window, rewriteOne: (url: string) => string, readBack: (text: string, decl: unknown) => string): void {
     const g = targetWindow as unknown as Record<string, { prototype: object } | undefined>;
     for (const name of ["HTMLElement", "SVGElement", "MathMLElement", "CSSStyleRule", "CSSPageRule", "CSSFontFaceRule", "CSSKeyframeRule", "CSSNestedDeclarations"]) {
         const proto = g[name]?.prototype;
@@ -239,6 +245,10 @@ function patchStyleViews(targetWindow: Window, rewriteOne: (url: string) => stri
     }
     // getComputedStyle's declaration too: its values read back.
     if (typeof nO.getOwnPropertyDescriptor(targetWindow, "getComputedStyle")?.value === "function") {
-        wrapMethod<(...a: unknown[]) => unknown>(targetWindow, "getComputedStyle", (native, self, args) => viewOf(nR.apply(native, self, args), rewriteOne, readBack));
+        wrapMethod<(...a: unknown[]) => unknown>(targetWindow, "getComputedStyle", (native, self, args) => {
+            const d = nR.apply(native, self, args) as unknown;
+            if (typeof d === "object" && d !== null) computed.add(d);
+            return viewOf(d, rewriteOne, readBack);
+        });
     }
 }

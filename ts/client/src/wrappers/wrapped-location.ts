@@ -18,6 +18,7 @@
 //   * ancestorOrigins is a Proxy of the real DOMStringList, answering the
 //     ancestors' original origins.
 
+import { navigationUrl } from "../url/js-url";
 import { SafeSet, nO, nOP, nR, ncall, aIncludes } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
 import { rewriteUrl, unwrapProxiedUrl, type Dest } from "../url/containment";
@@ -48,7 +49,7 @@ export interface LocationViewOptions {
 
 export function makeLocationView(real: Location, o: LocationViewOptions): Location {
     const navigate = (method: "assign" | "replace", url: string): void => {
-        real[method](rewriteUrl(String(url), o.base(), o.config, undefined, o.childFrame?.()));
+        real[method](navigationUrl(String(url), (u) => rewriteUrl(u, o.base(), o.config, undefined, o.childFrame?.())));
     };
     const setPart = (part: Part, value: string): void => {
         const next = new URL(o.base().href);

@@ -62,6 +62,13 @@ type Options struct {
 	// stall an inspector.
 	StripDebugger bool
 
+	// JSURL: the source is a javascript: URL's code (spec/JsUrl.agda): the
+	// value of its last top-level expression statement — the script's
+	// completion value, which a string makes the new document — is handed
+	// to the runtime (js_url_result), which rewrites a string as a document.
+	// Not for `void …` or a literal that is no string (javascript:void(0)).
+	JSURL bool
+
 	// DebugR5At, when set, limits R5 to the accesses whose `[` is at an
 	// offset it accepts (development aid: bisecting a script's edits).
 	DebugR5At func(pos int) bool
@@ -136,7 +143,7 @@ func mayEdit(src []byte) bool {
 }
 
 func Rewrite(src []byte, opts Options) []byte {
-	if alreadyRewritten(src) || !mayEdit(src) {
+	if alreadyRewritten(src) || !opts.JSURL && !mayEdit(src) {
 		return src
 	}
 	edits, ok := jsEdits(src, &opts)

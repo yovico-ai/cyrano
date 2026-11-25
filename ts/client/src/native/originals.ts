@@ -285,6 +285,11 @@ export function originalText(el: unknown): string | undefined {
  * Moves the originals attribute of `root` and its descendants into the
  * store, removing it from the elements.
  */
+// Told of CSS the server rewrote, as written and as it is now (a <style>'s
+// text, a style attribute): css/rewriter.ts pairWrittenCss.
+let cssOriginal: ((was: string, now: string) => void) | null = null;
+export function onCssOriginal(fn: (was: string, now: string) => void): void { cssOriginal = fn; }
+
 export function consume(root: unknown): void {
     if (!nat || typeof root !== "object" || root === null) return;
     const r = root as Partial<Element> & { querySelectorAll?: (s: string) => ArrayLike<Element> };
@@ -300,8 +305,15 @@ export function consume(root: unknown): void {
             if (was !== null && typeof was !== "string") continue;
             // The element's text as written (a <style> the server rewrote:
             // Go htmlrewrite withTextOriginal).
-            if (name === "#text") { if (typeof was === "string") recordElementText(el, was); continue; }
-            recordAttr(el, name, ncall(nat!.getAttribute, el, name), was);
+            if (name === "#text") {
+                if (typeof was !== "string") continue;
+                if (cssOriginal && el.localName === "style") { try { cssOriginal(was, ncall(nat!.textGet, el) as string); } catch { /* none */ } }
+                recordElementText(el, was);
+                continue;
+            }
+            const now = ncall(nat!.getAttribute, el, name);
+            if (cssOriginal && typeof was === "string" && typeof now === "string" && lower(name) === "style") { try { cssOriginal(was, now); } catch { /* none */ } }
+            recordAttr(el, name, now, was);
         }
     };
     if (r.nodeType === 1) one(r as Element);

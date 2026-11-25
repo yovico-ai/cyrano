@@ -4,7 +4,8 @@
 // through the real proxy (round I: its markup was unrewritten and it had
 // no runtime — its images and fetches went to their origins). Now its
 // document is rewritten as a srcdoc is, in a data: URL again (spec
-// Frames.dataDocument; server markup and the runtime's setters alike): every
+// Frames.dataDocument, dataDocKind — an SVG one as XML; server markup and the
+// runtime's setters alike): every
 // request goes through the proxy, and the frame reads its own origin
 // ("null") and its data: URL as directly.
 import { createRequire } from "node:module";
@@ -41,15 +42,19 @@ describe.skipIf(!wanted)("frames given data: documents, in Chromium, through the
             const k = u.searchParams.get("k");
             if (k) { got.push(k); res.writeHead(200, { "content-type": "image/gif", "access-control-allow-origin": "*" }); return res.end(Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64")); }
             const b = `http://localhost:${port0}`;
+            const svg = (n: string): string => `<svg xmlns="http://www.w3.org/2000/svg"><image href="${b}/i.gif?k=${n}img" width="1" height="1"/><script><![CDATA[fetch("${b}/f?k=${n}fetch"); parent.postMessage({ n: "${n}", origin: String(self.origin), loc: location.href.slice(0, 24) }, "*");]]></script></svg>`;
             const doc = (n: string): string => `<img src="${b}/i.gif?k=${n}img"><script>fetch("${b}/f?k=${n}fetch"); parent.postMessage({ n: "${n}", origin: String(self.origin), loc: location.href.slice(0, 24) }, "*");</script>`;
             res.writeHead(200, { "content-type": "text/html" });
             return res.end(`<!doctype html><script>window.out = []; addEventListener("message", (e) => out.push(e.data.n + " " + e.data.origin + " " + e.data.loc));</script>
 <iframe src="data:text/html,${encodeURIComponent(doc("static"))}"></iframe>
 <iframe src="data:text/html;base64,${Buffer.from(doc("b64")).toString("base64")}"></iframe>
 <object data="data:text/html,${encodeURIComponent(doc("object"))}"></object>
+<iframe src="data:image/svg+xml,${encodeURIComponent(svg("svg"))}"></iframe>
+<embed type="image/svg+xml" src="data:image/svg+xml,${encodeURIComponent(svg("svgembed"))}">
 <script>
 const f = document.createElement("iframe"); f.src = "data:text/html," + encodeURIComponent(${JSON.stringify(doc("setter")).replace(/<\//g, "<\\/")}); document.body.append(f);
 const g = document.createElement("iframe"); g.setAttribute("src", "data:text/html," + encodeURIComponent(${JSON.stringify(doc("attr")).replace(/<\//g, "<\\/")})); document.body.append(g);
+const h = document.createElement("iframe"); h.src = "data:image/svg+xml," + encodeURIComponent(${JSON.stringify(svg("svgset")).replace(/<\//g, "<\\/")}); document.body.append(h);
 </script>`);
         });
         await new Promise<void>((r) => upstream.listen(0, "0.0.0.0", () => r()));
@@ -92,7 +97,7 @@ const g = document.createElement("iframe"); g.setAttribute("src", "data:text/htm
     it("load through the proxy, and read as directly", async () => {
         const direct = await run(false);
         const proxied = await run(true);
-        const names = ["attr", "b64", "object", "setter", "static"];
+        const names = ["attr", "b64", "object", "setter", "static", "svg", "svgembed", "svgset"];
         expect(direct.out.map((x) => x.split(" ").slice(0, 2).join(" "))).toEqual(names.map((n) => n + " null"));
         expect(direct.got).toEqual(names.flatMap((n) => [n + "fetch", n + "img"]).sort());
         expect(proxied.out).toEqual(direct.out);

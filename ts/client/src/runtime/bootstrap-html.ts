@@ -8,6 +8,7 @@
 
 import { sPadStart } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
+import { xmlBootstrap, type XmlNs } from "../xml/rewriter";
 
 // The runtime did not load (its request failed): the document stops
 // loading, so none of its scripts runs without the runtime and reaches an
@@ -33,6 +34,19 @@ export function buildBootstrapHtml(config: ClientConfig, href: string): string {
         // Both bootstrap scripts leave the document once they have run (Go: inject.go).
         `(function(s,p){p=s.previousElementSibling;if(p&&p.src&&p.tagName==="SCRIPT")p.remove();s.remove()})(document.currentScript);</script>`
     );
+}
+
+/**
+ * The bootstrap for an XML document (SVG, XHTML root) at `href`: the same
+ * two steps as script elements of the root's namespace (Go XMLBootstrap).
+ */
+export function buildXmlBootstrap(config: ClientConfig, ns: XmlNs, href: string): string {
+    const { referrer: _creatorsOwn, ...childConfig } = config;
+    void _creatorsOwn;
+    const init = `${FAIL_CLOSED}window.$rewriter=window.$rewriter_init(window,${htmlSafeJson(childConfig)}).inject();` +
+        `$rewriter.set_location(${jsStringLiteral(href)});` +
+        `(function(s,p){p=s.previousElementSibling;if(p&&p.localName==="script")p.remove();s.remove()})(document.currentScript);`;
+    return xmlBootstrap(ns, config.apiBaseURL + config.source, init);
 }
 
 // A double-quoted JS string literal safe inside a <script> block: escapes

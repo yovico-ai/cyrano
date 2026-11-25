@@ -22,6 +22,9 @@ func TestMayEdit(t *testing.T) {
 	}
 	edited := 0
 	for _, c := range cases {
+		if strings.HasPrefix(c[0], "jsUrl") {
+			continue // the option bypasses mayEdit
+		}
 		if c[1] == c[2] {
 			continue
 		}

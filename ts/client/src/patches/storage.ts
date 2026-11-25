@@ -35,7 +35,7 @@ import { getDomain } from "tldts";
 import { SafeWeakMap, SafeWeakSet, nO, nR, ncall, sStarts, sIncludes } from "../native/intrinsics";
 import { internalsOf } from "../native/internals";
 import { wrapAccessor, wrapConstructor, wrapMethod } from "../native/surface";
-import { captureIdb, partitionFor, type NativeStorage, type Partition } from "./local-store";
+import { captureIdb, existingPartition, partitionFor, type NativeStorage, type Partition } from "./local-store";
 
 const SEP = "\u001f";
 const TAG = "crn" + SEP;
@@ -246,6 +246,13 @@ export function patchWebStorage(targetWindow: Window, prefix: Prefix, unwrapOne:
             throw e;
         }
     };
+    // A storage event updates a partition already made, and never makes one:
+    // making it writes the native store (its meta), and a document that
+    // writes in the middle of another tab's burst of writes is not given the
+    // rest of the burst's events by Chromium (they reached a plain page).
+    // One made later reads the store as it then is.
+    const tierIfAny = (real: Storage): Partition | null =>
+        real === nativeLocal ? existingPartition(prefix()) : null;
     const tier = (real: Storage): Partition | null =>
         real === nativeLocal ? partitionFor(prefix(), real, nat as unknown as NativeStorage, idb, quotaError) : null;
 
@@ -419,19 +426,19 @@ export function patchWebStorage(targetWindow: Window, prefix: Prefix, unwrapOne:
                 if (nv !== null) { clearing.add(area); e.stopImmediatePropagation(); return; }
                 clearing.delete(area);
                 // The whole partition went (the native store is only a cache of it).
-                const t = tier(area);
+                const t = tierIfAny(area);
                 if (t) for (const key of t.keys()) t.external(key, null);
                 asClear.add(e);
                 return;
             }
             if (area && clearing.has(area) && k !== null && sStarts(k, prefix())) {
-                const t = tier(area);
+                const t = tierIfAny(area);
                 if (t) t.external(k.slice(prefix().length), null);
                 e.stopImmediatePropagation();
                 return;
             }
             if (area && k !== null && sStarts(k, prefix())) {
-                const t = tier(area);
+                const t = tierIfAny(area);
                 const nv = newValueGet ? (ncall(newValueGet, e) as string | null) : null;
                 if (t) t.external(k.slice(prefix().length), nv);
             }

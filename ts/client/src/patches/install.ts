@@ -18,7 +18,7 @@ import { patchErrorStacks } from "../native/error-stack";
 import type { Internals } from "../native/internals";
 import { initOriginals } from "../native/originals";
 import { initCrossOrigin } from "../native/cross-origin";
-import { patchCrossOriginWindows } from "./cross-origin-windows";
+import { patchCrossOriginWindows, patchNamedFrames } from "./cross-origin-windows";
 import { patchResponseHeaders } from "./response-headers";
 import { patchEmbeddedContext } from "./embedded";
 import { patchFedCM } from "./fedcm";
@@ -55,6 +55,8 @@ import { patchDynamicHtml } from "./dynamic-html";
 import { patchCssRules } from "./css-rules";
 import { patchCssStyleDeclaration } from "./css-style-declaration";
 import { patchCssomRead } from "./cssom-read";
+import { pairWrittenCss, writtenUrl } from "../css/rewriter";
+import { onCssOriginal } from "../native/originals";
 import { unwrapUrlsInText } from "../url/error-text";
 import { patchFunctionConstructor } from "./function-ctor";
 import { patchDynamicIframeAppend } from "./dynamic-iframe";
@@ -175,8 +177,11 @@ export function installPatches(
     // What CSSOM reads names the page's URLs (patches/cssom-read.ts).
     const proxyOrigin = new URL(config.apiBaseURL).origin;
     const cssBack = (t: string): string => (t.indexOf(proxyOrigin + "/cyrano/") < 0 ? t : unwrapUrlsInText(t, proxyOrigin, unwrapOne));
-    step("patchCssStyleDeclaration", () => patchCssStyleDeclaration(targetWindow, rewriteOne, cssBack));
-    step("patchCssomRead", () => patchCssomRead(targetWindow, unwrapOne, cssBack, () => getCurrentBaseUrl().origin));
+    // A specified value (cssText, a declaration) reads a URL as the page wrote it, where known.
+    const cssBackWritten = (t: string): string => (t.indexOf(proxyOrigin + "/cyrano/") < 0 ? t : unwrapUrlsInText(t, proxyOrigin, (u) => writtenUrl(u) ?? unwrapOne(u)));
+    onCssOriginal(pairWrittenCss);
+    step("patchCssStyleDeclaration", () => patchCssStyleDeclaration(targetWindow, rewriteOne, cssBack, cssBackWritten));
+    step("patchCssomRead", () => patchCssomRead(targetWindow, unwrapOne, cssBackWritten, () => getCurrentBaseUrl().origin));
     // What attributes held before reads as the page wrote it (patches/attr-history.ts).
     step("patchAttrHistory", () => patchAttrHistory(targetWindow, cssBack));
     // The drag data store reads the page's URLs (patches/drag-data.ts).
@@ -203,6 +208,8 @@ export function installPatches(
     // code is given cross-origin views of windows of other origins.
     // … and an empty frame has the runtime by the time page code reaches into
     // it (it may do so in the same breath as creating it).
+    // A child frame reached by name is the cross-origin view too (patches/cross-origin-windows.ts).
+    if (flattened) step("patchNamedFrames", () => patchNamedFrames(targetWindow));
     if (flattened) step("patchCrossOriginWindows", () => patchCrossOriginWindows(targetWindow, (frame) =>
         injectIntoIframe(frame as HTMLIFrameElement, targetWindow, config, getCurrentBaseUrl().href)));
     // Selectors on URL attributes find elements by their original URLs (patches/selectors.ts).

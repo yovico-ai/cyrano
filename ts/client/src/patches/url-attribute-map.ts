@@ -1,4 +1,5 @@
-import { rewriteHandlerSource } from "../js/rewriter";
+import { rewriteHandlerSource, rewriteJsUrlCode } from "../js/rewriter";
+import { jsUrlCode, rewriteJsUrl } from "../url/js-url";
 import { rewriteCssText } from "../css/rewriter";
 import { heldAttr, originalAttr } from "../native/originals";
 import { credDest, frameDest, type Dest } from "../url/containment";
@@ -116,7 +117,8 @@ export function rewriteUrlList(v: string, rw: (url: string) => string): string {
 /** An attribute's value rewritten as its kind says. */
 export function rewriteByKind(kind: AttrKind, v: string, rw: (url: string) => string, srcset: (v: string, rw: (url: string) => string) => string): string {
     switch (kind) {
-        case "url": return rw(v);
+        // A javascript: URL's code through the JS rules (spec/JsUrl.agda).
+        case "url": return jsUrlCode(v) !== null ? rewriteJsUrl(v, rewriteJsUrlCode) : rw(v);
         case "urllist": return rewriteUrlList(v, rw);
         case "srcset": return srcset(v, rw);
         case "css": return rewriteCssText(v, rw);

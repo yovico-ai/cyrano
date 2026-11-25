@@ -7,7 +7,7 @@ import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { readDataUrl, rewritable, wrapped } from "../../src/url/data-url";
-import { dataDocument } from "../../src/patches/blob-document";
+import { dataDocKind, dataDocument } from "../../src/patches/blob-document";
 import { OracleClient, locateOracle, oracleRequired } from "./oracle-client";
 
 const located = locateOracle();
@@ -31,6 +31,16 @@ describe.skipIf(located.skip !== "")("data: URLs: spec conformance", () => {
     let oracle: OracleClient;
     beforeAll(() => { oracle = new OracleClient(located.path); });
     afterAll(() => oracle?.close());
+
+    it("dataDocKind is Frames.dataDocKind", async () => {
+        const head = fc.constantFrom("", "text/html", "image/svg+xml", "IMAGE/SVG+XML", " image/svg+xml ", "image/svg+xml;charset=utf-8", "application/xhtml+xml",
+            "text/xml", "application/xml", "application/rss+xml", "text/plain", "image/svg+xml;base64", "image/svgxml");
+        const body = fc.constantFrom("", "<svg/>", "PHN2Zy8+", "%3Csvg%2F%3E", "%FF");
+        await fc.assert(fc.asyncProperty(head, body, async (h, b) => {
+            const u = "data:" + h + "," + b;
+            expect(dataDocKind(u)).toBe(await oracle.ask("datadockind", [u]));
+        }), { numRuns: 200 });
+    });
 
     it("dataDocument is Frames.dataDocument", async () => {
         const head = fc.constantFrom("", "text/html", "TEXT/HTML", " text/html ", "text/html;charset=utf-8", "text/html;base64", "text/htmlx", "text/plain", "image/svg+xml", ";base64");

@@ -97,6 +97,14 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 		return func(src []byte) []byte { return jsrewrite.Rewrite(src, opts) }
 	}
 
+	// A javascript: URL's code (spec/JsUrl.agda): global code, its
+	// completion value handed to the runtime.
+	rewriteJSURL := func(code string) string {
+		opts := jsOpts
+		opts.JSURL = true
+		return string(jsrewrite.Rewrite([]byte(code), opts))
+	}
+
 	// A data: script's text (spec/DataUrl.agda): its base is its own URL,
 	// against which nothing relative resolves (as natively: such a specifier
 	// stays as written); a specifier naming its scheme is proxified.
@@ -179,6 +187,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				ScriptNonce:       proxy.ScriptNonce(originalPolicies(resp)),
 				ExternalBootstrap: !urlrewrite.InlineScriptAllowed(originalPolicies(resp)),
 				RewriteInlineJS:   rewriteJSFor(target),
+				RewriteJSURL:      rewriteJSURL,
 				RewriteInlineCSS:  rewriteCSS(target),
 			}
 			if cfg.ExternalBootstrap {
@@ -230,6 +239,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			// read `location` natively and report the proxy's URL (Turnstile
 			// then fails with 600010).
 			cfg.RewriteInlineJS = rewriteJSFor(target)
+			cfg.RewriteJSURL = rewriteJSURL
 			cfg.RewriteDataScript = rewriteDataScript
 			cfg.RewriteInlineCSS = rewriteCSS(target)
 			if isChallenge {

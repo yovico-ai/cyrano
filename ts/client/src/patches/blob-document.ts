@@ -34,6 +34,9 @@ import { rewriteSrcdoc } from "./html-rewriter";
 import type { RewriteOne } from "./referrer-policy";
 import { scriptKindOf, type ScriptKind } from "./script-kind";
 import { readDataUrl, rewritable, rewriteDataScript } from "../url/data-url";
+import { rewriteXml, type XmlRewriters } from "../xml/rewriter";
+import { rewriteUrlList } from "./url-attribute-map";
+import { rewriteSrcsetAttribute } from "./srcset";
 import { internalsOf } from "../native/internals";
 
 const done = new SafeMap<string, string>(); // "doc|css " + the page's blob URL → the rewritten one's
@@ -47,10 +50,21 @@ export function htmlDocumentType(type: string): boolean {
     return t === "text/html";
 }
 
-/** spec/Frames.agda dataDocument: a data: URL of a document a frame is given (text/html, its body rewritable). */
+/** spec/Frames.agda dataDocument: a data: URL of an HTML document a frame is given (text/html, its body rewritable). */
 export function dataDocument(raw: string): boolean {
+    return dataDocKind(raw) === "html";
+}
+
+const XML_TYPES = ["text/xml", "application/xml", "application/xhtml+xml", "image/svg+xml"];
+
+/** spec/Frames.agda dataDocKind: an HTML document, an XML one the browser renders (Disposition.isXmlType), or neither. */
+export function dataDocKind(raw: string): "html" | "xml" | "no" {
     const d = readDataUrl(raw);
-    return d !== null && rewritable(d) && htmlDocumentType(d.head);
+    if (d === null || !rewritable(d)) return "no";
+    if (htmlDocumentType(d.head)) return "html";
+    const semi = d.head.indexOf(";");
+    const e = (semi < 0 ? d.head : d.head.slice(0, semi)).replace(/^[ \t\n\r]+|[ \t\n\r]+$/g, "").replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+    return XML_TYPES.indexOf(e) >= 0 ? "xml" : "no";
 }
 
 /**
@@ -64,9 +78,29 @@ export function dataDocumentFor(win: Window, url: string, rewriteOne: RewriteOne
     const key = "datadoc " + (bootstrap ? "+" : "-") + url;
     const hit = done.get(key);
     if (hit) return hit;
-    if (!dataDocument(url)) return null;
-    const at = bootstrap ? internalsOf(win)?.bootstrapHtmlAt : undefined;
-    const now = rewriteDataScript(url, (text) => rewriteSrcdoc(text, underBlobBase(rewriteOne, url), proxyOrigin, at ? () => at(url) : undefined));
+    const kind = dataDocKind(url);
+    if (kind === "no") return null;
+    const rw = underBlobBase(rewriteOne, url);
+    let now: string | null;
+    if (kind === "xml") {
+        // An SVG / XHTML / XML document: rewritten as XML (spec XmlDoc).
+        const xmlAt = bootstrap ? internalsOf(win)?.bootstrapXmlAt : undefined;
+        const one = (u: string): string => rw(u);
+        const rewriters: XmlRewriters = {
+            url: (d, v) => (d && rw.withMark ? rw.withMark(v, null, d) : rw(v)),
+            urls: (v) => rewriteUrlList(v, one),
+            srcset: (v) => rewriteSrcsetAttribute(v, one),
+            cssVal: (v) => rewriteCssText(v, rw),
+            cssDecl: (v) => rewriteCssText(v, rw),
+            css: (v) => rewriteCssText(v, rw),
+            js: (v) => rewriteJsSource(v, defaultJsRewriteOptions()),
+            sheet: (v) => (rw.withMark ? rw.withMark(v, null, "css") : rw(v)),
+        };
+        now = rewriteDataScript(url, (text) => rewriteXml(text, rewriters, (ns) => (xmlAt ? xmlAt(ns, url) : "")));
+    } else {
+        const at = bootstrap ? internalsOf(win)?.bootstrapHtmlAt : undefined;
+        now = rewriteDataScript(url, (text) => rewriteSrcdoc(text, rw, proxyOrigin, at ? () => at(url) : undefined));
+    }
     if (now !== null) done.set(key, now);
     return now;
 }

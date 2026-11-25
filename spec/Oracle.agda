@@ -248,6 +248,7 @@ import Route
 import Features
 import Messaging
 import Selectors
+import JsUrl
 open import Html using (ScriptKind; scriptClassic; scriptModule; scriptImportMap; scriptSpeculation; scriptData; scriptKind; documentBase; BaseURL; baseOf′; aboutBlank; beyond)
 
 ------------------------------------------------------------------------
@@ -439,6 +440,9 @@ dispatch op args =
   else if eqStr op (toList "refererroute") then refererRouteReq args
   else if eqStr op (toList "evalcall") then evalCallReq args
   else if eqStr op (toList "adjoin") then adJoinReq args
+  -- The stand-in for the JS rules: code naming 'x' becomes J(…), any other stays.
+  else if eqStr op (toList "jsurl") then oneArg (λ u → JsUrl.rewriteUrl (λ c → if Url.any (Url.is 120) c then toList "J(" Data.List.Base.++ c Data.List.Base.++ toList ")" else c) u) args
+  else if eqStr op (toList "datadockind") then oneArg (λ u → toList (dataDocName (Frames.dataDocKind u))) args
   else if eqStr op (toList "datadoc") then oneArg (λ u → toList (if Frames.dataDocument u then "yes" else "no")) args
   else if eqStr op (toList "errmuted") then errMutedReq args
   else if eqStr op (toList "paymentrefused") then oneArg (λ t → paymentAnswer (Payment.refused t)) args
@@ -661,6 +665,11 @@ dispatch op args =
     joinName (just AdAuction.denied) = "denied"
     joinName nothing = "outside"
   adJoinReq _ = errorReply "BadRequest"
+
+  dataDocName : Frames.DataDoc → String
+  dataDocName Frames.htmlDoc = "html"
+  dataDocName Frames.xmlDoc  = "xml"
+  dataDocName Frames.notDoc  = "no"
 
   streamOut : Maybe Str → Str
   streamOut (just o) = o

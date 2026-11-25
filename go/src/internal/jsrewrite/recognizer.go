@@ -76,6 +76,8 @@ type expr struct {
 	// operation other than + (R5: such a key names no member the rules
 	// know).
 	num bool
+	// void: it is a `void …` (JSURL leaves it).
+	void bool
 	// evalName: the expression is eval, parenthesized or not (1), or a
 	// parenthesized sequence whose last item is (2): R6 / R17 when called.
 	evalName uint8
@@ -154,6 +156,9 @@ type parser struct {
 	o     *Options
 	edits []edit
 	seq   int
+
+	lastTop expr // the last non-empty top-level statement, when an expression statement (JSURL)
+	topOk   bool
 
 	numKey  bool // the computed key just parsed is certainly a number (expr.num)
 	winNum  bool // … and its object plainly is a window (R18)
@@ -489,7 +494,15 @@ func (p *parser) adopt(s *patScope) {
 func (p *parser) program() {
 	p.next()
 	for p.tok.kind != tEOF {
+		if !p.is(";") {
+			p.topOk = false
+		}
 		p.statement()
+	}
+	// JSURL: the completion value handed to the runtime, outermost (made last).
+	if p.o.JSURL && p.topOk && !p.lastTop.void && p.lastTop.lit != litOther {
+		p.open(p.lastTop.start, jsURLOpen)
+		p.close(p.lastTop.end, "))")
 	}
 }
 
@@ -671,7 +684,10 @@ func (p *parser) statement() {
 			return
 		}
 	}
-	p.expression()
+	e := p.expression()
+	if p.nest == 1 {
+		p.lastTop, p.topOk = e, true
+	}
 	p.semicolon()
 }
 
@@ -1314,7 +1330,7 @@ func (p *parser) unary() expr {
 			p.next()
 			e := p.unaryOperand()
 			p.read(&e)
-			return expr{start: start, end: e.end}
+			return expr{start: start, end: e.end, void: true}
 		case "await":
 			if p.fn.async || p.depth == 0 {
 				p.next()

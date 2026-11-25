@@ -1,4 +1,5 @@
 import type { RewriteOne } from "../patches/referrer-policy";
+import { SafeMap } from "../native/intrinsics";
 // Client-side CSS rewriter: the URLs in CSS text, through the proxy.
 //
 // A port of spec/Css.agda, which is the authority — keep this in step with
@@ -324,8 +325,39 @@ export function rewriteCssText(src: string, rewriteOne: RewriteOne): string {
         const imported = r === "importUrl" || r === "importString";
         const u = imported && rewriteOne.withMark ? rewriteOne.withMark(t.value, null, "css") : rewriteOne(t.value);
         if (u === t.value) { out += t.text; continue; }
+        noteWrittenUrl(u, t.value);
         // Each URL in the page's form where it can be (spec rewriteCss).
         out += r === "url" || r === "importUrl" ? `url(${plainInUrl(u) ? u : serializeString(u)})` : serializeWith(t.text[0] === "'" ? "'" : '"', u);
     }
     return out;
+}
+
+// The URLs a page wrote in CSS, by the proxified form they were given: a
+// specified value (a rule's cssText, a declaration) reads back the URL as
+// written — relative stays relative — where the runtime saw it written (every
+// CSS text it rewrote; the server's originals of a <style>'s text and a style
+// attribute, paired occurrence by occurrence). A URL written absolute needs
+// none (it unwraps to itself). Limit: a sheet the server rewrote for a <link>
+// reads absolute (its text as written never reaches the page); one proxified
+// URL written two ways reads as the last.
+const writtenForms = new SafeMap<string, string>();
+const ABSOLUTE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
+
+export function noteWrittenUrl(proxied: string, written: string): void {
+    if (ABSOLUTE.test(written)) return;
+    if (writtenForms.size >= 4096) writtenForms.clear();
+    writtenForms.set(proxied, written);
+}
+
+/** The URL as the page wrote it, for a proxified one it was given. */
+export function writtenUrl(proxied: string): string | undefined {
+    return writtenForms.get(proxied);
+}
+
+/** Pairs CSS text as written with the same text rewritten, URL by URL. */
+export function pairWrittenCss(was: string, now: string): void {
+    if (was === now || !/url|import|image-set|\\/i.test(was)) return;
+    const a = cssUrls(was), b = cssUrls(now);
+    if (a.length !== b.length) return;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) noteWrittenUrl(b[i]!, a[i]!);
 }

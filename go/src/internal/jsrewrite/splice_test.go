@@ -1,6 +1,7 @@
 package jsrewrite
 
 import (
+	"strings"
 	"bytes"
 	"encoding/json"
 	"os"
@@ -20,9 +21,10 @@ func TestSplice_SharedCases(t *testing.T) {
 	if err := json.Unmarshal(raw, &cases); err != nil {
 		t.Fatal(err)
 	}
-	opts := DefaultOptions()
 	for _, c := range cases {
 		rule, src, want := c[0], c[1], c[2]
+		opts := DefaultOptions()
+		opts.JSURL = strings.HasPrefix(rule, "jsUrl") // a javascript: URL's code
 		edits, ok := jsEdits([]byte(src), &opts)
 		if !ok {
 			t.Errorf("%s: does not parse: %s", rule, src)

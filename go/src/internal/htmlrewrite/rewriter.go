@@ -256,7 +256,7 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 		}
 		// A frame given a data: URL of a document: the document rewritten
 		// as a srcdoc is, in a data: URL again (spec Frames.dataDocument).
-		if (dest == urlrewrite.DestFrame || dest == urlrewrite.DestInert) && urlrewrite.DataDocument(raw) {
+		if (dest == urlrewrite.DestFrame || dest == urlrewrite.DestInert) && urlrewrite.DataDocKind(raw) != "" {
 			return rewriteDataDocument(raw, cfg, dest == urlrewrite.DestInert)
 		}
 		base := cfg.BaseURL
@@ -407,6 +407,13 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 		one := func(u string) string { return rewriteOne(u, urlOpts{tag: tag, attr: key}) }
 		switch URLAttrKindIn(svg, tag, key, anim) {
 		case AttrURL:
+			// A javascript: URL's code through the JS rules (spec/JsUrl.agda).
+			if _, isJS := urlrewrite.JSURLCode(at.Val); isJS {
+				if cfg.RewriteJSURL != nil {
+					attrs = setAttr(attrs, key, urlrewrite.RewriteJSURL(at.Val, cfg.RewriteJSURL))
+				}
+				continue
+			}
 			attrs = setAttr(attrs, key, one(at.Val))
 		case AttrAnimURLs:
 			attrs = setAttr(attrs, key, RewriteAnimURLs(at.Val, one))
@@ -728,6 +735,10 @@ func rewriteDataDocument(raw string, cfg *Config, inert bool) string {
 					sub.ClientPassthrough[k] = v
 				}
 			}
+		}
+		// An SVG / XHTML / XML one is rewritten as XML (spec Frames.dataDocKind).
+		if urlrewrite.DataDocKind(raw) == "xml" {
+			return string(RewriteXMLDocument([]byte(text), &sub))
 		}
 		var doc bytes.Buffer
 		if err := Rewrite(&doc, strings.NewReader(text), sub); err != nil {

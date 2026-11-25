@@ -694,3 +694,27 @@ func TestRewrite_UnchangedTagAsWritten(t *testing.T) {
 		t.Errorf("got  %q\nwant %q", got, in)
 	}
 }
+
+// A URL attribute holding a javascript: URL has its code rewritten by the JS
+// rules with JSURL (spec/JsUrl.agda), written back percent-encoded where the
+// URL parser would drop or trim; read back from the originals.
+func TestRewrite_JavascriptURLs(t *testing.T) {
+	js := func(cfg *Config) {
+		cfg.NoOriginals = false
+		cfg.RewriteJSURL = func(code string) string {
+			o := jsrewrite.DefaultOptions()
+			o.JSURL = true
+			return string(jsrewrite.Unmarked(jsrewrite.Rewrite([]byte(code), o)))
+		}
+	}
+	got := rewrite(t, `<html><body><iframe src="javascript:'&lt;b&gt;x&lt;/b&gt;'"></iframe><a href="javascript:void(0)">v</a><a href="https://e.com/">e</a></body></html>`, js)
+	for _, want := range []string{
+		`src="javascript:(typeof%20$rewriter!==&#34;undefined&#34;?$rewriter:parent.$rewriter).js_url_result(this,('&lt;b>x&lt;/b>'))"`,
+		`href="javascript:void(0)"`,
+		`crn-o="{&#34;src&#34;:&#34;javascript:'` + `\u003cb\u003ex\u003c/b\u003e'&#34;}"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+}

@@ -57,9 +57,10 @@ describe.skipIf(!wanted)("localStorage.clear in another tab, in Chromium", () =>
             (window as unknown as { heard: string[] }).heard = [];
             addEventListener("storage", (e) => (window as unknown as { heard: string[] }).heard.push([e.key, e.oldValue, e.newValue].map(String).join(" ")));
         }, null);
-        // (Spaced: writes made in one task reach another proxied tab as one —
-        // a separate queue entry.)
-        for (const [k, v] of [["a", "1"], ["b", "2"], ["c", "3"]]) { await pa.evaluate(([k, v]) => { localStorage.setItem(k!, v!); }, [k, v]); await new Promise((r) => setTimeout(r, 50)); }
+        // (Written in one task: the other tab hears every write — it once
+        // heard the first only: its runtime wrote the store as the first
+        // event came.)
+        await pa.evaluate(() => { localStorage.setItem("a", "1"); localStorage.setItem("b", "2"); localStorage.setItem("c", "3"); }, null);
         await new Promise((r) => setTimeout(r, 300));
         await pa.evaluate(() => { localStorage.clear(); }, null);
         await new Promise((r) => setTimeout(r, 500));

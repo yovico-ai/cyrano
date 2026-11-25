@@ -308,3 +308,26 @@ func DataDocument(raw string) bool {
 	}
 	return strings.EqualFold(strings.Trim(head, " \t"), "text/html")
 }
+
+// DataDocKind is spec Frames.dataDocKind: "html", "xml" (a type the
+// browser renders as XML: Disposition.isXmlType) or "" for a data: URL a
+// frame is given.
+func DataDocKind(raw string) string {
+	d, ok := ReadDataURL(raw)
+	if !ok || !d.Rewritable() {
+		return ""
+	}
+	head := d.Head
+	if i := strings.IndexByte(head, ';'); i >= 0 {
+		head = head[:i]
+	}
+	e := strings.ToLower(strings.Trim(head, " \t"))
+	if e == "text/html" {
+		return "html"
+	}
+	switch strings.ToLower(strings.Trim(head, " \t\n\r")) {
+	case "text/xml", "application/xml", "application/xhtml+xml", "image/svg+xml":
+		return "xml"
+	}
+	return ""
+}

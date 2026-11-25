@@ -7,7 +7,9 @@
 // (`parent` and `top` are unforgeable: rewritten code reaches them through
 // wrappers/window-tree.ts, which applies the same view.)
 
-import { nO, nR, ncall } from "../native/intrinsics";
+import { SafeMap, nO, nR, ncall } from "../native/intrinsics";
+import { hideOwn, showOwn } from "../native/hidden-globals";
+import { onInserted } from "./dynamic-iframe";
 import { crossOriginView } from "../native/cross-origin";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 
@@ -76,6 +78,95 @@ export function patchCrossOriginWindows(targetWindow: Window, ensureRuntime: (fr
                 try { parent = (self as Window).parent; } catch { return null; }
                 return crossOriginView(parent, null, targetWindow) === parent ? ncall(get, self) : null;
             },
+        });
+    }
+}
+
+/**
+ * A child frame reached by name (`window.kid`, a bare `kid`, `self["kid"]`)
+ * comes off the window's named properties object (WindowProperties), which
+ * handed page code the raw window of a frame of another origin — its
+ * document readable, natively a SecurityError — and an object unequal to
+ * `frames[0]`. Chromium gives Window.prototype and WindowProperties
+ * immutable prototypes and refuses definitions on the latter, so the view
+ * is one step earlier in the chain: an accessor on Window.prototype for
+ * each child's name (none where Window.prototype has a member of that name,
+ * which natively wins), reading what the named object gives and showing it
+ * as crossOriginView does; a write makes the receiver's own property, as
+ * natively. The accessors are hidden from reflection (hidden-globals.ts) and
+ * kept in step with the frames: at every insertion, frame load, name
+ * attribute change. Limit: a child renaming itself (`window.name = …`)
+ * shows by its new name at the next of those.
+ */
+export function patchNamedFrames(targetWindow: Window): void {
+    const W = (targetWindow as unknown as { Window?: { prototype: object } }).Window;
+    if (!W) return;
+    const proto = W.prototype;
+    const named = nO.getPrototypeOf(proto) as object | null;
+    if (!named) return;
+    const mine = new SafeMap<string, true>();
+    // A frame's window is judged as its element's contentWindow is: by the
+    // element's src while it is on its way there.
+    const cwGet = (k: string): ((this: unknown) => unknown) | undefined =>
+        nO.getOwnPropertyDescriptor((targetWindow as unknown as Record<string, { prototype: object } | undefined>)[k]?.prototype ?? {}, "contentWindow")?.get;
+    const cw = [cwGet("HTMLIFrameElement"), cwGet("HTMLFrameElement")];
+    const qsa = nO.getOwnPropertyDescriptor((targetWindow as unknown as { Document: { prototype: object } }).Document.prototype, "querySelectorAll")?.value as ((this: unknown, s: string) => ArrayLike<Element>) | undefined;
+    const elementOf = (v: unknown): unknown => {
+        let all: ArrayLike<Element> = [];
+        try { all = qsa ? ncall(qsa, targetWindow.document, "iframe,frame") : []; } catch { return null; }
+        for (let i = 0; i < all.length; i++) {
+            const e = all[i]!;
+            for (const g of cw) { try { if (g && ncall(g, e) === v) return e; } catch { /* not this kind */ } }
+        }
+        return null;
+    };
+    const shown = (v: unknown): unknown => {
+        if (typeof v !== "object" || v === null) return v;
+        const el = elementOf(v);
+        return crossOriginView(v, el ? pendingOrigin(el) : null, targetWindow);
+    };
+    const define = (n: string): void => {
+        if (mine.has(n) || nO.getOwnPropertyDescriptor(proto, n)) return;
+        mine.set(n, true);
+        const d = nO.getOwnPropertyDescriptor({
+            get [n]() { return shown(nR.get(named, n, this)); },
+            set [n](v: unknown) { nO.defineProperty(this as object, n, { value: v, writable: true, enumerable: true, configurable: true }); },
+        }, n)!;
+        nO.defineProperty(proto, n, { get: d.get!, set: d.set!, enumerable: false, configurable: true });
+        hideOwn(proto, n);
+    };
+    const drop = (n: string): void => {
+        mine.delete(n);
+        try { delete (proto as Record<string, unknown>)[n]; } catch { /* stays */ }
+        showOwn(proto, n);
+    };
+    const sync = (): void => {
+        const now = new SafeMap<string, true>();
+        let len = 0;
+        try { len = targetWindow.length; } catch { return; }
+        for (let i = 0; i < len; i++) {
+            let n = "";
+            try { n = (targetWindow as unknown as Window[])[i]!.name; } catch { continue; } // the browser's own cross-origin rules
+            if (n !== "") now.set(n, true);
+        }
+        for (const n of [...mine.keys()]) if (!now.has(n)) drop(n);
+        for (const n of now.keys()) define(n);
+    };
+    sync();
+    onInserted(targetWindow, sync);
+    try {
+        targetWindow.document.addEventListener("load", sync, true); // a frame's document loaded (its name may be its own)
+        targetWindow.document.addEventListener("DOMContentLoaded", sync);
+        targetWindow.document.addEventListener("readystatechange", sync);
+    } catch { /* no document */ }
+    const fr = (targetWindow as unknown as { HTMLIFrameElement?: { prototype: object } }).HTMLIFrameElement;
+    if (fr) wrapAccessor<string>(fr.prototype, "name", { set: (nativeSet, self, v) => { ncall(nativeSet, self, v); sync(); } });
+    const el = (targetWindow as unknown as { Element?: { prototype: object } }).Element;
+    if (el) {
+        wrapMethod<(...a: unknown[]) => unknown>(el.prototype, "setAttribute", (native, self, args) => {
+            const r = nR.apply(native, self, args);
+            if (typeof args[0] === "string" && args[0].toLowerCase() === "name") sync();
+            return r;
         });
     }
 }

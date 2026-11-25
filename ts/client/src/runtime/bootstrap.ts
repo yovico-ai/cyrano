@@ -8,7 +8,7 @@
 import { patchLocationReflection } from "../patches/location-reflect";
 import { isDocumentObject, isWindowObject } from "../native/brand";
 import { isView } from "../native/cross-origin";
-import { buildBootstrapHtml } from "./bootstrap-html";
+import { buildBootstrapHtml, buildXmlBootstrap } from "./bootstrap-html";
 import { defineHidden } from "../native/hidden-globals";
 import type { ClientConfig } from "../config";
 import type { RewriterApi } from "./api-types";
@@ -41,6 +41,7 @@ export function init(
                 api,
                 bootstrapHtml: () => buildBootstrapHtml(config, (api.get_base_url() ?? new URL(targetWindow.location.href)).href),
                 bootstrapHtmlAt: (href: string) => buildBootstrapHtml(config, href),
+                bootstrapXmlAt: (ns, href) => buildXmlBootstrap(config, ns, href),
             };
             installPatches(
                 targetWindow,

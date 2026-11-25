@@ -30,6 +30,7 @@ open import Data.String.Base using (toList)
 
 open import Messaging using (take)
 import DataUrl
+import Disposition
 open import Url using (Str; eqStr; eqLower; parse; url; originText; scheme; auth; hostPort; Parsed)
 
 data FrameOrigin : Set where
@@ -225,3 +226,18 @@ dataDocument s with DataUrl.read s
 ... | just d  = blobDocument (DataUrl.head d) ∧ DataUrl.rewritable d
 ... | nothing = false
 
+
+-- Of what kind a frame's data: document is: an HTML one (as above), an XML
+-- one the browser renders (Disposition.isXmlType: SVG, XHTML, XML —
+-- rewritten as XML, XmlDoc.rewriteXml, the XML bootstrap), or neither.
+data DataDoc : Set where
+  htmlDoc xmlDoc notDoc : DataDoc
+
+dataDocKind : Str → DataDoc
+dataDocKind s with DataUrl.read s
+... | nothing = notDoc
+... | just d  = if Data.Bool.Base.not (DataUrl.rewritable d) then notDoc
+                else if blobDocument (DataUrl.head d) then htmlDoc
+                else if Disposition.isXmlType (Disposition.essence (DataUrl.head d)) then xmlDoc
+                else notDoc
+  where import Data.Bool.Base

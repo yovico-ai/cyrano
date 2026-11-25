@@ -23,7 +23,7 @@ const cases = JSON.parse(readFileSync(resolve(__dirname, "../../../../spec/js-re
 
 describe("JS rewriting rules", () => {
     it.each(cases)("%s: %s", (_rule, src, want) => {
-        const out = rewriteJsSource(src, all);
+        const out = rewriteJsSource(src, _rule.startsWith("jsUrl") ? { ...all, jsUrl: true } : all);
         expect(code(out)).toBe(want);
         expect(original(out)).toBe(src);
         expect(out.split("\n").length).toBe(src.split("\n").length);

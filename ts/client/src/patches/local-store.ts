@@ -254,6 +254,11 @@ export class Partition {
 /** The partitions of a page tree (one per storage key), shared by its runtimes. */
 const partitions = sharedData("ls.partitions", () => new SafeMap<string, Partition>());
 
+/** The partition already made for `prefix`, or null (an event never makes one). */
+export function existingPartition(prefix: string): Partition | null {
+    return partitions.get(prefix) ?? null;
+}
+
 export function partitionFor(prefix: string, real: Storage, nat: NativeStorage, idb: NativeIdb | null, quotaError: (k: string) => Error): Partition {
     let p = partitions.get(prefix);
     if (!p) { p = new Partition(prefix, real, nat, idb, quotaError); partitions.set(prefix, p); }

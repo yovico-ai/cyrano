@@ -55,6 +55,8 @@ export interface JsRewriteOptions {
      * which would shift every column of its first line.
      */
     globalScript?: boolean;
+    /** The source is a javascript: URL's code (spec/JsUrl.agda): its completion value goes to the runtime. */
+    jsUrl?: boolean;
     /** With `proxify`: import/export specifiers and literal import() are proxified in place. */
     wrapStaticImport: boolean;
     /** With `baseUrl`: import.meta.url becomes that URL as a string literal. */
@@ -170,7 +172,7 @@ function withEvalPreamble(code: string, functionBody: boolean): string {
 export function rewriteJsSource(src: string, opts: JsRewriteOptions): string {
     if (typeof src !== "string" || src.length === 0) return src;
     // Nothing a rule could touch: not parsed at all (mayEdit).
-    if (!mayEdit(src)) return src;
+    if (opts.jsUrl !== true && !mayEdit(src)) return src;
     // A source compiled again is not parsed again: natively a repeated
     // eval / new Function of the same text is all but free (V8 keeps the
     // compiled code), and a page may lean on that — Cloudflare's Turnstile
@@ -258,6 +260,16 @@ function rewriteJsSourceUncached(src: string, opts: JsRewriteOptions): string {
 }
 
 /**
+ * A javascript: URL's code (spec/JsUrl.agda): global code, rewritten by the
+ * rules with jsUrl, without the eval preamble (Go: the JSURL option).
+ */
+export function rewriteJsUrlCode(src: string): string {
+    if (typeof src !== "string" || src.length === 0 || alreadyRewritten(src)) return src;
+    const edits = jsEdits(src, { ...defaultJsRewriteOptions(), jsUrl: true });
+    return edits === null ? src : applyEdits(src, edits);
+}
+
+/**
  * An event handler attribute's value (spec/Attrs.agda handler): a function
  * body the browser compiles where the global object is in scope, rewritten
  * by the rules as the server rewrites it — without the eval preamble (Go's
@@ -304,6 +316,7 @@ export function jsEdits(src: string, opts: JsRewriteOptions): Edit[] | null {
     }
     const s = new Splicer(src, opts);
     s.visit(ast, "expr", false);
+    if (opts.jsUrl === true) s.wrapCompletion(ast);
     // At one offset: inner closers first (in the order made), then openers
     // outermost first (the reverse of the order made), then replacements.
     return s.edits.sort((a, b) =>
@@ -358,6 +371,8 @@ const SET_LOCATION = "$rewriter.wrap_set_location(location, function(v){location
  * SDK's strict modules inside a with, in Disqus frames: armorgames.com).
  */
 const WITH_GLOBAL = '((typeof _crn$g!=="undefined"&&_crn$g)||(function(){return this})()||(typeof globalThis!=="undefined"&&globalThis&&globalThis.$rewriter&&globalThis)||(function(){}).constructor("return this")()).';
+/** jsUrl: a javascript: URL's completion value to the runtime — its target's, or its parent's (Go: jsURLOpen). */
+const JS_URL_OPEN = '(typeof $rewriter!=="undefined"?$rewriter:parent.$rewriter).js_url_result(this,(';
 /** R13: the holder an outermost with's block declares (its sites take it first). */
 const WITH_BLOCK = "{let _crn$g={$rewriter:$rewriter,$__crn_key__:$__crn_key__};";
 function inWith(ins: string): string {
@@ -477,6 +492,23 @@ class Splicer {
 
     private open(pos: number, ins: string): void { this.edits.push({ pos, del: 0, ins: this.rt(ins), kind: Kind.Open, seq: this.seq++ }); }
     private close(pos: number, ins: string): void { this.edits.push({ pos, del: 0, ins: this.rt(ins), kind: Kind.Close, seq: this.seq++ }); }
+
+    /**
+     * jsUrl: the last non-empty top-level statement, when an expression
+     * statement, has its value handed to the runtime (made last: outermost).
+     * Not a `void …` or a literal that is no string.
+     */
+    wrapCompletion(program: N): void {
+        const body = (program as unknown as { body: N[] }).body;
+        let last: N | undefined;
+        for (let i = body.length - 1; i >= 0; i--) if (body[i]!.type !== "EmptyStatement") { last = body[i]; break; }
+        if (!last || last.type !== "ExpressionStatement") return;
+        const e = (last as unknown as { expression: N & { operator?: string; value?: unknown } }).expression;
+        if (e.type === "UnaryExpression" && e.operator === "void") return;
+        if (e.type === "Literal" && typeof e.value !== "string") return;
+        this.open(e.start, JS_URL_OPEN);
+        this.close(e.end, "))");
+    }
     private replace(pos: number, del: number, ins: string): void { this.edits.push({ pos, del, ins: this.rt(ins), kind: Kind.Replace, seq: this.seq++ }); }
     private rt(ins: string): string { return this.withDepth > 0 ? inWith(ins) : ins; }
 

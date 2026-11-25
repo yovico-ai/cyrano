@@ -49,6 +49,8 @@ export interface Internals {
     bootstrapHtml?: () => string;
     /** The bootstrap for a document whose location is `href` (a frame's data: document). */
     bootstrapHtmlAt?: (href: string) => string;
+    /** The XML bootstrap of a document of that root namespace at `href`. */
+    bootstrapXmlAt?: (ns: "svg" | "xhtml" | "other", href: string) => string;
     /** What this window's runtime holds for every copy in its tree (native/shared.ts). */
     data?: Record<string, unknown>;
 }
