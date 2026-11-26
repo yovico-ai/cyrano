@@ -31,7 +31,8 @@ import (
 
 // CredentialsHeader is a request header the runtime adds beside
 // InitiatorHeader: the request's credentials mode as the page set it,
-// "include" or "omit" (fetch's "same-origin" resolved against the target).
+// "include", "omit" or "same-origin" (resolved here against each target:
+// a same-origin request redirected to another origin includes none).
 // It never goes upstream.
 const CredentialsHeader = "Crn-C"
 

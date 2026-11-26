@@ -51,7 +51,9 @@ describe.skipIf(!wanted)("a response that varies on Origin, cached, in Chromium,
             if (u.includes("/info")) {
                 const proxied = u.startsWith("/cyrano/");
                 const crnI = req.headers["crn-i"];
-                const o = proxied ? (typeof crnI === "string" ? new URL(crnI).origin : undefined) : req.headers.origin;
+                // (the runtime names a same-origin fetch's context too: no Origin for it, as the proxy's spec gives)
+                const named = typeof crnI === "string" ? new URL(crnI).origin : undefined;
+                const o = proxied ? (named && named !== `http://a.test:${port}` ? named : undefined) : req.headers.origin;
                 const h: Record<string, string> = { "content-type": "text/plain", "cache-control": "max-age=300", vary: proxied ? VARY_FOR_BROWSER : "Origin" };
                 if (o && o !== "null") h["access-control-allow-origin"] = o;
                 res.writeHead(200, h);
@@ -123,8 +125,9 @@ describe.skipIf(!wanted)("a response that varies on Origin, cached, in Chromium,
         });
         await ctx.close();
         expect(marks).toEqual({
-            bare: [`http://b.test:${port}/p`, "omit"], headers: [`http://b.test:${port}/p`, "omit"],
-            request: [`http://b.test:${port}/p`, "omit"], include: [`http://b.test:${port}/p`, "include"],
+            // Crn-C: the page's mode as set (the proxy resolves "same-origin" per target)
+            bare: [`http://b.test:${port}/p`, "same-origin"], headers: [`http://b.test:${port}/p`, "same-origin"],
+            request: [`http://b.test:${port}/p`, "same-origin"], include: [`http://b.test:${port}/p`, "include"],
         });
     }, 30_000);
 });

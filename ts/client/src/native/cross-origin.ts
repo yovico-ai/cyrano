@@ -120,6 +120,10 @@ function originalOriginOf(w: unknown, unwrap: (url: string) => string): string |
 export function coopOpened(): SafeWeakMap<object, { coop: string; origin: string }> {
     return sharedData("coopOpened", () => new SafeWeakMap<object, { coop: string; origin: string }>());
 }
+/** A popup → its current document's policy and original origin (spec Coop.emulatedAt: its next document is judged against it). */
+export function coopCurrent(): SafeWeakMap<object, { coop: string; origin: string }> {
+    return sharedData("coopCurrent", () => new SafeWeakMap<object, { coop: string; origin: string }>());
+}
 export function coopSevered(): SafeWeakSet<object> {
     return sharedData("coopSevered", () => new SafeWeakSet<object>());
 }

@@ -134,7 +134,7 @@
 --                                       → {"out":"!<error>"} / {"out":"<wire name>\n<wire value>"}
 --   cookiestoreget <url> <-|=name> <jar>   → {"out":"name\tvalue\tdomain|-\tpath\tsameSite\tyes|no\n…"}
 --   credentials <omit|same-origin|include> <same|cross>
---   namescontext <opaque> <cross> <unreferred>   (each yes|no) → yes|no
+--   namescontext <opaque> <cross> <unreferred> <cors mode>   (each yes|no) → yes|no
 --                                       → {"out":"yes"} / {"out":"no"}
 --   cors    <origin> <cred|nocred> <ACAO lines> <ACAC lines>
 --                                       → {"out":"yes"} / {"out":"no"}
@@ -150,6 +150,7 @@
 --   docbase <document URL> <href>…      → {"out":"<base URL>"} (the hrefs of
 --                                         the document's <base> elements)
 --   importmap <proxy> <base> <text>     → {"out":"<rewritten import map>"}
+--   importmapintegrity <base> <url> <map> [<map> …] → the URL's integrity metadata, maps merged | -
 --   attrkind <html|svg> <tag> <attr>    → {"out":"url|urllist|srcset|css|reflected|handler|none"}
 --   urldest <html|svg> <tag> <attr> <rel types> <as|-> → {"out":"js|css|-"}
 --   urllist <proxy> <base> <text>       → {"out":"<each token proxified>"}
@@ -413,8 +414,10 @@ dispatch op args =
   else if eqStr op (toList "xsltype") then oneArg (λ t → if XmlDoc.xslType t then toList "yes" else toList "no") args
   else if eqStr op (toList "xslnet") then out XmlDoc.xslNetPolicy
   else if eqStr op (toList "sameoriginmode") then sameOriginModeReq args
+  else if eqStr op (toList "corsorigin") then corsOriginReq args
   else if eqStr op (toList "coopof") then coopOfReq args
   else if eqStr op (toList "coopemulated") then coopEmulatedReq args
+  else if eqStr op (toList "coopemulatedat") then coopEmulatedAtReq args
   else if eqStr op (toList "rewritemark") then rewriteMarkReq args
   else if eqStr op (toList "disposition") then dispositionReq args
   else if eqStr op (toList "judgeddest") then judgedDestReq args
@@ -572,6 +575,7 @@ dispatch op args =
   else if eqStr op (toList "scriptkind") then scriptKindReq args
   else if eqStr op (toList "docbase") then docBaseReq args
   else if eqStr op (toList "importmap") then importMapReq args
+  else if eqStr op (toList "importmapintegrity") then importMapIntegrityReq args
   else if eqStr op (toList "urllike") then urlLikeReq args
   else if eqStr op (toList "attrkind") then attrKindReq args
   else if eqStr op (toList "urldest") then urlDestReq args
@@ -745,6 +749,17 @@ dispatch op args =
   sameOriginModeReq (m ∷ c ∷ t ∷ []) = out (if Fetch.sameOriginModeFails m c t then toList "yes" else toList "no")
   sameOriginModeReq _ = errorReply "BadRequest"
 
+  -- corsorigin <mode> <dest> <named|-> <referred|-> <target> → origin | - (Fetch.corsOrigin)
+  corsOriginReq : List Str → Str
+  corsOriginReq (m ∷ d ∷ n ∷ r ∷ tg ∷ []) = out (shown (Fetch.corsOrigin m d (opt n) (opt r) tg))
+    where
+    opt : Str → Maybe Str
+    opt s = if eqStr s (toList "-") then nothing else just s
+    shown : Maybe Str → Str
+    shown (just o) = o
+    shown nothing  = toList "-"
+  corsOriginReq _ = errorReply "BadRequest"
+
   lnaName : Lna.Space → Str
   lnaName Lna.spLoopback = toList "loopback"
   lnaName Lna.spLocal    = toList "local"
@@ -785,6 +800,11 @@ dispatch op args =
   coopEmulatedReq : List Str → Str
   coopEmulatedReq (a ∷ oa ∷ b ∷ ob ∷ px ∷ []) = out (if Coop.emulated (Coop.coopNamed a) oa (Coop.coopNamed b) ob px then toList "yes" else toList "no")
   coopEmulatedReq _ = errorReply "BadRequest"
+
+  -- coopemulatedat <initial yes|no> <coop a> <origin a> <coop b> <origin b> <proxy origin> → yes|no
+  coopEmulatedAtReq : List Str → Str
+  coopEmulatedAtReq (i ∷ a ∷ oa ∷ b ∷ ob ∷ px ∷ []) = out (if Coop.emulatedAt (eqStr i (toList "yes")) (Coop.coopNamed a) oa (Coop.coopNamed b) ob px then toList "yes" else toList "no")
+  coopEmulatedAtReq _ = errorReply "BadRequest"
 
   -- disposition <js|css|-> <0|1 Sec-Fetch-Dest present> <Sec-Fetch-Dest> <0|1 Content-Type present> <Content-Type> <0|1 sniffed>
   dispositionReq : List Str → Str
@@ -1860,7 +1880,7 @@ dispatch op args =
              else if eqStr x (toList "nocred") then just false else nothing
 
   namesContextReq : List Str → Str
-  namesContextReq (a ∷ b ∷ c ∷ []) = yesNo (namesContext (eqStr a (toList "yes")) (eqStr b (toList "yes")) (eqStr c (toList "yes")))
+  namesContextReq (a ∷ b ∷ c ∷ d ∷ []) = yesNo (namesContext (eqStr a (toList "yes")) (eqStr b (toList "yes")) (eqStr c (toList "yes")) (eqStr d (toList "yes")))
   namesContextReq _ = errorReply "BadRequest"
 
   credentialsReq : List Str → Str
@@ -1933,6 +1953,19 @@ dispatch op args =
   docDst t = if eqStr t (toList "-") then just nothing
              else if eqStr t (toList "frame") then just (just destFrame)
              else if eqStr t (toList "inert") then just (just destInert) else nothing
+
+  importMapIntegrityReq : List Str → Str
+  importMapIntegrityReq (b ∷ u ∷ maps) with baseOf b
+  ... | just base = out (shown (ImportMap.integrityFor (merged maps []) u))
+    where
+    merged : List Str → List (Str × Str) → List (Str × Str)
+    merged [] acc = acc
+    merged (m ∷ ms) acc = merged ms (ImportMap.mergeIntegrity acc (ImportMap.integrityEntries base m))
+    shown : Maybe Str → Str
+    shown (just v) = v
+    shown nothing  = toList "-"
+  ... | nothing = errorReply "BadBase"
+  importMapIntegrityReq _ = errorReply "BadRequest"
 
   importMapReq : List Str → Str
   importMapReq (p ∷ b ∷ text ∷ []) with proxyOf p | baseOf b

@@ -163,7 +163,11 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 		case html.TextToken:
 			switch {
 			case inImportMap:
-				emitRaw(rewriteImportMapFor(append([]byte(nil), z.Text()...), cfg))
+				text := append([]byte(nil), z.Text()...) // (Text can be read once)
+				if cfg.OnImportMap != nil && cfg.BaseURL != nil {
+					cfg.OnImportMap(string(text), cfg.BaseURL.String())
+				}
+				emitRaw(rewriteImportMapFor(text, cfg))
 			case foreignText && (inScript && cfg.RewriteInlineJS != nil || inStyle && cfg.RewriteInlineCSS != nil):
 				// An SVG <script> / <style>: its text is ordinary markup
 				// text, character references decoded — the script is the

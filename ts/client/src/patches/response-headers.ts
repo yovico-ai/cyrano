@@ -16,7 +16,7 @@
 import { opaqueResponses } from "./fetch";
 import { SafeMap, SafeWeakMap, nO, nR, ncall } from "../native/intrinsics";
 import { wrapAccessor, wrapMethod } from "../native/surface";
-import { crossOriginXhr, exposedBy, type Exposed } from "./cors";
+import { crossOriginXhr, xhrOrigin, otherOrigin, exposedBy, type Exposed } from "./cors";
 
 const CARRIER = "crn-h";
 
@@ -148,7 +148,17 @@ export function patchResponseHeaders(targetWindow: Window, opaque = false): void
         };
         /** What a cross-origin XHR's response exposes; undefined for a same-origin one. */
         const exposedOf = (self: unknown, orig: Originals | null): Exposed | undefined => {
-            if (typeof self !== "object" || self === null || !crossOriginXhr.has(self)) return undefined;
+            if (typeof self !== "object" || self === null) return undefined;
+            if (!crossOriginXhr.has(self)) {
+                // A same-origin XHR redirected to another origin: a
+                // cross-origin one's response there (Fetch; the proxy
+                // CORS-checked that hop: Fetch.corsOrigin).
+                const own = xhrOrigin.get(self);
+                const at = nO.getOwnPropertyDescriptor(X, "responseURL")?.get;
+                let url = "";
+                try { url = own && at ? String(ncall(at, self)) : ""; } catch { url = ""; }
+                if (!own || !url || !otherOrigin(url, own)) return undefined;
+            }
             const name = "access-control-expose-headers";
             let list: string | null;
             try { list = orig && name in orig ? (orig[name]?.join(", ") ?? null) : ncall(nativeOne, self, name); } catch { return undefined; }

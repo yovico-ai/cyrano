@@ -960,7 +960,14 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   element is not connected). The proxy hashes the origin's decoded bytes
   and fails a mismatch, or an opaque response (another origin's in no-cors
   mode), as a network error (`proxy.SRIFails`). `integrity` reads the
-  page's value. Gap: an import map's "integrity" section (dropped).
+  page's value. An import map's "integrity" section is given to the
+  browser emptied and kept by the proxy for the document (spec/ImportMap.agda
+  integrityEntries, mergeIntegrity: keys resolved, first map's entry
+  standing; `proxy/import_integrity.go`): a module request for it — its src,
+  a static or dynamic import (scriptDocs) — with no integrity of its own is
+  checked by its entry (`import-map-integrity-vs-chromium`). Limits: a
+  classic script of a listed URL is checked too; a map the runtime inserts
+  is not kept.
 - **Cross-Origin-Opener-Policy** (spec/Coop.agda; `coop-vs-chromium`):
   through the proxy two sites that both send `same-origin` match (one
   origin) and stay one browsing context group. The browser still severs
@@ -969,8 +976,13 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   set_location, from what its opener's `window.open` recorded): its
   `opener` reads null, its name is cleared, the opener's handle reads
   closed and drops postMessage. A non-secure document's COOP is told
-  `unsafe-none` (natively ignored). Gaps: later navigations of the popup;
-  a name lookup of the severed window.
+  `unsafe-none` (natively ignored). A popup's later navigations are judged
+  too, each document against the one before it (spec Coop.emulatedAt; the
+  page tree's registry, which the opener holds, keeps the popup's current
+  policy and origin): its opener reads null, its name cleared. Gaps: an
+  opener holding the popup as a same-origin handle still reads it live
+  after such a later switch (`closed` is the popup's own accessor); a name
+  lookup of the severed window.
 - **CORP / COEP** (spec/Corp.agda): the proxy runs the cross-origin
   resource policy check for no-cors subresource requests by the page's
   original origin and its recorded embedder policy (COEP /
@@ -1031,8 +1043,13 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   "same-origin" — to another origin than the requesting document's is
   refused by the proxy before it is sent (through the proxy every target
   is same-origin to the browser: telegram.me's worker, redirected to
-  telegram.org, ran its HTML). Gap: a cors-mode same-origin fetch
-  redirected to another origin is not CORS-checked.
+  telegram.org, ran its HTML). A fetch / XHR in cors mode names its
+  context (Crn-I, Crn-C as the page's mode, Crn-A) even same-origin, so
+  redirected to another origin it is CORS-checked there by the page's
+  origin, preflighted where needed, its credentials resolved per target
+  (spec/Fetch.agda corsOrigin; a request for no destination without the
+  headers by its Referer's document), and reads as a `cors` response
+  (`cors-redirect-vs-chromium`).
 - **Credentials in a subresource URL** (`http://u:p@host/…`, a user alone
   too): Chromium blocks every such request but a top-level navigation; the
   userinfo travels in the proxified path, so the proxy refuses it

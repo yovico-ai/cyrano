@@ -43,3 +43,32 @@ func TestSpecConformance_SameOriginMode(t *testing.T) {
 		}
 	}
 }
+
+func TestSpecConformance_CorsOrigin(t *testing.T) {
+	oracle := specoracle.Need(t)
+	opt := func(s string) string {
+		if s == "" {
+			return "-"
+		}
+		return s
+	}
+	for _, m := range []string{"cors", "no-cors", "same-origin", "navigate"} {
+		for _, d := range []string{"empty", "script", "image"} {
+			for _, n := range []string{"", "https://a.example", "https://b.example"} {
+				for _, r := range []string{"", "https://a.example", "https://c.example"} {
+					want, _, err := oracle.Ask("corsorigin", m, d, opt(n), opt(r), "https://a.example")
+					if err != nil {
+						t.Fatal(err)
+					}
+					got, ok := corsOrigin(m, d, n, r, "https://a.example")
+					if !ok {
+						got = "-"
+					}
+					if got != want {
+						t.Errorf("corsOrigin(%s, %s, %q, %q) = %q, spec %q", m, d, n, r, got, want)
+					}
+				}
+			}
+		}
+	}
+}

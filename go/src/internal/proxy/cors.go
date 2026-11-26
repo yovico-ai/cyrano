@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/yovico/cyrano/internal/upstream"
+	"github.com/yovico/cyrano/internal/urlrewrite"
 	"net/http"
 	"net/url"
 	"strings"
@@ -43,21 +44,29 @@ var errCORS = errors.New("cors check failed")
 // page-set headers go first, as Chrome sends them). It never goes upstream.
 const KindHeader = "Crn-K"
 
-func noteCORS(req *http.Request, target *url.URL) {
+func (h *Handler) noteCORS(req *http.Request, target *url.URL, mark urlrewrite.Dest) {
 	if strings.EqualFold(req.Header.Get(KindHeader), "xhr") {
 		*req = *req.WithContext(context.WithValue(req.Context(), upstream.XHRKey{}, true))
 	}
 	req.Header.Del(KindHeader)
 	authors, hasAuthors := req.Header[AuthorHeader] // consumed here whatever the request (preflight.go)
 	req.Header.Del(AuthorHeader)
-	if !strings.EqualFold(req.Header.Get("Sec-Fetch-Mode"), "cors") {
+	// (Not from a sandboxed document — cross-site to the browser, which runs
+	// CORS there itself by "null": fetch_headers.go opaqueElementCORS.)
+	referred := ""
+	if from := h.originalReferrer(req.Header.Get("Referer")); from != nil && !strings.EqualFold(req.Header.Get("Sec-Fetch-Site"), "cross-site") {
+		referred = from.Scheme + "://" + from.Host
+	}
+	origin, ok := corsOrigin(req.Header.Get("Sec-Fetch-Mode"), req.Header.Get("Sec-Fetch-Dest"),
+		initiatorOrigin(req.Header.Get(InitiatorHeader)), referred, target.Scheme+"://"+target.Host)
+	if !ok {
 		return
 	}
-	origin := initiatorOrigin(req.Header.Get(InitiatorHeader))
-	if origin == "" || strings.EqualFold(origin, target.Scheme+"://"+target.Host) {
-		return
-	}
-	cred := strings.EqualFold(req.Header.Get(CredentialsHeader), "include")
+	// Credentials as the page set them (Crn-C), else as the URL's mark says
+	// (a use-credentials element, a credentialed EventSource). The target is
+	// of another origin here: "same-origin" includes none.
+	cc := req.Header.Get(CredentialsHeader)
+	cred := strings.EqualFold(cc, "include") || (cc == "" && mark.Credentialed())
 	c := corsRequest{origin: origin, credentialed: cred}
 	*req = *req.WithContext(context.WithValue(req.Context(), corsKey{}, c))
 	if hasAuthors {
@@ -65,6 +74,28 @@ func noteCORS(req *http.Request, target *url.URL) {
 	} else {
 		notePreflight(req, c, "")
 	}
+}
+
+// corsOrigin is spec Fetch.corsOrigin: the origin a request is CORS-checked
+// by — the context the runtime named, else for a request for no destination
+// its Referer's document's — and false for none (not cors mode, the
+// target's own origin). Mode and destination as the Sec-Fetch-* headers
+// carry them; origins as serialized, "" for none.
+func corsOrigin(mode, dest, named, referred, target string) (string, bool) {
+	if !strings.EqualFold(mode, "cors") {
+		return "", false
+	}
+	o := named
+	if o == "" {
+		if !strings.EqualFold(dest, "empty") {
+			return "", false
+		}
+		o = referred
+	}
+	if o == "" || strings.EqualFold(o, target) {
+		return "", false
+	}
+	return o, true
 }
 
 // corsFails reports whether the response fails the CORS check of the

@@ -65,11 +65,14 @@ matches : Coop → Str → Coop → Str → Bool
 matches unsafeNone oa unsafeNone ob = true
 matches a oa b ob = eqCoop a b ∧ eqStr oa ob
 
--- A popup's first navigation (from its initial about:blank, which has its
--- opener's policy and origin) to a response of policy `b`, origin `ob`.
-switches : Coop → Str → Coop → Str → Bool
-switches a oa b ob =
-  not (matches a oa b ob) ∧ not (allowPopups a ∧ none b)
+-- A navigation of a top-level browsing context from a document of policy
+-- `a`, origin `oa`, to a response of policy `b`, origin `ob`: a switch
+-- unless they match, or — from a popup's initial about:blank only (its
+-- policy and origin its opener's) — `a` is same-origin-allow-popups and
+-- `b` unsafe-none (HTML "check if a BCG switch is needed").
+switchesAt : Bool → Coop → Str → Coop → Str → Bool
+switchesAt initial a oa b ob =
+  not (matches a oa b ob) ∧ not (initial ∧ allowPopups a ∧ none b)
   where
   allowPopups : Coop → Bool
   allowPopups sameOriginAllowPopups = true
@@ -78,10 +81,21 @@ switches a oa b ob =
   none unsafeNone = true
   none _ = false
 
+-- A popup's first navigation (from its initial about:blank).
+switches : Coop → Str → Coop → Str → Bool
+switches = switchesAt true
+
 -- What the runtime severs: a switch by the original origins that the
--- browser, seeing the proxy's origin for both, does not make.
+-- browser, seeing the proxy's origin for both, does not make — at a
+-- popup's first navigation, and at each later one (the previous
+-- document's policy and origin kept for the tab: a severed popup that
+-- navigates on stays severed, and one that was not is severed when its
+-- next document does not match).
+emulatedAt : Bool → Coop → Str → Coop → Str → Str → Bool
+emulatedAt initial a oa b ob proxy = switchesAt initial a oa b ob ∧ not (switchesAt initial a proxy b proxy)
+
 emulated : Coop → Str → Coop → Str → Str → Bool
-emulated a oa b ob proxy = switches a oa b ob ∧ not (switches a proxy b proxy)
+emulated = emulatedAt true
 
 -- The header's token as the server gives it to the runtime (a structured
 -- item's bare token; nothing otherwise).

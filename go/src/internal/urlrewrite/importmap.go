@@ -528,3 +528,113 @@ func RewriteImportMapTwin(text string, rewrite, twin func(string) string) string
 	}
 	return b.String()
 }
+
+// IntegrityEntry is one entry of an import map's "integrity" section: a
+// module URL (resolved) and its integrity metadata as the page wrote it.
+type IntegrityEntry struct{ URL, Metadata string }
+
+// ImportMapIntegrity is spec ImportMap.integrityEntries: the entries of the
+// map's last "integrity" member (the browser is given it emptied), keys
+// resolved against base — a key not URL-like, a value not a string,
+// ignored; nil when the text is not a JSON object.
+func ImportMapIntegrity(text, base string) []IntegrityEntry {
+	toks, ok := jsonTokens(text)
+	if !ok {
+		return nil
+	}
+	if _, ok := importMapRoles(toks); !ok {
+		return nil
+	}
+	b, res := parseRef(nil, preprocess(base))
+	if res != parsedURL {
+		return nil
+	}
+	var solid []jsonTok
+	for _, t := range toks {
+		if t.kind != jWS {
+			solid = append(solid, t)
+		}
+	}
+	isP := func(t jsonTok, c string) bool { return t.kind == jPunct && t.text == c }
+	opens := func(t jsonTok) bool { return isP(t, "{") || isP(t, "[") }
+	after := func(ts []jsonTok) []jsonTok { // the tokens after one value
+		if len(ts) == 0 {
+			return nil
+		}
+		if !opens(ts[0]) {
+			return ts[1:]
+		}
+		d := 1
+		for i := 1; i < len(ts); i++ {
+			if opens(ts[i]) {
+				d++
+			} else if isP(ts[i], "}") || isP(ts[i], "]") {
+				if d--; d == 0 {
+					return ts[i+1:]
+				}
+			}
+		}
+		return nil
+	}
+	members := func(ts []jsonTok, each func(k jsonTok, v []jsonTok)) {
+		for len(ts) >= 3 && ts[0].kind == jString && isP(ts[1], ":") {
+			k, v := ts[0], ts[2:]
+			each(k, v)
+			ts = after(v)
+			if len(ts) == 0 || !isP(ts[0], ",") {
+				return
+			}
+			ts = ts[1:]
+		}
+	}
+	var pairs [][2]string
+	if len(solid) > 0 {
+		members(solid[1:], func(k jsonTok, v []jsonTok) {
+			if k.value != "integrity" {
+				return
+			}
+			pairs = nil // the last one stands
+			if !isP(v[0], "{") {
+				return
+			}
+			members(v[1:], func(k jsonTok, v []jsonTok) {
+				if v[0].kind == jString {
+					pairs = append(pairs, [2]string{k.value, v[0].value})
+				}
+			})
+		})
+	}
+	var out []IntegrityEntry
+	for _, p := range pairs {
+		if !IsURLLikeSpecifier(p[0]) {
+			continue
+		}
+		if u, res := parseRef(&b, preprocess(p[0])); res == parsedURL {
+			out = append(out, IntegrityEntry{u.href(), p[1]})
+		}
+	}
+	return out
+}
+
+// IntegrityFor is spec ImportMap.integrityFor: a URL's metadata, the last
+// entry for it.
+func IntegrityFor(entries []IntegrityEntry, u string) (string, bool) {
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].URL == u {
+			return entries[i].Metadata, true
+		}
+	}
+	return "", false
+}
+
+// MergeIntegrity is spec ImportMap.mergeIntegrity: a document's next map
+// adds entries for URLs the earlier ones have none for.
+func MergeIntegrity(old, next []IntegrityEntry) []IntegrityEntry {
+	out := append([]IntegrityEntry(nil), old...)
+	for _, e := range next {
+		if _, ok := IntegrityFor(out, e.URL); !ok {
+			out = append(out, e)
+		}
+	}
+	return out
+}

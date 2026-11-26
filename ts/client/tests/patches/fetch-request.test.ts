@@ -117,7 +117,7 @@ describe("fetch(request): the page's own Request goes to the native as is", () =
         // the DOM adds one, is listed too — the proxy checks it either way)
         expect(req.headers.get("Crn-A")!.split(",")).toContain("x-page");
         expect(req.headers.get("Crn-I")).toBe("https://page.example/app/");
-        expect(req.headers.get("Crn-C")).toBe("include");
+        expect(req.headers.get("Crn-C")).toBe("same-origin") // the page's mode: the proxy resolves it per target;
     });
 
     // YouTube's blocker bait: a data: Request whose subclass's `url` names
@@ -150,12 +150,12 @@ describe("fetch(request): the page's own Request goes to the native as is", () =
         expect(init).toEqual({ headers: { "x-init": "1" } });
     });
 
-    it("cross-origin with default credentials: Crn-C is omit, the Request still as is", async () => {
+    it("cross-origin with default credentials: Crn-C is the page's same-origin, the Request still as is", async () => {
         const { win, fetchMock } = setup({ ...sameOriginCors, always: false });
         const req = new win.Request("https://api.other.example/v1", { method: "POST", body: "payload" });
         await win.fetch(req as unknown as Request);
         expect(fetchMock.mock.calls[0]![0]).toBe(req);
-        expect(req.headers.get("Crn-C")).toBe("omit");
+        expect(req.headers.get("Crn-C")).toBe("same-origin");
         expect(req.headers.get("Crn-I")).toBe("https://page.example/app/");
     });
 

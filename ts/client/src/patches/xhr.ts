@@ -7,7 +7,7 @@
 import { documentQueryEncoder, requery } from "../url/doc-query";
 import { SafeWeakMap, SafeWeakSet, nO, nR, ncall, sLower, sStarts } from "../native/intrinsics";
 import { wrapAccessor, wrapMethod } from "../native/surface";
-import { AUTHORS, CREDENTIALS, INITIATOR, KIND, crossOriginXhr, namesContext, includesCredentials, initiatorValue, initiatorOfXhr, isCrossOrigin, type CorsContext } from "./cors";
+import { AUTHORS, CREDENTIALS, INITIATOR, KIND, crossOriginXhr, xhrOrigin, namesContext, initiatorValue, initiatorOfXhr, isCrossOrigin, type CorsContext } from "./cors";
 
 export function patchXmlHttpRequest(
     targetWindow: Window,
@@ -82,7 +82,8 @@ export function patchXmlHttpRequest(
             const target = unwrapOne(String(next[1]));
             const cross = isCrossOrigin(target, baseUrl(), own) && !(cors.proxy && sStarts(target, cors.proxy + "/"));
             if (cross) crossOriginXhr.set(self, own); else crossOriginXhr.delete(self);
-            if (namesContext(cors.opaque === true, cross, cors.always === true)) initiatorOfXhr.set(self, { href: initiatorValue(cors.href()), cross });
+            xhrOrigin.set(self, own);
+            if (namesContext(cors.opaque === true, cross, cors.always === true, true)) initiatorOfXhr.set(self, { href: initiatorValue(cors.href()), cross });
             else initiatorOfXhr.delete(self);
         }
         return done;
@@ -105,7 +106,7 @@ export function patchXmlHttpRequest(
                 ncall(setHeader, self, INITIATOR, from.href);
                 // An XHR's credentials mode: "include" with withCredentials, else "same-origin".
                 const mode = withCredentials && ncall(withCredentials, self) ? "include" : "same-origin";
-                ncall(setHeader, self, CREDENTIALS, includesCredentials(mode, !from.cross) ? "include" : "omit");
+                ncall(setHeader, self, CREDENTIALS, mode);
             } catch { /* not opened: the native send throws */ }
         }
         return nR.apply(native, self, args) as void;

@@ -57,6 +57,11 @@ export function includesCredentials(mode: string, sameOrigin: boolean): boolean 
     return mode === "include" || (mode === "same-origin" && sameOrigin);
 }
 
+/** A credentials mode as Crn-C carries it: the page's, an unknown value as fetch reads it (it throws first). */
+export function credentialsMode(mode: string): "omit" | "same-origin" | "include" {
+    return mode === "omit" || mode === "include" ? mode : "same-origin";
+}
+
 const isTchar = (c: number): boolean =>
     (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a) || sIncludes("!#$%&'*+-.^_`|~", String.fromCharCode(c));
 
@@ -130,14 +135,29 @@ export interface CorsContext {
  * Whether a request names its context in Crn-I / Crn-C (spec/Fetch.agda
  * namesContext): never from an opaque context — the browser then runs the
  * protocol itself, and the headers would cause a preflight — else where it
- * crosses original origins or the context sends no Referer.
+ * crosses original origins, the context sends no Referer, or it is in cors
+ * mode (redirected to another origin it comes to the proxy again with the
+ * same headers, and is CORS-checked there: Fetch.corsOrigin). Crn-C is the
+ * credentials mode as the page set it; the proxy resolves "same-origin".
  */
-export function namesContext(opaque: boolean, cross: boolean, unreferred: boolean): boolean {
-    return !opaque && (cross || unreferred);
+export function namesContext(opaque: boolean, cross: boolean, unreferred: boolean, corsMode: boolean): boolean {
+    return !opaque && (cross || unreferred || corsMode);
 }
 
 /** XHRs opened to another origin → the requesting origin. */
 export const crossOriginXhr = new SafeWeakMap<object, string>();
+/** Every opened XHR → the requesting origin (one redirected to another origin is a cross-origin one's: its responseURL tells). */
+export const xhrOrigin = new SafeWeakMap<object, string>();
+
+/** Whether an absolute URL (the page's) is of another origin than own. */
+export function otherOrigin(url: string, own: string): boolean {
+    try {
+        const u = new URL(url);
+        return (u.protocol === "http:" || u.protocol === "https:") && u.origin !== own;
+    } catch {
+        return false;
+    }
+}
 /** XHRs whose request must name its context (CorsContext.always, or cross-origin) → [document URL, cross-origin]. */
 export const initiatorOfXhr = new SafeWeakMap<object, { href: string; cross: boolean }>();
 

@@ -332,11 +332,15 @@ func TestE2E_OrbBlocksCrossOriginData(t *testing.T) {
 			}
 		}
 	}
-	// Only a script: a fetch() of the same data gets it (the runtime's CORS
-	// headers decide there).
+	// Not ORB, which is a script's: a fetch() of the same data gets it where
+	// CORS allows (judged by its Referer's document without the runtime's
+	// headers: spec Fetch.corsOrigin), and fails where it does not.
 	dest = "empty"
-	if err := load(cross, ""); err != nil {
+	if err := load(cross, "?acao=1"); err != nil {
 		t.Errorf("fetch of cross-origin JSON: %v, want the response", err)
+	}
+	if err := load(cross, ""); err == nil {
+		t.Errorf("fetch of cross-origin JSON without ACAO: the response, want it failed")
 	}
 }
 

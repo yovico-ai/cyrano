@@ -27,12 +27,22 @@ export function coopMatches(a: Coop, oa: string, b: Coop, ob: string): boolean {
     return a === b && oa === ob;
 }
 
-/** spec Coop.switches: a popup's first navigation from its initial about:blank (policy `a`, origin `oa`) needs a group of its own. */
-export function coopSwitches(a: Coop, oa: string, b: Coop, ob: string): boolean {
-    return !coopMatches(a, oa, b, ob) && !(a === "same-origin-allow-popups" && b === "unsafe-none");
+/** spec Coop.switchesAt: a top-level navigation from a document of policy `a`, origin `oa` (`initial`: a popup's initial about:blank) needs a group of its own. */
+export function coopSwitchesAt(initial: boolean, a: Coop, oa: string, b: Coop, ob: string): boolean {
+    return !coopMatches(a, oa, b, ob) && !(initial && a === "same-origin-allow-popups" && b === "unsafe-none");
 }
 
-/** spec Coop.emulated: a switch by the original origins the browser, seeing the proxy's for both, does not make. */
+/** spec Coop.switches: a popup's first navigation from its initial about:blank (policy `a`, origin `oa`) needs a group of its own. */
+export function coopSwitches(a: Coop, oa: string, b: Coop, ob: string): boolean {
+    return coopSwitchesAt(true, a, oa, b, ob);
+}
+
+/** spec Coop.emulatedAt: a switch by the original origins the browser, seeing the proxy's for both, does not make. */
+export function coopEmulatedAt(initial: boolean, a: Coop, oa: string, b: Coop, ob: string, proxy: string): boolean {
+    return coopSwitchesAt(initial, a, oa, b, ob) && !coopSwitchesAt(initial, a, proxy, b, proxy);
+}
+
+/** spec Coop.emulated */
 export function coopEmulated(a: Coop, oa: string, b: Coop, ob: string, proxy: string): boolean {
-    return coopSwitches(a, oa, b, ob) && !coopSwitches(a, proxy, b, proxy);
+    return coopEmulatedAt(true, a, oa, b, ob, proxy);
 }

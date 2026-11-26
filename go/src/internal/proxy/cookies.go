@@ -163,6 +163,13 @@ func (h *Handler) upstreamCookies(req *http.Request, target *url.URL, sessionID 
 			elementOmits = !urlrewrite.MarkedCookies(false, true, mark.Credentialed(), same)
 		}
 	}
+	// Crn-C "same-origin" (the page's mode as set; spec Fetch
+	// includesCredentials): none to another origin than the context's —
+	// a same-origin fetch redirected elsewhere comes with it again.
+	if strings.EqualFold(req.Header.Get(CredentialsHeader), "same-origin") {
+		from := h.requestingDocument(req)
+		elementOmits = from == nil || !strings.EqualFold(from.Scheme+"://"+from.Host, target.Scheme+"://"+target.Host)
+	}
 	if elementOmits || strings.EqualFold(req.Header.Get(CredentialsHeader), "omit") {
 		req.Header.Del("Cookie")
 		*req = *req.WithContext(context.WithValue(req.Context(), noCredentialsKey{}, true))

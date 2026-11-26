@@ -44,9 +44,9 @@ describe.skipIf(located.skip !== "")("fetch / CORS: spec conformance", () => {
 
     it("namesContext", async () => {
         const yn = (b: boolean) => (b ? "yes" : "no");
-        for (const o of [false, true]) for (const c of [false, true]) for (const u of [false, true]) {
-            const want = (await oracle.ask("namescontext", [yn(o), yn(c), yn(u)])) === "yes";
-            expect(namesContext(o, c, u), `${o} ${c} ${u}`).toBe(want);
+        for (const o of [false, true]) for (const c of [false, true]) for (const u of [false, true]) for (const m of [false, true]) {
+            const want = (await oracle.ask("namescontext", [yn(o), yn(c), yn(u), yn(m)])) === "yes";
+            expect(namesContext(o, c, u, m), `${o} ${c} ${u} ${m}`).toBe(want);
         }
     });
 

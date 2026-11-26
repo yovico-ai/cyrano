@@ -6,7 +6,9 @@
 // same-origin (or same-origin-allow-popups) matched and stayed one group:
 // the opener's handle stayed live, the popup kept its opener (round K).
 // The runtime severs where only the original origins differ; the browser
-// still severs where the values do.
+// still severs where the values do. At a popup's later navigation the
+// popup's side is checked: an opener holding it as a same-origin handle
+// still reads it live (a limit).
 //
 // Needs the server binary and Playwright's Chromium; `make browser-check`.
 
@@ -54,6 +56,16 @@ describe.skipIf(!wanted)("Cross-Origin-Opener-Policy, in Chromium, through the p
                   let href; try { href = w.location.href; } catch (e) { href = e.name; }
                   done({ closed: w.closed, href: typeof href === "string" && href.startsWith("http") ? "url" : href }); }, 1500); });</script>`);
             }
+            if (u.pathname === "/opener2") {
+                // the popup's first document matches; it then navigates itself on
+                const first = u.searchParams.get("first"), to = u.searchParams.get("to"), host = u.searchParams.get("host");
+                return res.end(`<script>window.out = new Promise((done) => { const w = window.open("http://127.0.0.1:${port0}/hop?c=${first}&to=${to}&host=${host}", "nm"); setTimeout(() => {
+                  done({ closed: w.closed }); }, 2500); });</script>`);
+            }
+            if (u.pathname === "/hop") {
+                const to = u.searchParams.get("to"), host = u.searchParams.get("host");
+                return res.end(`<script>setTimeout(() => { location.href = "http://${host}:${port0}/popup?c=${to}"; }, 200);</script>`);
+            }
             return res.end(`<script>document.title = (window.opener ? "has" : "no") + " opener; name=" + window.name;</script>`);
         });
         await new Promise<void>((r) => upstream.listen(0, "0.0.0.0", () => r()));
@@ -90,6 +102,32 @@ describe.skipIf(!wanted)("Cross-Origin-Opener-Policy, in Chromium, through the p
         await ctx.close();
         return JSON.stringify(o) + " popup: " + t;
     };
+
+    const run2 = async (base: string, from: string, first: string, to: string, host: string): Promise<string> => {
+        const ctx = await browser.newContext();
+        const p = await ctx.newPage();
+        const pop = ctx.waitForEvent("page", { timeout: 5000 }).catch(() => null);
+        await p.goto(`${base}/opener2?c=${from}&first=${first}&to=${to}&host=${host}`);
+        const o = await p.evaluate(() => (window as unknown as { out: Promise<unknown> }).out);
+        const pp = await pop;
+        let t = "";
+        if (pp) { try { await pp.waitForLoadState(); t = await pp.title(); } catch { t = "?"; } }
+        await ctx.close();
+        // (the opener's handle: see the limit in patches/coop.ts)
+        void o;
+        return "popup: " + t;
+    };
+
+    it("severs at a popup's later navigation, as directly (the popup's side)", async () => {
+        const LATER: Array<[string, string, string, string]> = [["so", "so", "so", "localhost"], ["so", "so", "so", "127.0.0.1"],
+            ["none", "none", "so", "localhost"], ["sap", "sap", "none", "localhost"], ["sap", "sap", "sap", "localhost"]];
+        for (const [from, first, to, host] of LATER) {
+            const direct = await run2(`http://127.0.0.1:${port0}`, from, first, to, host);
+            const proxied = await run2(`${proxyOrigin}/cyrano/http/127.0.0.1:${port0}`, from, first, to, host);
+            expect(proxied, `${from}->${first}->${to}@${host}`).toBe(direct);
+        }
+        expect(await run2(`http://127.0.0.1:${port0}`, "so", "so", "so", "localhost")).toContain("no opener");
+    }, 180_000);
 
     it("severs as directly", async () => {
         for (const [from, to, host] of CASES) {

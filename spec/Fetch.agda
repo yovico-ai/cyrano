@@ -65,10 +65,16 @@ includesCredentials credInclude    sameOriginReq = true
 -- request non-simple: a preflight the page did not cause, which the
 -- upstream refuses (Target's PerimeterX frame, 2026-11-19). Elsewhere the
 -- runtime names its context where the request crosses original origins,
--- or where the context sends no Referer (a blob: worker).
+-- where the context sends no Referer (a blob: worker), or where the
+-- request is in cors mode (a fetch, an XHR): such a request redirected to
+-- another origin comes to the proxy again with the same headers, and is
+-- judged there (corsOrigin) — through the proxy the browser followed it as
+-- same-origin, and a same-origin fetch sent elsewhere read any answer
+-- (round K). Crn-C carries the credentials mode as the page set it; the
+-- proxy resolves "same-origin" against each target (includesCredentials).
 
-namesContext : (opaqueCtx cross unreferred : Bool) → Bool
-namesContext opaqueCtx cross unreferred = not opaqueCtx ∧ (cross ∨ unreferred)
+namesContext : (opaqueCtx cross unreferred corsMode : Bool) → Bool
+namesContext opaqueCtx cross unreferred corsMode = not opaqueCtx ∧ (cross ∨ unreferred ∨ corsMode)
 
 ------------------------------------------------------------------------
 -- Header values.
@@ -214,3 +220,22 @@ credentialsBlocked userinfo dest = userinfo ∧ not (eqStr dest (toList "documen
 -- every target differs). Sec-Fetch-Mode names the mode.
 sameOriginModeFails : Str → Str → Str → Bool
 sameOriginModeFails mode client target = eqStr mode (toList "same-origin") ∧ not (eqStr client target)
+
+-- The origin a request in cors mode is CORS-checked by (nothing: none):
+-- the context the runtime named (Crn-I's origin), else — for a request for
+-- no destination (a fetch preload, an EventSource) — its Referer's
+-- document's; none when that is the target's own origin. At every fetch
+-- of a redirect chain (Fetch "main fetch": a same-origin request
+-- redirected to another origin is a cors request there). Arguments: mode,
+-- destination (Sec-Fetch-*, lowercase), the named origin, the Referer's
+-- document's, the target's (origins as serialized).
+corsOrigin : Str → Str → Maybe Str → Maybe Str → Str → Maybe Str
+corsOrigin mode dest named referred target =
+  if eqStr mode (toList "cors") then pick named referred else nothing
+  where
+  other : Str → Maybe Str
+  other o = if eqStr o target then nothing else just o
+  pick : Maybe Str → Maybe Str → Maybe Str
+  pick (just o) _        = other o
+  pick nothing (just o)  = if eqStr dest (toList "empty") then other o else nothing
+  pick nothing nothing   = nothing

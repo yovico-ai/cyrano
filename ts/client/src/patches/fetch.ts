@@ -19,7 +19,7 @@
 import { SafeWeakMap, SafeWeakSet, nO, nOP, nR, ncall, sStarts } from "../native/intrinsics";
 import { patchFetchLater } from "./fetch-later";
 import { wrapAccessor, wrapConstructor, wrapMethod } from "../native/surface";
-import { AUTHORS, CREDENTIALS, INITIATOR, responseType, namesContext, includesCredentials, initiatorValue, corsAllows, exposedBy, isCrossOrigin, type CorsContext, type Exposed } from "./cors";
+import { AUTHORS, CREDENTIALS, INITIATOR, responseType, namesContext, includesCredentials, credentialsMode, otherOrigin, initiatorValue, corsAllows, exposedBy, isCrossOrigin, type CorsContext, type Exposed } from "./cors";
 import { headerViewsOf } from "./response-headers";
 import { type RewriteOne } from "./referrer-policy";
 import { isReferrerPolicy } from "../url/containment";
@@ -91,6 +91,8 @@ export function patchFetch(
 ): void {
     // Response#type, the browser's own (read before the runtime wraps it).
     const nativeType = (w0 => { try { return nO.getOwnPropertyDescriptor((w0 as unknown as { Response?: { prototype: object } }).Response?.prototype ?? {}, "type")?.get as ((this: unknown) => string) | undefined; } catch { return undefined; } })(targetWindow);
+    const nativeRedirected = (w0 => { try { return nO.getOwnPropertyDescriptor((w0 as unknown as { Response?: { prototype: object } }).Response?.prototype ?? {}, "redirected")?.get as ((this: unknown) => boolean) | undefined; } catch { return undefined; } })(targetWindow);
+    const nativeResponseUrl = (w0 => { try { return nO.getOwnPropertyDescriptor((w0 as unknown as { Response?: { prototype: object } }).Response?.prototype ?? {}, "url")?.get as ((this: unknown) => string) | undefined; } catch { return undefined; } })(targetWindow);
     const w = targetWindow as unknown as {
         Request?: typeof Request; Response?: typeof Response; Promise?: PromiseConstructor; TypeError?: TypeErrorConstructor;
     };
@@ -211,7 +213,7 @@ export function patchFetch(
                 asIs = false;
             }
         }
-        if (own === undefined || !namesContext(cors?.opaque === true, cross, cors?.always === true)) return plain();
+        if (own === undefined || !namesContext(cors?.opaque === true, cross, cors?.always === true, mode === "cors")) return plain();
 
         const credentialed = credentials === "include";
         const redirect = init?.redirect ?? (viaRequest ? input.redirect : "follow");
@@ -235,7 +237,7 @@ export function patchFetch(
                     if (nativeHeadersForEach) ncall(nativeHeadersForEach, h, (_v: string, k: string) => { names[names.length] = k; });
                     h.set(AUTHORS, names.join(","));
                     h.set(INITIATOR, from);
-                    h.set(CREDENTIALS, includesCredentials(credentials, !cross) ? "include" : "omit");
+                    h.set(CREDENTIALS, credentialsMode(String(credentials)));
                     return h;
                 };
                 const H = (w as unknown as { Headers: typeof Headers }).Headers;
@@ -264,11 +266,16 @@ export function patchFetch(
             }]) as Promise<Response>;
         }
         const views = headerViewsOf(targetWindow);
-        if (!cross || mode !== "cors" || !views || !headersOf) return sent;
+        if (mode !== "cors" || !views || !headersOf) return sent;
+        if (!cross && (redirect !== "follow" || !nativeRedirected || !nativeResponseUrl)) return sent;
         return nR.apply(then, sent, [(resp: Response) => {
             // An opaque redirect (redirect: "manual") shows no headers: the
             // proxy checked the redirect itself (round I: Chromium gives it).
             if (nativeType && ncall(nativeType, resp) === "opaqueredirect") return resp;
+            // A same-origin request redirected to another origin: a
+            // cross-origin response there (the proxy CORS-checked that hop:
+            // spec Fetch.corsOrigin).
+            if (!cross && !(ncall(nativeRedirected!, resp) && otherOrigin(unwrapOne(String(ncall(nativeResponseUrl!, resp))), own!))) return resp;
             const h = ncall(headersOf, resp);
             if (!corsAllows(views.original(h, "access-control-allow-origin"), views.original(h, "access-control-allow-credentials"), own, credentialed)) {
                 throw new TypeErr("Failed to fetch");

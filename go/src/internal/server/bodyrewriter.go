@@ -258,6 +258,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				return urlrewrite.SrcdocReferrer(proxy.PagePolicy(resp, target), target.String())
 			}
 			cfg.OnMetaCSP = func(content string) { proxy.RecordMetaUIR(resp, target, content); proxy.RecordMetaCSP(resp, target, content) }
+			cfg.OnImportMap = func(text, base string) { proxy.RecordImportMap(resp, target, base, text) }
 			if cfg.ExternalBootstrap {
 				cfg.ClientPassthrough["xb"] = true // documents this page writes need the same
 			}

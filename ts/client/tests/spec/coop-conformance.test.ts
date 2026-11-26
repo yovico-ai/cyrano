@@ -5,7 +5,7 @@
 import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { coopEmulated, coopOf, type Coop } from "../../src/url/coop";
+import { coopEmulated, coopEmulatedAt, coopOf, type Coop } from "../../src/url/coop";
 import { OracleClient, locateOracle, oracleRequired } from "./oracle-client";
 
 const located = locateOracle();
@@ -31,6 +31,13 @@ describe.skipIf(located.skip !== "")("Cross-Origin-Opener-Policy: spec conforman
             async (a, oa, b, ob) => {
                 const want = await oracle.ask("coopemulated", [a, oa, b, ob, "https://proxy.example"]);
                 expect(coopEmulated(a, oa, b, ob, "https://proxy.example") ? "yes" : "no", JSON.stringify([a, oa, b, ob])).toBe(want);
+            }), { numRuns: 300 });
+    });
+    it("coopEmulatedAt is Coop.emulatedAt", async () => {
+        await fc.assert(fc.asyncProperty(fc.boolean(), fc.constantFrom(...values), fc.constantFrom(...origins), fc.constantFrom(...values), fc.constantFrom(...origins),
+            async (i, a, oa, b, ob) => {
+                const want = await oracle.ask("coopemulatedat", [i ? "yes" : "no", a, oa, b, ob, "https://proxy.example"]);
+                expect(coopEmulatedAt(i, a, oa, b, ob, "https://proxy.example") ? "yes" : "no", JSON.stringify([i, a, oa, b, ob])).toBe(want);
             }), { numRuns: 300 });
     });
 });

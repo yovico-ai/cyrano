@@ -400,10 +400,10 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 		// are recomputed here from the original URLs and the referring page's
 		// own Referrer-Policy.
 		noDictionaryOffer(req)
-		h.filterClientHints(req, target, sessionID) // reads the proxied Referer: before it is replaced
-		noteCORS(req, target)                       // reads the runtime's headers: before they are consumed below
+		h.filterClientHints(req, target, sessionID)               // reads the proxied Referer: before it is replaced
+		h.noteCORS(req, target, requestMark.Dest)                 // reads the runtime's headers: before they are consumed below
 		h.storageAccess(req, target, sessionID, requestMark.Dest) // reads the proxied Referer and the runtime's headers
-		if from := h.requestingDocument(req); from != nil { // before directFetchHeaders replaces the Referer
+		if from := h.requestingDocument(req); from != nil {       // before directFetchHeaders replaces the Referer
 			*req = *req.WithContext(context.WithValue(req.Context(), requesterKey{}, pageKey(from)))
 		}
 		// A request whose Referer is itself a script or stylesheet (a module's
@@ -424,6 +424,7 @@ func (h *Handler) makeDirector(target *url.URL) func(*http.Request) {
 				}
 			}
 		}
+		noteMapIntegrity(req, target) // its document's import map entry, when it has none of its own
 		// A sandboxed (opaque-origin) document's requests are the only
 		// cross-site ones the browser makes to the proxy: its origin is
 		// "null" (fetch_headers.go). Read before directFetchHeaders.
@@ -456,6 +457,10 @@ func (h *Handler) modifyResponse(resp *http.Response) error {
 	// (cors.go); so does a no-cors one its CORP (or the embedder's COEP)
 	// refuses (spec/Corp.agda).
 	if corsFails(resp) || scriptCORSFails(resp) || corpFails(resp) {
+		if c, ok := resp.Request.Context().Value(corsKey{}).(corsRequest); ok {
+			h.opts.Logger.Debug("cors refused", "target", resp.Request.URL.Redacted(), "origin", c.origin, "credentialed", c.credentialed,
+				"status", resp.StatusCode, "acao", resp.Header.Values("Access-Control-Allow-Origin"), "acac", resp.Header.Values("Access-Control-Allow-Credentials"))
+		}
 		// The browser stores a refused response's cookies (before the check).
 		h.failedCookies(resp, false)
 		_ = resp.Body.Close()
@@ -585,6 +590,7 @@ func (h *Handler) translateResponse(resp *http.Response) error {
 			setUIR(sessionIn(resp.Request), pageKey(resp.Request.URL), declaresUIR)
 			h.recordPageSpace(resp)
 			setPageCSP(sessionIn(resp.Request), pageKey(resp.Request.URL), originalCSP, false)
+			forgetImportMaps(sessionIn(resp.Request), pageKey(resp.Request.URL))
 			setEmbedder(sessionIn(resp.Request), pageKey(resp.Request.URL),
 				urlrewrite.EmbedderOf(resp.Header.Get("Cross-Origin-Embedder-Policy"), resp.Header.Get("Document-Isolation-Policy")))
 		}

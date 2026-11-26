@@ -499,3 +499,114 @@ rewriteImportMapT rw twin s with tokenize s
   emit (suc n) (t ∷ ts′) (r ∷ rs′) = one t r ++ emit n ts′ rs′
   emit (suc n) (t ∷ ts′) [] = text t ++ emit n ts′ []
   emit (suc n) [] _ = []
+
+------------------------------------------------------------------------
+-- The "integrity" section, enforced by the proxy (HTML "normalize a
+-- module integrity map", "resolve a module integrity metadata"). The map
+-- the browser is given has it emptied (above), so the proxy keeps it for
+-- the document: its keys resolved against the map's base (a key that is
+-- not URL-like, or a value that is not a string, is ignored); JSON.parse
+-- keeps the last of a repeated key, and of two maps of a document the
+-- first entry for a URL stands (HTML "merge existing and new import
+-- maps"). A module script fetched for the document (its src, a static or
+-- dynamic import, a modulepreload) without integrity of its own is
+-- checked by its URL's entry. Limits: the proxy cannot tell a classic
+-- script of a listed URL from a module (both are cors mode through it);
+-- a map the runtime inserts is not kept.
+
+isStrTok : Tok → Bool
+isStrTok t with kind t
+... | tString = true
+... | _       = false
+
+solidI : List Tok → List Tok
+solidI [] = []
+solidI (t ∷ ts) = if isWS t then solidI ts else t ∷ solidI ts
+
+-- The tokens after a closing bracket at depth d.
+closeI : ℕ → ℕ → List Tok → List Tok
+closeI zero _ _ = []
+closeI (suc n) d [] = []
+closeI (suc n) d (t ∷ ts) =
+  if isP '{' t ∨ isP '[' t then closeI n (suc d) ts
+  else if isP '}' t ∨ isP ']' t then (if eqN d 1 then ts else closeI n (d ∸ 1) ts)
+  else closeI n d ts
+  where
+  open import Data.Nat.Base using () renaming (_≡ᵇ_ to eqN)
+
+-- The tokens after one value.
+afterI : ℕ → List Tok → List Tok
+afterI n (t ∷ ts) = if isP '{' t ∨ isP '[' t then closeI n 1 ts else ts
+afterI n [] = []
+
+-- The string members of an object, from after '{'.
+pairsI : ℕ → List Tok → List (Str × Str)
+pairsI zero _ = []
+pairsI (suc n) (k ∷ c ∷ v ∷ rest) =
+  if isStrTok k ∧ isP ':' c
+  then (if isStrTok v then (Tok.value k , Tok.value v) ∷ next (pairsI n) rest else next (pairsI n) (afterI n (v ∷ rest)))
+  else []
+  where
+  next : (List Tok → List (Str × Str)) → List Tok → List (Str × Str)
+  next f (t ∷ r) = if isP ',' t then f r else []
+  next f [] = []
+pairsI (suc n) _ = []
+
+-- The last "integrity" member's string members, from after the map's '{'.
+topI : ℕ → List Tok → Maybe (List (Str × Str))
+topI zero _ = nothing
+topI (suc n) (k ∷ c ∷ v ∷ rest) =
+  if isStrTok k ∧ isP ':' c then latest here (next (afterI n (v ∷ rest))) else nothing
+  where
+  here : Maybe (List (Str × Str))
+  here = if eqStr (Tok.value k) (toList "integrity")
+         then (if isP '{' v then just (pairsI n rest) else just [])
+         else nothing
+  next : List Tok → Maybe (List (Str × Str))
+  next (t ∷ r) = if isP ',' t then topI n r else nothing
+  next [] = nothing
+  latest : Maybe (List (Str × Str)) → Maybe (List (Str × Str)) → Maybe (List (Str × Str))
+  latest a (just b) = just b
+  latest a nothing  = a
+topI (suc n) _ = nothing
+
+-- A URL-like key resolved against the base (nothing: ignored).
+resolveLike : Abs → Str → Maybe Str
+resolveLike base s = if urlLike s then from (parse (just base) (preprocess s)) else nothing
+  where
+  from : Parsed → Maybe Str
+  from (url a) = just (href a)
+  from _       = nothing
+
+-- A map's integrity entries, keys resolved (the map as the page wrote it).
+integrityEntries : Abs → Str → List (Str × Str)
+integrityEntries base s with tokenize s
+... | nothing = []
+... | just ts with roles ts
+...   | nothing = []
+...   | just _ = resolved (body (solidI ts))
+  where
+  body : List Tok → List (Str × Str)
+  body (t ∷ r) with topI (length r) r
+  ... | just ps = ps
+  ... | nothing = []
+  body [] = []
+  resolved : List (Str × Str) → List (Str × Str)
+  resolved [] = []
+  resolved ((k , v) ∷ xs) with resolveLike base k
+  ... | just u  = (u , v) ∷ resolved xs
+  ... | nothing = resolved xs
+
+-- A URL's entry: the last one for it.
+integrityFor : List (Str × Str) → Str → Maybe Str
+integrityFor [] u = nothing
+integrityFor ((k , v) ∷ xs) u with integrityFor xs u
+... | just w  = just w
+... | nothing = if eqStr k u then just v else nothing
+
+-- A document's next map: its entries for URLs the earlier ones have none for.
+mergeIntegrity : List (Str × Str) → List (Str × Str) → List (Str × Str)
+mergeIntegrity old [] = old
+mergeIntegrity old ((k , v) ∷ xs) with integrityFor old k
+... | just _  = mergeIntegrity old xs
+... | nothing = mergeIntegrity (old ++ (k , v) ∷ []) xs

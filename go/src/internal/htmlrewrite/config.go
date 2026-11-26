@@ -85,6 +85,10 @@ type Config struct {
 	// OnMetaCSP is told the content of a <meta http-equiv=content-security-policy>
 	// as the page wrote it (its upgrade-insecure-requests, proxy.RecordMetaUIR).
 	OnMetaCSP func(content string)
+	// OnImportMap is told the text of an import map of the document as the
+	// page wrote it, and the base its keys resolve against (its integrity:
+	// proxy.RecordImportMap).
+	OnImportMap func(text, base string)
 	// QueryEncoder: the document's encoding, when it is declared and not
 	// UTF-8 — an element URL's query is encoded in it (spec/Encoding.agda).
 	QueryEncoder urlrewrite.QueryEncoder

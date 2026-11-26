@@ -20,7 +20,7 @@ func TestCORSCheck(t *testing.T) {
 		if creds != "" {
 			req.Header.Set(CredentialsHeader, creds)
 		}
-		noteCORS(req, target)
+		(&Handler{}).noteCORS(req, target, "")
 		return corsFails(&http.Response{Header: resp, Request: req})
 	}
 	page := "https://site.test/p?q=1"
@@ -57,7 +57,7 @@ func TestKindHeaderConsumed(t *testing.T) {
 		if kind != "" {
 			req.Header.Set(KindHeader, kind)
 		}
-		noteCORS(req, target)
+		(&Handler{}).noteCORS(req, target, "")
 		if req.Header.Get(KindHeader) != "" {
 			t.Errorf("%q: Crn-K left on the request", kind)
 		}
