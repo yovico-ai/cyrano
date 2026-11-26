@@ -701,7 +701,7 @@ private
 -- such a document a policy admitting the proxy's origin alone ('self'):
 -- what the output loads through the proxy (relative URLs) loads, what it
 -- would load from another origin is refused, never fetched outside it.
--- (Rewriting the XSL itself — literal result elements, xsl:import, values
+-- (Its own loads are proxified: rewriteXsl, below. Literal result elements,
 -- taken from the data — is not done.)
 xslType : Str → Bool
 xslType t = any′ (map toList ("text/xml" ∷ "text/xsl" ∷ "application/xml" ∷ "application/xhtml+xml" ∷ "application/rss+xml" ∷ "application/atom+xml" ∷ []))
@@ -714,3 +714,147 @@ xslType t = any′ (map toList ("text/xml" ∷ "text/xsl" ∷ "application/xml" 
 
 xslNetPolicy : Str
 xslNetPolicy = toList "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:"
+
+------------------------------------------------------------------------
+-- An XSLT stylesheet's own loads: xsl:import and xsl:include (their href)
+-- and the document() function, which the browser fetches itself, by URLs
+-- resolved against the stylesheet (XSLT 1.0 §2.6, §12.1). Through the
+-- proxy an absolute one named the origin, which the browser's XSLT loader
+-- refuses (it loads its own origin's only — the proxy's): a transform that
+-- imports or reads by absolute URL failed where directly it ran (measured,
+-- XSLTProcessor and an XSLT-styled document). So a stylesheet — one the
+-- browser fetches as such (Sec-Fetch-Dest xslt: Disposition.xslDest), one
+-- the page hands XSLTProcessor (a copy) — has, in its elements of the XSLT
+-- namespace, the href of xsl:import / xsl:include and every document()
+-- string literal of any attribute proxified, edited in place. Its literal
+-- result elements are left (the output is not rewritten: a gap), as is a
+-- document() argument that is not a literal.
+
+xslUri : Str
+xslUri = toList "http://www.w3.org/1999/XSL/Transform"
+
+-- An expression's document('…') / document("…") literals given to f (the
+-- name not part of a longer one; spaces allowed before "(" and the quote).
+documentLits : (Str → Str) → Str → Str
+documentLits f s = go (suc (len s)) false s
+  where
+  -- an XPath name's characters (a "document" after one is a longer name)
+  isNameC : Char → Bool
+  isNameC c = isDigit c ∨ within 65 90 c ∨ within 97 122 c ∨ is 45 c ∨ is 46 c ∨ is 95 c ∨ is 58 c ∨ (127 <ᵇ toℕ c)
+  spaces : Str → Str × Str
+  spaces (c ∷ cs) with isWs c
+  ... | true  = let r = spaces cs in (c ∷ Data.Product.Base.proj₁ r) , Data.Product.Base.proj₂ r
+  ... | false = [] , c ∷ cs
+  spaces [] = [] , []
+  upTo : Char → Str → Maybe (Str × Str)
+  upTo q [] = nothing
+  upTo q (c ∷ cs) = if toℕ c ≡ᵇ toℕ q then just ([] , cs) else more (upTo q cs)
+    where
+    more : Maybe (Str × Str) → Maybe (Str × Str)
+    more nothing = nothing
+    more (just (a , b)) = just (c ∷ a , b)
+  go : ℕ → Bool → Str → Str
+  go zero _ s′ = s′
+  go (suc n) _ [] = []
+  go (suc n) prevName (c ∷ cs) =
+    if not prevName ∧ startsS (toList "document") (c ∷ cs) then call (dropS 8 (c ∷ cs))
+    else c ∷ go n (isNameC c) cs
+    where
+    startsS : Str → Str → Bool
+    startsS [] _ = true
+    startsS (p ∷ ps) (x ∷ xs) = (toℕ p ≡ᵇ toℕ x) ∧ startsS ps xs
+    startsS _ [] = false
+    dropS : ℕ → Str → Str
+    dropS zero r = r
+    dropS (suc k) [] = []
+    dropS (suc k) (_ ∷ r) = dropS k r
+    -- after "document": [spaces] "(" [spaces] quote literal quote, else as written
+    call : Str → Str
+    call r with spaces r
+    ... | (w₁ , '(' ∷ r₁) with spaces r₁
+    ...   | (w₂ , q ∷ r₂) =
+      if is 39 q ∨ is 34 q then lit (upTo q r₂)
+      else toList "document" ++ w₁ ++ '(' ∷ go n false (w₂ ++ q ∷ r₂)
+      where
+      lit : Maybe (Str × Str) → Str
+      lit nothing = toList "document" ++ w₁ ++ '(' ∷ w₂ ++ q ∷ r₂
+      lit (just (l , r₃)) = toList "document" ++ w₁ ++ '(' ∷ w₂ ++ q ∷ f l ++ q ∷ go n false r₃
+    ...   | (w₂ , []) = toList "document" ++ w₁ ++ '(' ∷ w₂
+    call r | (w₁ , r₁) = toList "document" ++ w₁ ++ go n (noSpace w₁) r₁
+      where
+      noSpace : Str → Bool
+      noSpace [] = true
+      noSpace _  = false
+
+-- The edits of one start tag of the XSLT namespace (local name l).
+xslAttrEdits : (Str → Str) → Str → List XAttr → Maybe (List Edit)
+xslAttrEdits f l [] = just []
+xslAttrEdits f l (xattr n v q from to ∷ as) with decode true v | xslAttrEdits f l as
+... | just d | just es =
+  let now = if isRef ∧ eqStr n (toList "href") then f d else documentLits f d in
+  if eqStr now d then just es else just ((from , to , q ∷ encodeAttr q now ++ q ∷ []) ∷ es)
+  where
+  isRef : Bool
+  isRef = eqStr l (toList "import") ∨ eqStr l (toList "include")
+... | _ | _ = nothing
+
+-- The stylesheet's edits, its scopes kept open element by element;
+-- nothing: it does not read (given as sent).
+outerScope : List Scope → Scope
+outerScope [] = []
+outerScope (s ∷ _) = s
+
+-- A start tag's edits by its namespace: the XSLT namespace's only.
+xslHere : (Str → Str) → Str → List XAttr → Maybe Str → Maybe (List Edit)
+xslHere f n as (just uri) = if eqStr uri xslUri then xslAttrEdits f (Data.Product.Base.proj₂ (qname n)) as else just []
+xslHere f n as nothing = just []
+
+xslWalk : (Str → Str) → List Scope → List XTok → Maybe (List Edit)
+xslWalk f sc [] = just []
+xslWalk f sc (xtok (xStart n as em) _ _ ∷ ts) with bindings as
+... | nothing = nothing
+... | just b with resolve (b ++ outerScope sc) n
+...   | nothing = nothing
+...   | just u with xslHere f n as u | xslWalk f (if em then sc else (b ++ outerScope sc) ∷ sc) ts
+...     | just es | just rest = just (es ++ rest)
+...     | _ | _ = nothing
+xslWalk f (_ ∷ sc) (xtok (xEnd _) _ _ ∷ ts) = xslWalk f sc ts
+xslWalk f [] (xtok (xEnd _) _ _ ∷ ts) = nothing
+xslWalk f sc (_ ∷ ts) = xslWalk f sc ts
+
+-- The rewritten stylesheet (f: what containment makes of one URL, resolved
+-- against the stylesheet); as sent when it does not read.
+rewriteXsl : (Str → Str) → Str → Str
+rewriteXsl f s with tokenize s
+... | nothing = s
+... | just ts with xslWalk f [] ts
+...   | nothing = s
+...   | just es = apply 0 s es
+  where
+  apply : ℕ → Str → List Edit → Str
+  apply i cs [] = cs
+  apply i [] ((a , z , t) ∷ es′) = t ++ apply i [] es′
+  apply i (c ∷ cs) ((a , z , t) ∷ es′) =
+    if i <ᵇ a then c ∷ apply (suc i) cs ((a , z , t) ∷ es′)
+    else t ++ apply z (skip (z ∸ i) (c ∷ cs)) es′
+    where
+    skip : ℕ → Str → Str
+    skip zero    r        = r
+    skip (suc k) []       = []
+    skip (suc k) (_ ∷ r)  = skip k r
+
+private
+  open import Relation.Binary.PropositionalEquality using (_≡_; refl)
+  px : Str → Str
+  px u = 'P' ∷ u
+  -- xsl:import's href, a document() literal; a literal result element left.
+  xsl1 : rewriteXsl px (toList "<x:stylesheet xmlns:x=\"http://www.w3.org/1999/XSL/Transform\"><x:import href=\"a.xsl\"/><x:value-of select=\"document('d.xml')/r\"/><img src=\"i\"/></x:stylesheet>")
+       ≡ toList "<x:stylesheet xmlns:x=\"http://www.w3.org/1999/XSL/Transform\"><x:import href=\"Pa.xsl\"/><x:value-of select=\"document('Pd.xml')/r\"/><img src=\"i\"/></x:stylesheet>"
+  xsl1 = refl
+  -- Another namespace: nothing; a longer name is not document().
+  xsl2 : rewriteXsl px (toList "<r><import href=\"a\" s=\"document('x')\"/></r>") ≡ toList "<r><import href=\"a\" s=\"document('x')\"/></r>"
+  xsl2 = refl
+  xsl3 : documentLits px (toList "mydocument('x') | document ( \"y\" )") ≡ toList "mydocument('x') | document ( \"Py\" )"
+  xsl3 = refl
+  xsl4 : documentLits px (toList "count(document('a'))") ≡ toList "count(document('Pa'))"
+  xsl4 = refl

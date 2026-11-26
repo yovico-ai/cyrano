@@ -411,6 +411,8 @@ dispatch op args =
   else if eqStr op (toList "lnarefused") then lnaRefusedReq args
   else if eqStr op (toList "oacreads") then oacReadsReq args
   else if eqStr op (toList "csprefuses") then cspRefusesReq args
+  else if eqStr op (toList "csprefusal") then out Csp.refusalLocation
+  else if eqStr op (toList "csppairs") then cspPairsReq args
   else if eqStr op (toList "xsltype") then oneArg (λ t → if XmlDoc.xslType t then toList "yes" else toList "no") args
   else if eqStr op (toList "xslnet") then out XmlDoc.xslNetPolicy
   else if eqStr op (toList "sameoriginmode") then sameOriginModeReq args
@@ -585,6 +587,7 @@ dispatch op args =
   else if eqStr op (toList "link") then linkReq args
   else if eqStr op (toList "specrules") then specRulesReq args
   else if eqStr op (toList "xmlrw") then xmlRwReq args
+  else if eqStr op (toList "xslrw") then oneArg (λ v → XmlDoc.rewriteXsl (λ u → 'P' ∷ u) v) args
   else if eqStr op (toList "mixed") then mixedReq args
   else if eqStr op (toList "uir") then uirReq args
   else if eqStr op (toList "uirdeclared") then uirDeclReq args
@@ -1915,6 +1918,14 @@ dispatch op args =
     px : CspProxy
     px = record { origin = o ; ttPolicy = tt ; plainHttp = prefixCI (toList "http://") o }
   cspReq _ = errorReply "BadRequest"
+
+  -- csppairs <proxy origin> <tt policy> <header> → each policy "translated<TAB>original", one a line (Csp.policyPairs)
+  cspPairsReq : List Str → Str
+  cspPairsReq (o ∷ tt ∷ v ∷ []) = out (Csp.joinWith (toList "\n") (Data.List.Base.map (λ pr → Data.Product.Base.proj₁ pr ++ toList "\t" ++ Data.Product.Base.proj₂ pr) (policyPairs px v)))
+    where
+    px : CspProxy
+    px = record { origin = o ; ttPolicy = tt ; plainHttp = prefixCI (toList "http://") o }
+  cspPairsReq _ = errorReply "BadRequest"
 
   cspNonceReq : List Str → Str
   cspNonceReq (hs ∷ []) = maybeOut (scriptNonce (fieldLines hs))

@@ -19,7 +19,7 @@ func TestMain(m *testing.M) {
 
 func TestSpecConformance_Disposition(t *testing.T) {
 	oracle := specoracle.Need(t)
-	dests := []string{"script", "Script", "style", "worker", "sharedworker", "serviceworker", "audioworklet", "paintworklet", "sharedstorageworklet", "AudioWorklet", "document",
+	dests := []string{"xslt", "XSLT", "script", "Script", "style", "worker", "sharedworker", "serviceworker", "audioworklet", "paintworklet", "sharedstorageworklet", "AudioWorklet", "document",
 		"iframe", "frame", "embed", "object", "empty", "image", "font", "manifest", "track", "video", "report", ""}
 	cts := []string{"text/javascript", "text/plain", "TEXT/HTML; charset=utf-8", " text/html ", "application/xhtml+xml", "text/css",
 		"text/css;x", "application/javascript", "application/x-javascript", "text/jscript", "application/json", "image/png",

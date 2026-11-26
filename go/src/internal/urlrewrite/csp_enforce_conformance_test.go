@@ -38,3 +38,15 @@ func TestSpecConformance_CSPRefuses(t *testing.T) {
 		}
 	})
 }
+
+// Where a refused request is redirected (spec Csp.refusalLocation).
+func TestSpecConformance_CSPRefusalLocation(t *testing.T) {
+	oracle := specoracle.Need(t)
+	want, _, err := oracle.Ask("csprefusal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if CSPRefusalLocation != want {
+		t.Errorf("CSPRefusalLocation %q, spec %q", CSPRefusalLocation, want)
+	}
+}

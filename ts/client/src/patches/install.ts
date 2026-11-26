@@ -15,14 +15,14 @@ import { patchCanvasTaint } from "./canvas-taint";
 import { patchSvgHref } from "./svg-href";
 import { patchWorklets } from "./worklet";
 import type { Dest } from "../url/containment";
-import { SafeSet, nO, nOP, nR, ncall, sStarts } from "../native/intrinsics";
+import { SafeMap, SafeSet, nO, nOP, nR, ncall, sStarts } from "../native/intrinsics";
 import { initTrusted } from "../native/trusted";
 import type { ClientConfig } from "../config";
 import { rewriteUrl, unwrapProxiedUrl } from "../url/containment";
 import { installToStringMask, wrapAccessor, wrapMethod } from "../native/surface";
 import { patchErrorStacks } from "../native/error-stack";
 import type { Internals } from "../native/internals";
-import { initOriginals } from "../native/originals";
+import { initOriginals, originalAttr } from "../native/originals";
 import { initCrossOrigin } from "../native/cross-origin";
 import { patchCrossOriginWindows, patchNamedFrames } from "./cross-origin-windows";
 import { patchResponseHeaders } from "./response-headers";
@@ -44,6 +44,7 @@ import { patchCacheUrls } from "./cache-urls";
 import { patchTypedOm, patchWebAnimations } from "./typed-om";
 import { patchMediaMetadata } from "./media-metadata";
 import { patchNotification } from "./notification";
+import { patchXslt } from "./xslt";
 import { patchReflection } from "../native/hidden-globals";
 import { patchDocumentWrite } from "../wrappers/document-write";
 import { buildBootstrapHtml } from "../runtime/bootstrap-html";
@@ -150,7 +151,7 @@ export function installPatches(
     step("patchErrorStacks", () => patchErrorStacks(targetWindow, config.apiBaseURL + config.source, unwrapOne));
     step("patchPerformanceEntryNames", () => patchPerformanceEntryNames(targetWindow, unwrapOne, rewriteOne, new URL(config.apiBaseURL).origin,
         config.identity ? config.apiBaseURL + config.source : undefined));
-    step("patchCspViolationEvents", () => patchCspViolationEvents(targetWindow, unwrapOne, new URL(config.apiBaseURL).origin));
+    step("patchCspViolationEvents", () => patchCspViolationEvents(targetWindow, unwrapOne, new URL(config.apiBaseURL).origin, config.cspp ?? []));
     step("patchReports", () => patchReports(targetWindow, unwrapOne, config.apiBaseURL + config.source));
 
     // Anchor/area URL-part reflection must be patched before patchUrlAttributes
@@ -246,6 +247,7 @@ export function installPatches(
     step("patchTypedOm", () => patchTypedOm(targetWindow, rewriteOne));
     step("patchWebAnimations", () => patchWebAnimations(targetWindow, rewriteOne));
     step("patchMediaMetadata", () => patchMediaMetadata(targetWindow, rewriteOne, unwrapOne));
+    step("patchXslt", () => patchXslt(targetWindow, rewriteOne, unwrapOne));
     // A notification's images the browser fetches itself (patches/notification.ts).
     step("patchNotification", () => patchNotification(targetWindow, rewriteOne, unwrapOne));
     // Before document.cookie is wrapped: it writes with the native setter.
@@ -445,19 +447,53 @@ export function patchPerformanceEntryNames(
 
 /**
  * SecurityPolicyViolationEvent: the URLs it reports are the page's own, and
- * the policy text is the origin's — without the proxy origin cyrano added
- * to its source lists (proxy/csp.go).
+ * the policy text is the origin's: a header's policy as the server paired
+ * it with the translated one (spec Csp.policyPairs), a <meta>'s content as
+ * the page wrote it (its originals), else the browser's without the proxy
+ * origin cyrano added to its source lists (proxy/csp.go).
  */
-function patchCspViolationEvents(targetWindow: Window, unwrapOne: (url: string) => string, proxyOrigin: string): void {
+function patchCspViolationEvents(targetWindow: Window, unwrapOne: (url: string) => string, proxyOrigin: string, pairs: Array<[string, string]>): void {
     const proto = (targetWindow as unknown as { SecurityPolicyViolationEvent?: { prototype: object } }).SecurityPolicyViolationEvent?.prototype;
     if (!proto) return;
     for (const key of ["documentURI", "blockedURI", "sourceFile", "referrer"]) {
         if (!nO.getOwnPropertyDescriptor(proto, key)) continue;
         wrapAccessor<string>(proto, key, { get: (get, self) => unwrapOne(ncall(get, self)) });
     }
+    const byBrowser = new SafeMap<string, string>();
+    for (const [b, o] of pairs) if (!byBrowser.has(b)) byBrowser.set(b, o);
+    const doc = (targetWindow as unknown as { document?: Document }).document;
+    const nativeGetAttr = (targetWindow as unknown as { Element?: { prototype: Element } }).Element?.prototype.getAttribute;
+    const nativeQSA = (targetWindow as unknown as { Document?: { prototype: Document } }).Document?.prototype.querySelectorAll;
+    const asWrittenMeta = (v: string): string | undefined => {
+        if (!doc || !nativeQSA || !nativeGetAttr) return undefined;
+        try {
+            const metas = ncall(nativeQSA, doc, "meta[http-equiv]") as NodeListOf<Element>;
+            for (let i = 0; i < metas.length; i++) {
+                const m = metas[i]!;
+                if (String(ncall(nativeGetAttr, m, "http-equiv")).toLowerCase() !== "content-security-policy") continue;
+                const now = ncall(nativeGetAttr, m, "content");
+                if (now === null || trimAscii(String(now)) !== v) continue;
+                const was = originalAttr(m, "content");
+                return was && was.value !== null ? trimAscii(was.value) : v;
+            }
+        } catch { /* as the browser has it */ }
+        return undefined;
+    };
     if (nO.getOwnPropertyDescriptor(proto, "originalPolicy")) {
         wrapAccessor<string>(proto, "originalPolicy", {
-            get: (get, self) => ncall(get, self).split(" " + proxyOrigin).join(""),
+            get: (get, self) => {
+                const v = ncall(get, self);
+                return byBrowser.get(v) ?? asWrittenMeta(v) ?? v.split(" " + proxyOrigin).join("");
+            },
         });
     }
+}
+
+/** ASCII whitespace off both ends (a policy's text as Chromium reports it). */
+function trimAscii(s: string): string {
+    let a = 0, b = s.length;
+    const ws = (c: number): boolean => c === 9 || c === 10 || c === 12 || c === 13 || c === 32;
+    while (a < b && ws(s.charCodeAt(a))) a++;
+    while (b > a && ws(s.charCodeAt(b - 1))) b--;
+    return s.slice(a, b);
 }

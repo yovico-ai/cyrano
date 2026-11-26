@@ -5,6 +5,7 @@
 const { chromium } = require("playwright");
 const PROXY = process.env.PROXY || "http://localhost:9081"; // PROXY=https://localhost:9443 for a TLS instance
 const PROXY_HOST = PROXY.replace(/^https?:\/\//, "");
+const REFUSED = "https://cyrano-refused.invalid/"; // the proxy's CSP refusal redirect (Go urlrewrite.CSPRefusalLocation)
 const sites = process.argv.slice(2);
 const assist = require("./assist.cjs");
 const ads = require("./ads.cjs");
@@ -72,9 +73,9 @@ async function clickAround(browser, url, n) {
   const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
   const page = await ctx.newPage();
   const escaped = [], errors = [];
-  page.on("request", (r) => { const u = r.url(); if (/^https?:/.test(u) && !u.startsWith(PROXY)) escaped.push(u.slice(0, 140)); });
+  page.on("request", (r) => { const u = r.url(); if (/^https?:/.test(u) && !u.startsWith(PROXY) && !u.startsWith(REFUSED)) escaped.push(u.slice(0, 140)); });
   page.on("pageerror", (e) => errors.push(String(e.message).slice(0, 300)));
-  ctx.on("page", (p) => p.on("request", (r) => { const u = r.url(); if (/^https?:/.test(u) && !u.startsWith(PROXY)) escaped.push("(new tab) " + u.slice(0, 130)); }));
+  ctx.on("page", (p) => p.on("request", (r) => { const u = r.url(); if (/^https?:/.test(u) && !u.startsWith(PROXY) && !u.startsWith(REFUSED)) escaped.push("(new tab) " + u.slice(0, 130)); }));
   const site = siteOf(new URL(url).hostname);
   try {
     await page.goto(prox(url), { waitUntil: "load", timeout: 45000 });
@@ -143,11 +144,14 @@ async function clickAround(browser, url, n) {
 async function visit(browser, url, viaProxy) {
   const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
   const page = await ctx.newPage();
-  const errors = [], failed = [], escaped = [];
+  const errors = [], failed = [], escaped = [], refusedFollowed = [];
   page.on("pageerror", (e) => errors.push(String(e.message).slice(0, 600)));
   page.on("console", (m) => { if (m.type() === "error" && !ads.namesAd(m.text()) && !ads.namesAd(m.location()?.url || "")) errors.push("console: " + m.text().slice(0, 600)); }); // cut on output: a proxied URL is longer
   page.on("requestfailed", (r) => ads.isAd(r.url()) || failed.push(`${r.failure()?.errorText} ${r.url().slice(0, 120)}`));
-  page.on("request", (r) => { const u = r.url(); if (viaProxy && /^https?:/.test(u) && !u.startsWith(PROXY)) escaped.push(u.slice(0, 140)); });
+  // The proxy's CSP refusal redirect (spec Csp.refusalLocation), followed
+  // where the browser's policy admitted it: no escape (it resolves
+  // nowhere, carries nothing), counted apart.
+  page.on("request", (r) => { const u = r.url(); if (viaProxy && /^https?:/.test(u) && !u.startsWith(PROXY)) (u.startsWith(REFUSED) ? refusedFollowed : escaped).push(u.slice(0, 140)); });
   let status = 0, navErr = "";
   try {
     const resp = await page.goto(viaProxy ? prox(url) : url, { waitUntil: "load", timeout: 45000 });
@@ -166,7 +170,7 @@ async function visit(browser, url, viaProxy) {
   try { dom = await page.evaluate(ads.DOM); } catch { /* none */ }
   try { p = await page.evaluate(probe); } catch (e) { navErr += " | probe: " + String(e.message).slice(0, 120); }
   await ctx.close();
-  return { status, navErr, p, errors, failed, escaped, shot, dom, masked };
+  return { status, navErr, p, errors, failed, escaped, refusedFollowed, shot, dom, masked };
 }
 
 (async () => {
@@ -237,6 +241,7 @@ async function visit(browser, url, viaProxy) {
     const de = new Set(d.errors.map(plain));
     for (const e of [...new Set(v.errors)].filter((e) => !de.has(plain(e))).slice(0, 5)) out.push(`    cyrano-only error: ${e.slice(0, 200)}`);
     for (const e of [...new Set(v.escaped)].slice(0, 4)) out.push(`    escaped: ${e}`);
+    if (v.refusedFollowed.length) out.push(`    CSP refusal redirect followed by the browser: ${v.refusedFollowed.length} (no violation event)`);
     for (const e of [...new Set(v.failed)].slice(0, 3)) out.push(`    cyrano failed: ${e}`);
     const clicks = Number(process.env.CLICKS || 0);
     if (clicks > 0 && v.status && v.status < 400 && !why) out.push(...await clickAround(browser, url, clicks));

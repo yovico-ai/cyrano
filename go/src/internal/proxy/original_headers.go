@@ -143,3 +143,15 @@ func sameValues(a, b []string) bool {
 	}
 	return true
 }
+
+type sentHeadersKey struct{}
+
+// SentHeaders: the headers the origin sent with resp, before the proxy
+// changed any (what Crn-H will carry where they differ); nil when unknown.
+func SentHeaders(resp *http.Response) http.Header {
+	if resp == nil || resp.Request == nil {
+		return nil
+	}
+	h, _ := resp.Request.Context().Value(sentHeadersKey{}).(http.Header)
+	return h
+}

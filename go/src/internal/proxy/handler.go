@@ -259,8 +259,17 @@ func (h *Handler) serveTarget(w http.ResponseWriter, r *http.Request, target *ur
 	}
 	// The document's own fetch directives (spec Csp.cspRefuses, csp_enforce.go).
 	if from := h.requestingDocument(r); from != nil && cspRefused(r, session, from, target) {
-		h.opts.Logger.Debug("refused by the page's policy", "target", target.Redacted())
-		panic(http.ErrAbortHandler) // a network error, nothing sent
+		h.opts.Logger.Debug("refused by the page's policy", "target", target.Redacted(), "from", from.Redacted(), "dest", r.Header.Get("Sec-Fetch-Dest"),
+			"policies", pageCSP(session, pageKey(from)))
+		if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			panic(http.ErrAbortHandler) // a network error, nothing sent
+		}
+		// A redirect the browser's own policy refuses too: it reports the
+		// violation itself, for this URL (spec Csp.refusalLocation).
+		w.Header().Set("Location", urlrewrite.CSPRefusalLocation)
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+		return
 	}
 	// Local Network Access (spec/Lna.agda, lna.go): a public document's
 	// request to a loopback or private address, a private one's to loopback.
@@ -474,6 +483,7 @@ func (h *Handler) modifyResponse(resp *http.Response) error {
 	// Whatever is changed below, scripts still read what the origin sent.
 	sent := resp.Header.Clone()
 	defer func() { carryOriginalHeaders(resp.Header, sent, statusPhrase(resp)) }()
+	*resp.Request = *resp.Request.WithContext(context.WithValue(resp.Request.Context(), sentHeadersKey{}, sent))
 	// A short HTTP/2 body is the response it is (short_body.go).
 	if err := fitShortBody(resp); err != nil {
 		return err

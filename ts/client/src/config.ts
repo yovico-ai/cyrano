@@ -44,6 +44,8 @@ export interface ClientConfig {
     /** The document's Cross-Origin-Opener-Policy token (secure contexts only; spec/Coop.agda), and whether its embedder policy isolates. */
     coop?: string;
     coep?: boolean;
+    /** Each policy of the document's CSP headers as the browser has it and as the origin sent it (spec Csp.policyPairs): a violation's originalPolicy. */
+    cspp?: Array<[string, string]>;
     /** The document's Origin-Agent-Cluster header as sent (spec/Oac.agda). */
     oac?: string;
     /**

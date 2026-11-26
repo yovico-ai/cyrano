@@ -42,10 +42,11 @@ open import Relation.Binary.PropositionalEquality using (_≡_; refl)
 
 -- asWorklet: a worklet's module (below, workletDest).
 data Kind : Set where
-  asJs asCss asHtml asXml asIs asWorklet : Kind
+  asJs asCss asHtml asXml asIs asWorklet asXsl : Kind
 
 kindName : Kind → String
 kindName asWorklet = "worklet"
+kindName asXsl = "xsl"
 kindName asJs   = "js"
 kindName asCss  = "css"
 kindName asHtml = "html"
@@ -218,8 +219,15 @@ workletDest : Maybe Str → Bool
 workletDest (just d) = inS (map lowerAscii d) ("audioworklet" ∷ "paintworklet" ∷ "sharedstorageworklet" ∷ [])
 workletDest nothing  = false
 
+-- An XSLT stylesheet the browser loads (Sec-Fetch-Dest xslt: an
+-- XSLT-styled document's, its imports and document() loads): its own loads
+-- proxified (XmlDoc.rewriteXsl).
+xslDest : Maybe Str → Bool
+xslDest (just d) = eqStr (map lowerAscii d) (toList "xslt")
+xslDest nothing  = false
+
 responseKind : Maybe Dest → Maybe Str → Maybe Str → Sniff → Kind
-responseKind d sfd ct sn = if workletDest sfd then asWorklet else byMark d sfd ct sn
+responseKind d sfd ct sn = if workletDest sfd then asWorklet else if xslDest sfd then asXsl else byMark d sfd ct sn
   where
   byMark : Maybe Dest → Maybe Str → Maybe Str → Sniff → Kind
   byMark (just destScript) _ _ _ = asJs

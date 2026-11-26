@@ -392,6 +392,22 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 				"target", target.String(), "in", len(body), "out", len(rewritten),
 				"identical", len(body) == len(rewritten))
 			replaceBody(resp, rewritten)
+
+		case kindXSL:
+			// An XSLT stylesheet the browser loads (spec Disposition.xslDest):
+			// its own loads proxified (spec XmlDoc.rewriteXsl).
+			body, err := readDecompressedBody(resp)
+			if err != nil {
+				return fmt.Errorf("read upstream body: %w", err)
+			}
+			now := htmlrewrite.RewriteXSL(string(body), func(u string) string {
+				return urlrewrite.RewriteDest(u, target, proxyCfg, "")
+			})
+			if now != string(body) {
+				replaceBody(resp, []byte(now))
+			} else {
+				replaceBody(resp, body)
+			}
 		}
 		return nil
 	}
@@ -409,10 +425,12 @@ const (
 	// A worklet's module (spec/Disposition.agda workletDest): JavaScript
 	// for a scope with no runtime, given only the rules that need none.
 	kindWorklet
+	// An XSLT stylesheet (spec/Disposition.agda xslDest).
+	kindXSL
 )
 
 func (k bodyKind) String() string {
-	return [...]string{"none", "js", "css", "html", "xml", "worklet"}[k]
+	return [...]string{"none", "js", "css", "html", "xml", "worklet", "xsl"}[k]
 }
 
 // isXMLType: a document Chromium renders as an XML document (spec
@@ -469,6 +487,9 @@ func xmlMagicBytes(b []byte) bool {
 func responseKind(mark urlrewrite.Dest, sfd string, has bool, ct string, hasCT bool, sniff func() sniffResult) bodyKind {
 	if has && workletDest(sfd) {
 		return kindWorklet
+	}
+	if has && strings.EqualFold(sfd, "xslt") {
+		return kindXSL
 	}
 	switch mark {
 	case urlrewrite.DestScript, urlrewrite.DestModuleWorker, urlrewrite.DestScriptCred:
@@ -1003,6 +1024,17 @@ func pageConfig(base map[string]any, resp *http.Response, target *url.URL) map[s
 		referrer = resp.Request.Header.Get("Referer")
 	}
 	cp["referrer"] = referrer
+	// Each policy as the browser has it and as the page wrote it: a
+	// violation event's originalPolicy reads the page's (spec Csp.policyPairs).
+	if pub, _ := base["apiBaseURL"].(string); pub != "" {
+		var pairs [][2]string
+		for _, v := range originalPolicyHeaders(resp) {
+			pairs = append(pairs, urlrewrite.CSPPolicyPairs(v, pub)...)
+		}
+		if len(pairs) > 0 {
+			cp["cspp"] = pairs
+		}
+	}
 	// The page's referrer policy as the proxy recorded it (the header the
 	// browser gets says unsafe-url), for the srcdoc documents the client
 	// writes (their referrer: spec srcdocReferrer); the client reads a
@@ -1131,6 +1163,16 @@ func originalPolicies(resp *http.Response) []string {
 		}
 	}
 	return resp.Header.Values("Content-Security-Policy")
+}
+
+// originalPolicyHeaders: the response's Content-Security-Policy and
+// -Report-Only values as the origin sent them.
+func originalPolicyHeaders(resp *http.Response) []string {
+	h := proxy.SentHeaders(resp)
+	if h == nil {
+		h = resp.Header
+	}
+	return append(append([]string(nil), h.Values("Content-Security-Policy")...), h.Values("Content-Security-Policy-Report-Only")...)
 }
 
 // bootHandler serves htmlrewrite.BootPath: the bootstrap's second script

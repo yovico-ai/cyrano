@@ -766,3 +766,21 @@ func DeclaresUIR(header string) bool {
 	}
 	return false
 }
+
+// CSPRefusalLocation is where the proxy redirects a request the page's own
+// policy refuses (spec Csp.refusalLocation): the browser's policy refuses
+// it as well and reports the violation itself, for the URL before the
+// redirect; followed (a policy admitting https: only), it resolves nowhere.
+const CSPRefusalLocation = "https://cyrano-refused.invalid/"
+
+// CSPPolicyPairs is spec Csp.policyPairs: each policy of a header as the
+// browser has it (translated) and as the page wrote it — what a violation
+// event's originalPolicy reads (Chromium: each policy trimmed of ASCII
+// whitespace at its ends).
+func CSPPolicyPairs(header, proxyOrigin string) [][2]string {
+	var out [][2]string
+	for _, p := range strings.Split(header, ",") {
+		out = append(out, [2]string{showCSPPolicy(parseCSPPolicy(p), proxyOrigin), strings.TrimFunc(p, isCSPSpace)})
+	}
+	return out
+}

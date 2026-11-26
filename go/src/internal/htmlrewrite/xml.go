@@ -767,3 +767,141 @@ func XSLTStyled(src []byte) bool {
 	}
 	return false
 }
+
+const xslURI = "http://www.w3.org/1999/XSL/Transform"
+
+// RewriteXSL is spec XmlDoc.rewriteXsl: in a stylesheet's elements of the
+// XSLT namespace, the href of xsl:import / xsl:include and every
+// document('…') literal of any attribute given to url (which proxifies one
+// URL against the stylesheet), edited in place; the stylesheet as sent when
+// it does not read. Its loads are the browser's, and its XSLT loader takes
+// only the proxy's origin: an absolute URL to the origin failed.
+func RewriteXSL(s string, url func(string) string) string {
+	toks, ok := xmlTokenize(s)
+	if !ok {
+		return s
+	}
+	var edits []xedit
+	var scopes [][]xbinding
+	for _, t := range toks {
+		switch t.kind {
+		case xEnd:
+			if len(scopes) == 0 {
+				return s
+			}
+			scopes = scopes[:len(scopes)-1]
+		case xStart:
+			var bind []xbinding
+			for _, a := range t.attrs {
+				p, hp, l := qname(a.name)
+				u, ok := xmlDecode(a.value, true)
+				if !ok {
+					return s
+				}
+				if !hp && l == "xmlns" {
+					bind = append(bind, xbinding{isDefault: true, uri: u})
+				} else if hp && p == "xmlns" {
+					bind = append(bind, xbinding{prefix: l, uri: u})
+				}
+			}
+			var outer []xbinding
+			if len(scopes) > 0 {
+				outer = scopes[len(scopes)-1]
+			}
+			scope := append(append([]xbinding(nil), bind...), outer...)
+			p, hp, l := qname(t.name)
+			var uri string
+			var bound bool
+			switch {
+			case !hp:
+				uri, bound = lookupNS(scope, "", true)
+			case p == "xml":
+				uri, bound = xmlURI, true
+			default:
+				u, ok := lookupNS(scope, p, false)
+				if !ok {
+					return s
+				}
+				uri, bound = u, true
+			}
+			if bound && uri == xslURI {
+				ref := l == "import" || l == "include"
+				for _, a := range t.attrs {
+					d, ok := xmlDecode(a.value, true)
+					if !ok {
+						return s
+					}
+					now := DocumentLiterals(d, url)
+					if ref && a.name == "href" {
+						now = url(d)
+					}
+					if now != d {
+						edits = append(edits, xedit{a.from, a.to, string(a.quote) + xmlEncodeAttr(a.quote, now) + string(a.quote)})
+					}
+				}
+			}
+			if !t.empty {
+				scopes = append(scopes, scope)
+			}
+		}
+	}
+	var b strings.Builder
+	at := 0
+	for _, e := range edits {
+		b.WriteString(s[at:e.from])
+		b.WriteString(e.text)
+		at = e.to
+	}
+	b.WriteString(s[at:])
+	return b.String()
+}
+
+// DocumentLiterals is spec XmlDoc.documentLits: an XPath expression's
+// document('…') / document("…") string literals given to f — the name not
+// part of a longer one, spaces allowed before "(" and the literal.
+func DocumentLiterals(s string, f func(string) string) string {
+	isWS := func(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
+	var b strings.Builder
+	prevName := false
+	i := 0
+	for i < len(s) {
+		if !prevName && strings.HasPrefix(s[i:], "document") {
+			j := i + 8
+			for j < len(s) && isWS(s[j]) {
+				j++
+			}
+			if j < len(s) && s[j] == '(' {
+				k := j + 1
+				for k < len(s) && isWS(s[k]) {
+					k++
+				}
+				if k < len(s) && (s[k] == '\'' || s[k] == '"') {
+					if e := strings.IndexByte(s[k+1:], s[k]); e >= 0 {
+						b.WriteString(s[i : k+1])
+						b.WriteString(f(s[k+1 : k+1+e]))
+						b.WriteByte(s[k])
+						i = k + 1 + e + 1
+						prevName = false
+						continue
+					}
+					// an unclosed literal: as written
+					b.WriteString(s[i:])
+					return b.String()
+				}
+				b.WriteString(s[i : j+1])
+				i = j + 1
+				prevName = false
+				continue
+			}
+			b.WriteString(s[i:j])
+			prevName = j == i+8
+			i = j
+			continue
+		}
+		c := s[i]
+		b.WriteByte(c)
+		prevName = c >= '0' && c <= '9' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c == '-' || c == '.' || c == '_' || c == ':' || c >= 0x80
+		i++
+	}
+	return b.String()
+}

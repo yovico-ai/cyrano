@@ -5,7 +5,12 @@
 // that admits the proxy, where every proxied resource is: a script the
 // page's policy refuses ran (awishcometrue.com: Mailchimp's script,
 // refused directly, replaced the page's jQuery and broke its carousel).
-// The proxy refuses what the page's policies refuse, by the original URLs.
+// The proxy refuses what the page's policies refuse, by the original URLs,
+// with a redirect the browser's own policy refuses too: the browser
+// reports the violation itself — a trusted securitypolicyviolation event
+// naming the page's URL (spec Csp.refusalLocation). Not compared: its
+// sourceFile / lineNumber, which Chromium leaves empty for a refusal at a
+// redirect (a limit: directly they name the script that made the request).
 //
 // Needs the server binary and Playwright's Chromium; `make browser-check`.
 
@@ -32,6 +37,10 @@ const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR
 const PAGE = (allowed: string, refused: string): string => `<!doctype html>
 <meta http-equiv="content-security-policy" content="img-src 'self' ${allowed}">
 <script>
+window.violations = [];
+document.addEventListener("securitypolicyviolation", (e) => violations.push({ blockedURI: e.blockedURI, documentURI: e.documentURI, violatedDirective: e.violatedDirective,
+  effectiveDirective: e.effectiveDirective, originalPolicy: e.originalPolicy, disposition: e.disposition, statusCode: e.statusCode,
+  target: e.target === document ? "document" : String(e.target && e.target.nodeName), isTrusted: e.isTrusted, bubbles: e.bubbles, composed: e.composed }));
 window.out = (async () => {
   const o = {};
   const script = (u) => new Promise((ok) => { const s = document.createElement("script"); s.src = u; s.onload = () => ok("load"); s.onerror = () => ok("error"); document.head.append(s); });
@@ -44,6 +53,8 @@ window.out = (async () => {
   try { o.fetchRefused = (await fetch("${refused}/f")).status; } catch (e) { o.fetchRefused = e.name; }
   try { o.fetchAllowed = (await fetch("${allowed}/f")).status; } catch (e) { o.fetchAllowed = e.name; }
   o.ran = window.ran || [];
+  await new Promise((r) => setTimeout(r, 300));
+  o.violations = violations.map((v) => JSON.stringify(v)).sort();
   return o;
 })();
 </script>`;

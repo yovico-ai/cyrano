@@ -297,6 +297,21 @@ translateMeta p s = showPolicy (translatePolicy p (parsePolicy s))
 translateHeader : CspProxy → Str → Str
 translateHeader p s = joinWith (toList ", ") (map (λ pol → showPolicy (translatePolicy p pol)) (parseHeader s))
 
+-- A violation event's originalPolicy is the policy as the browser has
+-- it: the translated one. The runtime reads it as the page's (measured:
+-- Chromium gives each policy of a header trimmed of ASCII whitespace at
+-- its ends, as written within): each translated policy paired with the
+-- page's text.
+trimPolicy : Str → Str
+trimPolicy s = reverse (dropWS (reverse (dropWS s)))
+  where
+  dropWS : Str → Str
+  dropWS [] = []
+  dropWS (c ∷ cs) = if isAsciiWS c then dropWS cs else c ∷ cs
+
+policyPairs : CspProxy → Str → List (Str × Str)
+policyPairs p s = map (λ t → showPolicy (translatePolicy p (parsePolicy t)) , trimPolicy t) (splitOn (is 44) s)
+
 ------------------------------------------------------------------------
 -- What the bootstrap needs of the policies of a response (header values,
 -- as the origin sent them; report-only ones are not passed).
@@ -779,3 +794,25 @@ cspRefuses policies d self u = anyPol (concatH policies)
   anyPol : List (List Directive) → Bool
   anyPol []         = false
   anyPol (p ∷ ps) = refusesOne p ∨ anyPol ps
+
+-- How the proxy refuses (cspRefuses). Not by a network error alone:
+-- natively the page is also told — a `securitypolicyviolation` event,
+-- trusted, at the document, naming the page's URL, the directive and the
+-- policy (measured: csp-enforce-vs-chromium). The proxy answers 307 to
+-- refusalLocation, and the browser's own policy — the page's, its source
+-- lists gaining the proxy and the additions above — refuses that as the
+-- page's refuses the target: a list that admits no URL of the target's
+-- host admits no name under .invalid (a scheme source admitting https:
+-- would admit the target too, unless the target is http: — then the
+-- browser follows it, and .invalid resolves nowhere: a plain network
+-- error). So the browser itself reports the violation, for the URL
+-- before the redirect (Chromium, measured) — the proxified URL, which
+-- the event's accessors read as the page's — and the element gets its
+-- error event, fetch rejects: as directly, nothing sent. Not for a
+-- WebSocket (no redirect there: a network error). Limits: a fetch with
+-- redirect "manual" reads an opaque redirect where natively it rejects;
+-- where the browser's own policy admits the location after all (seen on
+-- kosho.or.jp, a document whose policy came with a page it then rewrote in
+-- place) it follows it — a network error, no event, nothing sent.
+refusalLocation : Str
+refusalLocation = toList "https://cyrano-refused.invalid/"

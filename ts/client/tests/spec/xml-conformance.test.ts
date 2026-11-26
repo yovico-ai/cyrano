@@ -7,7 +7,7 @@
 import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { rewriteXml, type XmlNs, type XmlRewriters } from "../../src/xml/rewriter";
+import { rewriteXml, rewriteXsl, type XmlNs, type XmlRewriters } from "../../src/xml/rewriter";
 import { OracleClient, locateOracle, oracleRequired } from "./oracle-client";
 
 const located = locateOracle();
@@ -43,5 +43,21 @@ describe.skipIf(located.skip !== "")("the XML rewriter: spec conformance", () =>
         await fc.assert(fc.asyncProperty(doc, async (d) => {
             expect(rewriteXml(d, standIns, boot)).toBe(await oracle.ask("xmlrw", [d]));
         }), { numRuns: 400 });
+    });
+
+    it("rewriteXsl is XmlDoc.rewriteXsl", async () => {
+        const parts = [
+            `<x:stylesheet xmlns:x="http://www.w3.org/1999/XSL/Transform" version="1.0">`, `</x:stylesheet>`,
+            `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform">`, `</xsl:stylesheet>`,
+            `<x:import href="a.xsl"/>`, `<x:include href='/b.xsl'/>`, `<xsl:import href="https://o.example/c.xsl"/>`,
+            `<x:value-of select="document('d.xml')/r"/>`, `<x:for-each select='count(document("e.xml"))'/>`,
+            `<x:value-of select="mydocument('n')"/>`, `<x:value-of select="document ( 'sp' )"/>`, `<x:value-of select="document('open"/>`,
+            `<x:copy-of select="document($v)"/>`, `<img src="i.png" title="document('lit')"/>`, `<x:value-of select="document(&apos;q&apos;)"/>`,
+            `<r xmlns="http://www.w3.org/1999/XSL/Transform"><import href="z"/></r>`, `<p:a/>`, `<x:t a="&nbsp;"/>`, "<!-- c -->", "text",
+        ];
+        const doc = fc.array(fc.constantFrom(...parts), { minLength: 1, maxLength: 8 }).map((ps) => ps.join(""));
+        await fc.assert(fc.asyncProperty(doc, async (d) => {
+            expect(rewriteXsl(d, (u) => "P" + u)).toBe(await oracle.ask("xslrw", [d]));
+        }), { numRuns: 300 });
     });
 });

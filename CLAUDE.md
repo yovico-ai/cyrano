@@ -130,8 +130,15 @@ A document styled by XSLT (an `<?xml-stylesheet?>` of an XSL type) is
 given a policy admitting the proxy alone (spec/XmlDoc.agda xslNetPolicy;
 `xslt-vs-chromium`): the transformation's output replaces it and keeps
 that policy, so what the output names from another origin is refused
-instead of escaping. Gaps: the output is not rewritten; the XSLTProcessor
-API.
+instead of escaping. A stylesheet's own loads — `xsl:import`,
+`xsl:include` hrefs and `document('…')` literals in its XSLT elements —
+are proxified (spec XmlDoc.rewriteXsl): by the server for a response asked
+as `xslt` (Disposition.xslDest), by the runtime for a copy of the node given
+to `XSLTProcessor.importStylesheet` (`patches/xslt.ts`); the browser's XSLT
+loader takes the proxy's origin only, and an absolute URL to the origin
+failed the transform (`xslt-loads-vs-chromium`). Gaps: the output of a
+styled document is not rewritten (its literal result elements); a
+document() argument that is not a literal.
 
 
 By what the request is for, never by its Content-Type, which the proxy
@@ -384,7 +391,18 @@ and origin are the opener's (`popup-blank-vs-chromium`;
   and page, and a subresource request they refuse by the original URLs is
   refused before it is sent (awishcometrue.com: a script its policy refuses
   replaced its jQuery). Not judged: a script or style list with a nonce,
-  a hash or 'strict-dynamic'; a source's path. Gap: no violation event.
+  a hash or 'strict-dynamic'; a source's path. A refusal is a 307 to
+  `https://cyrano-refused.invalid/`, which the browser's own policy refuses
+  too (spec Csp.refusalLocation): the browser reports the violation itself —
+  a trusted `securitypolicyviolation` for the URL before the redirect, the
+  page's — and the element's error event follows, fetch rejects, nothing
+  sent. Its `originalPolicy` reads the page's text (spec Csp.policyPairs,
+  config `cspp`; a `<meta>`'s from its originals). Limits: its sourceFile /
+  lineNumber are empty (Chromium's for a refusal at a redirect); a fetch
+  with redirect "manual" reads an opaque redirect; a WebSocket gets a plain
+  network error; no report is sent; where the browser's own policy admits
+  the location after all (kosho.or.jp) it follows it — a network error, no
+  event (live-compare counts it apart from escapes).
 - **CSP** is weakened, not translated — spec/Csp.agda (both runtimes
   checked against it; `csp-vs-chromium`: whatever loads directly loads
   proxied, and the bootstrap runs): source lists gain the proxy origin,

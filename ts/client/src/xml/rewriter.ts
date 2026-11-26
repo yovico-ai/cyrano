@@ -5,6 +5,7 @@
 // The client needs it where a page builds such a document itself: a frame
 // given a data: URL of one (spec/Frames.agda dataDocument).
 
+import { sStarts } from "../native/intrinsics";
 import { ORIGINALS_ATTR } from "../native/originals";
 import { credDest, type Dest } from "../url/containment";
 import { rewriteAnimUrls, urlAttrKindIn, urlDest } from "../patches/url-attribute-map";
@@ -366,4 +367,99 @@ export function xmlBootstrap(ns: XmlNs, src: string, init: string): string {
     const [uri, srcAttr, closeExternal] = ns === "svg" ? [SVG_URI, "href", "/>"] : [XHTML_URI, "src", "></script>"];
     const open = `<script xmlns="${uri}"`;
     return `${open} ${srcAttr}="${encodeAttr('"', src)}"${closeExternal}${open}><![CDATA[${cdataSafe(init)}]]></script>`;
+}
+
+const XSL_URI = "http://www.w3.org/1999/XSL/Transform";
+
+/**
+ * spec XmlDoc.rewriteXsl: in a stylesheet's elements of the XSLT namespace,
+ * the href of xsl:import / xsl:include and every document('…') literal of
+ * any attribute given to `url` (one URL, proxified against the
+ * stylesheet), edited in place; as given when it does not read. Go:
+ * htmlrewrite.RewriteXSL.
+ */
+export function rewriteXsl(s: string, url: (u: string) => string): string {
+    const toks = tokenize(s);
+    if (!toks) return s;
+    const edits: Edit[] = [];
+    const scopes: Binding[][] = [];
+    for (const t of toks) {
+        if (t.kind === "end") {
+            if (!scopes.length) return s;
+            scopes.pop();
+        } else if (t.kind === "start") {
+            const bind: Binding[] = [];
+            for (const a of t.attrs) {
+                const q = qname(a.name);
+                const u = decode(a.value, true);
+                if (u === null) return s;
+                if (!q.hasPrefix && q.local === "xmlns") bind.push({ prefix: "", isDefault: true, uri: u });
+                else if (q.hasPrefix && q.prefix === "xmlns") bind.push({ prefix: q.local, isDefault: false, uri: u });
+            }
+            const scope = [...bind, ...(scopes.length ? scopes[scopes.length - 1]! : [])];
+            const q = qname(t.name);
+            let uri: string | null;
+            if (!q.hasPrefix) uri = lookupNs(scope, "", true);
+            else if (q.prefix === "xml") uri = XML_URI;
+            else {
+                uri = lookupNs(scope, q.prefix, false);
+                if (uri === null) return s;
+            }
+            if (uri === XSL_URI) {
+                const ref = q.local === "import" || q.local === "include";
+                for (const a of t.attrs) {
+                    const d = decode(a.value, true);
+                    if (d === null) return s;
+                    const now = ref && a.name === "href" ? url(d) : documentLiterals(d, url);
+                    if (now !== d) edits.push({ from: a.from, to: a.to, text: a.quote + encodeAttr(a.quote, now) + a.quote });
+                }
+            }
+            if (!t.empty) scopes.push(scope);
+        }
+    }
+    let out = "", at = 0;
+    for (const e of edits) { out += s.slice(at, e.from) + e.text; at = e.to; }
+    return out + s.slice(at);
+}
+
+/** spec XmlDoc.documentLits: an XPath expression's document('…') / document("…") literals given to f. */
+export function documentLiterals(s: string, f: (u: string) => string): string {
+    const isWS = (c: string | undefined): boolean => c === " " || c === "\t" || c === "\n" || c === "\r";
+    const isName = (c: string): boolean => {
+        const n = c.charCodeAt(0);
+        return (n >= 48 && n <= 57) || (n >= 65 && n <= 90) || (n >= 97 && n <= 122) || n === 45 || n === 46 || n === 95 || n === 58 || n > 127;
+    };
+    let out = "", prevName = false, i = 0;
+    while (i < s.length) {
+        if (!prevName && sStarts(s.slice(i, i + 8), "document")) {
+            let j = i + 8;
+            while (j < s.length && isWS(s[j])) j++;
+            if (s[j] === "(") {
+                let k = j + 1;
+                while (k < s.length && isWS(s[k])) k++;
+                const q = s[k];
+                if (q === "'" || q === '"') {
+                    const e = s.indexOf(q, k + 1);
+                    if (e < 0) return out + s.slice(i);
+                    out += s.slice(i, k + 1) + f(s.slice(k + 1, e)) + q;
+                    i = e + 1;
+                    prevName = false;
+                    continue;
+                }
+                out += s.slice(i, j + 1);
+                i = j + 1;
+                prevName = false;
+                continue;
+            }
+            out += s.slice(i, j);
+            prevName = j === i + 8;
+            i = j;
+            continue;
+        }
+        const c = s[i]!;
+        out += c;
+        prevName = isName(c);
+        i++;
+    }
+    return out;
 }

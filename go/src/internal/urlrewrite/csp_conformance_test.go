@@ -162,3 +162,19 @@ func TestSpecConformance_DeclaresUIR(t *testing.T) {
 		}
 	})
 }
+
+func TestSpecConformance_CSPPolicyPairs(t *testing.T) {
+	oracle := specoracle.Need(t)
+	rapid.Check(t, func(rt *rapid.T) {
+		v := drawPolicy(rt, "csp", false)
+		proxy := rapid.SampledFrom([]string{"http://localhost:9081", "https://proxy.example"}).Draw(rt, "proxy")
+		want, _ := ask(rt, oracle, "csppairs", proxy, TrustedTypesPolicy, v)
+		var lines []string
+		for _, p := range CSPPolicyPairs(v, proxy) {
+			lines = append(lines, p[0]+"\t"+p[1])
+		}
+		if got := strings.Join(lines, "\n"); got != want {
+			rt.Fatalf("CSPPolicyPairs(%q) = %q; spec says %q", v, got, want)
+		}
+	})
+}
