@@ -257,9 +257,14 @@ func (h *Handler) serveTarget(w http.ResponseWriter, r *http.Request, target *ur
 		h.opts.Logger.Debug("same-origin request to another origin", "target", target.Redacted())
 		panic(http.ErrAbortHandler) // a network error, nothing sent
 	}
+	// The document's own fetch directives (spec Csp.cspRefuses, csp_enforce.go).
+	if from := h.requestingDocument(r); from != nil && cspRefused(r, session, from, target) {
+		h.opts.Logger.Debug("refused by the page's policy", "target", target.Redacted())
+		panic(http.ErrAbortHandler) // a network error, nothing sent
+	}
 	// Local Network Access (spec/Lna.agda, lna.go): a public document's
 	// request to a loopback or private address, a private one's to loopback.
-	if from := h.requestingDocument(r); from != nil && h.lnaRefused(r, pageKey(from), target.String(), target.Hostname()) {
+	if from := h.requestingDocument(r); from != nil && h.lnaRefused(r, session, pageKey(from), target.String(), target.Hostname()) {
 		h.opts.Logger.Debug("local network access refused", "target", target.Redacted())
 		panic(http.ErrAbortHandler) // a network error, nothing sent
 	}
@@ -534,6 +539,7 @@ func (h *Handler) translateResponse(resp *http.Response) error {
 	// (a plain-HTTP proxy drops the directive from what the browser gets).
 	// (Recorded once the response has its session: below.)
 	declaresUIR := urlrewrite.DeclaresUIR(strings.Join(resp.Header.Values("Content-Security-Policy"), ","))
+	originalCSP := append([]string(nil), resp.Header.Values("Content-Security-Policy")...) // enforced here too (csp_enforce.go)
 	for _, name := range []string{"Content-Security-Policy", "Content-Security-Policy-Report-Only"} {
 		vals := resp.Header.Values(name)
 		if len(vals) == 0 {
@@ -578,6 +584,7 @@ func (h *Handler) translateResponse(resp *http.Response) error {
 		if dest := strings.ToLower(resp.Request.Header.Get("Sec-Fetch-Dest")); setsPolicy(dest) || (dest == "" && strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/html")) {
 			setUIR(sessionIn(resp.Request), pageKey(resp.Request.URL), declaresUIR)
 			h.recordPageSpace(resp)
+			setPageCSP(sessionIn(resp.Request), pageKey(resp.Request.URL), originalCSP, false)
 			setEmbedder(sessionIn(resp.Request), pageKey(resp.Request.URL),
 				urlrewrite.EmbedderOf(resp.Header.Get("Cross-Origin-Embedder-Policy"), resp.Header.Get("Document-Isolation-Policy")))
 		}

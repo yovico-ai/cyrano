@@ -486,11 +486,15 @@ func isAlphaByte(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 
 
 // cspSourceMatch: does the origin of u (its path "/") match the source
 // expression, for a document at self (CSP3 §6.7.2.8, spec sourceMatch)?
-func cspSourceMatch(self, u absURL, expr string) bool {
+func cspSourceMatch(self, u absURL, expr string) bool { return cspSourceMatchP(self, u, expr, false) }
+
+// cspSourceMatchP: pathless, a source's path is not judged (spec
+// sourceMatchPathless) and '*' admits ws: and wss: too.
+func cspSourceMatchP(self, u absURL, expr string, pathless bool) bool {
 	e := asciiLower(expr)
 	switch {
 	case e == "*":
-		return u.scheme == "http" || u.scheme == "https" || u.scheme == self.scheme
+		return u.scheme == "http" || u.scheme == "https" || u.scheme == self.scheme || (pathless && (u.scheme == "ws" || u.scheme == "wss"))
 	case e == "'self'":
 		return cspSelfMatch(self, u)
 	}
@@ -596,8 +600,90 @@ func cspSourceMatch(self, u absURL, expr string) bool {
 			return false
 		}
 	}
-	// path: the origin's URL path is "/"
-	return path == "" || path == "/"
+	// path: the origin's URL path is "/" (pathless: not judged)
+	return pathless || path == "" || path == "/"
+}
+
+// cspEffective: the directives governing a request for dest
+// (Sec-Fetch-Dest), first present in effect (spec effectiveFor).
+func cspEffective(dest string) []string {
+	switch strings.ToLower(dest) {
+	case "script":
+		return []string{"script-src-elem", "script-src", "default-src"}
+	case "worker", "sharedworker", "serviceworker":
+		return []string{"worker-src", "child-src", "script-src", "default-src"}
+	case "style":
+		return []string{"style-src-elem", "style-src", "default-src"}
+	case "image":
+		return []string{"img-src", "default-src"}
+	case "font":
+		return []string{"font-src", "default-src"}
+	case "audio", "video", "track":
+		return []string{"media-src", "default-src"}
+	case "iframe", "frame":
+		return []string{"frame-src", "child-src", "default-src"}
+	case "object", "embed":
+		return []string{"object-src", "default-src"}
+	case "manifest":
+		return []string{"manifest-src", "default-src"}
+	case "empty", "websocket":
+		return []string{"connect-src", "default-src"}
+	}
+	return nil
+}
+
+// CSPRefuses: the document's policies (header field values and <meta>
+// contents) refuse a request for dest to target (spec cspRefuses): some
+// policy's governing list admits it not, where that list holds no nonce,
+// hash or 'strict-dynamic'. Paths are not judged.
+func CSPRefuses(policies []string, dest, self, target string) bool {
+	names := cspEffective(dest)
+	if len(names) == 0 {
+		return false
+	}
+	s, res := parseRef(nil, self)
+	if res != parsedURL {
+		return false
+	}
+	u, res := parseRef(nil, target)
+	if res != parsedURL {
+		return false
+	}
+	for _, h := range policies {
+		for _, pol := range parseCSPHeader(h) {
+			var vals []string
+			found := false
+			for _, n := range names {
+				for _, d := range pol {
+					if d.name == n {
+						vals, found = d.vals, true
+						break
+					}
+				}
+				if found {
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+			judged, admits := true, false
+			for _, v := range vals {
+				l := asciiLower(v)
+				if isHashSource(l) || strings.HasPrefix(l, "'nonce-") || l == "'strict-dynamic'" {
+					judged = false
+					break
+				}
+				if cspSourceMatchP(s, u, v, true) {
+					admits = true
+				}
+			}
+			if judged && !admits {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func cspSelfMatch(self, u absURL) bool {

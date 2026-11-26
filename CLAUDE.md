@@ -378,6 +378,13 @@ and origin are the opener's (`popup-blank-vs-chromium`;
   `var globalThis = this; with (this)`: kosho.or.jp). Open: stack-trace columns are the
   rewritten text's (a Function body's first line: the preamble's); a server-rewritten inline script's text is restored
   only through the read-back paths (not CSS attribute selectors etc.).
+- **The page's own CSP is enforced by the proxy** (spec/Csp.agda
+  cspRefuses, `proxy/csp_enforce.go`; `csp-enforce-vs-chromium`): a
+  document's enforced policies (headers, `<meta>`s) are kept per session
+  and page, and a subresource request they refuse by the original URLs is
+  refused before it is sent (awishcometrue.com: a script its policy refuses
+  replaced its jQuery). Not judged: a script or style list with a nonce,
+  a hash or 'strict-dynamic'; a source's path. Gap: no violation event.
 - **CSP** is weakened, not translated — spec/Csp.agda (both runtimes
   checked against it; `csp-vs-chromium`: whatever loads directly loads
   proxied, and the bootstrap runs): source lists gain the proxy origin,
@@ -1014,7 +1021,9 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   loopback and private addresses (the proxy host's own services, routers,
   cloud metadata). The proxy records each document's address space (the
   address its response came over) and refuses a subresource request whose
-  target resolves less public — before it is sent; Chromium would ask the
+  target resolves less public — before it is sent (both records are kept
+  under the session cookie, read before the Director sets the context);
+  Chromium would ask the
   user, the proxy cannot. A document of the internal network may reach it.
   Navigations are not judged.
 - **Mode same-origin** (spec/Fetch.agda sameOriginModeFails;

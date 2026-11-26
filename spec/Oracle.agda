@@ -409,6 +409,7 @@ dispatch op args =
   else if eqStr op (toList "lnaspace4") then lnaSpace4Req args
   else if eqStr op (toList "lnarefused") then lnaRefusedReq args
   else if eqStr op (toList "oacreads") then oacReadsReq args
+  else if eqStr op (toList "csprefuses") then cspRefusesReq args
   else if eqStr op (toList "xsltype") then oneArg (λ t → if XmlDoc.xslType t then toList "yes" else toList "no") args
   else if eqStr op (toList "xslnet") then out XmlDoc.xslNetPolicy
   else if eqStr op (toList "sameoriginmode") then sameOriginModeReq args
@@ -2196,6 +2197,13 @@ dispatch op args =
     verdict nothing      = nothing
   ... | _ | _ = errorReply "OutOfModel"
   frameAncReq _ = errorReply "BadRequest"
+
+  -- csprefuses <policies, LF-separated> <Sec-Fetch-Dest> <document URL> <target URL> → yes|no
+  cspRefusesReq : List Str → Str
+  cspRefusesReq (ps ∷ d ∷ a ∷ t ∷ []) with baseOf a | baseOf t
+  ... | just self | just u = out (if cspRefuses (splitOn (is 10) ps) d self u then toList "yes" else toList "no")
+  ... | _ | _ = errorReply "OutOfModel"
+  cspRefusesReq _ = errorReply "BadRequest"
 
   xfoReq : List Str → Str
   xfoReq (ls ∷ so ∷ []) = yesNo (xfoAllows (fieldLines ls) (eqStr so (toList "same")))

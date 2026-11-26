@@ -37,13 +37,15 @@ func TestLNA_PublicDocumentToLoopback(t *testing.T) {
 	front := httptest.NewServer(nil)
 	defer front.Close()
 	pubURL, _ := url.Parse(front.URL)
-	front.Config.Handler = New(Options{LNASpaceOf: spaceOf, ProxyCfg: urlrewrite.ProxyConfig{PublicURL: pubURL}})
+	// A session, as every real request has: the page's space is kept under it.
+	front.Config.Handler = New(Options{LNASpaceOf: spaceOf, ProxyCfg: urlrewrite.ProxyConfig{PublicURL: pubURL}, CookieJar: NewSessionJar(), SessionCookieName: "crnsct"})
 	get := func(path, referer, dest, mode string) (int, error) {
 		req, _ := http.NewRequest("GET", front.URL+path, nil)
 		if referer != "" {
 			req.Header.Set("Referer", referer)
 		}
 		req.Header.Set("Sec-Fetch-Dest", dest)
+		req.AddCookie(&http.Cookie{Name: "crnsct", Value: "0123456789abcdef0123456789abcdef"})
 		req.Header.Set("Sec-Fetch-Mode", mode)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {

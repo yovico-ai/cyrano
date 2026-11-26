@@ -96,11 +96,11 @@ func (h *Handler) targetSpace(host string) (urlrewrite.AddressSpace, bool) {
 }
 
 // lnaRefused: the request goes to a less public space than its document's.
-func (h *Handler) lnaRefused(r *http.Request, from, target string, targetHost string) bool {
+func (h *Handler) lnaRefused(r *http.Request, session, from, target string, targetHost string) bool {
 	if strings.EqualFold(r.Header.Get("Sec-Fetch-Mode"), "navigate") || from == "" {
 		return false
 	}
-	doc, ok := pageSpace(sessionIn(r), from)
+	doc, ok := pageSpace(session, from)
 	if !ok || doc == urlrewrite.SpaceLoopback {
 		return false
 	}

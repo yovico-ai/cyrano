@@ -681,3 +681,101 @@ xfoAllows lines sameOriginEmbedder with dedupe (concatMapL values lines) []
                     else if eqStr v (toList "sameorigin") then sameOriginEmbedder
                     else true
 ... | vs@(_ ∷ _ ∷ _) = not (member (toList "deny") vs ∨ member (toList "allowall") vs ∨ member (toList "sameorigin") vs)
+
+------------------------------------------------------------------------
+-- The page's fetch directives, enforced by the proxy (CSP3 §6.6 "should
+-- request be blocked"; csp-enforce-vs-chromium). The policy the browser
+-- is given admits the proxy, where every proxied resource is: a script the
+-- page's own policy refuses ran (awishcometrue.com: Mailchimp's
+-- mc-validate.js, refused directly, replaced the page's jQuery and its
+-- carousel broke). The proxy judges a subresource request by the
+-- document's original policies (every header and <meta> one) and the
+-- original URLs, and refuses what they refuse — a network error, as for
+-- CORS (no violation is reported: a gap). Not judged: a script or style
+-- list holding a nonce, a hash or 'strict-dynamic' (the proxy sees no
+-- element and no loader), and a source's path (after a redirect CSP
+-- ignores it, and the proxy cannot tell a redirect's hop: it never
+-- refuses by path).
+
+-- The directives that govern a request for `dest` (Sec-Fetch-Dest), the
+-- first present one in effect (CSP3 §6.8.1–6.8.2).
+effectiveFor : Str → List Str
+effectiveFor d =
+  if is′ "script" then names ("script-src-elem" ∷ "script-src" ∷ "default-src" ∷ [])
+  else if is′ "worker" ∨ is′ "sharedworker" ∨ is′ "serviceworker" then names ("worker-src" ∷ "child-src" ∷ "script-src" ∷ "default-src" ∷ [])
+  else if is′ "style" then names ("style-src-elem" ∷ "style-src" ∷ "default-src" ∷ [])
+  else if is′ "image" then names ("img-src" ∷ "default-src" ∷ [])
+  else if is′ "font" then names ("font-src" ∷ "default-src" ∷ [])
+  else if is′ "audio" ∨ is′ "video" ∨ is′ "track" then names ("media-src" ∷ "default-src" ∷ [])
+  else if is′ "iframe" ∨ is′ "frame" then names ("frame-src" ∷ "child-src" ∷ "default-src" ∷ [])
+  else if is′ "object" ∨ is′ "embed" then names ("object-src" ∷ "default-src" ∷ [])
+  else if is′ "manifest" then names ("manifest-src" ∷ "default-src" ∷ [])
+  else if is′ "empty" ∨ is′ "websocket" then names ("connect-src" ∷ "default-src" ∷ [])
+  else []
+  where
+  is′ : String → Bool
+  is′ s = eqStr (lowerAll d) (toList s)
+  names : List String → List Str
+  names = map toList
+
+-- Does the URL match the source expression, path aside.
+sourceMatchPathless : Abs → Abs → Str → Bool
+sourceMatchPathless self u expr with lowerAll expr
+... | e = if eqStr e (toList "*") then httpLike (scheme u) ∨ sameScheme (scheme u) (scheme self) ∨ wsLike
+          else if eqStr e (toList "'self'") then selfMatch self u
+          else viaScheme (schemeSource e)
+  where
+  wsLike : Bool
+  wsLike = eqStr (schemeChars (scheme u)) (toList "ws") ∨ eqStr (schemeChars (scheme u)) (toList "wss")
+  viaHost : Maybe HostSource → Bool
+  viaHost nothing   = false
+  viaHost (just hs) =
+    schemeOK (hsScheme hs) ∧ hostPartMatch (hsHost hs) (hostOf u) ∧ portPartMatch (hsPort hs) u
+    where
+    schemeOK : Maybe Str → Bool
+    schemeOK (just sc) = schemePartMatch sc (scheme u)
+    schemeOK nothing   = schemePartMatch (schemeChars (scheme self)) (scheme u)
+  viaScheme : Maybe Str → Bool
+  viaScheme (just sc) = schemePartMatch sc (scheme u)
+  viaScheme nothing   = viaHost (hostSource e)
+
+-- One policy's verdict for a request: nothing when no directive governs
+-- it or it is one the proxy does not judge; else whether it admits.
+policyAdmits : Abs → Abs → Str → List Directive → Maybe Bool
+policyAdmits self u d ds = byList (firstOf (effectiveFor d))
+  where
+  find : Str → List Directive → Maybe (List Str)
+  find n []              = nothing
+  find n ((m , vs) ∷ xs) = if eqStr n m then just vs else find n xs
+  firstOf : List Str → Maybe (List Str)
+  firstOf [] = nothing
+  firstOf (n ∷ ns) with find n ds
+  ... | just vs = just vs
+  ... | nothing = firstOf ns
+  kw : String → Str → Bool
+  kw k t = eqStr (lowerAll t) (toList k)
+  unjudged : List Str → Bool
+  unjudged vs = anyL (λ t → isNonce t ∨ hashSource t ∨ kw "'strict-dynamic'" t) vs
+  admits : List Str → Bool
+  admits []       = false
+  admits (v ∷ vs) = sourceMatchPathless self u v ∨ admits vs
+  byList : Maybe (List Str) → Maybe Bool
+  byList nothing   = nothing
+  byList (just vs) = if unjudged vs then nothing else just (admits vs)
+
+-- Is the request refused: the document's policies (each a header's field
+-- value or a <meta>'s content), what it is for, the document's origin
+-- (as a URL), the target.
+cspRefuses : List Str → Str → Abs → Abs → Bool
+cspRefuses policies d self u = anyPol (concatH policies)
+  where
+  concatH : List Str → List (List Directive)
+  concatH []       = []
+  concatH (h ∷ hs) = parseHeader h ++ concatH hs
+  refusesOne : List Directive → Bool
+  refusesOne ds with policyAdmits self u d ds
+  ... | just false = true
+  ... | _          = false
+  anyPol : List (List Directive) → Bool
+  anyPol []         = false
+  anyPol (p ∷ ps) = refusesOne p ∨ anyPol ps
