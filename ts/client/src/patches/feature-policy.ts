@@ -17,7 +17,7 @@ import { allowsBy, allowlistBy, type PolicyTable } from "../url/feature-policy";
 
 const NEVER = "https://crn-default.invalid";
 
-export function patchFeaturePolicy(targetWindow: Window, table: PolicyTable | null, docOrigin: () => string, proxyOrigin: string): void {
+export function patchFeaturePolicy(targetWindow: Window, policy: () => PolicyTable | null, docOrigin: () => string, proxyOrigin: string): void {
     const FP = (targetWindow as unknown as Record<string, { prototype: Record<string, unknown> } | undefined>)["FeaturePolicy"]?.prototype;
     if (!FP) return;
     const nat = (k: string): ((...a: unknown[]) => unknown) | undefined => {
@@ -41,7 +41,7 @@ export function patchFeaturePolicy(targetWindow: Window, table: PolicyTable | nu
         const o = args.length > 1 ? originArg(args[1]) : doc;
         if (o === null) return r;
         if (!isTop) return o === doc ? ncall(native, self, f, proxyOrigin) : o === proxyOrigin ? false : r;
-        return allowsBy(table, defaultAll(self, f), f, doc, o);
+        return allowsBy(policy(), defaultAll(self, f), f, doc, o);
     });
     wrapMethod<(...a: unknown[]) => unknown>(FP, "getAllowlistForFeature", (native, self, args) => {
         const r = nR.apply(native, self, args) as string[];
@@ -49,7 +49,7 @@ export function patchFeaturePolicy(targetWindow: Window, table: PolicyTable | nu
         if (!known(self, f)) return r;
         const doc = docOrigin();
         if (!isTop) return r.map((e) => (e === proxyOrigin ? doc : e));
-        return allowlistBy(table, defaultAll(self, f), f, doc);
+        return allowlistBy(policy(), defaultAll(self, f), f, doc);
     });
     if (nAllowed) {
         wrapMethod<(...a: unknown[]) => unknown>(FP, "allowedFeatures", (native, self, args) => {
@@ -58,7 +58,7 @@ export function patchFeaturePolicy(targetWindow: Window, table: PolicyTable | nu
             const doc = docOrigin();
             const all = ncall(nFeatures, self) as string[];
             const out = r.slice(0, 0); // an array of the native's realm
-            for (const f of all) if (allowsBy(table, defaultAll(self, f), f, doc, doc)) out[out.length] = f;
+            for (const f of all) if (allowsBy(policy(), defaultAll(self, f), f, doc, doc)) out[out.length] = f;
             return out;
         });
     }

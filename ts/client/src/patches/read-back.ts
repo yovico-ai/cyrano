@@ -20,13 +20,14 @@ import {
     isScriptOrStyle,
 } from "../native/originals";
 import { wrapAccessor, wrapConstructor, wrapMethod } from "../native/surface";
+import { eachDocument, type Internals } from "../native/internals";
 
 type Protos = Record<string, { prototype: object } | undefined>;
 
 const isRawText = (x: unknown): x is Element =>
     typeof x === "object" && x !== null && (x as Node).nodeType === 1 && isScriptOrStyle(x as Element);
 
-export function patchReadBack(targetWindow: Window, onElement: (el: Element) => void = () => undefined): void {
+export function patchReadBack(targetWindow: Window, onElement: (el: Element) => void = () => undefined, internals?: Internals): void {
     const g = targetWindow as unknown as Protos;
     const E = g["Element"]?.prototype;
     const N = g["Node"]?.prototype;
@@ -329,8 +330,9 @@ export function patchReadBack(targetWindow: Window, onElement: (el: Element) => 
     // (Runs at the microtask checkpoint before each parser-inserted script —
     // in an HTML document; one the XML parser builds has none: there an
     // element's originals are taken when it is first read.)
-    const doc = targetWindow.document;
-    try { if (doc && doc.contentType !== "text/html") consumeOriginalsOnRead(); } catch { /* HTML */ }
+    // Per document: a window that keeps its realm for its next document (a
+    // frame's initial about:blank giving way to its proxied one) observes
+    // that one too (native/internals.ts eachDocument).
     const each = (node: Node): void => {
         if (node.nodeType !== 1) return;
         consume(node);
@@ -338,12 +340,16 @@ export function patchReadBack(targetWindow: Window, onElement: (el: Element) => 
         const frames = (node as Element).getElementsByTagName?.("iframe");
         if (frames) for (let i = 0; i < frames.length; i++) onElement(frames[i]!);
     };
-    if (doc && NativeMO) {
-        consume(doc);
-        try {
-            new NativeMO((records) => {
-                for (const r of records) for (let i = 0; i < r.addedNodes.length; i++) each(r.addedNodes[i]!);
-            }).observe(doc, { childList: true, subtree: true });
-        } catch { /* non-fatal */ }
-    }
+    eachDocument(internals, () => {
+        const doc = targetWindow.document;
+        try { if (doc && doc.contentType !== "text/html") consumeOriginalsOnRead(); } catch { /* HTML */ }
+        if (doc && NativeMO) {
+            consume(doc);
+            try {
+                new NativeMO((records) => {
+                    for (const r of records) for (let i = 0; i < r.addedNodes.length; i++) each(r.addedNodes[i]!);
+                }).observe(doc, { childList: true, subtree: true });
+            } catch { /* non-fatal */ }
+        }
+    });
 }

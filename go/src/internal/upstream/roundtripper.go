@@ -57,7 +57,15 @@ const (
 
 type clientEntry struct {
 	client   tls_client.HttpClient
+	h3       *h3Transport // beside it, for origins spoken to over HTTP/3 (h3.go)
 	lastUsed time.Time
+}
+
+func (e *clientEntry) close() {
+	e.client.CloseIdleConnections()
+	if e.h3 != nil {
+		e.h3.Close()
+	}
 }
 
 // RoundTripper implements http.RoundTripper by fanning https requests out to a
@@ -76,6 +84,9 @@ type RoundTripper struct {
 	// Intermediates completed from AIA, as Chrome does (aia.go) — per
 	// session: no session's visits change another's connections.
 	aia map[string]*aiaState
+
+	// Which origins go over HTTP/3 (h3.go).
+	h3 *h3State
 }
 
 // NewRoundTripper returns a RoundTripper. skipVerify disables upstream TLS
@@ -85,6 +96,7 @@ func NewRoundTripper(skipVerify bool) *RoundTripper {
 		skipVerify: skipVerify,
 		clients:    make(map[string]*clientEntry),
 		aia:        make(map[string]*aiaState),
+		h3:         newH3State(),
 	}
 }
 
@@ -202,7 +214,34 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	fReq.Header[fhttp.HeaderOrderKey] = names
 
-	fResp, err := client.Do(fReq)
+	// HTTP/3 where a direct Chrome speaks it (h3.go): a connection that
+	// cannot be made goes over TCP instead, the request not yet sent.
+	scheme := strings.ToLower(req.URL.Scheme)
+	hostname, port := req.URL.Hostname(), 443
+	if p := req.URL.Port(); p != "" {
+		port, _ = strconv.Atoi(p)
+	} else if scheme == "http" {
+		port = 80
+	}
+	var fResp *fhttp.Response
+	if rt.h3.want(req.Context(), sessionID, scheme, hostname, port) {
+		// The QUIC connection is raced against this request: up within
+		// quicRace, the request goes over it; else over TCP now, the dial
+		// going on for the next (a failed one marks the origin broken).
+		if t := rt.h3For(clientKey, profile); t != nil && t.ready(net.JoinHostPort(hostname, strconv.Itoa(port)), quicRace) {
+			fResp, err = h3RoundTrip(t, fReq)
+			if err != nil {
+				if !isQUICDial(err) || body != nil && body.n > 0 {
+					return nil, err
+				}
+				rt.h3.markBroken(sessionID, hostname, port)
+				fResp, err = nil, nil
+			}
+		}
+	}
+	if fResp == nil {
+		fResp, err = client.Do(fReq)
+	}
 	// A chain the server sent short: complete it from AIA, as Chrome does,
 	// and try once more (a request with a body too, when none of it was sent:
 	// bigotires' POSTs to metrics.kmsmep.com failed with "unknown authority").
@@ -216,6 +255,7 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
+	rt.h3.noteAltSvc(sessionID, hostname, port, fResp.Header.Values("Alt-Svc"))
 
 	return &http.Response{
 		Status:           fResp.Status,
@@ -280,8 +320,11 @@ func (rt *RoundTripper) clientFor(key string, profile profiles.ClientProfile) (t
 		// No overall timeout: rely on the request context (cancelled when the
 		// browser disconnects) so large/streamed downloads aren't cut off.
 		tls_client.WithTimeoutSeconds(0),
-		// H3 only kicks in after Alt-Svc; a real Chrome's first contact is h2.
-		// Keeping to h2/h1 makes the outbound path predictable.
+		// HTTP/3 is not this client's: h3.go chooses it as Chrome does (the
+		// DNS HTTPS record, Alt-Svc) and races the connection, not the
+		// request. ("A real Chrome's first contact is h2" was wrong: it reads
+		// HTTPS records; Cloudflare zones that challenge HTTP/2 refused every
+		// proxied page.)
 		tls_client.WithDisableHttp3(),
 		tls_client.WithDialContext((&dnscache.Dialer{Dialer: net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}}).DialContext),
 		tls_client.WithTransportOptions(&tls_client.TransportOptions{
@@ -318,7 +361,7 @@ func (rt *RoundTripper) dropClients(session string) {
 	defer rt.mu.Unlock()
 	for k, e := range rt.clients {
 		if sessionOfKey(k) == session {
-			e.client.CloseIdleConnections()
+			e.close()
 			delete(rt.clients, k)
 		}
 	}
@@ -357,7 +400,7 @@ func (rt *RoundTripper) sweepLocked(now time.Time) {
 	rt.lastSweep = now
 	for k, e := range rt.clients {
 		if now.Sub(e.lastUsed) > clientTTL {
-			e.client.CloseIdleConnections()
+			e.close()
 			delete(rt.clients, k)
 		}
 	}
@@ -371,6 +414,7 @@ func (rt *RoundTripper) sweepLocked(now time.Time) {
 			delete(rt.aia, sess)
 		}
 	}
+	rt.h3.dropSessionsExcept(live)
 }
 
 var chromeUARe = regexp.MustCompile(`Chrome/(\d+)`)

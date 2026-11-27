@@ -7,7 +7,7 @@
 import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { rewriteImportMapText, rewriteImportMapTwin } from "../../src/url/import-map";
+import { rewriteImportMapText, rewriteImportMapTwin, rewriteRuleSetText } from "../../src/url/import-map";
 import { isUrlLikeSpecifier, rewriteUrl } from "../../src/url/containment";
 import type { ClientConfig } from "../../src/config";
 import { OracleClient, locateOracle, oracleRequired } from "./oracle-client";
@@ -52,6 +52,21 @@ describe.skipIf(located.skip !== "")("import maps: spec conformance", () => {
                     (u) => rewriteUrl(u, b, config(proxy), pol === "-" ? undefined : pol, dd === "-" ? undefined : (dd as "frame" | "inert")));
                 expect(got, JSON.stringify([t, pol, dd])).toBe(want);
             }), { numRuns: 400 });
+    });
+
+    // A speculation rule set (spec/Speculation.agda rewriteRuleSet).
+    it("rewriteRuleSetText is rewriteRuleSet", async () => {
+        const url = fc.constantFrom('"https://www.immi-usa.com/blog/"', '"/about-us/"', '"rel/x"', '"//h.example/r"', '"mailto:a@b"', '"a\\"b"', '"\\u00e9"', '""', '"#f"');
+        const list = fc.array(url, { maxLength: 3 }).map((u) => u.join(", "));
+        const rule = fc.tuple(fc.constantFrom('"urls"', '"url"', '"where"'), list).chain(([k, l]) => fc.constantFrom(
+            `{"source":"list",${k}:[${l}],"eagerness":"immediate"}`, `{"source":"document","where":{"href_matches":"/*"}}`,
+            `{"source":"list",${k}:[[${l}]]}`, `{"tag":"urls",${k}:[${l}]}`));
+        const rs = fc.oneof(rule.map((r) => `{"prefetch":[${r}]}`), rule.map((r) => ` {"prerender": [ ${r} ] } `), rule.map((r) => `{"prefetch":[${r}]`),
+            fc.constant('{urls:["/x"]}'), fc.array(fc.constantFrom(...pieces, '"urls"'), { maxLength: 12 }).map((p) => p.join("")));
+        await fc.assert(fc.asyncProperty(fc.constantFrom(...proxies), fc.constantFrom(...bases), rs, async (proxy, base, t) => {
+            const want = await oracle.ask("ruleset", [proxy, base, t]);
+            expect(rewriteRuleSetText(t, (u) => rewriteUrl(u, new URL(base), config(proxy))), JSON.stringify(t)).toBe(want);
+        }), { numRuns: 600 });
     });
 
     it("isUrlLikeSpecifier is urlLike", async () => {

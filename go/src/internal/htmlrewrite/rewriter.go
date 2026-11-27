@@ -27,6 +27,7 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 	bootstrapDone := false // guard against multiple <head> (e.g. nested srcdoc)
 	inScript := false      // currently inside <script>...</script> with rewritable content
 	inImportMap := false   // currently inside <script type="importmap">
+	inRuleSet := false     // currently inside <script type="speculationrules">
 	inStyle := false       // currently inside <style>...</style>
 	inNoscript := false    // currently inside <noscript>...</noscript>
 	foreignText := false   // the script/style is SVG's: its text is markup text (entities decoded)
@@ -51,6 +52,7 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 		tt    html.TokenType
 		tag   string
 		attrs []html.Attribute
+		raw   []byte // the tag as written, when its attributes are unchanged
 	}
 	var held *heldTag
 	release := func(was, now []byte) {
@@ -60,6 +62,10 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 		attrs := held.attrs
 		if was != nil && !bytes.Equal(was, now) && !cfg.NoOriginals {
 			attrs = withTextOriginal(attrs, string(was))
+		} else if held.raw != nil {
+			emitRaw(held.raw) // nothing changed: as written
+			held = nil
+			return
 		}
 		emitTag(&emitted, held.tt, held.tag, attrs)
 		held = nil
@@ -67,7 +73,7 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 
 	for {
 		tt := z.Next()
-		if held != nil && !(tt == html.TextToken && inStyle) {
+		if held != nil && !(tt == html.TextToken && (inStyle || inRuleSet)) {
 			release(nil, nil)
 		}
 		if tt == html.ErrorToken {
@@ -105,7 +111,14 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 			}
 
 			if tt == html.StartTagToken && tag == "style" && cfg.RewriteInlineCSS != nil {
-				held = &heldTag{tt, tag, attrs}
+				held = &heldTag{tt, tag, attrs, nil}
+			} else if _, hasSrc := getAttr(attrs, "src"); tt == html.StartTagToken && tag == "script" && elNs == NsHTML && !hasSrc && scriptKindOf(attrs) == ScriptSpeculationRules && cfg.BaseURL != nil {
+				// A rule set's text as written goes in its originals when
+				// rewritten (read back as the page wrote it).
+				held = &heldTag{tt, tag, attrs, nil}
+				if sameAttrs(attrs, written) {
+					held.raw = append([]byte(nil), raw...)
+				}
 			} else if sameAttrs(attrs, written) {
 				// Nothing to change: the tag as written, byte for byte — its
 				// line breaks (script line numbers below it), its attributes'
@@ -127,6 +140,8 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 			if tt == html.StartTagToken && tag == "script" {
 				_, hasSrc := getAttr(attrs, "src")
 				inImportMap = elNs == NsHTML && !hasSrc && scriptKindOf(attrs) == ScriptImportMap
+				// A speculation rule set: its list rules' URLs (spec/Speculation.agda rewriteRuleSet).
+				inRuleSet = elNs == NsHTML && !hasSrc && scriptKindOf(attrs) == ScriptSpeculationRules
 			}
 			// Same idea for <style> — the body is CSS.
 			if tt == html.StartTagToken && tag == "style" && cfg.RewriteInlineCSS != nil {
@@ -154,6 +169,7 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 			case "script":
 				inScript = false
 				inImportMap = false
+				inRuleSet = false
 			case "style":
 				inStyle = false
 			case "noscript":
@@ -162,6 +178,11 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 
 		case html.TextToken:
 			switch {
+			case inRuleSet && cfg.BaseURL != nil:
+				was := append([]byte(nil), z.Text()...)
+				now := urlrewrite.RewriteRuleSet(was, cfg.BaseURL, cfg.Proxy)
+				release(was, now)
+				emitRaw(now)
 			case inImportMap:
 				text := append([]byte(nil), z.Text()...) // (Text can be read once)
 				if cfg.OnImportMap != nil && cfg.BaseURL != nil {

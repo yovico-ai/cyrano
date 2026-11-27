@@ -260,3 +260,38 @@ export function rewriteImportMapTwin(text: string, rewriteOne: (url: string) => 
     }
     return out;
 }
+
+/**
+ * A speculation rule set's content (spec/Speculation.agda rewriteRuleSet):
+ * every string of an array that is the value of a "urls" member — a list
+ * rule's URLs — rewritten with rewriteOne (unchanged: kept as written);
+ * the rest byte for byte; text that is not JSON at the token level as
+ * written. A script that read a link's href (the page's URL) and wrote it
+ * into a list rule had the browser prefetch it from the origin.
+ */
+export function rewriteRuleSetText(text: string, rewriteOne: (url: string) => string): string {
+    const toks = tokenize(text);
+    if (!toks) return text;
+    let out = "";
+    const frames: Array<"urls" | "array" | "object"> = [];
+    let key: string | null = null, prev: string | null = null;
+    for (const t of toks) {
+        if (t.kind === "ws") { out += t.text; continue; }
+        if (t.kind === "string") {
+            if (frames.length > 0 && frames[frames.length - 1] === "urls") {
+                const u = rewriteOne(t.value);
+                out += u === t.value ? t.text : stringify(u);
+            } else out += t.text;
+            prev = t.value;
+            continue;
+        }
+        out += t.text;
+        if (t.kind !== "punct") { key = null; prev = null; continue; }
+        if (t.text === ":") { key = prev; prev = null; continue; }
+        if (t.text === "[") frames.push(key === "urls" ? "urls" : "array");
+        else if (t.text === "{") frames.push("object");
+        else if (t.text === "]" || t.text === "}") frames.pop();
+        key = null; prev = null;
+    }
+    return out;
+}

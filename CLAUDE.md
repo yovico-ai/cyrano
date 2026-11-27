@@ -449,6 +449,27 @@ and origin are the opener's (`popup-blank-vs-chromium`;
   deployment) gets Chrome's usual order from a template instead. Client
   hints are per original origin (`proxy/client_hints.go`; gaps listed
   there: delegation, `<meta>` Accept-CH, the first cross-site navigation).
+  **HTTP/3 where a direct Chrome speaks it** (spec/Alpn.agda,
+  `upstream/alpn.go`, `h3.go`): the host's DNS HTTPS record lists h3
+  (`dnscache/https.go`: Go's resolver asks none), or the origin's own
+  Alt-Svc offered h3 for its host and port — per session. Cloudflare zones
+  challenge HTTP/2 from this client and admit HTTP/3 (measured in real
+  Chrome: --disable-quic → "Just a moment…"): 17 sites refused every proxied
+  page (codepen, Elsevier journals, wiley, science.org, napaonline,
+  findagrave…; the transport had HTTP/3 off on the premise "Chrome's first
+  contact is h2"). The QUIC connection is raced, never the request: a full
+  handshake (no 0-RTT), dialed beside the request; up within 300 ms the
+  request goes over it, else over TCP now (the dial goes on for the next);
+  a failed one marks the origin broken for 5 minutes. tls-client's own
+  racer sent each request over both (a POST twice). The transport is given
+  a copy of the request (it alters the one it gets). Its SETTINGS are
+  Chrome's with QPACK's dynamic table at 0 (capacity, blocked streams):
+  the decoder has none, and offered Chrome's 64 KiB Google and Cloudflare
+  front ends encoded against it — 4% of responses failed ("Required Insert
+  Count", geico's canvaskit). Gaps: those two values differ from Chrome's;
+  the QUIC ClientHello is quic-go's, not Chrome's; fivebelow.com's QUIC handshake
+  fails our RSA signature check (Chrome's succeeds); an alternative on
+  another host or port is not taken; the broken period does not double.
   Compression dictionaries are never registered (spec/Dictionary.agda:
 Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS resumes
   sessions as Chrome does (`upstream/resume.go`: tls-client's profiles lack
@@ -602,9 +623,25 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   (spec/Messaging.agda streamOrigin; `stream-origins-vs-chromium`). A frame whose document has
   committed is that document's origin, not its src's (a frame sent
   elsewhere and redirected back to the page's origin: ir.netflix.net's
-  Q4 sign-in; `frame-redirect-back-vs-chromium`); only an empty frame
-  (about:) not on its way to a proxied URL is given its creator's runtime
-  (a proxied document with no runtime of its own read the creator's URL).
+  Q4 sign-in; `frame-redirect-back-vs-chromium`). A frame's runtime, document
+  by document (spec/Frames.agda frameRuntime; `runtime/iframe-injection.ts`):
+  its initial about:blank gets its creator's — on its way to a proxied URL
+  too, at insertion, a parser-inserted one when the observer sees it (page
+  code writes into it before that navigation commits: Ruffle's `<script
+  src>` on freeasteroids.org loaded from the origin; a parser-inserted
+  frame's `javascript:` URL threw `$rewriter is not defined`, my.adp.com,
+  geico — `pending-frame-vs-chromium`, `js-url-frame-vs-chromium`). The
+  navigation keeps the window and realm; the document's own bootstrap
+  takes them over (`runtime/bootstrap.ts` adoptDocument: its config
+  replaces the one the patches read, in place — they read it live — and
+  what is installed on a document, not the realm, is redone for it:
+  `native/internals.ts` eachDocument). A document with no runtime of its
+  own (no script of its own runs) is told its own URL at its load. The
+  windows a window creates get the copy of the runtime it runs (its
+  internals' `init`), not the bundle its own bootstrap loaded: two copies
+  wrapping one frame's `document.write` rewrote Flashtalking's richload
+  against the wrong base, and its copy-fitting loop hung ginifab.com
+  (`adopted-frame-copy-vs-chromium`).
   Limit: such a document reads its own `URL` from its own realm, proxied.
   The postMessage trampoline is compiled only for a realm other than the
   runtime's own (under Trusted Types a compile is a violation: Pinterest;
@@ -684,8 +721,11 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   Cannot work by design: passkeys / WebAuthn (bound to the proxy's
   origin), FedCM / One Tap.
 - **Random-site testing** (2026-11-18; Google 3 random words, compare
-  direct vs proxied with `ts/e2e/tools/live-compare.cjs`, `HEADED=1` on a
-  virtual display — never open windows on the owner's desktop, see memory).
+  direct vs proxied with `ts/e2e/tools/live-compare.cjs` — real Chrome on
+  the nested display `:97` by default (`CRN_DISPLAY`; it refuses to start
+  when that display is down), never the owner's desktop. `HEADLESS=1` only
+  on purpose: the headless shell says HeadlessChrome and webdriver, and
+  bot-protected sites refuse it on both sides (11% of a walk; 1% headed)).
   Fixed from it: selectors on URL attributes match the original URL — and
   XPath comparisons on them (spec/XPath.agda widenXPath; `string(@href)`
   reads as written; `xpath-vs-chromium`)
@@ -850,9 +890,14 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   made inside a worker gets the runtime as one made in a window (blob: /
   data: source rewritten; douyin.com's decoders; `nested-worker-vs-chromium`). The
   `Speculation-Rules` header's rule-set URLs are proxified
-  (spec/Speculation.agda; chadscafe.com); a rule set's content (`urls`,
-  `href_matches`, inline `<script type=speculationrules>`) is not
-  rewritten yet. The Cache API keys entries by the proxified URL whichever
+  (spec/Speculation.agda; chadscafe.com); a rule set's content — its
+  list rules' `urls` — is proxified against its base, by the server
+  (inline `<script type=speculationrules>`, its text as written in `crn-o`)
+  and the runtime (text a script gives one; immi-usa.com wrote its links'
+  hrefs, the page's URLs, into an `immediate` list rule and the browser
+  prefetched them from the origin: `speculation-list-vs-chromium`). Gaps:
+  an absolute `href_matches` pattern; a rule set fetched by the header (its
+  body is not rewritten). The Cache API keys entries by the proxified URL whichever
   form the page gives (string, URL, Request): `add`/`addAll` fetch through
   the proxy, lookups by the page's URL find them (`patches/cache-urls.ts`,
   windows and workers; toyotaofbellevue.com; `cache-api-vs-chromium`). CSS

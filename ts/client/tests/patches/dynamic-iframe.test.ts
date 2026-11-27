@@ -49,12 +49,11 @@ describe("patchDynamicIframeAppend — appendChild", () => {
         expect(spy).toHaveBeenCalledWith(iframe, window, config, BASE_HREF);
     });
 
-    it("skips injection for iframes whose src is already a proxied URL", () => {
-        // When src is set before appendChild, patchDynamicIframeAppend must NOT
-        // inject. Same-origin navigations reuse the window object; injecting now
-        // would stamp PATCHED_FLAG onto the about:blank window and prevent the
-        // server-injected bootstrap from reinstalling patches with the correct
-        // base URL for the iframe's own origin.
+    it("injects for iframes on their way to a proxied URL", () => {
+        // Until its navigation commits the frame holds its initial
+        // about:blank, which page code writes into (spec/Frames.agda
+        // frameRuntime pendingFrame); its document then takes the window
+        // over (runtime/bootstrap.ts adoptDocument).
         const spy = vi.spyOn(iframeInjection, "injectIntoIframe").mockImplementation(() => {});
         install();
 
@@ -62,7 +61,7 @@ describe("patchDynamicIframeAppend — appendChild", () => {
         iframe.src = `${PROXY_ORIGIN}/cyrano/https/embed.example.com/widget`;
         document.body.appendChild(iframe);
 
-        expect(spy).not.toHaveBeenCalled();
+        expect(spy).toHaveBeenCalledOnce();
     });
 
     it("injects for iframes with about:blank src", () => {

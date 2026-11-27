@@ -32,6 +32,7 @@
 --   netdest <proxy> <destination>      → {"out":"<where the navigation goes instead>"|"none"} (Route.netDestination)
 --   framedest <has sandbox 0|1> <sandbox>  → {"out":"frame"|"inert"} (Frames.frameDest)
 --   inertframe <mark inert 0|1> <marked 0|1> <recorded 0|1> → {"out":"yes"|"no"} (Frames.inertFrame)
+--   frameruntime <held 0|1> <pending|blank|booted|bare|inert> → {"out":"none"|"creators"|"own"|"creators-own-url"} (Frames.frameRuntime)
 --   embedder <marked 0|1> <recorded embedder|"-"> <referer document> → {"out":"<the embedder>"} (Frames.embedderOf)
 --   selforigin <native origin> <original origin> → {"out":"<self.origin>"} (Frames.selfOrigin)
 --   documentdomain <native origin> <original host> → {"out":"<document.domain>"} (Frames.documentDomain)
@@ -89,6 +90,8 @@
 --   ppallows <lines> <feature> <0|1> <doc> <origin> → {"out":"yes"|"no"} (featurePolicy.allowsFeature)
 --   pptranslate <lines>                 → {"out":"<the lines the browser is given>"}
 --   upgradable <host[:port]> <known TLD 0|1> → {"out":"yes"|"no"} (Chrome tries it over https)
+--   altsvc <header>                     → {"out":"clear"} or {"out":"<proto>\t<host>\t<port>\t<ma>" lines joined by "\n"} (Alpn.readAltSvc)
+--   h3proto <scheme> <host> <port> <rr alpn, comma-joined|-> <alt-svc header|-> <broken 0|1> → {"out":"h3"|"h2"} (Alpn.protocol)
 --   swapscheme <from> <to> <target>     → {"out":"<target>"|"none"}
 --   upgradesteps <events>               → {"out":"<decisions>"} (n<t> l f<t>; U P B -)
 --   secchua <major> <brand>             → {"out":"<the Sec-CH-UA value>"}
@@ -150,6 +153,7 @@
 --   docbase <document URL> <href>…      → {"out":"<base URL>"} (the hrefs of
 --                                         the document's <base> elements)
 --   importmap <proxy> <base> <text>     → {"out":"<rewritten import map>"}
+--   ruleset <proxy> <base> <text>       → {"out":"<the speculation rule set rewritten>"} (Speculation.rewriteRuleSet)
 --   importmapintegrity <base> <url> <map> [<map> …] → the URL's integrity metadata, maps merged | -
 --   attrkind <html|svg> <tag> <attr>    → {"out":"url|urllist|srcset|css|reflected|handler|none"}
 --   urldest <html|svg> <tag> <attr> <rel types> <as|-> → {"out":"js|css|-"}
@@ -221,6 +225,7 @@ import Carry
 import Query
 import Hints
 import Upgrades
+import Alpn
 import Permissions
 import Allow
 import Storage
@@ -457,6 +462,8 @@ dispatch op args =
   else if eqStr op (toList "hintsent") then hintSentReq args
   else if eqStr op (toList "secchua") then secChUaReq args
   else if eqStr op (toList "upgradable") then upgradableReq args
+  else if eqStr op (toList "altsvc") then altSvcReq args
+  else if eqStr op (toList "h3proto") then h3ProtoReq args
   else if eqStr op (toList "ppallows") then ppAllowsReq args
   else if eqStr op (toList "pptable") then ppTableReq args
   else if eqStr op (toList "ppallowlist") then ppAllowlistReq args
@@ -520,6 +527,7 @@ dispatch op args =
   else if eqStr op (toList "embedder") then embedderReq args
   else if eqStr op (toList "framedest") then frameDestReq args
   else if eqStr op (toList "inertframe") then inertFrameReq args
+  else if eqStr op (toList "frameruntime") then frameRuntimeReq args
   else if eqStr op (toList "netdest") then netDestReq args
   else if eqStr op (toList "selforigin") then twoArgs Frames.selfOrigin args
   else if eqStr op (toList "documentdomain") then twoArgs Frames.documentDomain args
@@ -577,6 +585,7 @@ dispatch op args =
   else if eqStr op (toList "scriptkind") then scriptKindReq args
   else if eqStr op (toList "docbase") then docBaseReq args
   else if eqStr op (toList "importmap") then importMapReq args
+  else if eqStr op (toList "ruleset") then ruleSetReq args
   else if eqStr op (toList "importmapintegrity") then importMapIntegrityReq args
   else if eqStr op (toList "urllike") then urlLikeReq args
   else if eqStr op (toList "attrkind") then attrKindReq args
@@ -1096,6 +1105,26 @@ dispatch op args =
   inertFrameReq (a ∷ b ∷ c ∷ []) = yn (Frames.inertFrame (eqStr a (toList "1")) (eqStr b (toList "1")) (eqStr c (toList "1")))
   inertFrameReq _ = errorReply "BadRequest"
 
+  frameRuntimeReq : List Str → Str
+  frameRuntimeReq (h ∷ d ∷ []) = byDoc (docOf d)
+    where
+    docOf : Str → Maybe Frames.FrameDoc
+    docOf d = if eqStr d (toList "pending") then just Frames.pendingFrame
+      else if eqStr d (toList "blank") then just Frames.blankLater
+      else if eqStr d (toList "booted") then just Frames.ownBooted
+      else if eqStr d (toList "bare") then just Frames.ownBare
+      else if eqStr d (toList "inert") then just Frames.inertSame
+      else nothing
+    rtName : Frames.FrameRuntime → Str
+    rtName Frames.noRuntime = toList "none"
+    rtName Frames.creators = toList "creators"
+    rtName Frames.ownConfig = toList "own"
+    rtName Frames.creatorsOwnUrl = toList "creators-own-url"
+    byDoc : Maybe Frames.FrameDoc → Str
+    byDoc (just fd) = out (rtName (Frames.frameRuntime (eqStr h (toList "1")) fd))
+    byDoc nothing = errorReply "BadRequest"
+  frameRuntimeReq _ = errorReply "BadRequest"
+
   embedderReq : List Str → Str
   embedderReq (m ∷ rec ∷ ref ∷ []) =
     out (Frames.embedderOf (eqStr m (toList "1")) (if eqStr rec (toList "-") then nothing else just rec) ref)
@@ -1318,6 +1347,36 @@ dispatch op args =
     joinLF (x ∷ []) = x
     joinLF (x ∷ xs) = x ++ fromℕ 10 ∷ joinLF xs
   ppTranslateReq _ = errorReply "BadRequest"
+
+  altSvcReq : List Str → Str
+  altSvcReq (h ∷ []) with Alpn.readAltSvc h
+  ... | Alpn.clear = out (toList "clear")
+  ... | Alpn.offers os = out (joinNl (Data.List.Base.map line os))
+    where
+    line : Alpn.Offer → Str
+    line o = Alpn.proto o ++ toList "\t" ++ Alpn.host o ++ toList "\t" ++ toList (showNat (Alpn.port o)) ++ toList "\t" ++ toList (showNat (Alpn.maxAge o))
+    joinNl : List Str → Str
+    joinNl [] = []
+    joinNl (x ∷ []) = x
+    joinNl (x ∷ xs) = x ++ toList "\n" ++ joinNl xs
+  altSvcReq _ = errorReply "BadRequest"
+
+  h3ProtoReq : List Str → Str
+  h3ProtoReq (sc ∷ h ∷ p ∷ rr ∷ alt ∷ br ∷ []) with Alpn.natOf p
+  ... | nothing = errorReply "BadRequest"
+  ... | just n = out (protoName (Alpn.protocol sc h n rrOf altOf (eqStr br (toList "1"))))
+    where
+    protoName : Alpn.Proto → Str
+    protoName Alpn.h3 = toList "h3"
+    protoName Alpn.h2 = toList "h2"
+    rrOf : Maybe (List Str)
+    rrOf = if eqStr rr (toList "-") then nothing else just (splitOn (is 44) rr)
+    altOf : List Alpn.Offer
+    altOf with eqStr alt (toList "-") | Alpn.readAltSvc alt
+    ... | true  | _ = []
+    ... | false | Alpn.clear = []
+    ... | false | Alpn.offers os = os
+  h3ProtoReq _ = errorReply "BadRequest"
 
   upgradableReq : List Str → Str
   upgradableReq (h ∷ r ∷ []) = out (if Upgrades.upgradable (eqStr r (toList "1")) h then toList "yes" else toList "no")
@@ -1977,6 +2036,19 @@ dispatch op args =
     shown nothing  = toList "-"
   ... | nothing = errorReply "BadBase"
   importMapIntegrityReq _ = errorReply "BadRequest"
+
+  ruleSetReq : List Str → Str
+  ruleSetReq (p ∷ b ∷ text ∷ []) with proxyOf p | baseOf b
+  ... | just px | just base = out (Speculation.rewriteRuleSet rw text)
+    where
+    -- prefetched and prerendered URLs are documents: no mark
+    rw : Str → Maybe Str
+    rw u with rewriteUrlWith px (mark nothing nothing) base u
+    ... | emit _ v = just v
+    ... | _        = nothing
+  ... | nothing | _ = errorReply "BadProxy"
+  ... | just _  | nothing = errorReply "BadBase"
+  ruleSetReq _ = errorReply "BadRequest"
 
   importMapReq : List Str → Str
   importMapReq (p ∷ b ∷ text ∷ []) with proxyOf p | baseOf b

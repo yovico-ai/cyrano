@@ -718,3 +718,25 @@ func TestRewrite_JavascriptURLs(t *testing.T) {
 		}
 	}
 }
+
+// An inline speculation rule set: its list rules' URLs proxified (spec
+// Speculation.rewriteRuleSet), a document rule left, the text as written in
+// the originals; a rule set with a src (invalid: Chromium fetches none) and
+// an unchanged one left byte for byte.
+func TestRewrite_SpeculationRuleSet(t *testing.T) {
+	in := `<html><head><script type="speculationrules">{"prefetch":[{"source":"list","urls":["https://example.com/blog/","/about/"]}]}</script>` +
+		`<script type=speculationrules>{"prefetch":[{"source":"document","where":{"href_matches":"/*"}}]}</script></head></html>`
+	got := rewrite(t, in, func(cfg *Config) { cfg.NoOriginals = false })
+	for _, want := range []string{
+		`"urls":["` + `http://localhost:9081/cyrano/https/example.com/blog/","http://localhost:9081/cyrano/https/example.com/about/"]`,
+		`crn-o="{&#34;#text&#34;:`,
+		`<script type=speculationrules>{"prefetch":[{"source":"document","where":{"href_matches":"/*"}}]}</script>`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %s in:\n%s", want, got)
+		}
+	}
+	if strings.Count(got, "crn-o=") != 1 {
+		t.Errorf("want originals on the rewritten rule set only:\n%s", got)
+	}
+}

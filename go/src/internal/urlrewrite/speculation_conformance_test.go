@@ -33,3 +33,30 @@ func TestSpecConformance_SpeculationRules(t *testing.T) {
 		}
 	})
 }
+
+// A rule set's content (spec rewriteRuleSet): list rules' "urls" proxified.
+func TestSpecConformance_RuleSet(t *testing.T) {
+	oracle := specoracle.Need(t)
+	urls := []string{`"https://www.immi-usa.com/blog/"`, `"/about-us/"`, `"rel/x"`, `"//h.example/r"`, `"mailto:a@b"`, `"a\"b"`, `"été"`, `""`, `"?q"`, `"#f"`}
+	rapid.Check(t, func(rt *rapid.T) {
+		proxy := rapid.SampledFrom(specoracle.Proxies).Draw(rt, "proxy")
+		base := rapid.SampledFrom(specoracle.Bases).Draw(rt, "base")
+		list := strings.Join(rapid.SliceOfN(rapid.SampledFrom(urls), 0, 3).Draw(rt, "urls"), rapid.SampledFrom([]string{",", ", ", " ,\n"}).Draw(rt, "sep"))
+		key := rapid.SampledFrom([]string{`"urls"`, `"urls" `, `"url"`, `"where"`}).Draw(rt, "key")
+		rule := rapid.SampledFrom([]string{
+			`{"source":"list",` + key + `:[` + list + `],"eagerness":"immediate"}`,
+			`{"source":"document","where":{"href_matches":"/*"}}`,
+			`{"source":"list",` + key + `:[[` + list + `]]}`,
+			`{"tag":"urls",` + key + `:[` + list + `]}`,
+		}).Draw(rt, "rule")
+		text := rapid.SampledFrom([]string{`{"prefetch":[` + rule + `]}`, ` {"prerender": [ ` + rule + ` ] } `, `{"prefetch":[` + rule + `]`, `{urls:["/x"]}`, `[` + list + `]`}).Draw(rt, "text")
+		want, _, err := oracle.Ask("ruleset", proxy, base, text)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		baseURL, _ := url.Parse(base)
+		if got := string(RewriteRuleSet([]byte(text), baseURL, proxyConfig(rt, proxy))); got != want {
+			rt.Fatalf("RewriteRuleSet(%q) on %s\n got  %q\n spec %q", text, base, got, want)
+		}
+	})
+}

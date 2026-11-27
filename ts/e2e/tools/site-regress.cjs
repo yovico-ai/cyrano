@@ -3,7 +3,7 @@
 // made for, with what was fixed. Run before a commit that touches
 // rewriting, against the build about to be committed:
 //
-//   PROXY=https://localhost:9443 HEADED=1 xvfb-run node tools/site-regress.cjs
+//   PROXY=https://localhost:9443 node tools/site-regress.cjs   (real Chrome on :97 by default; HEADLESS=1 only on purpose)
 //
 // "auto" sites are compared direct vs proxied here (live-compare.cjs).
 // "chrome" sites refuse an automated browser on both sides (bot

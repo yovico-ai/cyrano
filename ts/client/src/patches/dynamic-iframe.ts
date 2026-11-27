@@ -23,7 +23,6 @@
 import { SafeWeakMap, SafeWeakSet, nO, nOP, nR, ncall } from "../native/intrinsics";
 import type { ClientConfig } from "../config";
 import { replaceValue, wrapMethod } from "../native/surface";
-import { unwrapProxiedUrl } from "../url/containment";
 import { injectIntoIframe } from "../runtime/iframe-injection";
 import { rawText, rawTextTarget, rewriteTextNode } from "./dynamic-html";
 import { rewriteCssText } from "../css/rewriter";
@@ -118,7 +117,7 @@ export function patchDynamicIframeAppend(
         if (el.localName !== "script" || el.namespaceURI !== "http://www.w3.org/1999/xhtml") return;
         if (ncall(nativeGetAttr, el, "src") !== null) return;
         const kind = scriptKindOf(el);
-        if (kind !== "classic" && kind !== "module" && kind !== "importmap") return;
+        if (kind !== "classic" && kind !== "module" && kind !== "importmap" && kind !== "speculationrules") return;
         if (originalText(el) !== undefined) return;
         for (let c = el.firstChild; c; c = c.nextSibling) if (c.nodeType !== 3) return;
         const text = heldText(el);
@@ -175,18 +174,10 @@ export function patchDynamicIframeAppend(
         // A frame inserted again has a new window: no memo by element
         // (injectIntoIframe leaves a window that has the runtime alone).
 
-        // If the iframe already has a proxied src, the server will inject the
-        // bootstrap when that page loads. Injecting now would stamp PATCHED_FLAG
-        // onto the about:blank window; since same-origin navigations reuse the
-        // window object, the bootstrap's installPatches call would be a no-op,
-        // leaving DOM patches (fetch, XHR, URL attrs, document.cookie) wired to
-        // this window's parent-page closure instead of the iframe's own.
-        // Only inject immediately for about:blank / no-src frames (e.g. the
-        // Cloudflare beacon pattern that accesses contentDocument synchronously).
-        // The raw attribute (iframe.src itself reads back the original URL).
-        const src = ncall(nativeGetAttr, iframe, "src");
-        if (src && unwrapProxiedUrl(src, config) !== src) return;
-
+        // A frame on its way to a proxied URL too: until that navigation
+        // commits, its initial about:blank is what page code reaches
+        // (runtime/iframe-injection.ts; its document then takes the window
+        // over: runtime/bootstrap.ts adoptDocument).
         injectIntoIframe(iframe, targetWindow, config, getBaseHref());
     }
 

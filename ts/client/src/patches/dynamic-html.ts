@@ -57,7 +57,7 @@ import { scriptKindOf } from "./script-kind";
 import { isReferrerPolicy, targetMarkOf } from "../url/containment";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 import { injectFramesIn } from "./dynamic-iframe";
-import { rewriteImportMapText, rewriteImportMapTwin } from "../url/import-map";
+import { rewriteImportMapText, rewriteImportMapTwin, rewriteRuleSetText } from "../url/import-map";
 import { consume, heldAttr, originalAttr, recordAttr, noteAttr, recordText, recordTextNode, textAsWritten } from "../native/originals";
 import { trustedLike, trustedPolicyName } from "../native/trusted";
 
@@ -405,6 +405,8 @@ export function rawText(el: Element, text: string, rewriteOne: (url: string) => 
     if (tag !== "SCRIPT") return null;
     const kind = scriptKindOf(el);
     if (kind === "importmap") return rewriteImportMap(text, rewriteOne, docHrefOf(el));
+    // its list rules' URLs (spec/Speculation.agda rewriteRuleSet)
+    if (kind === "speculationrules") return rewriteRuleSetText(text, rewriteOne);
     if (kind !== "classic" && kind !== "module") return text;
     // As the server's: static import/export specifiers and literal import()
     // are proxified against the script's base URL, which import.meta.url

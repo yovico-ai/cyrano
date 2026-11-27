@@ -21,7 +21,7 @@ import type { ClientConfig } from "../config";
 import { rewriteUrl, unwrapProxiedUrl } from "../url/containment";
 import { installToStringMask, wrapAccessor, wrapMethod } from "../native/surface";
 import { patchErrorStacks } from "../native/error-stack";
-import type { Internals } from "../native/internals";
+import { eachDocument, type Internals } from "../native/internals";
 import { initOriginals, originalAttr } from "../native/originals";
 import { initCrossOrigin } from "../native/cross-origin";
 import { patchCrossOriginWindows, patchNamedFrames } from "./cross-origin-windows";
@@ -151,7 +151,7 @@ export function installPatches(
     step("patchErrorStacks", () => patchErrorStacks(targetWindow, config.apiBaseURL + config.source, unwrapOne));
     step("patchPerformanceEntryNames", () => patchPerformanceEntryNames(targetWindow, unwrapOne, rewriteOne, new URL(config.apiBaseURL).origin,
         config.identity ? config.apiBaseURL + config.source : undefined));
-    step("patchCspViolationEvents", () => patchCspViolationEvents(targetWindow, unwrapOne, new URL(config.apiBaseURL).origin, config.cspp ?? []));
+    step("patchCspViolationEvents", () => patchCspViolationEvents(targetWindow, unwrapOne, new URL(config.apiBaseURL).origin, () => config.cspp ?? []));
     step("patchReports", () => patchReports(targetWindow, unwrapOne, config.apiBaseURL + config.source));
 
     // Anchor/area URL-part reflection must be patched before patchUrlAttributes
@@ -196,7 +196,7 @@ export function installPatches(
     // The drag data store reads the page's URLs (patches/drag-data.ts).
     step("patchDragData", () => patchDragData(targetWindow, cssBack));
     // WebRTC through cyrano's relay only (patches/webrtc.ts).
-    step("patchWebRtc", () => patchWebRtc(targetWindow, config.rtc));
+    step("patchWebRtc", () => patchWebRtc(targetWindow, () => config.rtc));
     // WebTransport never around the proxy; a Picture-in-Picture window gets the runtime (patches/browser-windows.ts).
     step("patchWebTransport", () => patchWebTransport(targetWindow, rewriteOne));
     step("patchPictureInPicture", () => patchPictureInPicture(targetWindow, config, () => getCurrentBaseUrl()));
@@ -218,11 +218,11 @@ export function installPatches(
     // … and an empty frame has the runtime by the time page code reaches into
     // it (it may do so in the same breath as creating it).
     // A child frame reached by name is the cross-origin view too (patches/cross-origin-windows.ts).
-    if (flattened) step("patchNamedFrames", () => patchNamedFrames(targetWindow));
+    if (flattened) step("patchNamedFrames", () => patchNamedFrames(targetWindow, internals));
     if (flattened) step("patchCrossOriginWindows", () => patchCrossOriginWindows(targetWindow, (frame) =>
         injectIntoIframe(frame as HTMLIFrameElement, targetWindow, config, getCurrentBaseUrl().href)));
     // Selectors on URL attributes find elements by their original URLs (patches/selectors.ts).
-    step("patchFeaturePolicy", () => patchFeaturePolicy(targetWindow, config.pp ?? null, () => getCurrentBaseUrl().origin, new URL(config.apiBaseURL).origin));
+    step("patchFeaturePolicy", () => patchFeaturePolicy(targetWindow, () => config.pp ?? null, () => getCurrentBaseUrl().origin, new URL(config.apiBaseURL).origin));
     step("patchXPath", () => patchXPath(targetWindow, rewriteOne, unwrapOne));
     step("patchSelectors", () => patchSelectors(targetWindow, rewriteOne, config.apiBaseURL));
     step("patchResponseHeaders", () => patchResponseHeaders(targetWindow, opaqueOrigin));
@@ -252,7 +252,7 @@ export function installPatches(
     step("patchNotification", () => patchNotification(targetWindow, rewriteOne, unwrapOne));
     // Before document.cookie is wrapped: it writes with the native setter.
     // The document's cookies, from the session's jar: memory's from its first access.
-    step("cookieSnapshot", () => givenSnapshot(targetWindow, config.ck));
+    step("cookieSnapshot", () => eachDocument(internals, () => givenSnapshot(targetWindow, config.ck)));
     step("patchCookieStore", () => patchCookieStore(targetWindow, getCurrentBaseUrl));
     // (config.skip "cookieGet" / "cookieSet": one half only — development aid.)
     step("patchDocumentCookie", () => patchDocumentCookie(targetWindow, getCurrentBaseUrl,
@@ -265,8 +265,12 @@ export function installPatches(
     step("patchReadBack", () => patchReadBack(targetWindow, (el) => {
         if (el.tagName !== "IFRAME" || !nativeListen) return;
         const inject = (): void => injectIntoIframe(el as HTMLIFrameElement, targetWindow, config, getCurrentBaseUrl().href);
+        // At once, too: a frame the parser inserts runs its javascript: URL
+        // as a task after this checkpoint, in its initial about:blank, its
+        // code rewritten (spec/Frames.agda frameRuntime pendingFrame; my.adp.com).
+        inject();
         ncall(nativeListen, el, "load", inject);
-    }));
+    }, internals));
     step("patchSvgHref", () => patchSvgHref(targetWindow, unwrapOne)); // after read-back: it uses the runtime's getAttribute
 }
 
@@ -452,19 +456,30 @@ export function patchPerformanceEntryNames(
  * the page wrote it (its originals), else the browser's without the proxy
  * origin cyrano added to its source lists (proxy/csp.go).
  */
-function patchCspViolationEvents(targetWindow: Window, unwrapOne: (url: string) => string, proxyOrigin: string, pairs: Array<[string, string]>): void {
+function patchCspViolationEvents(targetWindow: Window, unwrapOne: (url: string) => string, proxyOrigin: string, pairs: () => Array<[string, string]>): void {
     const proto = (targetWindow as unknown as { SecurityPolicyViolationEvent?: { prototype: object } }).SecurityPolicyViolationEvent?.prototype;
     if (!proto) return;
     for (const key of ["documentURI", "blockedURI", "sourceFile", "referrer"]) {
         if (!nO.getOwnPropertyDescriptor(proto, key)) continue;
         wrapAccessor<string>(proto, key, { get: (get, self) => unwrapOne(ncall(get, self)) });
     }
-    const byBrowser = new SafeMap<string, string>();
-    for (const [b, o] of pairs) if (!byBrowser.has(b)) byBrowser.set(b, o);
-    const doc = (targetWindow as unknown as { document?: Document }).document;
+    // The document's pairs (its config's, read when an event is: a reused
+    // window's next document brings its own).
+    let seen: Array<[string, string]> | undefined;
+    let byBrowser = new SafeMap<string, string>();
+    const pairOf = (v: string): string | undefined => {
+        const now = pairs();
+        if (now !== seen) {
+            seen = now;
+            byBrowser = new SafeMap<string, string>();
+            for (const [b, o] of now) if (!byBrowser.has(b)) byBrowser.set(b, o);
+        }
+        return byBrowser.get(v);
+    };
     const nativeGetAttr = (targetWindow as unknown as { Element?: { prototype: Element } }).Element?.prototype.getAttribute;
     const nativeQSA = (targetWindow as unknown as { Document?: { prototype: Document } }).Document?.prototype.querySelectorAll;
     const asWrittenMeta = (v: string): string | undefined => {
+        const doc = (targetWindow as unknown as { document?: Document }).document;
         if (!doc || !nativeQSA || !nativeGetAttr) return undefined;
         try {
             const metas = ncall(nativeQSA, doc, "meta[http-equiv]") as NodeListOf<Element>;
@@ -483,7 +498,7 @@ function patchCspViolationEvents(targetWindow: Window, unwrapOne: (url: string) 
         wrapAccessor<string>(proto, "originalPolicy", {
             get: (get, self) => {
                 const v = ncall(get, self);
-                return byBrowser.get(v) ?? asWrittenMeta(v) ?? v.split(" " + proxyOrigin).join("");
+                return pairOf(v) ?? asWrittenMeta(v) ?? v.split(" " + proxyOrigin).join("");
             },
         });
     }

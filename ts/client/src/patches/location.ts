@@ -25,7 +25,7 @@ export function patchWindowLocation(
     targetWindow: Window,
     wrappedLocation: WrappedLocation,
     unwrapOne: (url: string) => string,
-    referrer?: string,
+    referrer?: () => string | undefined,
     base?: () => URL,
 ): void {
     // An about:blank / about:srcdoc document: its URL is its own (the
@@ -43,7 +43,7 @@ export function patchWindowLocation(
         wrapAccessor<string>(doc, "URL", { get: own });
         wrapAccessor<string>(doc, "documentURI", { get: own });
         wrapAccessor<string>(doc, "referrer", {
-            get: (get, self) => (typeof referrer === "string" ? referrer : unwrapOne(ncall(get, self))),
+            get: (get, self) => { const r = referrer?.(); return typeof r === "string" ? r : unwrapOne(ncall(get, self)); },
         });
         // document.domain as HTML sets it (spec/Frames.agda domainSet): a
         // bad value throws Chromium's SecurityError, a good one becomes the

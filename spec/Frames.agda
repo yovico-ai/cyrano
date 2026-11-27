@@ -279,3 +279,63 @@ dataDocKind s with DataUrl.read s
                 else if Disposition.isXmlType (Disposition.essence (DataUrl.head d)) then xmlDoc
                 else notDoc
   where import Data.Bool.Base
+
+------------------------------------------------------------------------
+-- The runtime a frame's window has, document by document (TS:
+-- runtime/iframe-injection.ts frameRuntime, runtime/bootstrap.ts
+-- adoptDocument). A frame's window keeps its realm when its initial
+-- about:blank gives way to a document of the same origin — through the
+-- proxy every proxied document is: the realm, its patched natives, and
+-- the runtime a creator put there stay.
+--
+--   * Its initial about:blank, whatever URL the frame is on its way to
+--     (pendingFrame): page code reaches it until that navigation commits
+--     (it writes a script into it: Ruffle on freeasteroids.org; it runs
+--     rewritten code there: `$rewriter is not defined` on nordstrom.com),
+--     so it is given its creator's runtime and config. Until 2026-11-26 a
+--     frame with a proxied src was given none: its script loaded from the
+--     origin. So too a later about:blank / about:srcdoc it is given.
+--   * A document of its own with a bootstrap of its own: the runtime in
+--     place (a realm is patched once) reads that document's config — its
+--     cookies, policies, referrer, credentials — and what is installed on
+--     a document, not the realm, is installed on it.
+--   * A document of its own under which none of its scripts runs (no
+--     bootstrap, Csp noScriptsRun), or a same-origin sandboxed one
+--     (inertFrame): no runtime of its own; if the window holds its
+--     creator's, it is told the document's own URL (its config stays the
+--     creator's: the document has none).
+
+data FrameDoc : Set where
+  pendingFrame : FrameDoc          -- its initial about:blank (on its way anywhere, or nowhere)
+  blankLater   : FrameDoc          -- about:blank / about:srcdoc it was given after
+  ownBooted    : FrameDoc          -- a document of its own, with its bootstrap
+  ownBare      : FrameDoc          -- a document of its own where no script of its own runs
+  inertSame    : FrameDoc          -- sandboxed without scripts, same origin (its parent scripts it)
+
+data FrameRuntime : Set where
+  noRuntime   : FrameRuntime
+  creators    : FrameRuntime       -- the creator's runtime and config
+  ownConfig   : FrameRuntime       -- the runtime in place, the document's own config
+  creatorsOwnUrl : FrameRuntime    -- the creator's runtime and config, told the document's URL
+
+-- held: the window already holds a runtime (a creator gave it one for an earlier document).
+frameRuntime : Bool → FrameDoc → FrameRuntime
+frameRuntime _     pendingFrame = creators
+frameRuntime _     blankLater   = creators
+frameRuntime _     ownBooted    = ownConfig
+frameRuntime true  ownBare      = creatorsOwnUrl
+frameRuntime false ownBare      = noRuntime
+frameRuntime _     inertSame    = creatorsOwnUrl
+
+private
+  open import Relation.Binary.PropositionalEquality using (_≡_; refl)
+  -- A frame on its way to a proxied URL, then its document: creator's, then its own.
+  fr1 : frameRuntime false pendingFrame ≡ creators
+  fr1 = refl
+  fr2 : frameRuntime true ownBooted ≡ ownConfig
+  fr2 = refl
+  -- A frame whose document has no script of its own: never the creator's URL.
+  fr3 : frameRuntime true ownBare ≡ creatorsOwnUrl
+  fr3 = refl
+  fr4 : frameRuntime false ownBare ≡ noRuntime
+  fr4 = refl

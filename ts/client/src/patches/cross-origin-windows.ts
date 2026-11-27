@@ -12,6 +12,7 @@ import { hideOwn, showOwn } from "../native/hidden-globals";
 import { onInserted } from "./dynamic-iframe";
 import { coopSevered, crossOriginView } from "../native/cross-origin";
 import { wrapAccessor, wrapMethod } from "../native/surface";
+import { eachDocument, type Internals } from "../native/internals";
 
 /**
  * The origin a frame element's document is, or is about to be, from: its
@@ -99,7 +100,7 @@ export function patchCrossOriginWindows(targetWindow: Window, ensureRuntime: (fr
  * attribute change. Limit: a child renaming itself (`window.name = …`)
  * shows by its new name at the next of those.
  */
-export function patchNamedFrames(targetWindow: Window): void {
+export function patchNamedFrames(targetWindow: Window, internals?: Internals): void {
     const W = (targetWindow as unknown as { Window?: { prototype: object } }).Window;
     if (!W) return;
     const proto = W.prototype;
@@ -155,11 +156,13 @@ export function patchNamedFrames(targetWindow: Window): void {
     };
     sync();
     onInserted(targetWindow, sync);
-    try {
-        targetWindow.document.addEventListener("load", sync, true); // a frame's document loaded (its name may be its own)
-        targetWindow.document.addEventListener("DOMContentLoaded", sync);
-        targetWindow.document.addEventListener("readystatechange", sync);
-    } catch { /* no document */ }
+    eachDocument(internals, () => {
+        try {
+            targetWindow.document.addEventListener("load", sync, true); // a frame's document loaded (its name may be its own)
+            targetWindow.document.addEventListener("DOMContentLoaded", sync);
+            targetWindow.document.addEventListener("readystatechange", sync);
+        } catch { /* no document */ }
+    });
     const fr = (targetWindow as unknown as { HTMLIFrameElement?: { prototype: object } }).HTMLIFrameElement;
     if (fr) wrapAccessor<string>(fr.prototype, "name", { set: (nativeSet, self, v) => { ncall(nativeSet, self, v); sync(); } });
     const el = (targetWindow as unknown as { Element?: { prototype: object } }).Element;

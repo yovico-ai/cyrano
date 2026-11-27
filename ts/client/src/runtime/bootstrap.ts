@@ -18,7 +18,7 @@ import { installPatches } from "../patches/install";
 import { patchWindowLocation } from "../patches/location";
 import { unwrapProxiedUrl } from "../url/containment";
 import { internalsOf, publish, type Internals } from "../native/internals";
-import { nR } from "../native/intrinsics";
+import { nO, nR } from "../native/intrinsics";
 
 export interface RewriterBootstrap {
     inject(): RewriterApi;
@@ -34,9 +34,14 @@ export function init(
             // own bootstrap after a parent injected the runtime into the
             // same window, which a same-origin navigation from about:blank
             // keeps — gets the first one's API, so its set_location reaches
-            // the state the installed patches read.
+            // the state the installed patches read; the document it is for
+            // brings its own config (cookies, policies, referrer…).
             const existing = internalsOf(targetWindow);
-            if (existing) return existing.api;
+            if (existing) {
+                adoptDocument(targetWindow, existing, config as unknown as Record<string, unknown>);
+                if ((targetWindow as unknown) === globalThis && !existing.realmApply) existing.realmApply = (f, s, a) => nR.apply(f as (...x: unknown[]) => unknown, s, a);
+                return existing.api;
+            }
             const api = createRewriterApi(targetWindow, config);
             const internals: Internals = {
                 api,
@@ -44,7 +49,10 @@ export function init(
                     srcdoc ? srcdocReferrerFrom(targetWindow, config) : undefined),
                 bootstrapHtmlAt: (href: string) => buildBootstrapHtml(config, href),
                 bootstrapXmlAt: (ns, href) => buildXmlBootstrap(config, ns, href),
+                config: config as unknown as Record<string, unknown>,
+                init: init as unknown as NonNullable<Internals["init"]>,
             };
+            try { internals.doc = targetWindow.document; } catch { /* none */ }
             installPatches(
                 targetWindow,
                 () => api.get_base_url(),
@@ -58,7 +66,7 @@ export function init(
                 targetWindow,
                 api.wrap_get_location(targetWindow.location),
                 (u) => unwrapProxiedUrl(u, config),
-                config.referrer,
+                () => config.referrer,
                 () => api.get_base_url() ?? new URL(targetWindow.location.href),
             );
             // `location` reached through reflection is the view too (patches/location-reflect.ts).
@@ -81,4 +89,26 @@ export function init(
             return api;
         },
     };
+}
+
+/**
+ * A window's next document — one that took over the window (and realm) of
+ * its initial about:blank, which its creator had given the runtime (a frame
+ * on its way to a proxied URL; spec/Frames.agda pendingFrame) — gets what
+ * is its own: its config replaces the one the patches read (in place: they
+ * hold it), and what is installed on a document rather than the realm is
+ * installed on it. `config` is that document's own (its bootstrap's), or
+ * none (a document with no runtime of its own: the creator's stays).
+ */
+export function adoptDocument(win: Window, internals: Internals, config?: Record<string, unknown>): void {
+    const live = internals.config;
+    if (config && live && config !== live) {
+        for (const k of nO.keys(live)) delete live[k];
+        nO.assign(live, config);
+    }
+    let doc: unknown;
+    try { doc = win.document; } catch { return; }
+    if (internals.doc === doc) return;
+    internals.doc = doc;
+    for (const step of internals.perDocument ?? []) { try { step(); } catch { /* as it is */ } }
 }

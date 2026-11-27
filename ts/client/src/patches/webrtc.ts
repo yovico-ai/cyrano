@@ -32,7 +32,7 @@ export function shown(page: Cfg, native: Cfg): Cfg {
     return { ...native, iceServers: page["iceServers"], iceTransportPolicy: page["iceTransportPolicy"] };
 }
 
-export function patchWebRtc(targetWindow: Window, relay: ClientConfig["rtc"]): void {
+export function patchWebRtc(targetWindow: Window, relay: () => ClientConfig["rtc"]): void {
     const g = targetWindow as unknown as Record<string, { prototype: object } | undefined>;
     const PC = g["RTCPeerConnection"]?.prototype;
     if (!PC) return;
@@ -45,7 +45,7 @@ export function patchWebRtc(targetWindow: Window, relay: ClientConfig["rtc"]): v
     const takeOver = (pc: object): void => {
         const page = ncall(nGet, pc) as Cfg;
         pages.set(pc, page);
-        ncall(nSet, pc, toNative(page, relay));
+        ncall(nSet, pc, toNative(page, relay()));
     };
     const original = g["RTCPeerConnection"] as unknown;
     wrapConstructor<new (...a: unknown[]) => object>(targetWindow, "RTCPeerConnection", (Native, args, newTarget) => {

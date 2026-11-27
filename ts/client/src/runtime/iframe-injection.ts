@@ -12,7 +12,8 @@
 
 import { srcdocReferrerFrom } from "../url/srcdoc-referrer";
 import { unwrapProxiedUrl } from "../url/containment";
-import { heldAttr } from "../native/originals";
+import { internalsOf } from "../native/internals";
+import { adoptDocument } from "./bootstrap";
 import { contentWindowOf } from "../native/cross-origin";
 import type { ClientConfig } from "../config";
 import type { RewriterApi } from "./api-types";
@@ -27,6 +28,21 @@ interface WindowWithRewriter extends Window {
     $rewriter_init?: RewriterInit;
 }
 
+/** What a frame's window holds (spec/Frames.agda FrameDoc). */
+export type FrameDoc = "pending" | "blank" | "booted" | "bare" | "inert";
+/** The runtime it has for it (spec/Frames.agda frameRuntime). */
+export type FrameRuntime = "none" | "creators" | "own" | "creators-own-url";
+
+/** held: the window already holds a runtime (a creator gave it one for an earlier document). */
+export function frameRuntime(held: boolean, doc: FrameDoc): FrameRuntime {
+    switch (doc) {
+        case "pending": case "blank": return "creators";
+        case "booted": return "own";
+        case "bare": return held ? "creators-own-url" : "none";
+        case "inert": return "creators-own-url";
+    }
+}
+
 export function injectIntoIframe(
     iframe: HTMLIFrameElement,
     parentWindow: Window,
@@ -39,30 +55,41 @@ export function injectIntoIframe(
     // proxied document has the server's bootstrap or, where none of its
     // scripts can run, no runtime at all — given the creator's, it read the
     // creator's URL as its own (a frame redirected back to the page's origin
-    // with a document of no element: frame-redirect-back-vs-chromium). Nor
-    // a blank frame on its way to a proxied URL: the navigation reuses the
-    // window, and the runtime stamped on it would stay the creator's
-    // (dynamic-iframe.ts maybeInjectIframe).
+    // with a document of no element: frame-redirect-back-vs-chromium). A
+    // blank frame on its way to a proxied URL is given it too (spec/Frames.agda
+    // pendingFrame): until that navigation commits, its initial about:blank
+    // is what the page reaches, and what the page writes into it ran
+    // without the runtime — a script's src went to its origin (Ruffle on
+    // freeasteroids.org), rewritten code threw on `$rewriter`. The
+    // navigation keeps the window (and realm): the document's own bootstrap
+    // takes it over (runtime/bootstrap.ts adoptDocument), and one with no
+    // runtime of its own is told its URL when it loads (below).
     // A frame sandboxed without scripts but same-origin (allow-same-origin):
     // its document has no runtime of its own (its URL is marked !inert:
     // spec/Frames.agda inertFrame), yet its parent scripts it — what the
     // parent writes into it, its natives, its URLs (round I: they escaped).
     // It is given its creator's runtime, told its own URL; no script of its
     // own runs, as directly.
+    let doc: FrameDoc;
+    let here = "";
+    const held = internalsOf(childWindow);
     try {
-        const here = String((childWindow as unknown as Window).location.href);
-        if (/\/cyrano\/[^/]*!inert(?=[!/])/.test(here)) {
-            const own = unwrapProxiedUrl(here, parentConfig);
-            injectIntoWindow(childWindow, parentWindow, parentConfig, own);
-            try { (childWindow.$rewriter as unknown as { set_location?: (u: string) => void } | undefined)?.set_location?.(own); } catch { /* as it is */ }
-            return;
-        }
+        here = String((childWindow as unknown as Window).location.href);
+        doc = /\/cyrano\/[^/]*!inert(?=[!/])/.test(here) ? "inert"
+            : /^about:/i.test(here) ? "pending"
+            // A document of its own: its bootstrap took the window over
+            // (adoptDocument noted its document), or it has none.
+            : held && held.doc === childWindow.document ? "booted" : "bare";
     } catch { return; }
-    try {
-        if (!/^about:/i.test(String((childWindow as unknown as Window).location.href))) return;
-        const src = heldAttr(iframe, "src"); // as held: getAttribute reads the page's back
-        if (src && unwrapProxiedUrl(src, parentConfig) !== src) return;
-    } catch { return; }
+    const rt = frameRuntime(held !== undefined, doc);
+    if (rt === "none" || rt === "own") return;
+    if (rt === "creators-own-url") {
+        const own = unwrapProxiedUrl(here, parentConfig);
+        if (held) adoptDocument(childWindow, held);
+        else injectIntoWindow(childWindow, parentWindow, parentConfig, own);
+        try { (childWindow.$rewriter as unknown as { set_location?: (u: string) => void } | undefined)?.set_location?.(own); } catch { /* as it is */ }
+        return;
+    }
 
     // A srcdoc frame keeps this Window when its about:srcdoc document
     // replaces the initial about:blank (same origin): its referrer is the
@@ -100,7 +127,8 @@ export function injectIntoWindow(
         // The bundle's entry point: on the window that loaded it. An empty
         // frame got its runtime from its creator, so it has none of its own —
         // look up the chain of creators.
-        let childInit = childWindow.$rewriter_init;
+        // The copy the creator runs first (native/internals.ts init).
+        let childInit = internalsOf(parentWindow)?.init as RewriterInit | undefined ?? childWindow.$rewriter_init;
         for (let w: WindowWithRewriter | null = parentWindow as WindowWithRewriter; !childInit && w; ) {
             try { childInit = w.$rewriter_init; } catch { break; }
             let up: WindowWithRewriter | null = null;

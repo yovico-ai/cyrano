@@ -7,6 +7,18 @@ const PROXY = process.env.PROXY || "http://localhost:9081"; // PROXY=https://loc
 const PROXY_HOST = PROXY.replace(/^https?:\/\//, "");
 const REFUSED = "https://cyrano-refused.invalid/"; // the proxy's CSP refusal redirect (Go urlrewrite.CSPRefusalLocation)
 const sites = process.argv.slice(2);
+// Real Chrome with a window, by default. Playwright's headless shell says
+// "HeadlessChrome" in its user agent, has navigator.webdriver true and no
+// plugins: Cloudflare and Akamai refuse it on both sides, so a page is never
+// judged (11% of a 2026-11-26 walk; 1% headed). HEADLESS=1 only on purpose.
+// The window goes on the nested display (CRN_DISPLAY, default :97, a Xephyr
+// window), never the desktop's.
+const HEADED = process.env.HEADLESS !== "1";
+const DISPLAY_ = process.env.CRN_DISPLAY || ":97";
+if (HEADED) {
+  const r = require("node:child_process").spawnSync("xdpyinfo", [], { env: { ...process.env, DISPLAY: DISPLAY_ }, stdio: "ignore" });
+  if (r.status !== 0) { console.error(`live-compare: display ${DISPLAY_} is not up (start: Xephyr ${DISPLAY_} -screen 1600x1000 &), or HEADLESS=1 on purpose`); process.exit(2); }
+} else console.error("live-compare: HEADLESS=1 — bot-protected sites refuse this browser on both sides");
 const assist = require("./assist.cjs");
 const ads = require("./ads.cjs");
 const prox = (u) => assist.proxify(PROXY, u);
@@ -159,7 +171,7 @@ async function visit(browser, url, viaProxy) {
     await page.waitForTimeout(2500);
     // A challenge page: give it time to pass and reload.
     for (let i = 0; i < 24 && /just a moment|attention required/i.test(await page.title().catch(() => "")); i++) await page.waitForTimeout(500);
-    if (process.env.HEADED === "1") await page.waitForTimeout(1500);
+    if (HEADED) await page.waitForTimeout(1500);
     // A challenge that passes reloads the page (an AWS WAF 202, Cloudflare):
     // read it once its network has settled, on both sides alike.
     await page.waitForLoadState("networkidle", { timeout: 12000 }).catch(() => {});
@@ -174,11 +186,8 @@ async function visit(browser, url, viaProxy) {
 }
 
 (async () => {
-  // HEADED=1: real Chrome with a window — sites behind an anti-bot challenge
-  // refuse a headless browser even direct, so there is nothing to compare.
-  const headed = process.env.HEADED === "1";
-  const browser = await chromium.launch(headed
-    ? { channel: "chrome", headless: false, args: ["--disable-blink-features=AutomationControlled", "--mute-audio"] }
+  const browser = await chromium.launch(HEADED
+    ? { channel: "chrome", headless: false, env: { ...process.env, DISPLAY: DISPLAY_ }, args: ["--disable-blink-features=AutomationControlled", "--mute-audio"] }
     : { args: ["--mute-audio"] });
   for (const url of sites) {
     const [d, v] = [await visit(browser, url, false), await visit(browser, url, true)];

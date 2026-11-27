@@ -73,5 +73,6 @@
   { "url": "https://www.kosho.or.jp/products/detail.php?product_id=292585532", "how": "auto", "fixed": "the Facebook SDK's strict modules in its own with, globalThis shadowed, compiled Function(\"return this\") per member read: an EvalError under a CSP without 'unsafe-eval'; an outermost with gets the runtime holder in a block of its own (R13; with-global-csp-vs-chromium)" },
   { "url": "https://www.sofascore.com/", "how": "chrome", "fixed": "the transport sent ClientHello extensions in one fixed order where Chrome permutes them per connection (constant full JA3); refused 403 by its firewall: tls-client's random extension order" },
   {"url": "https://contexture.org/", "how": "auto", "fixed": "img[src~=\"<url>\"] / [src|=…] matched nothing proxied (the AllAccessible widget set attributes on null): ~= and |= widened as = (spec/Selectors.agda)"},
-  {"url": "https://www.crazygames.com/game/web-master", "how": "auto", "fixed": "the cross-origin view refused in a bare message where Blink prefixes 'Failed to read a named property …': Blink's words (native/cross-origin.ts)"}
+  {"url": "https://www.crazygames.com/game/web-master", "how": "auto", "fixed": "the cross-origin view refused in a bare message where Blink prefixes 'Failed to read a named property …': Blink's words (native/cross-origin.ts)"},
+  {"url": "https://www.immi-usa.com/migrant-vs-immigrant/", "how": "auto", "fixed": "a list speculation rule a script wrote with its links' hrefs (the page's URLs) was prefetched from the origin: rule-set urls proxified (spec Speculation.rewriteRuleSet)"}
 ]

@@ -54,6 +54,34 @@ export interface Internals {
     bootstrapXmlAt?: (ns: "svg" | "xhtml" | "other", href: string) => string;
     /** What this window's runtime holds for every copy in its tree (native/shared.ts). */
     data?: Record<string, unknown>;
+    /**
+     * The config this window's patches read. A window keeps its realm when
+     * its initial about:blank gives way to a same-origin document (a frame
+     * on its way to a proxied URL, a srcdoc): that document's own config
+     * replaces this one's contents (runtime/bootstrap.ts adoptDocument).
+     */
+    config?: Record<string, unknown>;
+    /** What is installed on a document rather than in the realm: redone for each document the window holds. */
+    perDocument?: (() => void)[];
+    /** The document the per-document steps last ran for. */
+    doc?: unknown;
+    /**
+     * The entry point of the copy of the runtime this window runs: the
+     * windows it creates get the same copy. A window that adopted its
+     * creator's runtime has a copy of its own loaded too (its bootstrap's),
+     * whose `$rewriter_init` is not the one its patches are from — given
+     * that one, a frame it wrote into was wrapped by two copies whose
+     * per-copy registries do not know each other (Flashtalking's richload
+     * on ginifab.com: its markup rewritten against the wrong base, its
+     * stylesheet missing, its copy-fitting loop endless).
+     */
+    init?: (w: Window, c: never) => { inject(): RewriterApi };
+}
+
+/** Runs `step` for the window's document now and for each later one it holds. */
+export function eachDocument(internals: Internals | undefined, step: () => void): void {
+    if (internals) (internals.perDocument ??= []).push(step);
+    step();
 }
 
 
