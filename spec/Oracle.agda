@@ -99,6 +99,9 @@
 --   jsonbytes <value as bytes>          → {"out":"<JSON string, byte for byte>"}
 --   crnh <entries>                      → {"out":"<the Crn-H object>"} (lines "name\tn" or "name\tv\tvalue…")
 --   crnbread <description>              → {"out":"<encoded> <decoded>"|"none"}
+--   crnbref <description>               → {"out":"<token>"|"none"}
+--   freshness <cc> <expires−date|-> <date−lm|-> <age> <since>  → {"out":"nostore"|"<0|1> <seconds>"}
+--   browsercc <cc> <expires−date|-> <date−lm|-> <age> <since> <cap> → {"out":"<value>"|"keep"}
 --   wsmark <0|1> <query> <origin>       → {"out":"?<query>&__cyrano_ws_origin=<enc>"} (the runtime's marker)
 --   wssplit <query>                     → {"out":"none"|"<1|0>\t<page query>\t<enc origin>"} (the server's reading)
 --   refreshread <value>                 → {"out":"none"|"reload"|"url\t<url>"} (a Refresh's reading)
@@ -226,6 +229,7 @@ import Query
 import Hints
 import Upgrades
 import Alpn
+import Freshness
 import Permissions
 import Allow
 import Storage
@@ -540,6 +544,9 @@ dispatch op args =
   else if eqStr op (toList "upgradesteps") then upgradeStepsReq args
   else if eqStr op (toList "crnh") then crnHReq args
   else if eqStr op (toList "crnbread") then crnbReadReq args
+  else if eqStr op (toList "crnbref") then crnbRefReq args
+  else if eqStr op (toList "freshness") then freshnessReq args
+  else if eqStr op (toList "browsercc") then browserCCReq args
   else if eqStr op (toList "wssplit") then wsSplitReq args
   else if eqStr op (toList "refresh") then refreshReq args
   else if eqStr op (toList "unwrap") then unwrapReq args
@@ -1442,6 +1449,30 @@ dispatch op args =
   ... | just (e , x) = out (showN e ++ fromℕ 32 ∷ showN x)
   ... | nothing      = out (toList "none")
   crnbReadReq _ = errorReply "BadRequest"
+
+  -- crnbref <description> → {"out":"<token>"|"none"}
+  crnbRefReq : List Str → Str
+  crnbRefReq (d ∷ []) with Carry.crnbRef d
+  ... | just t  = out t
+  ... | nothing = out (toList "none")
+  crnbRefReq _ = errorReply "BadRequest"
+
+  -- freshness / browsercc: "-" for an absent Expires or Last-Modified.
+  optNat : Str → Maybe ℕ
+  optNat ('-' ∷ []) = nothing
+  optNat s = just (Url.digitsValue s)
+
+  freshnessReq : List Str → Str
+  freshnessReq (cc ∷ e ∷ lm ∷ a ∷ sd ∷ []) with Freshness.freshness cc (optNat e) (optNat lm) (Url.digitsValue a) (Url.digitsValue sd)
+  ... | Freshness.noStore     = out (toList "nostore")
+  ... | Freshness.fresh nc n  = out ((if nc then '1' else '0') ∷ ' ' ∷ showN n)
+  freshnessReq _ = errorReply "BadRequest"
+
+  browserCCReq : List Str → Str
+  browserCCReq (cc ∷ e ∷ lm ∷ a ∷ sd ∷ cap ∷ []) with Freshness.browserCC (Freshness.freshness cc (optNat e) (optNat lm) (Url.digitsValue a) (Url.digitsValue sd)) (Url.digitsValue cap)
+  ... | just v  = out v
+  ... | nothing = out (toList "keep")
+  browserCCReq _ = errorReply "BadRequest"
 
   -- wsmark <0|1 the URL has a query> <query> <origin>
   wsMarkReq : List Str → Str

@@ -48,6 +48,7 @@ import { patchNotification } from "./notification";
 import { patchXslt } from "./xslt";
 import { patchReflection } from "../native/hidden-globals";
 import { patchDocumentWrite } from "../wrappers/document-write";
+import { streamedSizes } from "./streamed-sizes";
 import { buildBootstrapHtml } from "../runtime/bootstrap-html";
 import { patchReadBack } from "./read-back";
 import { injectIntoIframe } from "../runtime/iframe-injection";
@@ -291,6 +292,12 @@ export function crnbSizes(desc: string): { encoded: number; decoded: number } | 
     return m ? { encoded: Number(m[1]), decoded: Number(m[2]) } : null;
 }
 
+/** A streamed body's crnb description, "@<token>" (spec/Carry.agda crnbRef): its token, or null. */
+export function crnbRef(desc: string): string | null {
+    const m = /^@([0-9a-z]+)$/.exec(desc);
+    return m ? m[1]! : null;
+}
+
 export function patchPerformanceEntryNames(
     targetWindow: Window,
     unwrapOne: (url: string) => string,
@@ -371,13 +378,19 @@ export function patchPerformanceEntryNames(
         RT ? nO.getOwnPropertyDescriptor(RT, key)?.get as ((this: unknown) => T) | undefined : undefined;
     const nativeServerTiming = nativeOf<ReadonlyArray<{ name: string; description: string }>>("serverTiming");
     const nativeEncoded = nativeOf<number>("encodedBodySize");
+    // A streamed body's sizes come from the proxy once it has ended
+    // (streamed-sizes.ts; spec/Carry.agda crnbRef).
+    const streamed = streamedSizes(targetWindow);
     const sizesOf = (entry: unknown): { encoded: number; decoded: number } | null => {
         if (!nativeServerTiming) return null;
         try {
             for (const m of ncall(nativeServerTiming, entry)) {
                 if (m.name !== SIZES_METRIC) continue;
-                const sizes = crnbSizes(String(m.description));
+                const desc = String(m.description);
+                const sizes = crnbSizes(desc);
                 if (sizes) return sizes;
+                const token = crnbRef(desc);
+                if (token !== null) return streamed.get(token);
             }
         } catch { /* not a resource entry */ }
         return null;

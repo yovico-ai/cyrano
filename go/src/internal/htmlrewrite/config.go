@@ -102,6 +102,13 @@ type Config struct {
 	// markup no runtime will read.
 	NoOriginals bool
 
+	// Stream, when set, makes the output follow the input: what is
+	// rewritten is written out whenever reading the input waits longer than
+	// Stream.Stall, and in pieces of Stream.Chunk bytes at most; after each
+	// such write Stream.Flush pushes it on (a compressor's flush). The bytes
+	// are the same whatever the input's pieces (streaming.go).
+	Stream *Streaming
+
 	// Prettify, when true, runs JS and CSS content through a formatter before
 	// serving. Makes minified challenge scripts readable in DevTools.
 	// Never set in production — it changes source text and can interfere with

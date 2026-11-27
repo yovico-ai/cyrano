@@ -8,7 +8,7 @@
 import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { crnbSizes } from "../../src/patches/install";
+import { crnbRef, crnbSizes } from "../../src/patches/install";
 import { OracleClient, locateOracle, oracleRequired } from "./oracle-client";
 
 const located = locateOracle();
@@ -34,6 +34,14 @@ describe.skipIf(located.skip !== "")("Carry: spec conformance", () => {
             const want = (await oracle.ask("crnbread", [d]))!;
             const got = crnbSizes(d);
             expect(got === null ? "none" : `${got.encoded} ${got.decoded}`, JSON.stringify(d)).toBe(want);
+        }), { numRuns: 400 });
+    });
+
+    it("crnbRef is crnbRef", async () => {
+        const piece = fc.constantFrom("@", "a", "z", "0", "9", "A", "-", "12", "", " ", "é", "_");
+        await fc.assert(fc.asyncProperty(fc.array(piece, { maxLength: 5 }).map((a) => a.join("")), async (d) => {
+            const want = (await oracle.ask("crnbref", [d]))!;
+            expect(crnbRef(d) ?? "none", JSON.stringify(d)).toBe(want);
         }), { numRuns: 400 });
     });
 });

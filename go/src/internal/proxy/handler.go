@@ -228,6 +228,13 @@ func (h *Handler) serveTarget(w http.ResponseWriter, r *http.Request, target *ur
 			session = c.Value // (the director puts it in the context, after this)
 		}
 	}
+	// A rewritten body the browser holds, asked for again (revalidate.go).
+	r = withBrowserURI(r)
+	if done, next := revalidate(w, r, session); done {
+		return
+	} else {
+		r = next
+	}
 	if ctx := h.mixedContext(r); ctx != nil && pageUIR(session, pageKey(ctx)) {
 		dest, has := "", false
 		if v := r.Header.Values("Sec-Fetch-Dest"); len(v) > 0 {
@@ -484,6 +491,8 @@ func (h *Handler) modifyResponse(resp *http.Response) error {
 	sent := resp.Header.Clone()
 	defer func() { carryOriginalHeaders(resp.Header, sent, statusPhrase(resp)) }()
 	*resp.Request = *resp.Request.WithContext(context.WithValue(resp.Request.Context(), sentHeadersKey{}, sent))
+	// The origin's 304 to a revalidation of a rewritten body (revalidate.go).
+	revalidated(resp)
 	// A short HTTP/2 body is the response it is (short_body.go).
 	if err := fitShortBody(resp); err != nil {
 		return err
@@ -593,6 +602,14 @@ func (h *Handler) translateResponse(resp *http.Response) error {
 		}
 		h.logExchange(resp) // before the Set-Cookie headers are replaced
 		h.routeSetCookies(resp)
+	}
+	// Streamed bodies' sizes, waiting for the session's next response
+	// (streamed_sizes.go).
+	if resp.Request != nil {
+		sid, _ := resp.Request.Context().Value(SessionContextKey{}).(string)
+		for _, c := range takeStreamedSizes(sid) {
+			resp.Header.Add("Set-Cookie", c)
+		}
 	}
 	if resp.Request != nil && resp.Request.URL != nil {
 		recordPagePolicy(resp, resp.Request.URL)

@@ -22,6 +22,11 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 	if cfg.BaseURL == nil {
 		return errors.New("htmlrewrite: Config.BaseURL required")
 	}
+	var stall *stallReader
+	if cfg.Stream != nil && cfg.Stream.Stall > 0 {
+		stall = &stallReader{r: r, stall: cfg.Stream.Stall}
+		r = stall
+	}
 	st := newTokenStream(r)
 	z := st.z
 	bootstrapDone := false // guard against multiple <head> (e.g. nested srcdoc)
@@ -43,6 +48,25 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 	}
 	emitRaw := func(p []byte) {
 		emitted.Write(p)
+	}
+	// Streamed: written out (and pushed on) when the input stalls, and in
+	// pieces of at most Chunk bytes (streaming.go). An error writing out
+	// ends the rewrite at the next token (the reader went away).
+	var outErr error
+	writeOut := func() {
+		if outErr != nil {
+			return
+		}
+		if err := flush(); err != nil {
+			outErr = err
+			return
+		}
+		if cfg.Stream.Flush != nil {
+			outErr = cfg.Stream.Flush()
+		}
+	}
+	if stall != nil {
+		stall.out = writeOut
 	}
 	// A <style> start tag waits for its text: when the rewriter changes
 	// the text, the tag carries the text as written (OriginalsAttr "#text"),
@@ -72,6 +96,14 @@ func Rewrite(w io.Writer, r io.Reader, cfg Config) error {
 	}
 
 	for {
+		if cfg.Stream != nil {
+			if cfg.Stream.Chunk > 0 && emitted.Len() >= cfg.Stream.Chunk {
+				writeOut()
+			}
+			if outErr != nil {
+				return outErr
+			}
+		}
 		tt := z.Next()
 		if held != nil && !(tt == html.TextToken && (inStyle || inRuleSet)) {
 			release(nil, nil)

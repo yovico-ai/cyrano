@@ -16,6 +16,16 @@
 --     runtime answers encodedBodySize / decodedBodySize from it and hides
 --     the metric. A metric of that name the origin sent itself is left as
 --     it is (the proxy does not add its own then).
+--   * A body the proxy streams (a document rewritten as it arrives) has
+--     no sizes when its headers go: crnb;desc="@<token>", a token of
+--     lowercase letters and digits. Once the body ends its sizes go to the
+--     runtime in the session's next response, as a cookie of the channel:
+--     sizesCookie token encoded decoded — "__crn~z!" token "=" and the
+--     sizes as a crnb description, with the inbox's life — which the
+--     runtime reads from the browser's jar (never the page's cookies: no
+--     name of the channel is). No request is made for them: a page's CSP
+--     refused one (a violation event the page saw), a sandboxed frame's
+--     failed CORS. A description is sizes or a token, never both.
 --
 -- Checked against Chromium (carry-vs-chromium): JSON.parse of a value
 -- written so equals the header as fetch shows it; the description of a
@@ -29,6 +39,7 @@ open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.Nat.Base using (ℕ; _<ᵇ_; _/_; _%_; _+_)
 open import Data.Product.Base using (_×_; _,_)
 open import Data.String.Base using (toList)
+open import Relation.Binary.PropositionalEquality using (_≡_; refl)
 
 open import Url using (Str; is; isDigit; showN; break; splitOn; eqStr; lowerAscii)
 
@@ -87,6 +98,51 @@ crnbRead s with break (is 45) s
   both (just x) (just y) = just (x , y)
   both _        _        = nothing
 ... | (a , []) = nothing
+
+-- A streamed body's description: "@" and its token (lowercase letters
+-- and digits, at least one).
+tokenChar : Char → Bool
+tokenChar c = isDigit c ∨ (('a' ≤ᶜ c) ∧ (c ≤ᶜ 'z'))
+  where
+  _≤ᶜ_ : Char → Char → Bool
+  x ≤ᶜ y = toℕ x Data.Nat.Base.≤ᵇ toℕ y
+    where import Data.Nat.Base
+
+allToken : Str → Bool
+allToken []       = true
+allToken (c ∷ cs) = tokenChar c ∧ allToken cs
+
+crnbRef : Str → Maybe Str
+crnbRef ('@' ∷ t@(_ ∷ _)) = if allToken t then just t else nothing
+crnbRef _                 = nothing
+
+-- A streamed body's sizes, as the channel cookie that carries them.
+sizesCookiePrefix : Str
+sizesCookiePrefix = toList "__crn~z!"
+
+sizesCookie : Str → ℕ → ℕ → Str
+sizesCookie t e d = sizesCookiePrefix ++ t ++ '=' ∷ showN e ++ '-' ∷ showN d
+
+-- Its value reads as the sizes (crnbRead), its name after the prefix as
+-- the token.
+private
+  s1 : crnbRead (toList "1234-56789") ≡ just (1234 , 56789)
+  s1 = refl
+  s2 : sizesCookie (toList "a1") 12 34 ≡ toList "__crn~z!a1=12-34"
+  s2 = refl
+
+-- Never both.
+private
+  r1 : crnbRef (toList "@a1z9") ≡ just (toList "a1z9")
+  r1 = refl
+  r2 : crnbRef (toList "@") ≡ nothing
+  r2 = refl
+  r3 : crnbRef (toList "@A") ≡ nothing
+  r3 = refl
+  r4 : crnbRead (toList "@12") ≡ nothing
+  r4 = refl
+  r5 : crnbRef (toList "12-34") ≡ nothing
+  r5 = refl
 
 ------------------------------------------------------------------------
 -- The length the browser is told. An HTTP/2 stream that ends with fewer

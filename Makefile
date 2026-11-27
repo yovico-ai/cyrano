@@ -6,7 +6,7 @@
 .PHONY: typecheck oracle spec-check browser-check chrome-check
 
 AGDA ?= agda
-SAFE_MODULES := Scheme Url Containment Srcset Referrer Cookies Fetch Csp Css Html ImportMap Attrs HtmlTok Link Disposition Refresh WsOrigin Carry Query Sf Hints Upgrades Alpn Permissions Allow Storage Metadata Dictionary Priority FetchLater WorkerSource DataUrl Speculation XmlDoc MixedContent Messaging Frames Stack H1 Eval LocalStore Route Features Selectors Orb Toolbar Payment ClearSiteData Auth Corp Encoding AdAuction ErrorEvents WebRtc JsUrl Canvas Preflight XPath Sri Coop Lna Oac Oracle
+SAFE_MODULES := Scheme Url Containment Srcset Referrer Cookies Fetch Csp Css Html ImportMap Attrs HtmlTok Link Disposition Refresh WsOrigin Carry Query Sf Hints Upgrades Alpn Permissions Allow Storage Metadata Dictionary Priority FetchLater WorkerSource DataUrl Speculation XmlDoc MixedContent Messaging Frames Stack H1 Eval LocalStore Route Features Selectors Orb Toolbar Payment ClearSiteData Auth Corp Encoding AdAuction ErrorEvents WebRtc JsUrl Canvas Preflight XPath Sri Coop Lna Oac Freshness Oracle
 ORACLE := $(CURDIR)/spec/build/Main
 
 # Every rule module is checked under --safe on its own; Main.agda (the IO

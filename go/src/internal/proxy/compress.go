@@ -11,6 +11,8 @@ import (
 
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
+
+	"github.com/yovico/cyrano/internal/rewritecache"
 )
 
 // A body the proxy rewrote goes to the browser compressed again. The
@@ -24,10 +26,12 @@ import (
 // them (Crn-H, original_headers.go), and a performance entry's sizes from
 // the crnb metric (server/bodyrewriter.go OriginalSizesMetric).
 
-// rewrittenBody is a response body a rewriter produced, whole.
+// rewrittenBody is a response body a rewriter produced, whole; key, when
+// set, its rewrite's cache key (its encoded forms are kept with it).
 type rewrittenBody struct {
 	*bytes.Reader
-	b []byte
+	b   []byte
+	key string
 }
 
 func (rewrittenBody) Close() error { return nil }
@@ -35,6 +39,91 @@ func (rewrittenBody) Close() error { return nil }
 // RewrittenBody wraps the bytes a rewriter produced as a response body.
 func RewrittenBody(b []byte) io.ReadCloser {
 	return rewrittenBody{Reader: bytes.NewReader(b), b: b}
+}
+
+// CachedBody is RewrittenBody for a rewrite kept in rewritecache.Shared
+// under key: its compressed forms are kept there too.
+func CachedBody(b []byte, key string) io.ReadCloser {
+	return rewrittenBody{Reader: bytes.NewReader(b), b: b, key: key}
+}
+
+// streamedBody is a response body a rewriter produces as it goes
+// (server/stream.go): each piece it writes is a piece to send at once.
+type streamedBody struct{ io.ReadCloser }
+
+// StreamedBody wraps a rewriter's output as it is made.
+func StreamedBody(r io.ReadCloser) io.ReadCloser { return streamedBody{r} }
+
+// flushWriter is an encoder whose output so far can be pushed out.
+type flushWriter interface {
+	io.WriteCloser
+	Flush() error
+}
+
+func streamEncoder(coding string, w io.Writer) flushWriter {
+	switch coding {
+	case "zstd":
+		e, err := zstd.NewWriter(w, zstd.WithEncoderLevel(zstd.SpeedDefault))
+		if err != nil {
+			return nil
+		}
+		return e
+	case "br":
+		return brotli.NewWriterLevel(w, 4)
+	case "gzip":
+		g, _ := gzip.NewWriterLevel(w, gzip.BestSpeed)
+		return g
+	}
+	return nil
+}
+
+// compressStreamed encodes a streamed body as it comes: each piece the
+// rewriter sends is encoded and flushed, so it reaches the browser as
+// soon as it was made.
+func compressStreamed(resp *http.Response, body streamedBody) {
+	if resp.Request == nil || resp.Header.Get("Content-Encoding") != "" {
+		return
+	}
+	accept, _ := resp.Request.Context().Value(browserEncodingsKey{}).(string)
+	coding := browserEncoding(accept)
+	if coding == "" {
+		return
+	}
+	pr, pw := io.Pipe()
+	enc := streamEncoder(coding, pw)
+	if enc == nil {
+		return
+	}
+	go func() {
+		defer body.Close()
+		buf := make([]byte, 64<<10)
+		var err error
+		for {
+			n, rerr := body.Read(buf)
+			if n > 0 {
+				if _, err = enc.Write(buf[:n]); err == nil {
+					err = enc.Flush()
+				}
+				if err != nil {
+					break
+				}
+			}
+			if rerr != nil {
+				if rerr != io.EOF {
+					err = rerr
+				}
+				break
+			}
+		}
+		if err == nil {
+			err = enc.Close()
+		}
+		pw.CloseWithError(err)
+	}()
+	resp.Body = pr
+	resp.ContentLength = -1
+	resp.Header.Del("Content-Length")
+	resp.Header.Set("Content-Encoding", coding)
 }
 
 type browserEncodingsKey struct{}
@@ -103,6 +192,10 @@ func encodeBody(coding string, body []byte) ([]byte, bool) {
 // compressForBrowser encodes a rewritten body in a coding the browser
 // accepts, when it has none and is worth it.
 func compressForBrowser(resp *http.Response) {
+	if sb, ok := resp.Body.(streamedBody); ok {
+		compressStreamed(resp, sb)
+		return
+	}
 	rb, ok := resp.Body.(rewrittenBody)
 	if !ok || resp.Request == nil || len(rb.b) < compressMin || resp.Header.Get("Content-Encoding") != "" || resp.Header.Get("Content-Range") != "" {
 		return
@@ -112,7 +205,15 @@ func compressForBrowser(resp *http.Response) {
 	if coding == "" {
 		return
 	}
-	enc, ok := encodeBody(coding, rb.b)
+	enc, ok := []byte(nil), false
+	if rb.key != "" {
+		enc, ok = rewritecache.Shared.Encoded(rb.key, coding)
+	}
+	if !ok {
+		if enc, ok = encodeBody(coding, rb.b); ok && rb.key != "" {
+			rewritecache.Shared.PutEncoded(rb.key, coding, enc)
+		}
+	}
 	if !ok || len(enc) >= len(rb.b) {
 		return
 	}

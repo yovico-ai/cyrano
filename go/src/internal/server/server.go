@@ -4,7 +4,11 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
+	"os"
 	"github.com/yovico/cyrano/internal/htmlrewrite"
 	"log/slog"
 	"net"
@@ -18,6 +22,7 @@ import (
 	"github.com/yovico/cyrano/internal/config"
 	"github.com/yovico/cyrano/internal/headerorder"
 	"github.com/yovico/cyrano/internal/proxy"
+	"github.com/yovico/cyrano/internal/rewritecache"
 	"github.com/yovico/cyrano/internal/static"
 	"github.com/yovico/cyrano/internal/upstream"
 	"github.com/yovico/cyrano/internal/urlrewrite"
@@ -109,6 +114,9 @@ func (s *Server) Handler() http.Handler {
 	// One jar per server lifetime — shared across all requests so cookies
 	// set on response N are available to forward on request N+1.
 	jar := proxy.NewSessionJar(proxy.DefaultCookieDir())
+	// What every rewrite is a function of beyond its inputs: this binary
+	// and the runtime it serves (internal/rewritecache).
+	rewritecache.Version = rewriteVersion(s.AssetsRoot)
 
 	// One upstream transport per server lifetime, shared across all requests
 	// and all per-request proxy.Handler instances. This is what makes HTTP/2
@@ -362,4 +370,19 @@ func logRequests(logger *slog.Logger, next http.Handler) http.Handler {
 		}()
 		next.ServeHTTP(w, r)
 	})
+}
+
+// rewriteVersion hashes the running binary and the runtime bundle.
+func rewriteVersion(assets string) string {
+	h := sha256.New()
+	if exe, err := os.Executable(); err == nil {
+		if f, err := os.Open(exe); err == nil {
+			_, _ = io.Copy(h, f)
+			f.Close()
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(assets, "client", "rewriter.js")); err == nil {
+		h.Write(b)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
 }

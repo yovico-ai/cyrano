@@ -938,8 +938,46 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   document: `CYRANO_PPROF` — CSS text that names no URL is not tokenized
   (as the client: a third of cnn.com's rewrite was `style` attributes);
   the CSS tokenizer still materializes its tokens (35 MB/s; the JS
-  recognizer does 60). Still open: the document is rewritten whole before
-  its first byte is sent (no streaming), so first paint trails direct.
+  recognizer does 60).
+  **HTML documents are rewritten as they arrive** (`server/stream.go`,
+  `htmlrewrite/streaming.go`): decoded, rewritten, compressed and sent as
+  the origin sends — what is rewritten goes out when the input stalls
+  (5 ms) and in 32 KiB pieces, each flushed through the encoder. The proxy
+  read the whole document first: the browser fetched nothing, painted
+  nothing until the origin's last byte (bbc.com's first byte 352 ms direct,
+  1529 proxied; ikea.com 348 / 1521). Same bytes whatever the input's
+  pieces (`TestStreaming_SameBytesWhateverThePieces`, rapid). Before the
+  first byte only what the rewriter needs first: the config, and for a
+  Content-Type naming no charset the head up to a `<meta>` declaring one,
+  `<body>` or 64 KiB. A failure cuts the document short, never the rest
+  unrewritten. Top-level documents only (a frame's is buffered); not
+  streamed: challenges (by host, `Cf-Mitigated`: their scripts compare their
+  frame's exact sizes), sniffed documents, ranges, XML; `CYRANO_STREAM=0`
+  turns it off. A streamed body's crnb is a token (spec/Carry.agda crnbRef:
+  `@<token>`); its sizes come in the session's next response as a channel
+  cookie, `__crn~z!<token>=<encoded>-<decoded>` (sizesCookie), read from the
+  browser's jar by `patches/streamed-sizes.ts` — never a request (the
+  runtime's request was refused by a page's CSP, a violation event the page
+  saw, and failed CORS in sandboxed frames); a size read before it came is
+  the browser's own. One a navigation: frames' would crowd the proxy
+  origin's 180-cookie jar where the channel lives
+  (`streaming-document-vs-chromium`: the head's stylesheet asked for, its
+  text parsed, before a body the origin sends 1.5 s later, plain and gzip;
+  the sizes as directly).
+  **Rewritten scripts and stylesheets are cached** (`internal/rewritecache`):
+  by a hash of every input — the origin's bytes, the kind, the URL it
+  resolves against, the proxy origin, debug settings, and the version (this
+  binary's and the runtime bundle's hash) — so an entry is found only by
+  whoever has those very bytes; nothing per-session goes in (a worker's
+  preamble, documents: never cached). Its compressed forms are kept with it.
+  The browser is told (spec/Freshness.agda, `proxy/revalidate.go`): an ETag
+  `"crn<version>-<key>"`, a lifetime of at most an hour, no Last-Modified or
+  Expires (the page reads the origin's: Crn-H); asked again with our ETag
+  while the origin's own lifetime lasts the proxy answers 304 itself (as the
+  browser's cache would, asking the origin nothing), after it asks the origin
+  with its own validators, and a stale version is fetched again — a rewriter
+  change reached no browser before (the origin's immutable year). A page's
+  own conditional request is left alone (`TestE2E_RewrittenScriptCaching`).
 - **Measuring pages with many requests (ads): serve the proxy over TLS.**
   Over plain HTTP the browser keeps 6 connections to the proxy for every
   site's traffic and queues the rest; over TLS it multiplexes on HTTP/2.

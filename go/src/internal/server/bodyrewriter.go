@@ -21,6 +21,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,7 @@ import (
 	"github.com/yovico/cyrano/internal/htmlrewrite"
 	"github.com/yovico/cyrano/internal/jsrewrite"
 	"github.com/yovico/cyrano/internal/proxy"
+	"github.com/yovico/cyrano/internal/rewritecache"
 	"github.com/yovico/cyrano/internal/static"
 	"github.com/yovico/cyrano/internal/urlrewrite"
 )
@@ -147,6 +149,68 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 		}
 	}
 
+	// A script's or stylesheet's rewrite, through the content cache
+	// (internal/rewritecache): its key names every input — the bytes, the
+	// kind, the URL it resolves against, the proxy's origin, the debug
+	// settings, prettify — and no session's.
+	debugEnv := debugSettings()
+	cachedRewrite := func(kind string, target *url.URL, body []byte, f func([]byte) []byte) ([]byte, string) {
+		key := rewritecache.Key(kind, target.String()+"\x00"+urlrewrite.APIBase(proxyCfg)+"\x00"+debugEnv+"\x00"+strconv.FormatBool(prettify), body)
+		if out, ok := rewritecache.Shared.Get(key); ok {
+			return out, key
+		}
+		out := f(body)
+		rewritecache.Shared.Put(key, out)
+		return out, key
+	}
+
+	// A document's rewriting config: what the rewriter needs before the
+	// body's first byte (buffered and streamed alike).
+	htmlConfig := func(resp *http.Response, target *url.URL) htmlrewrite.Config {
+		cfg := htmlrewrite.Config{
+			DocMark:        proxy.RequestMark(resp),
+			BaseURL:        target,
+			Proxy:          proxyCfg,
+			RewriterJSPath: static.RuntimeURL(vhost.RewriterJSPath),
+			// Every page gets the one runtime. Its patches keep the native
+			// surface (ts/client/src/native/surface.ts), so a challenge's
+			// integrity and fingerprint checks see native APIs; a challenge
+			// page's own scripts are rewritten like any other (below).
+			// …except a page under which no script of its own can run
+			// (spec/Csp.agda noScriptsRun): it has nothing for the runtime
+			// to serve, and natively runs nothing.
+			// …nor a frame sandboxed without allow-scripts (spec/Frames.agda
+			// inertFrame; the frame's URL says so).
+			InjectBootstrap:   !urlrewrite.NoScriptsRun(originalPolicies(resp)) && !proxy.InertFrame(resp),
+			ClientPassthrough: pageConfig(clientPassthrough, resp, target),
+			ScriptNonce:       proxy.ScriptNonce(originalPolicies(resp)),
+			ExternalBootstrap: !urlrewrite.InlineScriptAllowed(originalPolicies(resp)),
+		}
+		cfg.OnReferrerPolicy = func(content string) bool { return proxy.RecordMetaPolicy(resp, target, content) }
+		cfg.SrcdocReferrer = func() (string, bool) {
+			return urlrewrite.SrcdocReferrer(proxy.PagePolicy(resp, target), target.String())
+		}
+		cfg.OnMetaCSP = func(content string) {
+			proxy.RecordMetaUIR(resp, target, content)
+			proxy.RecordMetaCSP(resp, target, content)
+		}
+		cfg.OnImportMap = func(text, base string) { proxy.RecordImportMap(resp, target, base, text) }
+		if cfg.ExternalBootstrap {
+			cfg.ClientPassthrough["xb"] = true // documents this page writes need the same
+		}
+		documentCookies(cfg.ClientPassthrough, cfg.ExternalBootstrap, jar, resp, target)
+		// Challenge pages are rewritten like any other. Their scripts check
+		// their own source, which reads back as the origin wrote it
+		// (jsrewrite: marked, invertible edits); left unrewritten, they
+		// read `location` natively and report the proxy's URL (Turnstile
+		// then fails with 600010).
+		cfg.RewriteInlineJS = rewriteJSFor(target)
+		cfg.RewriteJSURL = rewriteJSURL
+		cfg.RewriteDataScript = rewriteDataScript
+		cfg.RewriteInlineCSS = rewriteCSS(target)
+		return cfg
+	}
+
 	return func(resp *http.Response, target *url.URL) error {
 		// A response that has no body — 1xx, 204, 304, or the answer to a
 		// HEAD — passes as it is: its Content-Type and Content-Encoding
@@ -177,14 +241,12 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			if proxy.SRIFails(resp, body) {
 				return proxy.ErrIntegrity
 			}
-			rewritten := cssrewrite.Rewrite(body, cssrewrite.Options{
-				BaseURL: target,
-				Proxy:   proxyCfg,
-				Logger:  cssLogger,
+			rewritten, key := cachedRewrite("css", target, body, func(src []byte) []byte {
+				return cssrewrite.Rewrite(src, cssrewrite.Options{BaseURL: target, Proxy: proxyCfg, Logger: cssLogger})
 			})
 			logger.Debug("rewriter: css rewritten",
 				"target", target.String(), "in", len(body), "out", len(rewritten))
-			replaceBody(resp, rewritten)
+			replaceCachedBody(resp, rewritten, key)
 
 		case kindXML:
 			// An XML document the browser renders: SVG, XHTML, XML using
@@ -225,6 +287,21 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			// Only HTML a browser renders: a fetch/XHR's text/html is the
 			// page's data (Cloudflare's challenge flow API answers text/html
 			// that orchestrate.js reads as text).
+			// Rewritten as it arrives where it can be (stream.go): the
+			// browser parses — and fetches what it names — as the origin
+			// sends, not after its last byte.
+			if streamable(resp, target) {
+				return streamDocument(resp, target, htmlConfig(resp, target), streamHooks{
+					logger: logger,
+					onChallenge: func() {
+						if jar != nil && sessName != "" && resp.Request != nil {
+							if sessID, _ := resp.Request.Context().Value(proxy.SessionContextKey{}).(string); sessID != "" {
+								jar.StoreChallengeOrigin(sessID, target.Scheme, target.Host)
+							}
+						}
+					},
+				})
+			}
 			body, err := readDecompressedBody(resp)
 			if err != nil {
 				logger.Warn("rewriter: read upstream body failed",
@@ -233,45 +310,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			}
 			var out bytes.Buffer
 			isChallenge := isChallengeHTML(body) || isChallengeHost(target.Hostname())
-
-			cfg := htmlrewrite.Config{
-				DocMark:        proxy.RequestMark(resp),
-				BaseURL:        target,
-				Proxy:          proxyCfg,
-				RewriterJSPath: static.RuntimeURL(vhost.RewriterJSPath),
-				// Every page gets the one runtime. Its patches keep the native
-				// surface (ts/client/src/native/surface.ts), so a challenge's
-				// integrity and fingerprint checks see native APIs; a challenge
-				// page's own scripts are rewritten like any other (below).
-				// …except a page under which no script of its own can run
-				// (spec/Csp.agda noScriptsRun): it has nothing for the runtime
-				// to serve, and natively runs nothing.
-				// …nor a frame sandboxed without allow-scripts (spec/Frames.agda
-				// inertFrame; the frame's URL says so).
-				InjectBootstrap:   !urlrewrite.NoScriptsRun(originalPolicies(resp)) && !proxy.InertFrame(resp),
-				ClientPassthrough: pageConfig(clientPassthrough, resp, target),
-				ScriptNonce:       proxy.ScriptNonce(originalPolicies(resp)),
-				ExternalBootstrap: !urlrewrite.InlineScriptAllowed(originalPolicies(resp)),
-			}
-			cfg.OnReferrerPolicy = func(content string) bool { return proxy.RecordMetaPolicy(resp, target, content) }
-			cfg.SrcdocReferrer = func() (string, bool) {
-				return urlrewrite.SrcdocReferrer(proxy.PagePolicy(resp, target), target.String())
-			}
-			cfg.OnMetaCSP = func(content string) { proxy.RecordMetaUIR(resp, target, content); proxy.RecordMetaCSP(resp, target, content) }
-			cfg.OnImportMap = func(text, base string) { proxy.RecordImportMap(resp, target, base, text) }
-			if cfg.ExternalBootstrap {
-				cfg.ClientPassthrough["xb"] = true // documents this page writes need the same
-			}
-			documentCookies(cfg.ClientPassthrough, cfg.ExternalBootstrap, jar, resp, target)
-			// Challenge pages are rewritten like any other. Their scripts check
-			// their own source, which reads back as the origin wrote it
-			// (jsrewrite: marked, invertible edits); left unrewritten, they
-			// read `location` natively and report the proxy's URL (Turnstile
-			// then fails with 600010).
-			cfg.RewriteInlineJS = rewriteJSFor(target)
-			cfg.RewriteJSURL = rewriteJSURL
-			cfg.RewriteDataScript = rewriteDataScript
-			cfg.RewriteInlineCSS = rewriteCSS(target)
+			cfg := htmlConfig(resp, target)
 			if isChallenge {
 				// Record this session's challenge origin so bare-path /cdn-cgi/
 				// requests from blob workers (which have no Referer) can be routed
@@ -345,14 +384,17 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			if proxy.SRIFails(resp, body) {
 				return proxy.ErrIntegrity
 			}
-			rewrite := rewriteJSFor(target)
+			rewrite, kindName := rewriteJSFor(target), "js"
 			if kind == kindWorklet {
-				rewrite = rewriteWorkletFor(target)
+				rewrite, kindName = rewriteWorkletFor(target), "worklet"
 			}
-			rewritten := rewrite(body)
-			if prettify {
-				rewritten = jsrewrite.Prettify(rewritten)
-			}
+			rewritten, key := cachedRewrite(kindName, target, body, func(src []byte) []byte {
+				out := rewrite(src)
+				if prettify {
+					out = jsrewrite.Prettify(out)
+				}
+				return out
+			})
 			// Pass the upstream's cache headers through unchanged. These bundles
 			// are content-hash-immutable (e.g. vendor.<hash>.js) and the JS
 			// rewriter is deterministic, so the browser may safely cache the
@@ -377,6 +419,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 					module := mark == urlrewrite.DestModuleWorker
 					pre := workerPreamble(urlrewrite.APIBase(proxyCfg), static.RuntimeURL(vhost.RewriterJSPath), clientPassthrough, target.String(), module)
 					rewritten = append(pre, rewritten...)
+					key = "" // (the preamble is the session's: not cached, not revalidated)
 					// Prevent the browser from caching the shimmed worker script.
 					// Without this the browser serves the pre-shim copy from cache
 					// on subsequent loads, causing $rewriter to be undefined inside
@@ -391,7 +434,7 @@ func makeBodyRewriter(vhost *config.VHost, proxyCfg urlrewrite.ProxyConfig, logg
 			logger.Debug("rewriter: js rewritten",
 				"target", target.String(), "in", len(body), "out", len(rewritten),
 				"identical", len(body) == len(rewritten))
-			replaceBody(resp, rewritten)
+			replaceCachedBody(resp, rewritten, key)
 
 		case kindXSL:
 			// An XSLT stylesheet the browser loads (spec Disposition.xslDest):
@@ -623,6 +666,29 @@ func kindOf(resp *http.Response) bodyKind {
 	cts := resp.Header.Values("Content-Type")
 	ct, hasCT := strings.Join(cts, ","), len(cts) > 0 // the lines, as one list (Chromium reads them all)
 	return responseKind(proxy.RequestDest(resp), sfd, has, ct, hasCT, func() sniffResult { return sniffed(resp) })
+}
+
+// replaceCachedBody is replaceBody for a rewrite kept under key (""
+// none): its compressed forms are kept with it, and the browser caches it
+// as proxy.NoteRewritten says.
+func replaceCachedBody(resp *http.Response, body []byte, key string) {
+	replaceBody(resp, body)
+	if key != "" {
+		resp.Body = proxy.CachedBody(body, key)
+		proxy.NoteRewritten(resp, key)
+	}
+}
+
+// debugSettings: the CYRANO_DEBUG_* settings, which change rewrites.
+func debugSettings() string {
+	var out []string
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "CYRANO_DEBUG_") {
+			out = append(out, kv)
+		}
+	}
+	sort.Strings(out)
+	return strings.Join(out, "\x00")
 }
 
 // replaceBody substitutes resp.Body with the given bytes, fixing
@@ -1054,11 +1120,11 @@ func pageConfig(base map[string]any, resp *http.Response, target *url.URL) map[s
 			}
 		}
 		// Its Origin-Agent-Cluster, as sent (spec/Oac.agda): the runtime answers
-	// originAgentCluster by original origin (the browser keys the proxy's).
-	if v := resp.Header.Values("Origin-Agent-Cluster"); len(v) > 0 {
-		cp["oac"] = strings.TrimSpace(strings.Join(v, ", "))
-	}
-	// The origin's Permissions-Policy, parsed: the document's featurePolicy
+		// originAgentCluster by original origin (the browser keys the proxy's).
+		if v := resp.Header.Values("Origin-Agent-Cluster"); len(v) > 0 {
+			cp["oac"] = strings.TrimSpace(strings.Join(v, ", "))
+		}
+		// The origin's Permissions-Policy, parsed: the document's featurePolicy
 		// reads it (spec/Permissions.agda table; the browser has the translation).
 		if tb, ok := urlrewrite.PermissionsTable(proxy.OriginalPermissionsPolicy(resp)); ok {
 			cp["pp"] = tb
@@ -1245,9 +1311,18 @@ func lenientInflate(body []byte, err error) ([]byte, error) {
 // document is left as it is: the browser sniffs those.
 // name: the encoding a <meta> declared, when it did (UTF-8 too), else "".
 func declaredEncoding(body []byte, contentType string) (encoding.Encoding, string) {
+	e, name, _ := declaredEncodingIn(body, contentType)
+	return e, name
+}
+
+// declaredEncodingIn is declaredEncoding, and whether body was enough to
+// decide it: a byte order mark, the Content-Type's charset, a <meta>
+// declaring one, <body>, or 64 KiB of it read — not so when it ended
+// first (a streamed document read so far: stream.go).
+func declaredEncodingIn(body []byte, contentType string) (encoding.Encoding, string, bool) {
 	switch {
 	case bytes.HasPrefix(body, []byte{0xEF, 0xBB, 0xBF}), bytes.HasPrefix(body, []byte{0xFE, 0xFF}), bytes.HasPrefix(body, []byte{0xFF, 0xFE}):
-		return nil, ""
+		return nil, "", true
 	}
 	pick := func(name string) (encoding.Encoding, string, bool) {
 		e, canon := charset.Lookup(strings.TrimSpace(name))
@@ -1266,19 +1341,19 @@ func declaredEncoding(body []byte, contentType string) (encoding.Encoding, strin
 	if _, params, err := mime.ParseMediaType(contentType); err == nil {
 		if cs, ok := params["charset"]; ok {
 			if e, _, ok := pick(cs); ok {
-				return e, ""
+				return e, "", true
 			}
 		}
 	}
-	head := body
+	head, cut := body, false
 	if len(head) > 64<<10 {
-		head = head[:64<<10]
+		head, cut = head[:64<<10], true
 	}
 	z := html.NewTokenizer(bytes.NewReader(head))
 	for {
 		tt := z.Next()
 		if tt == html.ErrorToken {
-			return nil, ""
+			return nil, "", cut
 		}
 		if tt != html.StartTagToken && tt != html.SelfClosingTagToken {
 			continue
@@ -1286,7 +1361,7 @@ func declaredEncoding(body []byte, contentType string) (encoding.Encoding, strin
 		name, hasAttr := z.TagName()
 		switch string(name) {
 		case "body":
-			return nil, ""
+			return nil, "", true
 		case "meta":
 			var cs, httpEquiv, content string
 			for hasAttr {
@@ -1308,7 +1383,7 @@ func declaredEncoding(body []byte, contentType string) (encoding.Encoding, strin
 			}
 			if cs != "" {
 				if e, canon, ok := pick(cs); ok {
-					return e, canon
+					return e, canon, true
 				}
 			}
 		}
