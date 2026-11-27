@@ -37,6 +37,13 @@
 --     once. The origin is not marked broken (the connection was made): the
 --     next request dials QUIC again. Not in this model (Go tests it:
 --     TestH3_ConnectionLostRetriesOverTCP).
+--   * So for a TCP connection that was reused: a request on it lost before
+--     its response (the origin closed it as the request came: its idle
+--     timeout racing ours — newsweek.com's "EOF" reached the page as the
+--     proxy's error page) is sent again, once, on a fresh connection, when
+--     none of its body went (Chrome: ShouldResendRequest, a reused
+--     connection). HTTP/1.1's transport did; HTTP/2's did not. Not in this
+--     model (Go: TestReusedHTTP2ConnectionClosedAtTheRequestIsResent).
 module Alpn where
 
 open import Data.Bool.Base using (Bool; true; false; _∨_; _∧_; not; if_then_else_)

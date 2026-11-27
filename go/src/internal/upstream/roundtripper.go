@@ -20,6 +20,7 @@ import (
 	"github.com/yovico/cyrano/internal/dnscache"
 	"github.com/yovico/cyrano/internal/headerorder"
 	"github.com/yovico/cyrano/internal/urlrewrite"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -29,6 +30,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"sync"
 	"time"
 
@@ -152,7 +155,9 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	var fReq *fhttp.Request
 	// Once the connection is up — its protocol known, nothing written yet:
 	// over HTTP/1.1 the head takes Chrome's HTTP/1.1 form (h1head.go).
+	var reusedConn atomic.Bool // the request went out on a connection used before
 	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(g httptrace.GotConnInfo) {
+		reusedConn.Store(g.Reused)
 		if info != nil {
 			info.Reused = g.Reused
 			if g.Conn != nil {
@@ -247,6 +252,13 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	if fResp == nil {
 		fResp, err = client.Do(fReq)
+		// Lost on a reused connection before any response (the origin
+		// closed it as the request came): sent again once, on a fresh one,
+		// when none of its body went (spec/Alpn.agda; Chrome's resend).
+		if err != nil && reusedConn.Load() && (body == nil || body.n == 0) && req.Context().Err() == nil && connectionLost(err) {
+			reusedConn.Store(false)
+			fResp, err = client.Do(fReq)
+		}
 	}
 	// A chain the server sent short: complete it from AIA, as Chrome does,
 	// and try once more (a request with a body too, when none of it was sent:
@@ -580,3 +592,18 @@ func (b *countedBody) Read(p []byte) (int, error) {
 }
 
 func (b *countedBody) Close() error { return b.r.Close() }
+
+// connectionLost says whether err is the connection going away under the
+// request: closed, reset, cut short.
+func connectionLost(err error) bool {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	msg := err.Error()
+	for _, s := range []string{"client connection lost", "connection reset by peer", "broken pipe", "use of closed network connection", "server closed idle connection"} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
+}
