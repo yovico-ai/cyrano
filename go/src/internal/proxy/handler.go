@@ -731,6 +731,9 @@ func (h *Handler) logExchange(resp *http.Response) {
 		slog.String("mitigated", resp.Header.Get("Cf-Mitigated")),
 		slog.String("clearance_sent", tag(cookieValue(r.Header.Values("Cookie"), "cf_clearance"))),
 		slog.String("clearance_set", tag(setCookieValue(resp.Header.Values("Set-Cookie"), "cf_clearance"))),
+		// The protocol the origin answered over: conn is the TCP connection's
+		// trace, which says nothing of a request that went over HTTP/3.
+		slog.String("proto", resp.Proto),
 		slog.String("conn", connTag(r)),
 		slog.String("hints", hintNamesOf(r.Header)),
 		slog.String("sent", headerSummary(r.Header)))

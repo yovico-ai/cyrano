@@ -180,3 +180,75 @@ func TestH3SettingsNoDynamicTable(t *testing.T) {
 		t.Errorf("settings order %v, want Chrome's %v", tr.t.AdditionalSettingsOrder, profiles.Chrome_144.GetHttp3SettingsOrder())
 	}
 }
+
+// The HTTP/3 connection fails under a request, before its response: the
+// server closes it with an error (Cloudflare's PROTOCOL_VIOLATION on
+// misting.party; a pooled connection idled out, a stateless reset). A
+// request none of whose body was sent goes again over TCP, once, as
+// Chrome resends it without the alternative (spec/Alpn.agda); it used to
+// reach the page as a failed load. A POST whose body went over the lost
+// connection is not sent twice. The origin is not marked broken (the
+// connection was made): the next request is over HTTP/3 again.
+func TestH3_ConnectionLostRetriesOverTCP(t *testing.T) {
+	c := &counts{n: map[string]int{}}
+	srv, port := tlsServer(t, c)
+	cert := srv.TLS.Certificates[0]
+	udp, err := net.ListenPacket("udp", "127.0.0.1:"+strconv.Itoa(port))
+	if err != nil {
+		t.Skipf("udp port %d: %v", port, err)
+	}
+	h3s := &http3.Server{
+		TLSConfig: http3.ConfigureTLSConfig(&utls.Config{Certificates: []utls.Certificate{{Certificate: cert.Certificate, PrivateKey: cert.PrivateKey}}}),
+		Handler: fhttp.HandlerFunc(func(w fhttp.ResponseWriter, r *fhttp.Request) {
+			b, _ := io.ReadAll(r.Body)
+			c.add("quic " + r.Method + " " + r.URL.Path + " " + string(b))
+			if strings.HasPrefix(r.URL.Path, "/lost") {
+				w.(http3.Hijacker).Connection().CloseWithError(0x101, "protocol violation")
+				return
+			}
+			io.WriteString(w, "quic")
+		}),
+	}
+	go h3s.Serve(udp)
+	t.Cleanup(func() { h3s.Close(); udp.Close() })
+
+	rt := NewRoundTripper(true)
+	send(t, rt, "GET", srv.URL+"/a", "") // the Alt-Svc offer
+	if r := send(t, rt, "GET", srv.URL+"/b", ""); r.ProtoMajor != 3 {
+		t.Fatalf("after the offer: %s, want HTTP/3", r.Proto)
+	}
+	tcpBefore := c.get("tcp GET ")
+	r := send(t, rt, "GET", srv.URL+"/lost", "")
+	if r.ProtoMajor != 2 {
+		t.Fatalf("a GET whose connection was lost: %s, want the TCP resend", r.Proto)
+	}
+	if q, tc := c.get("quic GET /lost "), c.get("tcp GET ")-tcpBefore; q != 1 || tc != 1 {
+		t.Fatalf("GET /lost: quic %d, tcp %d; want 1, 1", q, tc)
+	}
+	// A POST whose body went over the lost connection fails, sent once.
+	req := httptest.NewRequest("POST", srv.URL+"/lost-post", strings.NewReader("once"))
+	req.RequestURI = ""
+	req.Header.Set("User-Agent", ua139)
+	if resp, err := rt.RoundTrip(req); err == nil {
+		resp.Body.Close()
+		if c.get("tcp POST once") != 0 {
+			t.Fatalf("the POST was sent again over TCP")
+		}
+	}
+	if n := c.get("quic POST /lost-post once") + c.get("tcp POST once"); n != 1 {
+		t.Fatalf("POST reached the origin %d times, want 1", n)
+	}
+	// Not broken: HTTP/3 again for the next request.
+	if !rt.h3.want(t.Context(), "", "https", "127.0.0.1", port) {
+		t.Fatalf("a lost connection marked the origin broken")
+	}
+	var proto int
+	for end := time.Now().Add(3 * time.Second); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+		if proto = send(t, rt, "GET", srv.URL+"/c", "").ProtoMajor; proto == 3 {
+			break
+		}
+	}
+	if proto != 3 {
+		t.Fatalf("after a lost connection: HTTP/%d, want HTTP/3 again", proto)
+	}
+}

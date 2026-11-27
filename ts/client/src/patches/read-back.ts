@@ -21,6 +21,7 @@ import {
 } from "../native/originals";
 import { wrapAccessor, wrapConstructor, wrapMethod } from "../native/surface";
 import { eachDocument, type Internals } from "../native/internals";
+import { realmCallback } from "../native/realm-callback";
 
 type Protos = Record<string, { prototype: object } | undefined>;
 
@@ -346,9 +347,11 @@ export function patchReadBack(targetWindow: Window, onElement: (el: Element) => 
         if (doc && NativeMO) {
             consume(doc);
             try {
-                new NativeMO((records) => {
+                // The window's own callback: its records' nodes are made in
+                // its realm (native/realm-callback.ts).
+                new NativeMO(realmCallback(targetWindow, (records: MutationRecord[]) => {
                     for (const r of records) for (let i = 0; i < r.addedNodes.length; i++) each(r.addedNodes[i]!);
-                }).observe(doc, { childList: true, subtree: true });
+                })).observe(doc, { childList: true, subtree: true });
             } catch { /* non-fatal */ }
         }
     });

@@ -29,6 +29,14 @@
 --   * The connection is raced, never the request: a request is sent once,
 --     over the connection that was made (a library that sent it over both
 --     sent a POST twice). Not in this model (Go tests it).
+--   * A QUIC connection that was made and fails under a request before its
+--     response (the server closes it — Cloudflare's PROTOCOL_VIOLATION —,
+--     it idled out, a stateless reset) does not reach the page: the request
+--     is sent again over TCP, once, when none of its body went (Chrome
+--     resends it without the alternative); one whose body went fails, sent
+--     once. The origin is not marked broken (the connection was made): the
+--     next request dials QUIC again. Not in this model (Go tests it:
+--     TestH3_ConnectionLostRetriesOverTCP).
 module Alpn where
 
 open import Data.Bool.Base using (Bool; true; false; _∨_; _∧_; not; if_then_else_)

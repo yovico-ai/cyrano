@@ -466,7 +466,13 @@ and origin are the opener's (`popup-blank-vs-chromium`;
   Chrome's with QPACK's dynamic table at 0 (capacity, blocked streams):
   the decoder has none, and offered Chrome's 64 KiB Google and Cloudflare
   front ends encoded against it — 4% of responses failed ("Required Insert
-  Count", geico's canvaskit). Gaps: those two values differ from Chrome's;
+  Count", geico's canvaskit). A connection that was made and is lost under
+  a request before its response (the server closes it — Cloudflare's
+  PROTOCOL_VIOLATION —, an idle timeout, a stateless reset) does not reach
+  the page: the request goes again over TCP when none of its body went, the
+  origin not marked broken (`TestH3_ConnectionLostRetriesOverTCP`; misting.party
+  lost 12 resources in one burst). The exchange log line names the protocol
+  (`proto=`; its `conn=` is the TCP trace, stale for HTTP/3). Gaps: those two values differ from Chrome's;
   the QUIC ClientHello is quic-go's, not Chrome's; fivebelow.com's QUIC handshake
   fails our RSA signature check (Chrome's succeeds); an alternative on
   another host or port is not taken; the broken period does not double.
@@ -641,7 +647,14 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   internals' `init`), not the bundle its own bootstrap loaded: two copies
   wrapping one frame's `document.write` rewrote Flashtalking's richload
   against the wrong base, and its copy-fitting loop hung ginifab.com
-  (`adopted-frame-copy-vs-chromium`).
+  (`adopted-frame-copy-vs-chromium`). A callback the runtime hands to
+  another window's natives (an observer's, a listener on its document or
+  window) is that window's (`native/realm-callback.ts`: bound to its own
+  `Function.prototype.call`): Chromium makes a node's or an event's one
+  wrapper in the realm of the callback that first receives it, and the
+  creator's originals observer gave an adopted frame's parsed nodes the
+  creator's prototypes — `instanceof HTMLDivElement` false in the frame,
+  Instagram's embed invariant on blog.libro.fm (`frame-realm-wrappers-vs-chromium`).
   Limit: such a document reads its own `URL` from its own realm, proxied.
   The postMessage trampoline is compiled only for a realm other than the
   runtime's own (under Trusted Types a compile is a violation: Pinterest;

@@ -13,6 +13,7 @@ import { onInserted } from "./dynamic-iframe";
 import { coopSevered, crossOriginView } from "../native/cross-origin";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 import { eachDocument, type Internals } from "../native/internals";
+import { realmCallback } from "../native/realm-callback";
 
 /**
  * The origin a frame element's document is, or is about to be, from: its
@@ -156,11 +157,14 @@ export function patchNamedFrames(targetWindow: Window, internals?: Internals): v
     };
     sync();
     onInserted(targetWindow, sync);
+    // The window's own listener: the events (and a loaded element, the
+    // target) are made in its realm (native/realm-callback.ts).
+    const listener = realmCallback(targetWindow, sync);
     eachDocument(internals, () => {
         try {
-            targetWindow.document.addEventListener("load", sync, true); // a frame's document loaded (its name may be its own)
-            targetWindow.document.addEventListener("DOMContentLoaded", sync);
-            targetWindow.document.addEventListener("readystatechange", sync);
+            targetWindow.document.addEventListener("load", listener, true); // a frame's document loaded (its name may be its own)
+            targetWindow.document.addEventListener("DOMContentLoaded", listener);
+            targetWindow.document.addEventListener("readystatechange", listener);
         } catch { /* no document */ }
     });
     const fr = (targetWindow as unknown as { HTMLIFrameElement?: { prototype: object } }).HTMLIFrameElement;

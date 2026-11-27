@@ -28,6 +28,7 @@ import { blobNavigationFor } from "./blob-document";
 import type { RewriteOne } from "./referrer-policy";
 import { wrapAccessor, wrapMethod } from "../native/surface";
 import { nO, nR, ncall } from "../native/intrinsics";
+import { realmCallback } from "../native/realm-callback";
 
 /**
  * spec netDestination: where a navigation to `dest` goes instead, or null
@@ -178,7 +179,7 @@ export function patchNavigation(
         const setAttr = (g["Element"]?.prototype as Record<string, unknown> | undefined)?.["setAttribute"] as ((this: unknown, n: string, v: string) => void) | undefined;
         const getAttr = (g["Element"]?.prototype as Record<string, unknown> | undefined)?.["getAttribute"] as ((this: unknown, n: string) => string | null) | undefined;
         const removeAttr = (g["Element"]?.prototype as Record<string, unknown> | undefined)?.["removeAttribute"] as ((this: unknown, n: string) => void) | undefined;
-        ncall(listen as never, navigation, "navigate", (e: Event) => {
+        ncall(listen as never, navigation, "navigate", realmCallback(targetWindow, (e: Event) => {
             try {
                 if (!ncall(cancelable, e) || (net.hash && ncall(net.hash, e)) || (net.download && ncall(net.download, e) != null)) return;
                 const dest = String(ncall(url, ncall(destination, e)));
@@ -207,10 +208,12 @@ export function patchNavigation(
                 }
                 ncall((ncall(type, e) === "replace" ? replace : assign) as never, realLocation, to);
             } catch { /* left to the browser */ }
-        });
+        }));
     }
-    navigation?.addEventListener("currententrychange", () => {
+    // (The window's own listeners: the events are made in its realm, and
+    // the page's listeners get the same ones — native/realm-callback.ts.)
+    navigation?.addEventListener("currententrychange", realmCallback(targetWindow, () => {
         const href = unwrapOne(realLocation.href);
         if (href !== realLocation.href) setBaseUrl(href);
-    });
+    }));
 }

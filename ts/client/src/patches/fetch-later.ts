@@ -24,6 +24,7 @@
 import { stacked } from "../native/stacked";
 import { SafeMap, SafeWeakMap, nO, nR, ncall, sStarts } from "../native/intrinsics";
 import { wrapAccessor, wrapMethod } from "../native/surface";
+import { realmCallback } from "../native/realm-callback";
 
 const PER_ORIGIN = 65536;
 const OVERHEAD = 12;
@@ -171,18 +172,21 @@ export function patchFetchLater(
         const send = (): void => {
             if (state.activated || (signal && signal.aborted)) return;
             state.activated = true;
-            targetWindow.removeEventListener("pagehide", send);
+            targetWindow.removeEventListener("pagehide", onHide);
             if (timer !== undefined) clearTimeout(timer);
             if (nativeFetch) {
                 try { void nR.apply(nativeFetch, targetWindow, [url, fetchInit]).catch(() => undefined); } catch { /* as a lost beacon */ }
             }
         };
-        targetWindow.addEventListener("pagehide", send);
+        // The window's own listener: the event is made in its realm
+        // (native/realm-callback.ts).
+        const onHide = realmCallback(targetWindow, send);
+        targetWindow.addEventListener("pagehide", onHide);
         if (typeof init?.activateAfter === "number") timer = setTimeout(send, init.activateAfter);
-        signal?.addEventListener("abort", () => {
-            targetWindow.removeEventListener("pagehide", send);
+        signal?.addEventListener("abort", realmCallback(targetWindow, () => {
+            targetWindow.removeEventListener("pagehide", onHide);
             if (timer !== undefined) clearTimeout(timer);
-        });
+        }));
         return result;
     };
 

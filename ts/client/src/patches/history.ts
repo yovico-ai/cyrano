@@ -10,6 +10,7 @@
 
 import { stacked } from "../native/stacked";
 import { nR } from "../native/intrinsics";
+import { realmCallback } from "../native/realm-callback";
 import { wrapMethod } from "../native/surface";
 
 export function patchHistory(
@@ -48,6 +49,9 @@ export function patchHistory(
             follow();
         });
     }
-    targetWindow.addEventListener("popstate", follow);
-    targetWindow.addEventListener("hashchange", follow);
+    // The window's own listener: the events are made in its realm, and the
+    // page's listeners get the same ones (native/realm-callback.ts).
+    const onMove = realmCallback(targetWindow, follow);
+    targetWindow.addEventListener("popstate", onMove);
+    targetWindow.addEventListener("hashchange", onMove);
 }

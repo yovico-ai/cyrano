@@ -22,6 +22,7 @@ import { rewriteUrl, unwrapProxiedUrl } from "../url/containment";
 import { installToStringMask, wrapAccessor, wrapMethod } from "../native/surface";
 import { patchErrorStacks } from "../native/error-stack";
 import { eachDocument, type Internals } from "../native/internals";
+import { realmCallback } from "../native/realm-callback";
 import { initOriginals, originalAttr } from "../native/originals";
 import { initCrossOrigin } from "../native/cross-origin";
 import { patchCrossOriginWindows, patchNamedFrames } from "./cross-origin-windows";
@@ -269,7 +270,9 @@ export function installPatches(
         // as a task after this checkpoint, in its initial about:blank, its
         // code rewritten (spec/Frames.agda frameRuntime pendingFrame; my.adp.com).
         inject();
-        ncall(nativeListen, el, "load", inject);
+        // Of the window holding the frame: the load event is made in its
+        // realm, and the page's listeners get the same one (native/realm-callback.ts).
+        ncall(nativeListen, el, "load", realmCallback(targetWindow, inject));
     }, internals));
     step("patchSvgHref", () => patchSvgHref(targetWindow, unwrapOne)); // after read-back: it uses the runtime's getAttribute
 }

@@ -231,10 +231,16 @@ func (rt *RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		if t := rt.h3For(clientKey, profile); t != nil && t.ready(net.JoinHostPort(hostname, strconv.Itoa(port)), quicRace) {
 			fResp, err = h3RoundTrip(t, fReq)
 			if err != nil {
-				if !isQUICDial(err) || body != nil && body.n > 0 {
+				// No response: sent again over TCP when none of its body
+				// went and the page has not given up on it (spec/Alpn.agda:
+				// a connection that could not be made marks the origin
+				// broken; one lost under the request does not).
+				if body != nil && body.n > 0 || req.Context().Err() != nil {
 					return nil, err
 				}
-				rt.h3.markBroken(sessionID, hostname, port)
+				if isQUICDial(err) {
+					rt.h3.markBroken(sessionID, hostname, port)
+				}
 				fResp, err = nil, nil
 			}
 		}
