@@ -41,3 +41,21 @@ export function sriHonored(svg: boolean, tag: string, attr: string, rels: readon
     if (tag === "script" && attr === "src") return true;
     return tag === "link" && attr === "href" && rels.some((r) => r === "stylesheet" || r === "preload" || r === "modulepreload");
 }
+
+/**
+ * Where an honored element's integrity goes (spec Sri.carry): a module
+ * member — a module script's src, a modulepreload's href — is named by its
+ * URL in the module map, so its integrity is not marked there (two URLs were
+ * two module instances: gigabyte.com's Nuxt entry ran twice). The server
+ * keeps it for the document (Go proxy.RecordModuleIntegrity); the runtime has
+ * no such record, so one the page sets itself goes unchecked (as a map the
+ * runtime inserts). Everything else honored is marked in its URL.
+ */
+export type SriCarry = "url" | "document" | "unchecked";
+
+export function sriCarry(svg: boolean, tag: string, attr: string, rels: readonly string[], isModule: boolean): SriCarry {
+    if (!sriHonored(svg, tag, attr, rels)) return "unchecked";
+    if (tag === "script" && isModule) return "document";
+    if (tag === "link" && rels.some((r) => r === "modulepreload")) return "document";
+    return "url";
+}

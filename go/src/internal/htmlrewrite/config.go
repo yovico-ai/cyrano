@@ -89,6 +89,11 @@ type Config struct {
 	// page wrote it, and the base its keys resolve against (its integrity:
 	// proxy.RecordImportMap).
 	OnImportMap func(text, base string)
+	// OnModuleIntegrity is told a module member's integrity (a module
+	// script's src, a modulepreload's href — spec Sri.carry inDocument):
+	// its absolute URL and the attribute as the page wrote it
+	// (proxy.RecordModuleIntegrity). Its URL is left unmarked.
+	OnModuleIntegrity func(url, metadata string)
 	// QueryEncoder: the document's encoding, when it is declared and not
 	// UTF-8 — an element URL's query is encoded in it (spec/Encoding.agda).
 	QueryEncoder urlrewrite.QueryEncoder

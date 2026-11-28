@@ -14,7 +14,8 @@
 // the referrerPolicy property (the keyword, or "" when invalid), and its URLs
 // unmarked.
 
-import { sriHonored, sriMark } from "../url/sri";
+import { sriCarry, sriMark } from "../url/sri";
+import { scriptKind } from "./script-kind";
 import { documentQueryEncoder, requery } from "../url/doc-query";
 import { SafeSet, nO, ncall } from "../native/intrinsics";
 import { heldAttr, holdAttr, originalAttr, recordAttr } from "../native/originals";
@@ -115,7 +116,8 @@ function integrityMarkOf(el: Element, attr: string): string | null {
         if (tag !== "script" && tag !== "link") return null;
         const rel = heldAttr(el, "rel");
         const rels = rel === null ? [] : rel.toLowerCase().split(/[\t\n\f\r ]+/).filter((t) => t !== "");
-        if (!sriHonored(svg, tag, attr.toLowerCase(), rels)) return null;
+        const isModule = tag === "script" && !svg && scriptKind(heldAttr(el, "type"), heldAttr(el, "language")) === "module";
+        if (sriCarry(svg, tag, attr.toLowerCase(), rels, isModule) !== "url") return null;
         const o = originalAttr(el, "integrity");
         const v = o !== undefined ? o.value : heldAttr(el, "integrity");
         return v === null ? null : sriMark(v);

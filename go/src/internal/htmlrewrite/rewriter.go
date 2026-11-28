@@ -324,11 +324,21 @@ func applyAttrRules(tag string, svg bool, attrs []html.Attribute, cfg *Config) [
 		// In a legacy-encoded document the query is the browser's: in the
 		// document's encoding (spec/Encoding.agda).
 		// Its integrity rides the URL for the proxy to check on the origin's
-		// bytes (spec/Sri.agda; the attribute itself is dropped below).
+		// bytes (spec/Sri.agda; the attribute itself is dropped below) — but
+		// a module member's URL is the module's identity, so the document
+		// keeps its integrity instead (Sri.carry; proxy.RecordModuleIntegrity).
 		integrity := ""
-		if urlrewrite.SRIHonored(svg, tag, opts.attr, strings.Fields(strings.ToLower(rel))) {
-			if hasIntegrity {
+		if hasIntegrity {
+			isModule := tag == "script" && !svg && scriptKindOf(attrs) == ScriptModule
+			switch urlrewrite.SRICarry(svg, tag, opts.attr, strings.Fields(strings.ToLower(rel)), isModule) {
+			case urlrewrite.SRIInURL:
 				integrity, _ = urlrewrite.SRIMark(integrityAttr)
+			case urlrewrite.SRIInDocument:
+				if cfg.OnModuleIntegrity != nil && base != nil {
+					if abs, err := base.Parse(strings.TrimSpace(raw)); err == nil {
+						cfg.OnModuleIntegrity(abs.String(), integrityAttr)
+					}
+				}
 			}
 		}
 		return urlrewrite.Requery(urlrewrite.RewriteMarked(raw, base, cfg.Proxy, urlrewrite.Mark{Policy: policy, Dest: dest, Integrity: integrity}), raw, cfg.QueryEncoder)

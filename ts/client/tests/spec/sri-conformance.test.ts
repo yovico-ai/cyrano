@@ -6,7 +6,7 @@
 import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { sriHonored, sriMark } from "../../src/url/sri";
+import { sriCarry, sriHonored, sriMark } from "../../src/url/sri";
 import { OracleClient, locateOracle, oracleRequired } from "./oracle-client";
 
 const located = locateOracle();
@@ -32,6 +32,14 @@ describe.skipIf(located.skip !== "")("Subresource Integrity: spec conformance", 
             fc.array(fc.constantFrom("stylesheet", "preload", "modulepreload", "prefetch", "icon"), { maxLength: 2 }), async (svg, tag, attr, rels) => {
                 const want = await oracle.ask("srihonored", [svg ? "1" : "0", tag, attr, rels.join(" ")]);
                 expect(sriHonored(svg, tag, attr, rels) ? "yes" : "no").toBe(want);
+            }), { numRuns: 200 });
+    });
+
+    it("sriCarry is Sri.carry", async () => {
+        await fc.assert(fc.asyncProperty(fc.boolean(), fc.constantFrom("script", "link", "img", "iframe"), fc.constantFrom("src", "href", "xlink:href"),
+            fc.array(fc.constantFrom("stylesheet", "preload", "modulepreload", "prefetch", "icon"), { maxLength: 2 }), fc.boolean(), async (svg, tag, attr, rels, mod) => {
+                const want = await oracle.ask("sricarry", [svg ? "1" : "0", tag, attr, rels.join(" "), mod ? "1" : "0"]);
+                expect(sriCarry(svg, tag, attr, rels, mod)).toBe(want);
             }), { numRuns: 200 });
     });
 });

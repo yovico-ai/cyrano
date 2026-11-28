@@ -161,3 +161,34 @@ func SRIHonored(svg bool, tag, attr string, rels []string) bool {
 	}
 	return false
 }
+
+// Where an honored element's integrity goes (spec Sri.carry).
+type SRICarryKind int
+
+const (
+	SRIUnchecked  SRICarryKind = iota
+	SRIInURL                   // marked in its proxified URL
+	SRIInDocument              // kept for the document, checked by the proxy
+)
+
+// SRICarry: a module member — a module script's src, a modulepreload's
+// href — is named by its URL in the module map, so its integrity is not
+// marked there (two URLs were two module instances: gigabyte.com's Nuxt
+// entry ran twice); the document keeps it, as an import map's integrity
+// section (proxy.RecordModuleIntegrity). Everything else honored is marked.
+func SRICarry(svg bool, tag, attr string, rels []string, isModule bool) SRICarryKind {
+	if !SRIHonored(svg, tag, attr, rels) {
+		return SRIUnchecked
+	}
+	if tag == "script" && isModule {
+		return SRIInDocument
+	}
+	if tag == "link" {
+		for _, r := range rels {
+			if r == "modulepreload" {
+				return SRIInDocument
+			}
+		}
+	}
+	return SRIInURL
+}

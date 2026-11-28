@@ -33,3 +33,38 @@ func TestImportMapHookKeepsTheMap(t *testing.T) {
 		}
 	}
 }
+
+// A module member's integrity (a module script's src, a modulepreload's
+// href) goes to OnModuleIntegrity and its URL stays unmarked — the URL is
+// the module's identity, and a chunk importing the entry back by a plain
+// specifier must name the same module (gigabyte.com: Nuxt's entry ran
+// twice). A classic script's integrity is still marked in its URL.
+func TestModuleIntegrityKeptForTheDocument(t *testing.T) {
+	base, _ := url.Parse("https://a.example/p/page")
+	src := `<!doctype html><link rel="modulepreload" href="/m/entry.js" integrity="sha384-AAAA">` +
+		`<script type="module" src="./entry.js" integrity="sha384-BBBB"></script>` +
+		`<script src="/c.js" integrity="sha384-CCCC"></script>`
+	var told []string
+	cfg := Config{BaseURL: base, Proxy: urlrewrite.ProxyConfig{PublicURL: &url.URL{Scheme: "http", Host: "p:1"}}, NoOriginals: true,
+		OnModuleIntegrity: func(u, m string) { told = append(told, u+" "+m) }}
+	var out bytes.Buffer
+	if err := Rewrite(&out, strings.NewReader(src), cfg); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		`href="http://p:1/cyrano/https!js/a.example/m/entry.js"`,
+		`src="http://p:1/cyrano/https!js/a.example/p/entry.js"`,
+		`src="http://p:1/cyrano/https!js!=sha384-CCCC/a.example/c.js"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %s in %s", want, got)
+		}
+	}
+	if strings.Contains(got, "integrity") {
+		t.Errorf("integrity attribute left: %s", got)
+	}
+	if strings.Join(told, "|") != "https://a.example/m/entry.js sha384-AAAA|https://a.example/p/entry.js sha384-BBBB" {
+		t.Errorf("told %q", told)
+	}
+}

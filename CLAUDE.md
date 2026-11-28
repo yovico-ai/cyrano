@@ -1071,7 +1071,13 @@ Use-As-Dictionary gains `, type=crn`, which Chromium does not register). TLS res
   proved to unwrap and to read back) — for a script's src and a
   stylesheet / preload / modulepreload link's href, the runtime's setters
   too (integrity set before or after src: the URL re-marked while the
-  element is not connected). The proxy hashes the origin's decoded bytes
+  element is not connected). Not a module member's — a module script's
+  src, a modulepreload's href (Sri.carry): a module's URL is its identity
+  in the module map, and marked, gigabyte.com's Nuxt entry was another
+  module than the one its chunks import back, evaluated twice (Pinia's
+  stores read an uninstalled copy; `module-integrity-vs-chromium`). The
+  server keeps those for the document (`proxy.RecordModuleIntegrity`, the
+  import map's table); one the page's script sets goes unchecked. The proxy hashes the origin's decoded bytes
   and fails a mismatch, or an opaque response (another origin's in no-cors
   mode), as a network error (`proxy.SRIFails`). `integrity` reads the
   page's value. An import map's "integrity" section is given to the

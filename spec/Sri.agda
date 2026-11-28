@@ -171,3 +171,30 @@ honored svg tag attr rels =
   anyRel : List Str → Bool
   anyRel [] = false
   anyRel (r ∷ rs) = eqStr r (toList "stylesheet") ∨ eqStr r (toList "preload") ∨ eqStr r (toList "modulepreload") ∨ anyRel rs
+
+-- Where an honored element's metadata goes. A module's URL is its
+-- identity in the document's module map (HTML "fetch a single module
+-- script": the map is keyed by URL): a module script's src and a
+-- modulepreload's href name the very module its importers import by a
+-- plain specifier. Marked, they named another — two module records, the
+-- module evaluated twice (gigabyte.com: Nuxt's entry, a module script with
+-- an integrity, imported back by its own chunks; Pinia installed in one
+-- copy, its stores read from the other, the page left unrendered). So a
+-- module member's metadata is not marked: the document keeps it, as it
+-- keeps an import map's integrity section (ImportMap.integrityEntries),
+-- and the proxy checks the module request by it. Everything else honored
+-- is marked in its URL.
+data Carry : Set where
+  inUrl inDocument unchecked : Carry
+
+-- svg, tag, attr, rels (lowercased), and whether a <script> is a module
+-- (Html.scriptKind: scriptModule).
+carry : Bool → Str → Str → List Str → Bool → Carry
+carry svg tag attr rels isModule =
+  if not (honored svg tag attr rels) then unchecked
+  else if (eqStr tag (toList "script") ∧ isModule) ∨ (eqStr tag (toList "link") ∧ modulePreload rels) then inDocument
+  else inUrl
+  where
+  modulePreload : List Str → Bool
+  modulePreload [] = false
+  modulePreload (r ∷ rs) = eqStr r (toList "modulepreload") ∨ modulePreload rs

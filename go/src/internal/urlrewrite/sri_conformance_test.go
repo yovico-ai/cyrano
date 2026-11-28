@@ -127,3 +127,29 @@ func TestSpecConformance_RewriteMarkedIntegrity(t *testing.T) {
 		}
 	})
 }
+
+func TestSpecConformance_SRICarry(t *testing.T) {
+	oracle := specoracle.Need(t)
+	rapid.Check(t, func(rt *rapid.T) {
+		svg := rapid.Bool().Draw(rt, "svg")
+		tag := rapid.SampledFrom([]string{"script", "link", "img", "iframe"}).Draw(rt, "tag")
+		attr := rapid.SampledFrom([]string{"src", "href", "xlink:href"}).Draw(rt, "attr")
+		rels := rapid.SliceOfN(rapid.SampledFrom([]string{"stylesheet", "preload", "modulepreload", "prefetch", "icon", "alternate"}), 0, 2).Draw(rt, "rels")
+		mod := rapid.Bool().Draw(rt, "module")
+		sv, m := "0", "0"
+		if svg {
+			sv = "1"
+		}
+		if mod {
+			m = "1"
+		}
+		want, _, err := oracle.Ask("sricarry", sv, tag, attr, strings.Join(rels, " "), m)
+		if err != nil {
+			rt.Fatalf("oracle: %v", err)
+		}
+		got := map[SRICarryKind]string{SRIUnchecked: "unchecked", SRIInURL: "url", SRIInDocument: "document"}[SRICarry(svg, tag, attr, rels, mod)]
+		if got != want {
+			rt.Fatalf("SRICarry(%v, %s, %s, %v, %v) = %s, spec %s", svg, tag, attr, rels, mod, got, want)
+		}
+	})
+}

@@ -18,7 +18,9 @@ import (
 // session and page, and a module script request for that document — its
 // own, or an import of one of its modules (scriptDocs) — without integrity
 // in its URL is checked by its entry, as an integrity attribute is
-// (SRIFails). Limits: a classic script of a listed URL is checked too (the
+// (SRIFails). A module script's or modulepreload's own integrity is kept
+// the same way (RecordModuleIntegrity), first entry for a URL standing.
+// Limits: a classic script of a listed URL is checked too (the
 // proxy sees both in cors mode); a map the runtime inserts is not kept.
 
 var pageIntegrity struct {
@@ -26,10 +28,21 @@ var pageIntegrity struct {
 	m  map[string][]urlrewrite.IntegrityEntry
 }
 
+// RecordModuleIntegrity adds a module member's integrity (a module script's
+// src, a modulepreload's href, spec Sri.carry inDocument): its URL stays
+// unmarked, the module's one identity, and its request is checked here as
+// an import map entry is.
+func RecordModuleIntegrity(resp *http.Response, target *url.URL, abs, metadata string) {
+	recordIntegrity(resp, target, []urlrewrite.IntegrityEntry{{URL: abs, Metadata: metadata}})
+}
+
 // RecordImportMap adds a document's import map (as the page wrote it, its
 // keys resolved against base) to the integrity it enforces.
 func RecordImportMap(resp *http.Response, target *url.URL, base, text string) {
-	entries := urlrewrite.ImportMapIntegrity(text, base)
+	recordIntegrity(resp, target, urlrewrite.ImportMapIntegrity(text, base))
+}
+
+func recordIntegrity(resp *http.Response, target *url.URL, entries []urlrewrite.IntegrityEntry) {
 	if len(entries) == 0 {
 		return
 	}

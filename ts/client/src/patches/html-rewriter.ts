@@ -13,7 +13,7 @@
 // document.write that leaves an element open leaves it open — and a
 // noscript's content (text, scripting on) stays as written.
 
-import { sriHonored, sriMark } from "../url/sri";
+import { sriCarry, sriMark } from "../url/sri";
 import { type RewriteOne } from "./referrer-policy";
 import { scriptKind } from "./script-kind";
 import { rewriteImportMap } from "./dynamic-html";
@@ -252,7 +252,9 @@ function editStartTag(src: string, t: Extract<Tok, { kind: "start" }>, rewriteOn
         // An iframe sandboxed without allow-scripts runs nothing (spec Frames.frameDest).
         const dest = dest0 === "frame" && html && t.name === "iframe" ? frameDest(value("sandbox")) : dest0;
         // Its integrity rides the URL, for the proxy to check on the origin's bytes (spec/Sri.agda; dropped above).
-        const iv = sriHonored(!html, t.name, a.name, relOf(value("rel"))) ? value("integrity") : null;
+        // A module member's URL is its identity: never marked (Sri.carry).
+        const isModule = html && t.name === "script" && scriptKind(value("type"), value("language")) === "module";
+        const iv = sriCarry(!html, t.name, a.name, relOf(value("rel")), isModule) === "url" ? value("integrity") : null;
         const im = iv === null ? null : sriMark(iv);
         const rwd = (dest || im) && rewriteOne.withMark ? (u: string) => rewriteOne.withMark!(u, policyMark, dest, im) : rw;
         change(a, a.name, rewriteByKind(kind, v, rwd, rewriteSrcsetAttribute));

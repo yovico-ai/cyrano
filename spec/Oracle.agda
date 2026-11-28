@@ -414,6 +414,7 @@ dispatch op args =
   else if eqStr op (toList "srimark") then sriMarkReq args
   else if eqStr op (toList "sripasses") then sriPassesReq args
   else if eqStr op (toList "srihonored") then sriHonoredReq args
+  else if eqStr op (toList "sricarry") then sriCarryReq args
   else if eqStr op (toList "srifails") then sriFailsReq args
   else if eqStr op (toList "cooptoken") then coopTokenReq args
   else if eqStr op (toList "lnaspace4") then lnaSpace4Req args
@@ -762,6 +763,14 @@ dispatch op args =
   sriHonoredReq : List Str → Str
   sriHonoredReq (sv ∷ t ∷ a ∷ rs ∷ []) = out (if Sri.honored (eqStr sv (toList "1")) t a (splitOn (is 32) rs) then toList "yes" else toList "no")
   sriHonoredReq _ = errorReply "BadRequest"
+
+  -- sricarry <svg 0|1> <tag> <attr> <rels, space-separated> <module 0|1> → url|document|unchecked
+  sriCarryReq : List Str → Str
+  sriCarryReq (sv ∷ t ∷ a ∷ rs ∷ m ∷ []) with Sri.carry (eqStr sv (toList "1")) t a (splitOn (is 32) rs) (eqStr m (toList "1"))
+  ... | Sri.inUrl      = out (toList "url")
+  ... | Sri.inDocument = out (toList "document")
+  ... | Sri.unchecked  = out (toList "unchecked")
+  sriCarryReq _ = errorReply "BadRequest"
 
   -- sameoriginmode <Sec-Fetch-Mode> <client origin> <target origin> → yes|no (Fetch.sameOriginModeFails)
   sameOriginModeReq : List Str → Str

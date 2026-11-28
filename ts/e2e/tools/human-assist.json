@@ -61,5 +61,1355 @@
   "from": "random",
   "seen": "2026-11-21T21:56",
   "how": "assist"
+ },
+ {
+  "url": "https://www.dnb.com/business-directory/company-profiles/immense-jewellery-llp.3a68bfb5a6775e4854f36dd2c7b1b417",
+  "why": "direct: challenge page: \"Just a moment...\"",
+  "from": "random",
+  "seen": "2026-11-22T00:14",
+  "how": "assist"
+ },
+ {
+  "url": "https://parade.com/news/lavi-crain-15-year-old-gymnast-frightening-fall-us-gymnastics-championship",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "random",
+  "seen": "2026-11-22T01:27",
+  "how": "assist"
+ },
+ {
+  "url": "https://studylib.net/doc/25691903/the-lightning-thief",
+  "why": "direct: challenge page: \"Studylib Security Check\"; proxied: challenge page: \"Studylib Security Check\"",
+  "from": "random",
+  "seen": "2026-11-22T02:16",
+  "how": "assist"
+ },
+ {
+  "url": "https://phys.org/news/2026-10-scientists-tiny-particles-weather-air.html",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "random",
+  "seen": "2026-11-22T02:52",
+  "how": "assist"
+ },
+ {
+  "url": "https://biggest-gaudiest-patronuses.tumblr.com/post/649400003340697600/yall-were-really-not-gonna-tell-me-about-the-josh",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "random",
+  "seen": "2026-11-22T03:15",
+  "how": "assist"
+ },
+ {
+  "url": "https://bestneighborhood.org/household-income-forsyth-ga/",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "random",
+  "seen": "2026-11-22T03:41",
+  "how": "assist"
+ },
+ {
+  "url": "https://heirloom-eats.com/",
+  "why": "proxied: challenge page: \"Just a moment...\"",
+  "from": "random",
+  "seen": "2026-11-22T07:56",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.legacy.com/funeral-homes/nebraska/fremont/ludvigsen-mortuary-fremont/fh-3818",
+  "why": "proxied: refused (429)",
+  "from": "random",
+  "seen": "2026-11-22T08:32",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.syngentaflowers.com/ams/product/flower/70087660",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "random",
+  "seen": "2026-11-22T09:16",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.carmax.com/cars/ford/bronco?msockid=276c77ac72cd631e07556fb573446295",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "random",
+  "seen": "2026-11-22T09:40",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.tapatalk.com/groups/junkyardairguns/walther-loather-re-barrels-projects-t148.html",
+  "why": "proxied: challenge page: \"Just a moment...\"",
+  "from": "random",
+  "seen": "2026-11-22T09:44",
+  "how": "assist"
+ },
+ {
+  "url": "https://wiza.co/d/ubiquitybpo/9924/carol-palmer-stewart",
+  "why": "proxied: challenge page: \"Just a moment...\"",
+  "from": "random",
+  "seen": "2026-11-22T10:12",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.homely.com.au/",
+  "why": "proxied: challenge page: \"Just a moment...\"",
+  "from": "random",
+  "seen": "2026-11-22T10:27",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.ah.nl/allerhande/recepten/triflerecepten?msockid=0c7c2d5a76946e89291a354377b76f78",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "random",
+  "seen": "2026-11-22T11:15",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.zoominfo.com/p/Tania-Lopez/9003295334",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "live-compare",
+  "seen": "2026-11-22T14:35",
+  "how": "assist"
+ },
+ {
+  "url": "https://stockcake.com/s/create-an-image-of-a-serene-coastal-village-at-golden-hour-whitewashed-buildings-ocean-breeze-warm-sunlight-cinematic-landscape",
+  "why": "proxied: refused (403)",
+  "from": "runD1b",
+  "seen": "2026-11-22T14:47",
+  "how": "assist"
+ },
+ {
+  "url": "https://stackoverflow.com/questions",
+  "why": "direct: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-26T15:48",
+  "how": "assist",
+  "times": 52
+ },
+ {
+  "url": "https://www.bloomberg.com/",
+  "why": "direct: challenge page: \"Bloomberg - Are you a robot?\"; proxied: challenge page: \"Bloomberg - Are you a robot?\"",
+  "from": "live-compare",
+  "seen": "2026-11-26T15:51",
+  "how": "assist",
+  "times": 52
+ },
+ {
+  "url": "https://www.mountaineers.org/",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-26T15:53",
+  "how": "assist",
+  "times": 52
+ },
+ {
+  "url": "https://warframe.market/",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-26T15:56",
+  "how": "assist",
+  "times": 52
+ },
+ {
+  "url": "https://www.spokanecounty.gov/5519/SCRAPS---Regional-Animal-Protection",
+  "why": "direct: challenge page: \"Attention Required! | Cloudflare\"; proxied: challenge page: \"Attention Required! | Cloudflare\"",
+  "from": "live-compare",
+  "seen": "2026-11-26T16:10",
+  "how": "assist",
+  "times": 52
+ },
+ {
+  "url": "https://thehill.com/country/us/",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "live-compare",
+  "seen": "2026-11-26T16:14",
+  "how": "assist",
+  "times": 52
+ },
+ {
+  "url": "https://www.scorpion.co/",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-26T16:15",
+  "how": "assist",
+  "times": 52
+ },
+ {
+  "url": "https://www.sports-reference.com/stathead/baseball/vs/chicago-cubs-vs-texas-rangers",
+  "why": "direct: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-28T06:46",
+  "how": "assist",
+  "times": 53
+ },
+ {
+  "url": "https://sneakernews.com/2026/11/13/k-swiss-racquet-club-black-karats-collection/",
+  "why": "direct: challenge page: \"Attention Required! | Cloudflare\"; proxied: challenge page: \"Attention Required! | Cloudflare\"",
+  "from": "live-compare",
+  "seen": "2026-11-26T16:18",
+  "how": "assist",
+  "times": 51
+ },
+ {
+  "url": "https://www.periodicos.capes.gov.br/index.php/acervo/buscador.html?task=detalhes&id=W2138737041",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runD3",
+  "seen": "2026-11-22T15:35",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.chegg.com/homework-help/questions-and-answers/zybookscom-zybook-snhumat350v-1-chapter-2-zybooks-catalog-help-f-ay-library-mat-350-applie-q56121163?msockid=0fbce179b8a96448254af960b98c65e2",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runD3",
+  "seen": "2026-11-22T15:35",
+  "how": "assist"
+ },
+ {
+  "url": "https://onlinelibrary.wiley.com/journal/16136829?msockid=3fad5205c4386e0f00dd4a1cc5d16f88",
+  "why": "proxied: challenge page: \"Just a moment...\"",
+  "from": "runD3",
+  "seen": "2026-11-22T15:41",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.kbb.com/toyota/camry/2026/xse/?msockid=0ce58871e90d6f792f509068e86e6e4f",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "runD3",
+  "seen": "2026-11-22T15:42",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.nasdaq.com/articles/looking-nasdaq-100-index-adds-and-deletes",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "runE1",
+  "seen": "2026-11-22T15:46",
+  "how": "assist"
+ },
+ {
+  "url": "https://openpayrolls.com/employee/daniel-cortes-20408",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "runE1",
+  "seen": "2026-11-22T15:47",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.napaonline.com/en/shop/replacement-parts/ignition-engine-management/ignition-coils/348251742",
+  "why": "proxied: Cloudflare challenge (403, PAT 401), title kept",
+  "from": "runD3-recheck",
+  "seen": "2026-11-22T15:49",
+  "how": "assist"
+ },
+ {
+  "url": "https://onlinelibrary.wiley.com/journal/16136829",
+  "why": "proxied: challenge page: \"Just a moment...\"",
+  "from": "runD3",
+  "seen": "2026-11-22T15:49",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.rei.com/c/snowshoes",
+  "why": "proxied click: PerimeterX 403 Access denied (Playwright; check in real Chrome)",
+  "from": "runD2-recheck",
+  "seen": "2026-11-22T15:49",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.macys.com/shop/womens/handbags-wallets-accessories/handbags/satchels?id=46013&msockid=3bebe5974524675e1b09fd8e44af66ce",
+  "why": "direct: challenge page: \"Access Denied - Macy's\"; proxied: challenge page: \"Access Denied - Macy's\"",
+  "from": "runE1",
+  "seen": "2026-11-22T15:53",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.guns.com/search?keyword=6.5mm+grendel",
+  "why": "direct: challenge page: \"Attention Required! | Cloudflare\"; proxied: challenge page: \"Attention Required! | Cloudflare\"",
+  "from": "live-compare",
+  "seen": "2026-11-26T16:22",
+  "how": "assist",
+  "times": 50
+ },
+ {
+  "url": "https://www.loopnet.com/Listing/601-W-Flores-St-Tucson-AZ/33233955/",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "runE2",
+  "seen": "2026-11-22T16:07",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.asics.com/us/en-us/tennis-shoes/c/aa80204000/?msockid=0cc1bf20326361383340a73933fd6053",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "runE3",
+  "seen": "2026-11-22T16:31",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.tripadvisor.com.hk/Hotels-g32655-Los_Angeles_California-Hotels.html",
+  "why": "proxied: bot page (title = host, 0 elements), direct 200",
+  "from": "runE3",
+  "seen": "2026-11-22T16:58",
+  "how": "assist",
+  "times": 2
+ },
+ {
+  "url": "https://jooble.org/jdp/-7149622844090765304",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "runE4",
+  "seen": "2026-11-22T16:53",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.mouser.jp/en/ProductDetail/Toshiba/DCA121102TES?qs=AN2D3KK5ownDjSnVxjG7Og%3D%3D",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runE4",
+  "seen": "2026-11-22T16:57",
+  "how": "assist"
+ },
+ {
+  "url": "https://timedate.now/countries/japan/",
+  "why": "proxied: Cloudflare \"Just a moment...\" (direct passes)",
+  "from": "runE4",
+  "seen": "2026-11-22T17:11",
+  "how": "assist",
+  "times": 2
+ },
+ {
+  "url": "https://www.youlai.cn/doctorasklist_0_0_0.html",
+  "why": "direct: refused (405); proxied: refused (405)",
+  "from": "runE5",
+  "seen": "2026-11-22T17:22",
+  "how": "assist"
+ },
+ {
+  "url": "https://in.bookmyshow.com/explore/events-hyderabad",
+  "why": "proxied: Cloudflare Attention Required (403), direct 200",
+  "from": "runE5",
+  "seen": "2026-11-22T17:38",
+  "how": "assist",
+  "times": 2
+ },
+ {
+  "url": "https://www.olympics.com/en/athletes/michael-phelps-ii",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "runE7",
+  "seen": "2026-11-22T18:06",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.tenforums.com/threads/choose-default-apps-in-windows-10.5507/",
+  "why": "proxied: Cloudflare challenge (403 cf-mitigated) then passes; direct 200",
+  "from": "runE6",
+  "seen": "2026-11-22T18:07",
+  "how": "assist"
+ },
+ {
+  "url": "https://247sports.com/college/ucla/Season/2026-Basketball/Roster/",
+  "why": "proxied: \"Client Challenge\" page (bot check script fails to load), direct passes",
+  "from": "runE8",
+  "seen": "2026-11-22T18:49",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.polarispartshouse.com/oemcatalogs/p/polaris_sxs_2026_rzr_pro_s_4_sport/polaris_sxs_accessories-body-racks/5e4320c087a8660d98b62737/pivoting-spare-tire-carriers",
+  "why": "proxied: Cloudflare Attention Required (403), direct 200",
+  "from": "runE9",
+  "seen": "2026-11-22T19:15",
+  "how": "assist",
+  "times": 2
+ },
+ {
+  "url": "https://greenwichmeantime.com/current-time/",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runE9",
+  "seen": "2026-11-22T19:02",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.bestbuy.ca/en-ca",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "runE9",
+  "seen": "2026-11-22T19:08",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.ozon.ru/category/personalnye-kompyutery/",
+  "why": "direct: refused (403)",
+  "from": "runE10",
+  "seen": "2026-11-22T19:23",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.mensjournal.com/drink/best-bourbons-to-drink",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runE12",
+  "seen": "2026-11-22T20:10",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.levi.com/US/en_US/?msockid=3f365bd084786183240543c9853360cf",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "runE12",
+  "seen": "2026-11-22T20:13",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.findagrave.com/memorial/102647933/stephen_douglas-hacker",
+  "why": "proxied: Cloudflare Just a moment (403), direct 200",
+  "from": "runE12",
+  "seen": "2026-11-22T20:31",
+  "how": "assist",
+  "times": 2
+ },
+ {
+  "url": "https://www.crateandbarrel.com/furniture/sofas/1?msockid=1dc8051be639658100cf1d02e742645d",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "runE12",
+  "seen": "2026-11-22T20:27",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.realtor.com/realestateandhomes-search/Casa-Mesa_Mesa_AZ?msockid=312fe72d4f1c680203fbff344e96690e",
+  "why": "direct: refused (429); proxied: refused (429)",
+  "from": "runE13",
+  "seen": "2026-11-22T20:31",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.bloomingdales.com/shop/womens-designer-shoes/pumps-high-heels-stilettos?id=17397&msockid=01b4c9471682657f1dddd15e1765649f",
+  "why": "direct: challenge page: \"Access Denied - Bloomingdales\"; proxied: challenge page: \"Access Denied - Bloomingdales\"",
+  "from": "runE13",
+  "seen": "2026-11-22T20:40",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.harborfreight.com/10-in-x-18-in-5-speed-12-hp-benchtop-wood-lathe-58358.html",
+  "why": "proxied: generic page instead of product (bot check?), click 403; direct product page",
+  "from": "runE13",
+  "seen": "2026-11-22T21:00",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.gilt.com/",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runE14",
+  "seen": "2026-11-22T21:15",
+  "how": "assist"
+ },
+ {
+  "url": "https://join.newyorksportsclubs.com/",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runE15",
+  "seen": "2026-11-22T21:35",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.vegrecipesofindia.com/how-to-make-curd-dahi-homemade-curd-dahi/",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-26T15:57",
+  "how": "assist",
+  "times": 50
+ },
+ {
+  "url": "https://allthings.how/how-to-open-disk-management-in-windows-11/",
+  "why": "direct: challenge page: \"Just a moment...\"",
+  "from": "runF1",
+  "seen": "2026-11-23T07:40",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.headlightsdepot.com/",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runF1",
+  "seen": "2026-11-23T07:41",
+  "how": "assist"
+ },
+ {
+  "url": "https://photos.com/",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runF1",
+  "seen": "2026-11-23T07:51",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.cabelas.com/l/trapping?msockid=17a1fcbe4e3c6e2232d9e4a44f616f98",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "runF1",
+  "seen": "2026-11-23T07:56",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.dreamstime.com/illustration/cat-sleeping.html",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runF5",
+  "seen": "2026-11-23T09:24",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.collegesidekick.com/study-docs/6605055",
+  "why": "direct: challenge page: \"Attention Required! | Cloudflare\"; proxied: challenge page: \"Attention Required! | Cloudflare\"",
+  "from": "runF7",
+  "seen": "2026-11-23T10:08",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.shutterstock.com/search/textured-hoarding?msockid=216d218c624d684c29d139966397693c",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runF7",
+  "seen": "2026-11-23T10:14",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.wine-searcher.com/find/honig+pink+cab+sauv+rose+napa+valley+county+north+coast+california+usa/1/usa-ny",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runF8",
+  "seen": "2026-11-23T10:37",
+  "how": "assist"
+ },
+ {
+  "url": "https://kr.123rf.com/photo_4083507_ì¥ë¯¸-ìê²½-ë°-ì´íì¸-ë³-í-ì«ë-ê·ì¬ì´-ëª¨í¼-ì¬ì¥.html",
+  "why": "direct: refused (405); proxied: refused (405)",
+  "from": "runF9",
+  "seen": "2026-11-23T10:56",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.chooseauto.com.cn/news/822430.shtml",
+  "why": "direct: refused (403)",
+  "from": "runF9",
+  "seen": "2026-11-23T11:00",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.tripadvisor.es/Attraction_Review-g672292-d6976874-Reviews-Isla_Mata_La_Gata-La_Parguera_Lajas_Puerto_Rico.html",
+  "why": "proxied: refused (403)",
+  "from": "runF9",
+  "seen": "2026-11-23T11:07",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.gastrojournal.org/article/S0016-5085%2823%2900823-5/fulltext",
+  "why": "proxied: refused (403, Cloudflare); direct 200 in the run, 403 to curl on both",
+  "from": "runF3",
+  "seen": "2026-11-23",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.science.org/doi/10.1126/science.aem7343",
+  "why": "proxied: refused (403, Cloudflare); direct 200",
+  "from": "runF8",
+  "seen": "2026-11-23",
+  "how": "assist"
+ },
+ {
+  "url": "https://forums.golfwrx.com/topic/2098430-best-2026-irons-single-digit-handicap-player/",
+  "why": "subresources (static/js) answered with a Cloudflare challenge (403, cf-mitigated) on both sides on recheck",
+  "from": "runF5",
+  "seen": "2026-11-23",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.visitoslo.com/",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-26T16:02",
+  "how": "assist",
+  "times": 45
+ },
+ {
+  "url": "https://www.qidian.com/",
+  "why": "direct: empty 202 (an interstitial); proxied: empty 202 (an interstitial)",
+  "from": "live-compare",
+  "seen": "2026-11-26T16:02",
+  "how": "assist",
+  "times": 45
+ },
+ {
+  "url": "https://thangs.com/",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-26T16:08",
+  "how": "assist",
+  "times": 44
+ },
+ {
+  "url": "https://ir.netflix.net/home/default.aspx",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-26T16:09",
+  "how": "assist",
+  "times": 44
+ },
+ {
+  "url": "https://www.marriott.com/default.mi?msockid=0967f54e67cb618b2b1eed54661860f8",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "runG2",
+  "seen": "2026-11-23T13:37",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.sephora.com/shop/lipstick?ref=filters%5Bon_sale%5D=true&msockid=087fd723b1c267022c34cf39b03666f6",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "runG2",
+  "seen": "2026-11-23T13:41",
+  "how": "assist"
+ },
+ {
+  "url": "https://extension.psu.edu/privet",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runG4",
+  "seen": "2026-11-23T14:28",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.adidas.jp/%E3%82%B7%E3%83%A5%E3%83%BC%E3%82%BA%E3%83%BB%E9%9D%B4",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runG4",
+  "seen": "2026-11-23T14:32",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.menuswithprice.com/burger-king-menu/nevada/las-vegas/?msockid=01e99b27ae8169071918833dafd468da",
+  "why": "direct: challenge page: \"Attention Required! | Cloudflare\"; proxied: challenge page: \"Attention Required! | Cloudflare\"",
+  "from": "runG5",
+  "seen": "2026-11-23T14:46",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.docmorris.de/?msockid=26168f3762b16d9c3a43972d63696c07",
+  "why": "direct: challenge page: \"Attention Required! | Cloudflare\"; proxied: challenge page: \"Attention Required! | Cloudflare\"",
+  "from": "runG5",
+  "seen": "2026-11-23T14:49",
+  "how": "assist"
+ },
+ {
+  "url": "https://govsalaries.com/dolce-amanda-n-217976653",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "runG6",
+  "seen": "2026-11-23T15:11",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.kohls.com/?msockid=3b328b8bf934663c0fc49391f87e67c6",
+  "why": "proxied: challenge page: \"Access Denied\"",
+  "from": "runG6",
+  "seen": "2026-11-23T15:12",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.zeit.de/thema/steuer",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runG6",
+  "seen": "2026-11-23T15:13",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.travelmath.com/drive-distance/from/Boulder+City,+NV/to/Las+Vegas,+NV",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runG7",
+  "seen": "2026-11-23T15:24",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.neilsberg.com/r/us/digital-marketing-agencies-coral-springs-fl/",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runG7",
+  "seen": "2026-11-23T15:28",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.monitorbankrates.com/mortgage-lenders/missouri/west-plains",
+  "why": "direct: challenge page: \"Attention Required! | Cloudflare\"; proxied: challenge page: \"Attention Required! | Cloudflare\"",
+  "from": "runG7",
+  "seen": "2026-11-23T15:29",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.apartments.com/158-serpentine-dr-venice-fl/1tv80x4/?msockid=23d257f8c2cf6f420ab24fe2c3496e8b",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "runG7",
+  "seen": "2026-11-23T15:36",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.adidas.com/us?msockid=0f6e86740a2e6fe93d039e6e0b926e7f",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runG8",
+  "seen": "2026-11-23T15:56",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.appbrain.com/apps/popular/music-and-audio/",
+  "why": "direct: refused (429); proxied: refused (429)",
+  "from": "runG8",
+  "seen": "2026-11-23T15:59",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.hospita.jp/",
+  "why": "direct: challenge page: \"Attention Required! | Cloudflare\"; proxied: challenge page: \"Attention Required! | Cloudflare\"",
+  "from": "runG9",
+  "seen": "2026-11-23T16:12",
+  "how": "assist"
+ },
+ {
+  "url": "https://changelly.com.mx/",
+  "why": "direct: challenge page: \"Attention Required! | Cloudflare\"; proxied: challenge page: \"Attention Required! | Cloudflare\"",
+  "from": "runG9",
+  "seen": "2026-11-23T16:16",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.ugg.com/home-content.html?msockid=3181615e7c4b6e170ea579447d586f70",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runG9",
+  "seen": "2026-11-23T16:25",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.wikiwand.com/en/Foreskin",
+  "why": "direct: challenge page: \"Attention Required! | Cloudflare\"; proxied: challenge page: \"Attention Required! | Cloudflare\"",
+  "from": "live-compare",
+  "seen": "2026-11-23T19:02",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.sigmaaldrich.com/US/en/product/sigald/34851?msockid=199225d598176ecb12d93dcf991e6feb",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "runH1",
+  "seen": "2026-11-23T21:00",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.phoenixcontact.com/en-us/products/ferrules",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "runH2",
+  "seen": "2026-11-23T21:35",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.elementwheels.com/",
+  "why": "proxied only: Cloudflare /cf-verify?return=%2F interstitial (referrer), 3-12 cookies vs 20 direct; direct passes in Playwright Chrome — check in real Chrome",
+  "from": "runH2",
+  "seen": "2026-11-23T22:05",
+  "how": "manual"
+ },
+ {
+  "url": "https://www.thebrokebackpacker.com/best-places-to-visit-in-tokyo/",
+  "why": "direct: challenge page: \"Just a moment...\"",
+  "from": "runH3",
+  "seen": "2026-11-23T22:00",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.whitepages.com/address/17165-Cole-Ave/Riverside-CA/AVjNGNybdvw?msockid=09081943644460ef2ffb015965a26178",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runH3",
+  "seen": "2026-11-23T22:04",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.showcase.com/831-alamo-dr-vacaville-ca-95688/16691533/",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "runH3",
+  "seen": "2026-11-23T22:05",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.haoyisheng.com/",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runH3",
+  "seen": "2026-11-23T22:14",
+  "how": "assist"
+ },
+ {
+  "url": "https://sts.smartandfinal.com/shopfront/Account/Register",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "runH4",
+  "seen": "2026-11-23T22:29",
+  "how": "assist"
+ },
+ {
+  "url": "https://catholicindex.org/churches/us-ca-los-banos-st-joseph-772fddc4",
+  "why": "proxied: challenge page: \"Just a moment...\"",
+  "from": "runH4",
+  "seen": "2026-11-23T22:33",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.beadpark.com/",
+  "why": "direct: challenge page: \"Just a moment...\"",
+  "from": "runH4",
+  "seen": "2026-11-23T22:42",
+  "how": "assist"
+ },
+ {
+  "url": "https://rh.com/us/en/catalog/category/products.jsp/cat14010021/rh-pendants",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runH5",
+  "seen": "2026-11-23T22:55",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.musiker-board.de/threads/gitarre-zu-nah-an-der-heizung.689346/",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runI1",
+  "seen": "2026-11-24T04:42",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.prudential.com/login",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runI1",
+  "seen": "2026-11-24T04:49",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.at-s.com/gourmet/ranking/genre28-area_ci27/",
+  "why": "direct: refused (405); proxied: refused (405)",
+  "from": "runI2",
+  "seen": "2026-11-24T05:03",
+  "how": "assist"
+ },
+ {
+  "url": "https://happygamer.com/quarantine-zone-miami-zero-free-expansion-168333/",
+  "why": "direct: challenge page: \"Attention Required! | Cloudflare\"; proxied: challenge page: \"Attention Required! | Cloudflare\"",
+  "from": "runI2",
+  "seen": "2026-11-24T05:23",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.ssg.com/search.ssg?query=%EB%93%B1%EC%82%B0%ED%85%8C%EC%9D%B4%EB%B8%94",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runI3",
+  "seen": "2026-11-24T05:29",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.tripadvisor.co.kr/HotelsList-San_Juan-Cruise-Port-Hotels-zfp17067506.html",
+  "why": "proxied: refused (403)",
+  "from": "runI3",
+  "seen": "2026-11-24T05:35",
+  "how": "assist"
+ },
+ {
+  "url": "https://ar.pngtree.com/free-backgrounds-photos/%D8%B1%D8%B3%D9%85-%D8%A7%D9%84%D8%AC%D8%A8%D9%86-pictures",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "runI5",
+  "seen": "2026-11-24T06:07",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.sofascore.com/basketball/match/miami-heat-minnesota-timberwolves/BtbsKtb",
+  "why": "proxied: refused (403)",
+  "from": "runI6",
+  "seen": "2026-11-24T06:32",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.choicehotels.com/en-au/minnesota/bloomington/radisson-blu-hotels/mn292?msockid=012539fd1f1d622a00e921e61ecb63d6",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "runJ1",
+  "seen": "2026-11-24T06:45",
+  "how": "assist"
+ },
+ {
+  "url": "https://bijianqe.com/",
+  "why": "proxied: refused (429)",
+  "from": "runJ4",
+  "seen": "2026-11-24T07:47",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.khon2.com/hawaii-crime/diamond-head-kidnapping-suspect-indicted/",
+  "why": "proxied: refused (403)",
+  "from": "runJ5",
+  "seen": "2026-11-24T08:23",
+  "how": "assist"
+ },
+ {
+  "url": "https://forums.stevehoffman.tv/threads/shindo-labs-tone-arts-laboratory-leben-air-tight-and-devore.1242669/",
+  "why": "proxied: challenge page: \"Just a moment...\"",
+  "from": "runJ7",
+  "seen": "2026-11-24T08:56",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.tripadvisor.jp/Hotels-g60750-zff12-San_Diego_California-Hotels.html",
+  "why": "proxied: refused (403)",
+  "from": "runJ7",
+  "seen": "2026-11-24T08:59",
+  "how": "assist"
+ },
+ {
+  "url": "https://archiveofourown.org/works/54548647",
+  "why": "proxied: challenge page: \"Just a moment...\" (network leg alone draws it: mitmprobe)",
+  "from": "runK2",
+  "seen": "2026-11-24T09:46",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.ahajournals.org/doi/10.1161/CIR.0000000000001038",
+  "why": "direct: refused (403) Cloudflare challenge; proxied: refused (403)",
+  "from": "runK1",
+  "seen": "2026-11-24T09:46",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.sythe.org/threads/auto-prayer-flicker-infinite-prayer-plugin-for-runelite/",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "runK6",
+  "seen": "2026-11-24T11:00",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.phpbb.com/community/",
+  "why": "direct: challenge page: \"Attention Required! | Cloudflare\"; proxied: challenge page: \"Attention Required! | Cloudflare\"",
+  "from": "runK7",
+  "seen": "2026-11-24T11:06",
+  "how": "assist"
+ },
+ {
+  "url": "https://ci.jenkins.io/",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runK7",
+  "seen": "2026-11-24T11:10",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.ksdk.com/article/weather/10-facts-about-hurricanes/63-329707639",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "runK7",
+  "seen": "2026-11-24T11:10",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.ebay.ca/itm/185325391068",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runL1",
+  "seen": "2026-11-24T11:48",
+  "how": "assist"
+ },
+ {
+  "url": "https://york.manymanuals.com/heat-pumps/sunline-2000-bp-072/user-manual-39300",
+  "why": "direct: challenge page: \"Attention Required! | Cloudflare\"; proxied: challenge page: \"Attention Required! | Cloudflare\"",
+  "from": "runL2",
+  "seen": "2026-11-24T12:06",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.aavacations.com/en/vacation-packages-from-seattle-to-las-vegas",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "runL2",
+  "seen": "2026-11-24T12:14",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.wayfair.com/lighting/cat/lighting-c215735.html?msockid=2d92e1c238b569ce3d52f9d93993687f",
+  "why": "direct: refused (429)",
+  "from": "runL3",
+  "seen": "2026-11-24T12:33",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.tianqi.com/jianyequ",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "runL5",
+  "seen": "2026-11-24T13:19",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.tripadvisor.in/Hotels-g60878-Seattle_Washington-Hotels.html",
+  "why": "proxied: refused (403)",
+  "from": "runL6",
+  "seen": "2026-11-24T13:39",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.tubmangmpartsdepot.ca/t/oldsmobile_1987_cutlass-ciera/door-window-switch.html",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "runL9",
+  "seen": "2026-11-24T14:41",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.adobe.com/community/gallery",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "live-compare",
+  "seen": "2026-11-25T23:03",
+  "how": "assist"
+ },
+ {
+  "url": "https://ageofsigmar.lexicanum.com/wiki/Castigator",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-25T23:04",
+  "how": "assist"
+ },
+ {
+  "url": "https://sunnah.com/muslim:1106c",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-25T23:05",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.kohlrabi.org/kohlrabi-coleslaw/",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "live-compare",
+  "seen": "2026-11-25T23:05",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.discoverpuertorico.com/",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-25T23:07",
+  "how": "assist"
+ },
+ {
+  "url": "https://stockcake.com/",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-25T23:11",
+  "how": "assist"
+ },
+ {
+  "url": "https://library.oapen.org/bitstream/20.500.12657/64164/13/9780299223298.pdf",
+  "why": "direct: refused (429); proxied: refused (403)",
+  "from": "live-compare",
+  "seen": "2026-11-27T07:26",
+  "how": "assist"
+ },
+ {
+  "url": "https://roblox-lore.fandom.com/wiki/Aphelions",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-27T08:31",
+  "how": "assist"
+ },
+ {
+  "url": "https://porterranchrx.com/es/patient-resources/article/2659059225/what-is-glaucoma-and-how-can-you-prevent-it",
+  "why": "direct: empty 202 (an interstitial); proxied: empty 202 (an interstitial)",
+  "from": "live-compare",
+  "seen": "2026-11-27T08:39",
+  "how": "assist"
+ },
+ {
+  "url": "https://brentspharmacy.com/es/patient-resources/article/2659059225/what-is-glaucoma-and-how-can-you-prevent-it",
+  "why": "direct: empty 202 (an interstitial); proxied: empty 202 (an interstitial)",
+  "from": "live-compare",
+  "seen": "2026-11-27T08:39",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.lovehoney.com.au/blog/position-of-the-week-downward-doggy.html",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "live-compare",
+  "seen": "2026-11-27T09:37",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.flyfishing.co.uk/threads/a-couple-more-pennel-klink.207937/",
+  "why": "direct: empty 202 (an interstitial)",
+  "from": "live-compare",
+  "seen": "2026-11-27T11:11",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.poynter.org/fact-checking/2025/what-is-darpa-strontium-chemtrails-rfk-kennedy/",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "live-compare",
+  "seen": "2026-11-27T11:21",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.earlycountynews.com/articles/catcalls-need-to-be-more-constructive/",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "live-compare",
+  "seen": "2026-11-27T12:02",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.goodrx.com/health-topic/gastroenterology/ipecac-syrup?srsltid=AY6E961rZnBbAfuy081q07YEom0yHsAtWetm73rNoNIUPuikSjyFDNhD",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "live-compare",
+  "seen": "2026-11-27T12:03",
+  "how": "assist"
+ },
+ {
+  "url": "https://openyls.law.yale.edu/bitstreams/27b448ac-1694-40b7-b0bb-063aad250912/download",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "live-compare",
+  "seen": "2026-11-27T12:59",
+  "how": "assist"
+ },
+ {
+  "url": "https://news.sky.com/story/waukesha-parade-crash-person-of-interest-named-as-five-killed-and-more-than-40-injured-after-car-driven-into-christmas-procession-12475739",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "live-compare",
+  "seen": "2026-11-27T13:11",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.congress.gov/bill/119th-congress/senate-bill/2291/text",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-27T13:18",
+  "how": "assist"
+ },
+ {
+  "url": "https://pubmed.ncbi.nlm.nih.gov/11125672/",
+  "why": "direct: challenge page: \"Checking your browser - reCAPTCHA\"; proxied: challenge page: \"Checking your browser - reCAPTCHA\"",
+  "from": "live-compare",
+  "seen": "2026-11-27T13:50",
+  "how": "assist"
+ },
+ {
+  "url": "https://etda.libraries.psu.edu/files/final_submissions/32803",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "live-compare",
+  "seen": "2026-11-27T14:21",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.research.ed.ac.uk/files/522920095/NeedlePunctureCocoon.pdf",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "live-compare",
+  "seen": "2026-11-27T15:27",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.cliffsnotes.com/cliffs-questions/8835156",
+  "why": "direct: challenge page: \"Attention Required! | Cloudflare\"; proxied: challenge page: \"Attention Required! | Cloudflare\"",
+  "from": "live-compare",
+  "seen": "2026-11-27T16:06",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.indeed.com/q-water-utility-worker-l-california-jobs.html",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-27T16:15",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.chewy.com/super-bird-creations-fold-away-shower/dp/165605",
+  "why": "direct: refused (429); proxied: refused (429)",
+  "from": "live-compare",
+  "seen": "2026-11-27T16:41",
+  "how": "assist"
+ },
+ {
+  "url": "https://challenge.magnific.com/security/magnific/challenge.html",
+  "why": "direct: challenge page: \"Security check\"; proxied: challenge page: \"Security check\"",
+  "from": "live-compare",
+  "seen": "2026-11-27T17:42",
+  "how": "assist"
+ },
+ {
+  "url": "https://sonichits.com/video/The_Push_%26_Basstyler/Shake_it_up",
+  "why": "direct: refused (429); proxied: refused (429)",
+  "from": "live-compare",
+  "seen": "2026-11-27T19:37",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.uspnf.com/sites/default/files/usp_pdf/EN/USPNF/revisions/659_rb_notice.pdf",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "live-compare",
+  "seen": "2026-11-27T20:07",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.coursehero.com/file/p6s2go1/Question-3-In-which-cases-do-you-need-to-use-ccBPM-processes-Choose-two-A-When/",
+  "why": "direct: challenge page: \"Attention Required! | Cloudflare\"; proxied: challenge page: \"Attention Required! | Cloudflare\"",
+  "from": "live-compare",
+  "seen": "2026-11-27T20:21",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.sciencesource.com/1812797-western-meadowlark-stock-image-rights-managed.html",
+  "why": "proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-27T20:48",
+  "how": "assist"
+ },
+ {
+  "url": "https://mybroadband.co.za/forum/threads/the-world%E2%80%99s-most-irritating-alarm-clock.420378/",
+  "why": "direct: challenge page: \"Attention Required! | Cloudflare\"; proxied: challenge page: \"Attention Required! | Cloudflare\"",
+  "from": "live-compare",
+  "seen": "2026-11-27T23:35",
+  "how": "assist"
+ },
+ {
+  "url": "https://publications.gc.ca/collections/collection_2011/ccg-cgc/A92-11-2003-eng.pdf",
+  "why": "direct: empty 202 (an interstitial); proxied: empty 202 (an interstitial)",
+  "from": "live-compare",
+  "seen": "2026-11-28T00:34",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.realself.com/dr/raj-dedhia-san-francisco-ca",
+  "why": "direct: refused (403)",
+  "from": "live-compare",
+  "seen": "2026-11-28T00:38",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.ownedcore.com/forums/world-of-warcraft/world-of-warcraft-guides/165685-skinning-making-money.html",
+  "why": "direct: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-28T01:22",
+  "how": "assist"
+ },
+ {
+  "url": "https://app.thestorygraph.com/book_reviews/750e1bee-99b9-4e47-bb37-5fa9beb9976f?dnf=true&sort=lowest_rated",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-28T02:16",
+  "how": "assist"
+ },
+ {
+  "url": "https://syphonfilter.fandom.com/wiki/Waterfront",
+  "why": "proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-28T03:04",
+  "how": "assist"
+ },
+ {
+  "url": "https://se.dreamstime.com/lanternfyllda-rowboat-floats-lake-beneath-ominous-bloodred-dusk-sky-en-tom-b%C3%A5t-r%C3%B6r-sig-lugnt-ovanf%C3%B6r-neds%C3%A4nkt-yta-i-image385942387",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "live-compare",
+  "seen": "2026-11-28T03:44",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.fowkes.co.za/catalogue/clamps/all?filters%5Bavailability%5D%5B0%5D=0&filters%5Bbrands%5D%5B0%5D=57&filters%5Bbrands%5D%5B1%5D=67&filters%5Bbrands%5D%5B2%5D=88&filters%5Bbrands%5D%5B3%5D=70&filters%5Bbrands%5D%5B4%5D=191&page=5&srsltid=AY6E960ZpJOKTK7pTu_oEoxoSMylC_IjIqyWNDvEw4v8H6UGjLC2RERs",
+  "why": "proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-28T05:12",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.spglobal.com/spdji/en/research/article/heroes-in-haystacks-index-comparisons-for-active-portfolio-performance/",
+  "why": "direct: challenge page: \"Access Denied\"; proxied: challenge page: \"Access Denied\"",
+  "from": "live-compare",
+  "seen": "2026-11-28T05:18",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.ubuy.tm/tk/product/59JIYS0GO-halloween-ghost-doll-props-scary-haunted-house-adornment-realistically-latex-mummified-ghost-baby-decoration-creepy-zombie-babies-ugly-devil-statue",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-28T05:29",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.ubuy.com.lb/en/product/59LYHIG1C-halloween-ghost-doll-props-scary-haunted-house-adornment-realistically-latex-mummified-ghost-baby-decoration-creepy-zombie-babies-ugly-devil-statue?srsltid=AY6E963TmVYZKz6GNWD0rPFkn7dEQDD_s4QlqfaU6yOf0rwaa_Wplb9K",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-28T05:31",
+  "how": "assist"
+ },
+ {
+  "url": "https://dokumen.pub/tough-guys-dont-dance-stnbsped-0394537866-9780394537863.html",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "live-compare",
+  "seen": "2026-11-28T05:33",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.rugerforum.net/",
+  "why": "direct: empty 202 (an interstitial); proxied: empty 202 (an interstitial)",
+  "from": "live-compare",
+  "seen": "2026-11-28T06:25",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.dieselplace.com/threads/injector-sleeve-leaking-coolant.16271/",
+  "why": "direct: empty 202 (an interstitial); proxied: empty 202 (an interstitial)",
+  "from": "live-compare",
+  "seen": "2026-11-28T07:00",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.musixmatch.com/lyrics/FWBC/Kneel-At-the-Cross",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "live-compare",
+  "seen": "2026-11-28T07:08",
+  "how": "assist"
+ },
+ {
+  "url": "https://readdork.com/lyrics/crosses-bitches-brew",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-28T07:11",
+  "how": "assist"
+ },
+ {
+  "url": "https://constitution.congress.gov/browse/essay/amdt5-3-6-1/ALDE_00000861/%5B'the',%20'bill',%20'of',%20'rights'%5D",
+  "why": "direct: challenge page: \"Just a moment...\"; proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-28T07:28",
+  "how": "assist"
+ },
+ {
+  "url": "https://music.getyarn.io/yarn-clip/01be13c1-7c00-42ce-ba07-3ea0798a903d",
+  "why": "proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-28T08:00",
+  "how": "assist"
+ },
+ {
+  "url": "https://seekingalpha.com/news/4654453-activist-investor-starboard-builds-stake-in-solstice-urges-focus-on-core-business-ft-reports",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "live-compare",
+  "seen": "2026-11-28T10:26",
+  "how": "assist"
+ },
+ {
+  "url": "https://m.yelp.com/biz/saratoga-auto-glass-san-jose",
+  "why": "direct: refused (403)",
+  "from": "live-compare",
+  "seen": "2026-11-28T10:44",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.123rf.com/photo_65697439_orangutan-lying-on-a-wooden-platform-in-the-jungle-indonesia-the-island-of-kalimantan-borneo-an.html",
+  "why": "direct: refused (405); proxied: refused (405)",
+  "from": "live-compare",
+  "seen": "2026-11-28T10:57",
+  "how": "assist"
+ },
+ {
+  "url": "https://fairytalereformschool.fandom.com/wiki/Rumplestiltskin",
+  "why": "direct: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-28T12:31",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.crossbownation.com/threads/list-of-crossbow-silencing-methods.134221/",
+  "why": "direct: empty 202 (an interstitial); proxied: empty 202 (an interstitial)",
+  "from": "live-compare",
+  "seen": "2026-11-28T12:58",
+  "how": "assist"
+ },
+ {
+  "url": "https://research.fs.usda.gov/silvics/poplar-hybrids",
+  "why": "direct: refused (403); proxied: refused (403)",
+  "from": "live-compare",
+  "seen": "2026-11-28T14:07",
+  "how": "assist"
+ },
+ {
+  "url": "https://www.pedigreequery.com/initials",
+  "why": "proxied: challenge page: \"Just a moment...\"",
+  "from": "live-compare",
+  "seen": "2026-11-28T14:54",
+  "how": "assist"
+ },
+ {
+  "url": "https://oro.open.ac.uk/54705/1/601793.pdf",
+  "why": "proxied: refused (403)",
+  "from": "live-compare",
+  "seen": "2026-11-28T15:36",
+  "how": "assist"
  }
 ]
